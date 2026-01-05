@@ -806,6 +806,9 @@ class LinkTypeMigration(BaseMigration):
 
             _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
 
+            # Record provenance for link types with custom fields
+            self._record_link_type_provenance()
+
         return {
             "success": failure_count == 0,
             "success_count": success_count,
@@ -815,3 +818,72 @@ class LinkTypeMigration(BaseMigration):
             "errors": error_details,
             "message": f"Resolved {success_count} link types via custom fields ({failure_count} errors)",
         }
+
+    def _record_link_type_provenance(self) -> None:
+        """Record provenance for link types with custom fields in J2O Migration project."""
+        provenance_mappings = []
+        for jira_id, entry in self.link_type_mapping.items():
+            # Only record link types that have custom fields (unmapped ones)
+            cf_id = entry.get("custom_field_id")
+            if cf_id:
+                provenance_mappings.append({
+                    "jira_key": jira_id,
+                    "jira_name": entry.get("jira_name"),
+                    "op_entity_id": cf_id,
+                })
+
+        if provenance_mappings:
+            try:
+                result = self.op_client.bulk_record_entity_provenance(
+                    "link_type", provenance_mappings
+                )
+                self.logger.info(
+                    "Recorded link type provenance: %d success, %d failed",
+                    result.get("success", 0),
+                    result.get("failed", 0),
+                )
+            except Exception as prov_err:
+                self.logger.warning("Failed to record link type provenance: %s", prov_err)
+
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore link type mapping from OpenProject provenance data alone.
+
+        This method rebuilds the link type mapping by querying the J2O Migration
+        provenance project for link type mapping work packages. It does NOT require
+        Jira data, making it suitable for recovery scenarios where local mapping
+        files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by Jira link type ID with OpenProject mapping data
+
+        """
+        self.logger.info("Restoring link type mapping from OpenProject provenance data...")
+
+        # Query provenance registry for link type mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("link_type")
+
+        if not provenance_mappings:
+            self.logger.info("No link type provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        for jira_id, prov_data in provenance_mappings.items():
+            mapping[jira_id] = {
+                "jira_id": jira_id,
+                "jira_name": prov_data.get("jira_name"),
+                "custom_field_id": prov_data.get("openproject_id"),
+                "openproject_id": str(prov_data.get("openproject_id")),
+                "matched_by": "j2o_provenance",
+                "status": "mapped",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+
+        # Persist mapping via controller
+        from src import config as _cfg
+        self.link_type_mapping = mapping
+        _cfg.mappings.set_mapping("link_type", mapping)
+
+        self.logger.info("Restored %d link type mappings from OpenProject provenance", len(mapping))
+        return mapping

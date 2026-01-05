@@ -162,7 +162,7 @@ def test_ts_normal_timestamp_operation_works(ts_migrator) -> None:
 
     # Verify script contains expected content
     assert f"WorkPackage.find({wp_id})" in script
-    assert f"wp.created_at = DateTime.parse('{timestamp}')" in script
+    assert f"wp.update_columns(created_at: DateTime.parse('{timestamp}'))" in script
     assert "operations << {" in script
     assert "rescue => e" in script
     assert 'puts "Timestamp preservation completed:"' in script
@@ -199,10 +199,10 @@ def test_ts_different_field_types_work(ts_migrator) -> None:
     wp_map = _create_work_package_mapping(jira_key=jira_key, wp_id=wp_id)
     script = ts_migrator._generate_timestamp_preservation_script(wp_map)
 
-    # Verify all field types are handled
+    # Verify all field types are handled with update_columns format
     for op_type in field_operations:
         field_name = op_type.replace("set_", "")
-        assert f"wp.{field_name} = DateTime.parse('{base_timestamp}')" in script
+        assert f"wp.update_columns({field_name}: DateTime.parse('{base_timestamp}'))" in script
 
     # Should have all operation blocks
     assert script.count("begin") == len(field_operations)
@@ -244,12 +244,12 @@ def test_combined_operations_ua_and_ts_independently(ua_migrator, ts_migrator) -
     # Verify scripts are independent and correct
     assert "wp.author_id = 50" in ua_script
     assert f"WorkPackage.find({ua_wp_id})" in ua_script
-    assert "wp.created_at = DateTime.parse" in ts_script
+    assert "wp.update_columns(created_at: DateTime.parse" in ts_script
     assert f"WorkPackage.find({ts_wp_id})" in ts_script
 
     # Scripts should not contain each other's content
     assert "wp.author_id" not in ts_script
-    assert "wp.created_at" not in ua_script
+    assert "update_columns(created_at:" not in ua_script
 
 
 @pytest.mark.regression

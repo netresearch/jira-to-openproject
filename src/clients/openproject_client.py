@@ -531,6 +531,7 @@ class OpenProjectClient:
 
         local_script_path: Path | None = None
         container_script_path: Path | None = None
+        operation_succeeded = False  # Track success for debug file preservation
         try:
             # Create local script file and transfer both script and data
             local_script_path = self._create_script_file(full_script)
@@ -762,6 +763,7 @@ class OpenProjectClient:
                             raise QueryExecutionError(q_msg) from e
 
                 # Return a structured success response
+                operation_succeeded = True
                 return {
                     "status": "success",
                     "message": "Script executed successfully",
@@ -770,6 +772,8 @@ class OpenProjectClient:
                 }
 
             # No JSON markers found - return an error envelope for callers
+            # Note: Still mark as "succeeded" since execution completed (just no JSON found)
+            operation_succeeded = True
             return {
                 "status": "error",
                 "message": "JSON markers not found in Rails output",
@@ -777,12 +781,44 @@ class OpenProjectClient:
             }
 
         finally:
-            # Best-effort cleanup of local + remote files
-            with suppress(Exception):
-                if local_script_path is not None and container_script_path is not None:
-                    self._cleanup_script_files(local_script_path, container_script_path)
-            with suppress(Exception):
-                self._cleanup_script_files(local_data_path, container_data_path)
+            # Cleanup logic: preserve debug files on errors if configured
+            preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+            should_cleanup = operation_succeeded or not preserve_on_error
+
+            if not should_cleanup:
+                # Preserve files for debugging - log their locations
+                logger.warning(
+                    "Preserving debug files due to error (set preserve_debug_files_on_error=false to auto-cleanup):\n"
+                    "  Local script: %s\n"
+                    "  Container script: %s\n"
+                    "  Local data: %s\n"
+                    "  Container data: %s",
+                    local_script_path,
+                    container_script_path,
+                    local_data_path,
+                    container_data_path,
+                )
+            else:
+                # Best-effort cleanup of local + remote files
+                try:
+                    if local_script_path is not None and container_script_path is not None:
+                        self._cleanup_script_files(local_script_path, container_script_path)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Failed to cleanup script files (local=%s, container=%s): %s",
+                        local_script_path,
+                        container_script_path,
+                        cleanup_err,
+                    )
+                try:
+                    self._cleanup_script_files(local_data_path, container_data_path)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Failed to cleanup data files (local=%s, container=%s): %s",
+                        local_data_path,
+                        container_data_path,
+                        cleanup_err,
+                    )
 
     def transfer_file_to_container(
         self,
@@ -1003,7 +1039,10 @@ class OpenProjectClient:
             self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
 
             # Decide load mode: default to console `load` to avoid tmux pastes but keep low startup cost
+            # Force runner mode if J2O_FORCE_RAILS_RUNNER is set
             mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "console").lower()
+            if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+                mode = "runner"
             if mode == "console":
                 try:
                     _console_output = self.rails_client.execute(
@@ -1614,10 +1653,11 @@ class OpenProjectClient:
 
     def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
         """Remove CustomField records matching the provided name/type."""
-        name_literal = json.dumps(name)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        name_literal = json.dumps(name, ensure_ascii=False)
         type_filter = ""
         if cf_type:
-            type_literal = json.dumps(cf_type)
+            type_literal = json.dumps(cf_type, ensure_ascii=False)
             type_filter = f"scope = scope.where(type: {type_literal})\n"
 
         ruby = (
@@ -1696,6 +1736,420 @@ class OpenProjectClient:
                 self.logger.warning("Failed ensuring TE CF %s: %s", name, e)
 
         return ensured
+
+    # =========================================================================
+    # J2O Provenance Registry
+    # =========================================================================
+    # For entities that cannot have custom fields directly (Groups, Types,
+    # Statuses), we use a special "J2O Migration" project to store provenance
+    # data as work packages. This allows restoration of ALL mappings from OP
+    # alone without requiring local mapping files.
+    # =========================================================================
+
+    J2O_MIGRATION_PROJECT_IDENTIFIER = "j2o-migration-provenance"
+    J2O_MIGRATION_PROJECT_NAME = "J2O Migration Provenance"
+
+    # Entity types tracked in provenance registry (those without direct CF support)
+    # Note: company and account also create OP Projects but from Tempo sources
+    # custom_field and link_type track CF creation for Jira→OP field mapping
+    J2O_PROVENANCE_ENTITY_TYPES = (
+        "project", "group", "type", "status", "company", "account",
+        "custom_field", "link_type",
+    )
+
+    def ensure_j2o_migration_project(self) -> int:
+        """Ensure the J2O Migration Provenance project exists.
+
+        This project stores provenance data for entities that cannot have
+        custom fields attached directly (groups, types, statuses, projects).
+
+        Returns:
+            OpenProject project ID for the J2O Migration project
+
+        """
+        return self.ensure_reporting_project(
+            identifier=self.J2O_MIGRATION_PROJECT_IDENTIFIER,
+            name=self.J2O_MIGRATION_PROJECT_NAME,
+        )
+
+    def ensure_j2o_provenance_types(self, project_id: int) -> dict[str, int]:
+        """Ensure work package types exist for each provenance entity type.
+
+        Creates types like 'J2O Project Mapping', 'J2O Group Mapping', etc.
+
+        Args:
+            project_id: The J2O Migration project ID
+
+        Returns:
+            Dict mapping entity type to OP type ID
+
+        """
+        type_ids: dict[str, int] = {}
+
+        for entity_type in self.J2O_PROVENANCE_ENTITY_TYPES:
+            type_name = f"J2O {entity_type.title()} Mapping"
+
+            script = (
+                "begin\n"
+                f"  type_name = '{type_name}'\n"
+                f"  project_id = {project_id}\n"
+                "  wp_type = Type.find_by(name: type_name)\n"
+                "  unless wp_type\n"
+                "    wp_type = Type.create!(name: type_name, is_default: false, is_milestone: false)\n"
+                "  end\n"
+                "  project = Project.find(project_id)\n"
+                "  unless project.types.include?(wp_type)\n"
+                "    project.types << wp_type\n"
+                "  end\n"
+                "  { id: wp_type.id, name: wp_type.name }\n"
+                "rescue => e\n"
+                "  { error: e.message }\n"
+                "end\n"
+            )
+
+            try:
+                result = self.execute_json_query(script)
+                if isinstance(result, dict) and result.get("id"):
+                    type_ids[entity_type] = int(result["id"])
+                    self.logger.debug("Ensured J2O type '%s' with ID %d", type_name, type_ids[entity_type])
+                elif isinstance(result, dict) and result.get("error"):
+                    self.logger.warning("Failed to ensure J2O type '%s': %s", type_name, result["error"])
+            except Exception as e:
+                self.logger.warning("Error ensuring J2O type '%s': %s", type_name, e)
+
+        return type_ids
+
+    def ensure_j2o_provenance_custom_fields(self) -> dict[str, int]:
+        """Ensure custom fields for OP entity ID mapping exist.
+
+        Creates fields like 'J2O OP Project ID', 'J2O OP Group ID', etc.
+
+        Returns:
+            Dict mapping field name to CF ID
+
+        """
+        cf_ids: dict[str, int] = {}
+
+        # Fields for mapping to OP entity IDs
+        cf_specs = [
+            ("J2O OP Project ID", "int"),
+            ("J2O OP Group ID", "int"),
+            ("J2O OP Type ID", "int"),
+            ("J2O OP Status ID", "int"),
+            ("J2O OP Company ID", "int"),  # Tempo Company → OP Project ID
+            ("J2O OP Account ID", "int"),  # Tempo Account → OP Project ID
+            ("J2O OP Custom_field ID", "int"),  # Jira CF ID → OP CustomField ID
+            ("J2O OP Link_type ID", "int"),  # Jira Link Type ID → OP CustomField ID
+            ("J2O Entity Type", "string"),  # Entity type for filtering
+        ]
+
+        for name, fmt in cf_specs:
+            try:
+                result = self.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField")
+                if isinstance(result, dict) and result.get("id"):
+                    cf_ids[name] = int(result["id"])
+            except Exception as e:
+                self.logger.warning("Failed ensuring provenance CF '%s': %s", name, e)
+
+        return cf_ids
+
+    def record_entity_provenance(
+        self,
+        *,
+        entity_type: str,
+        jira_key: str,
+        jira_id: str | None = None,
+        op_entity_id: int,
+        jira_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Record provenance for an entity that cannot have custom fields.
+
+        Creates or updates a work package in the J2O Migration project that
+        stores the Jira→OP mapping for entities like projects, groups, types,
+        and statuses.
+
+        Args:
+            entity_type: One of 'project', 'group', 'type', 'status'
+            jira_key: The Jira entity key/identifier
+            jira_id: The Jira entity ID (optional)
+            op_entity_id: The OpenProject entity ID
+            jira_name: The Jira entity name (optional)
+
+        Returns:
+            Dict with created/updated work package info
+
+        """
+        if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
+            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+
+        # Ensure infrastructure exists
+        project_id = self.ensure_j2o_migration_project()
+        type_ids = self.ensure_j2o_provenance_types(project_id)
+        cf_ids = self.ensure_j2o_provenance_custom_fields()
+
+        type_id = type_ids.get(entity_type)
+        if not type_id:
+            raise QueryExecutionError(f"Failed to get type ID for {entity_type}")
+
+        # Build work package subject (unique identifier for this mapping)
+        subject = f"{entity_type.upper()}: {jira_key}"
+        if jira_name:
+            subject = f"{subject} ({jira_name})"
+
+        # Get CF IDs for the mapping fields
+        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+        cf_op_id = cf_ids.get(cf_op_id_field)
+        cf_entity_type_id = cf_ids.get("J2O Entity Type")
+
+        script = (
+            "begin\n"
+            f"  project = Project.find({project_id})\n"
+            f"  wp_type = Type.find({type_id})\n"
+            f"  subject = {repr(subject)}\n"
+            "  status = Status.default || Status.first\n"
+            "  priority = IssuePriority.default || IssuePriority.first\n"
+            "  # Find existing or create new\n"
+            f"  wp = project.work_packages.where(type_id: {type_id}).find_by(subject: subject)\n"
+            "  created = false\n"
+            "  if wp.nil?\n"
+            "    wp = WorkPackage.new(\n"
+            "      project: project,\n"
+            "      type: wp_type,\n"
+            "      subject: subject,\n"
+            "      status: status,\n"
+            "      priority: priority,\n"
+            "      author: User.admin.first || User.first\n"
+            "    )\n"
+            "    created = true\n"
+            "  end\n"
+            "  # Set custom field values\n"
+            "  cf_values = {}\n"
+            f"  cf_values[{cf_op_id}] = {op_entity_id} if {cf_op_id}\n" if cf_op_id else ""
+            f"  cf_values[{cf_entity_type_id}] = '{entity_type}' if {cf_entity_type_id}\n" if cf_entity_type_id else ""
+            "  wp.custom_field_values = cf_values if cf_values.any?\n"
+            "  wp.save!\n"
+            "  { success: true, id: wp.id, subject: wp.subject, created: created }\n"
+            "rescue => e\n"
+            "  { success: false, error: e.message, backtrace: e.backtrace.first(3) }\n"
+            "end\n"
+        )
+
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict):
+                if result.get("success"):
+                    action = "Created" if result.get("created") else "Updated"
+                    self.logger.debug("%s provenance WP for %s '%s' → OP ID %d", action, entity_type, jira_key, op_entity_id)
+                return result
+            return {"success": False, "error": f"Unexpected result: {result}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def restore_entity_mappings_from_provenance(self, entity_type: str) -> dict[str, dict[str, Any]]:
+        """Restore entity mappings from provenance work packages.
+
+        Queries the J2O Migration project for work packages of the specified
+        entity type and reconstructs the Jira→OP mapping.
+
+        Args:
+            entity_type: One of 'project', 'group', 'type', 'status'
+
+        Returns:
+            Dict mapping Jira key to mapping data
+
+        """
+        if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
+            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+
+        # Get the project and type IDs (may not exist if never recorded)
+        try:
+            project_result = self.get_project_by_identifier(self.J2O_MIGRATION_PROJECT_IDENTIFIER)
+            if not project_result or not project_result.get("id"):
+                self.logger.info("J2O Migration project not found - no provenance data available")
+                return {}
+            project_id = int(project_result["id"])
+        except Exception:
+            self.logger.debug("J2O Migration project not found")
+            return {}
+
+        # Find the type for this entity
+        type_name = f"J2O {entity_type.title()} Mapping"
+        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+
+        script = (
+            "begin\n"
+            f"  project = Project.find({project_id})\n"
+            f"  wp_type = Type.find_by(name: '{type_name}')\n"
+            "  return [].to_json unless wp_type\n"
+            f"  cf_op_id = CustomField.find_by(name: '{cf_op_id_field}', type: 'WorkPackageCustomField')\n"
+            "  cf_entity_type = CustomField.find_by(name: 'J2O Entity Type', type: 'WorkPackageCustomField')\n"
+            "  # Also get J2O Origin fields for full provenance\n"
+            "  cf_origin_key = CustomField.find_by(name: 'J2O Origin Key', type: 'WorkPackageCustomField')\n"
+            "  cf_origin_id = CustomField.find_by(name: 'J2O Origin ID', type: 'WorkPackageCustomField')\n"
+            "  cf_origin_system = CustomField.find_by(name: 'J2O Origin System', type: 'WorkPackageCustomField')\n"
+            f"  wps = project.work_packages.where(type_id: wp_type.id)\n"
+            "  wps.map do |wp|\n"
+            "    {\n"
+            "      id: wp.id,\n"
+            "      subject: wp.subject,\n"
+            "      op_entity_id: (cf_op_id ? wp.custom_value_for(cf_op_id)&.value&.to_i : nil),\n"
+            "      entity_type: (cf_entity_type ? wp.custom_value_for(cf_entity_type)&.value : nil),\n"
+            "      j2o_origin_key: (cf_origin_key ? wp.custom_value_for(cf_origin_key)&.value : nil),\n"
+            "      j2o_origin_id: (cf_origin_id ? wp.custom_value_for(cf_origin_id)&.value : nil),\n"
+            "      j2o_origin_system: (cf_origin_system ? wp.custom_value_for(cf_origin_system)&.value : nil)\n"
+            "    }\n"
+            "  end\n"
+            "rescue => e\n"
+            "  { error: e.message }\n"
+            "end\n"
+        )
+
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict) and result.get("error"):
+                self.logger.warning("Error restoring %s mappings: %s", entity_type, result["error"])
+                return {}
+
+            if not isinstance(result, list):
+                return {}
+
+            # Build mapping from subject parsing and CF values
+            mappings: dict[str, dict[str, Any]] = {}
+            for wp in result:
+                # Parse subject to extract Jira key: "TYPE: jira-key (name)" or "TYPE: jira-key"
+                subject = wp.get("subject", "")
+                prefix = f"{entity_type.upper()}: "
+                if subject.startswith(prefix):
+                    rest = subject[len(prefix):]
+                    # Handle "(name)" suffix
+                    if " (" in rest and rest.endswith(")"):
+                        jira_key = rest.split(" (")[0]
+                        jira_name = rest.split(" (")[1].rstrip(")")
+                    else:
+                        jira_key = rest
+                        jira_name = None
+
+                    mappings[jira_key] = {
+                        "jira_key": jira_key,
+                        "jira_name": jira_name,
+                        "openproject_id": wp.get("op_entity_id"),
+                        "matched_by": "j2o_provenance",
+                        "j2o_origin_key": wp.get("j2o_origin_key"),
+                        "j2o_origin_id": wp.get("j2o_origin_id"),
+                        "j2o_origin_system": wp.get("j2o_origin_system"),
+                        "restored_from_op": True,
+                        "provenance_wp_id": wp.get("id"),
+                    }
+
+            self.logger.info("Restored %d %s mappings from provenance", len(mappings), entity_type)
+            return mappings
+
+        except Exception as e:
+            self.logger.warning("Failed to restore %s mappings from provenance: %s", entity_type, e)
+            return {}
+
+    def bulk_record_entity_provenance(
+        self,
+        entity_type: str,
+        mappings: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Bulk record provenance for multiple entities.
+
+        Args:
+            entity_type: One of 'project', 'group', 'type', 'status'
+            mappings: List of dicts with keys: jira_key, jira_id (optional),
+                     op_entity_id, jira_name (optional)
+
+        Returns:
+            Dict with success count, failed count, errors
+
+        """
+        if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
+            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+
+        if not mappings:
+            return {"success": 0, "failed": 0, "errors": []}
+
+        # Ensure infrastructure exists (once for all)
+        project_id = self.ensure_j2o_migration_project()
+        type_ids = self.ensure_j2o_provenance_types(project_id)
+        cf_ids = self.ensure_j2o_provenance_custom_fields()
+
+        type_id = type_ids.get(entity_type)
+        if not type_id:
+            return {"success": 0, "failed": len(mappings), "errors": [f"No type ID for {entity_type}"]}
+
+        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+        cf_op_id = cf_ids.get(cf_op_id_field)
+        cf_entity_type_id = cf_ids.get("J2O Entity Type")
+
+        # Build Ruby array of mappings
+        ruby_mappings = []
+        for m in mappings:
+            jira_key = m.get("jira_key", "")
+            jira_name = m.get("jira_name", "")
+            op_entity_id = m.get("op_entity_id") or m.get("openproject_id")
+            if jira_key and op_entity_id:
+                subject = f"{entity_type.upper()}: {jira_key}"
+                if jira_name:
+                    subject = f"{subject} ({jira_name})"
+                ruby_mappings.append(
+                    f"  {{ subject: {repr(subject)}, op_entity_id: {op_entity_id} }}"
+                )
+
+        if not ruby_mappings:
+            return {"success": 0, "failed": 0, "errors": []}
+
+        script = (
+            "begin\n"
+            f"  project = Project.find({project_id})\n"
+            f"  wp_type = Type.find({type_id})\n"
+            "  status = Status.default || Status.first\n"
+            "  priority = IssuePriority.default || IssuePriority.first\n"
+            "  author = User.admin.first || User.first\n"
+            f"  cf_op_id = {cf_op_id or 'nil'}\n"
+            f"  cf_entity_type_id = {cf_entity_type_id or 'nil'}\n"
+            "  mappings = [\n" + ",\n".join(ruby_mappings) + "\n  ]\n"
+            "  success = 0\n"
+            "  failed = 0\n"
+            "  errors = []\n"
+            "  mappings.each do |m|\n"
+            "    begin\n"
+            "      wp = project.work_packages.where(type_id: wp_type.id).find_by(subject: m[:subject])\n"
+            "      if wp.nil?\n"
+            "        wp = WorkPackage.new(\n"
+            "          project: project,\n"
+            "          type: wp_type,\n"
+            "          subject: m[:subject],\n"
+            "          status: status,\n"
+            "          priority: priority,\n"
+            "          author: author\n"
+            "        )\n"
+            "      end\n"
+            "      cf_values = {}\n"
+            "      cf_values[cf_op_id] = m[:op_entity_id] if cf_op_id\n"
+            f"      cf_values[cf_entity_type_id] = '{entity_type}' if cf_entity_type_id\n"
+            "      wp.custom_field_values = cf_values if cf_values.any?\n"
+            "      wp.save!\n"
+            "      success += 1\n"
+            "    rescue => e\n"
+            "      failed += 1\n"
+            "      errors << \"#{m[:subject]}: #{e.message}\"\n"
+            "    end\n"
+            "  end\n"
+            "  { success: success, failed: failed, errors: errors.first(10) }\n"
+            "rescue => e\n"
+            "  { success: 0, failed: mappings.size, errors: [e.message] }\n"
+            "end\n"
+        )
+
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": 0, "failed": len(mappings), "errors": [f"Unexpected result: {result}"]}
+        except Exception as e:
+            return {"success": 0, "failed": len(mappings), "errors": [str(e)]}
 
     def get_roles(self) -> list[dict[str, Any]]:
         """Return OpenProject roles (id, name, builtin flag)."""
@@ -2046,7 +2500,8 @@ end
             "sharing": sharing or "none",
         }
 
-        payload_json = json.dumps(payload)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        payload_json = json.dumps(payload, ensure_ascii=False)
         script = f"""
         require 'json'
         input = JSON.parse(<<'JSON_DATA')
@@ -2105,7 +2560,8 @@ JSON_DATA
             "options": options or {},
         }
 
-        payload_json = json.dumps(payload)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        payload_json = json.dumps(payload, ensure_ascii=False)
         script = f"""
         require 'json'
         input = JSON.parse(<<'JSON_DATA')
@@ -2189,7 +2645,8 @@ JSON_DATA
             "title": title,
             "content": content,
         }
-        payload_json = json.dumps(payload)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        payload_json = json.dumps(payload, ensure_ascii=False)
 
         script = f"""
         require 'json'
@@ -2405,6 +2862,116 @@ JSON_DATA
         except Exception as e:  # noqa: BLE001
             self.logger.warning("Failed to upsert project attribute %s for %s: %s", name, project_id, e)
             return False
+
+    def bulk_upsert_project_attributes(
+        self,
+        attributes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Bulk upsert project attributes in a single Rails call.
+
+        Args:
+            attributes: List of dicts with keys:
+                - project_id: int
+                - name: str
+                - value: str
+                - field_format: str (default 'string')
+
+        Returns:
+            Dict with 'success': bool, 'processed': int, 'failed': int
+        """
+        if not attributes:
+            return {"success": True, "processed": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for attr in attributes:
+            data.append({
+                "pid": int(attr["project_id"]),
+                "name": str(attr["name"]),
+                "value": str(attr.get("value", "")),
+                "fmt": str(attr.get("field_format", "string")),
+            })
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        ruby = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          # Ensure section exists once
+          section = nil
+          begin
+            section = CustomFieldSection.find_or_create_by!(type: 'ProjectCustomFieldSection', name: 'J2O Origin')
+          rescue => e
+          end
+
+          # Cache custom fields by name
+          cf_cache = {{}}
+
+          results = {{ processed: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              pid = item['pid']
+              name = item['name']
+              fmt = item['fmt']
+              val = item['value']
+
+              # Get or create custom field
+              cf = cf_cache[name]
+              if !cf
+                cf = ProjectCustomField.find_by(name: name)
+                if !cf
+                  cf = ProjectCustomField.new(
+                    name: name,
+                    field_format: fmt,
+                    is_required: false,
+                    is_filter: false,
+                    searchable: true,
+                    editable: true,
+                    admin_only: false
+                  )
+                  cf.custom_field_section_id = section.id if section && cf.respond_to?(:custom_field_section_id=) rescue nil
+                  cf.is_for_all = false if cf.respond_to?(:is_for_all=) rescue nil
+                  cf.save!
+                end
+                # Attach section if needed
+                if section && (!cf.custom_field_section_id || cf.custom_field_section_id.nil?)
+                  cf.update!(custom_field_section_id: section.id) rescue nil
+                end
+                cf_cache[name] = cf
+              end
+
+              # Ensure mapping for project
+              ProjectCustomFieldProjectMapping.find_or_create_by!(project_id: pid, custom_field_id: cf.id)
+
+              # Upsert value
+              cv = CustomValue.find_or_initialize_by(customized_type: 'Project', customized_id: pid, custom_field_id: cf.id)
+              cv.value = val
+              cv.save!
+
+              results[:processed] += 1
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ pid: item['pid'], name: item['name'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(ruby)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Bulk upsert project attributes failed: %s", e)
+            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(e)}
 
     def rename_project_attribute(self, *, old_name: str, new_name: str) -> bool:
         """Rename a Project attribute (ProjectCustomField) if it exists.
@@ -3320,7 +3887,8 @@ JSON_DATA
 
         """
         # Convert Python dict to Ruby hash format
-        ruby_hash = json.dumps(attributes).replace('"', "'")
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
 
         # Build Rails command for creating a record
         # Use a simple, single-line approach that works well with tmux console
@@ -3435,7 +4003,8 @@ JSON_DATA
 
         """
         # Convert Python dict to Ruby hash format
-        ruby_hash = json.dumps(attributes).replace('"', "'")
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
 
         # Build command to update the record
         command = f"""
@@ -3946,6 +4515,10 @@ JSON_DATA
             )
 
             try:
+                # Skip console attempt entirely if forced runner mode
+                if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+                    from src.clients.rails_console_client import ConsoleNotReadyError  # noqa: PLC0415
+                    raise ConsoleNotReadyError("Forced runner mode via J2O_FORCE_RAILS_RUNNER")
                 output = self.rails_client.execute(write_query, suppress_output=True)
                 self._check_console_output_for_errors(output or "", context="get_statuses")
                 logger.debug("Successfully executed statuses write command")
@@ -3983,6 +4556,7 @@ JSON_DATA
                 else:
                     raise
 
+            operation_succeeded = False  # Track success for debug file preservation
             try:
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
                 stdout = ""
@@ -4012,12 +4586,27 @@ JSON_DATA
                     raise QueryExecutionError(_emsg)
                 parsed = json.loads(stdout)
                 logger.info("Successfully loaded %d statuses from container file", len(parsed))
+                operation_succeeded = True
                 return parsed if isinstance(parsed, list) else []
             finally:
-                with suppress(Exception):
-                    self.ssh_client.execute_command(
-                        f"docker exec {self.container_name} rm -f {file_path}",
+                preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+                should_cleanup = operation_succeeded or not preserve_on_error
+                if not should_cleanup:
+                    logger.warning(
+                        "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
+                        file_path,
                     )
+                else:
+                    try:
+                        self.ssh_client.execute_command(
+                            f"docker exec {self.container_name} rm -f {file_path}",
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Failed to cleanup container temp file %s: %s",
+                            file_path,
+                            cleanup_err,
+                        )
         except Exception as e:
             msg = "Failed to get statuses."
             raise QueryExecutionError(msg) from e
@@ -4045,6 +4634,10 @@ JSON_DATA
             )
 
             try:
+                # Skip console attempt entirely if forced runner mode
+                if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+                    from src.clients.rails_console_client import ConsoleNotReadyError  # noqa: PLC0415
+                    raise ConsoleNotReadyError("Forced runner mode via J2O_FORCE_RAILS_RUNNER")
                 self.rails_client.execute(write_query, suppress_output=True)
                 logger.debug("Successfully executed work package types write command")
             except Exception as e:
@@ -4080,6 +4673,7 @@ JSON_DATA
                 else:
                     raise
 
+            operation_succeeded = False  # Track success for debug file preservation
             try:
                 ssh_command = f"docker exec {self.container_name} cat {file_path}"
                 stdout = ""
@@ -4109,12 +4703,27 @@ JSON_DATA
                     "Successfully loaded %d work package types from container file",
                     len(parsed) if isinstance(parsed, list) else 0,
                 )
+                operation_succeeded = True
                 return parsed if isinstance(parsed, list) else []
             finally:
-                with suppress(Exception):
-                    self.ssh_client.execute_command(
-                        f"docker exec {self.container_name} rm -f {file_path}",
+                preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+                should_cleanup = operation_succeeded or not preserve_on_error
+                if not should_cleanup:
+                    logger.warning(
+                        "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
+                        file_path,
                     )
+                else:
+                    try:
+                        self.ssh_client.execute_command(
+                            f"docker exec {self.container_name} rm -f {file_path}",
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Failed to cleanup container temp file %s: %s",
+                            file_path,
+                            cleanup_err,
+                        )
         except Exception as e:
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
@@ -4316,10 +4925,10 @@ JSON_DATA
         except Exception as e:
             msg = "Failed to get project."
             raise QueryExecutionError(msg) from e
-            if project is None:
-                msg = f"Project with identifier '{identifier}' not found"
-                raise RecordNotFoundError(msg)
-            return project
+        if project is None:
+            msg = f"Project with identifier '{identifier}' not found"
+            raise RecordNotFoundError(msg)
+        return project
 
     def delete_all_work_packages(self) -> int:
         """Delete all work packages in bulk.
@@ -4678,7 +5287,8 @@ JSON_DATA
             return []
 
     def find_issue_priority_by_name(self, name: str) -> dict[str, Any] | None:
-        script = f"p = IssuePriority.find_by(name: {json.dumps(name)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
+        # Use ensure_ascii=False to output UTF-8 directly
+        script = f"p = IssuePriority.find_by(name: {json.dumps(name, ensure_ascii=False)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
         try:
             result = self.execute_json_query(script)
             return result if isinstance(result, dict) else None
@@ -4688,8 +5298,9 @@ JSON_DATA
 
     def create_issue_priority(self, name: str, position: int | None = None, is_default: bool = False) -> dict[str, Any]:
         pos_expr = "nil" if position is None else str(int(position))
+        # Use ensure_ascii=False to output UTF-8 directly
         script = f"""
-        p = IssuePriority.create!(name: {json.dumps(name)}, position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
+        p = IssuePriority.create!(name: {json.dumps(name, ensure_ascii=False)}, position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
         {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}
         """
         try:
@@ -4800,6 +5411,441 @@ result.to_json
             msg = "Failed to add watcher."
             raise QueryExecutionError(msg) from e
 
+    def bulk_add_watchers(
+        self,
+        watchers: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Add multiple watchers in a single Rails call.
+
+        Args:
+            watchers: List of dicts with keys:
+                - work_package_id: int
+                - user_id: int
+
+        Returns:
+            Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
+        """
+        if not watchers:
+            return {"success": True, "created": 0, "skipped": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for w in watchers:
+            data.append({
+                "wp_id": int(w["work_package_id"]),
+                "user_id": int(w["user_id"]),
+            })
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        # that Ruby misinterprets as invalid Unicode escape sequences
+        data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        script = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              wp_id = item['wp_id']
+              user_id = item['user_id']
+
+              # Check if already exists
+              if Watcher.exists?(watchable_type: 'WorkPackage', watchable_id: wp_id, user_id: user_id)
+                results[:skipped] += 1
+              else
+                wp = WorkPackage.find_by(id: wp_id)
+                u = User.find_by(id: user_id)
+                if wp && u
+                  w = Watcher.new(user: u, watchable: wp)
+                  if w.save
+                    results[:created] += 1
+                  else
+                    results[:failed] += 1
+                    results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: w.errors.full_messages.join(', ') }}
+                  end
+                else
+                  results[:failed] += 1
+                  results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: 'WorkPackage or User not found' }}
+                end
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['wp_id'], user_id: item['user_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk add watchers failed: %s", e)
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(e)}
+
+    def bulk_set_wp_custom_field_values(
+        self,
+        cf_values: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Set custom field values for multiple work packages in a single Rails call.
+
+        Args:
+            cf_values: List of dicts with keys:
+                - work_package_id: int
+                - custom_field_id: int
+                - value: str
+
+        Returns:
+            Dict with 'success': bool, 'updated': int, 'failed': int
+        """
+        if not cf_values:
+            return {"success": True, "updated": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for cv in cf_values:
+            data.append({
+                "wp_id": int(cv["work_package_id"]),
+                "cf_id": int(cv["custom_field_id"]),
+                "value": str(cv["value"]),
+            })
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        script = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          results = {{ updated: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              wp_id = item['wp_id']
+              cf_id = item['cf_id']
+              val = item['value']
+
+              wp = WorkPackage.find_by(id: wp_id)
+              cf = CustomField.find_by(id: cf_id)
+              if wp && cf
+                cv = wp.custom_value_for(cf)
+                if cv
+                  cv.value = val
+                  cv.save
+                else
+                  wp.custom_field_values = {{ cf.id => val }}
+                end
+                wp.save!
+                results[:updated] += 1
+              else
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: wp_id, cf_id: cf_id, error: 'WorkPackage or CustomField not found' }}
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['wp_id'], cf_id: item['cf_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk set WP CF values failed: %s", e)
+            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(e)}
+
+    def upsert_work_package_description_section(
+        self,
+        work_package_id: int,
+        section_marker: str,
+        content: str,
+    ) -> bool:
+        """Upsert a section in a work package's description.
+
+        Args:
+            work_package_id: The work package ID
+            section_marker: The section title/marker (e.g., "Remote Links")
+            content: The markdown content for the section
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Escape content for Ruby
+        safe_content = content.replace("'", "\\'").replace("\n", "\\n")
+        safe_marker = section_marker.replace("'", "\\'")
+
+        script = f"""
+          wp = WorkPackage.find_by(id: {work_package_id})
+          if !wp
+            {{ success: false, error: 'WorkPackage not found' }}.to_json
+          else
+            desc = wp.description || ''
+            marker = '## {safe_marker}'
+            content = '{safe_content}'
+
+            # Find existing section
+            section_regex = /\\n?## {safe_marker}\\n[\\s\\S]*?(?=\\n## |\\z)/
+            if desc.match?(section_regex)
+              # Replace existing section
+              new_section = "\\n" + marker + "\\n" + content
+              desc = desc.gsub(section_regex, new_section)
+            else
+              # Append new section
+              desc = desc.strip + "\\n\\n" + marker + "\\n" + content
+            end
+
+            wp.description = desc.strip
+            if wp.save
+              {{ success: true }}.to_json
+            else
+              {{ success: false, error: wp.errors.full_messages.join(', ') }}.to_json
+            end
+          end
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result.get("success", False)
+            return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to upsert WP description section: %s", e)
+            return False
+
+    def bulk_upsert_wp_description_sections(
+        self,
+        sections: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upsert description sections for multiple work packages in a single Rails call.
+
+        Args:
+            sections: List of dicts with keys:
+                - work_package_id: int
+                - section_marker: str
+                - content: str
+
+        Returns:
+            Dict with 'success': bool, 'updated': int, 'failed': int
+        """
+        if not sections:
+            return {"success": True, "updated": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for s in sections:
+            data.append({
+                "wp_id": int(s["work_package_id"]),
+                "marker": str(s["section_marker"]),
+                "content": str(s["content"]),
+            })
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        script = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          results = {{ updated: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              wp_id = item['wp_id']
+              marker_text = item['marker']
+              content = item['content']
+
+              wp = WorkPackage.find_by(id: wp_id)
+              if !wp
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: wp_id, error: 'WorkPackage not found' }}
+                next
+              end
+
+              desc = wp.description || ''
+              marker = '## ' + marker_text
+
+              # Find existing section using regex
+              section_regex = Regexp.new("\\n?" + Regexp.escape(marker) + "\\n[\\s\\S]*?(?=\\n## |\\z)")
+              if desc.match?(section_regex)
+                new_section = "\\n" + marker + "\\n" + content
+                desc = desc.gsub(section_regex, new_section)
+              else
+                desc = desc.strip + "\\n\\n" + marker + "\\n" + content
+              end
+
+              wp.description = desc.strip
+              if wp.save
+                results[:updated] += 1
+              else
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: wp_id, error: wp.errors.full_messages.join(', ') }}
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['wp_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "updated": 0, "failed": len(sections), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk upsert WP description sections failed: %s", e)
+            return {"success": False, "updated": 0, "failed": len(sections), "error": str(e)}
+
+    def create_work_package_activity(
+        self,
+        work_package_id: int,
+        activity_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Create a journal/activity (comment) on a work package.
+
+        Args:
+            work_package_id: The work package ID
+            activity_data: Dict with 'comment' key containing {'raw': 'comment text'}
+
+        Returns:
+            Created journal data or None on failure
+        """
+        comment = activity_data.get("comment", {})
+        if isinstance(comment, dict):
+            comment_text = comment.get("raw", "")
+        else:
+            comment_text = str(comment)
+
+        if not comment_text:
+            return None
+
+        # Escape single quotes for Ruby
+        escaped_comment = comment_text.replace("\\", "\\\\").replace("'", "\\'")
+
+        script = f"""
+        begin
+          wp = WorkPackage.find({work_package_id})
+          user = User.current || User.find_by(admin: true)
+          journal = wp.journals.create!(
+            user: user,
+            notes: '{escaped_comment}'
+          )
+          {{ id: journal.id, status: 'created' }}
+        rescue => e
+          {{ error: e.message }}
+        end
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict) and not result.get("error"):
+                return result
+            logger.debug("Failed to create activity: %s", result)
+            return None
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Failed to create activity for WP#%d: %s", work_package_id, e)
+            return None
+
+    def bulk_create_work_package_activities(
+        self,
+        activities: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Create multiple journal/activity entries (comments) in a single Rails call.
+
+        Args:
+            activities: List of dicts with keys:
+                - work_package_id: int
+                - comment: str (the comment text)
+                - user_id: int (optional, defaults to admin user)
+
+        Returns:
+            Dict with 'success': bool, 'created': int, 'failed': int
+        """
+        if not activities:
+            return {"success": True, "created": 0, "failed": 0}
+
+        # Build JSON data for Ruby - escape properly
+        data = []
+        for act in activities:
+            comment = act.get("comment", "")
+            if isinstance(comment, dict):
+                comment = comment.get("raw", "")
+            data.append({
+                "work_package_id": int(act["work_package_id"]),
+                "comment": str(comment),
+                "user_id": act.get("user_id"),
+            })
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        script = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          results = {{ created: 0, failed: 0, errors: [] }}
+          default_user = User.current || User.find_by(admin: true)
+
+          data.each do |item|
+            begin
+              wp = WorkPackage.find_by(id: item['work_package_id'])
+              unless wp
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: item['work_package_id'], error: 'WorkPackage not found' }}
+                next
+              end
+
+              user = item['user_id'] ? User.find_by(id: item['user_id']) : default_user
+              user ||= default_user
+
+              comment_text = item['comment'].to_s
+              next if comment_text.empty?
+
+              journal = wp.journals.create!(
+                user: user,
+                notes: comment_text
+              )
+              results[:created] += 1
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['work_package_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "created": 0, "failed": len(activities), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk create WP activities failed: %s", e)
+            return {"success": False, "created": 0, "failed": len(activities), "error": str(e)}
+
     def find_relation(
         self,
         from_work_package_id: int,
@@ -4870,6 +5916,91 @@ result.to_json
         except Exception as e:
             msg = f"Failed to create relation: {e}"
             raise QueryExecutionError(msg) from e
+
+    def bulk_create_relations(
+        self,
+        relations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Create multiple relations in a single Rails call.
+
+        Args:
+            relations: List of dicts with keys:
+                - from_id: int (from work package ID)
+                - to_id: int (to work package ID)
+                - relation_type: str (relates, duplicates, blocks, precedes, follows)
+
+        Returns:
+            Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
+        """
+        if not relations:
+            return {"success": True, "created": 0, "skipped": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for rel in relations:
+            data.append({
+                "from_id": int(rel["from_id"]),
+                "to_id": int(rel["to_id"]),
+                "type": str(rel["relation_type"]),
+            })
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        script = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              from_id = item['from_id']
+              to_id = item['to_id']
+              rel_type = item['type']
+
+              # Check if relation already exists (either direction for symmetric types)
+              existing = Relation.where(from_id: from_id, to_id: to_id).first
+              existing ||= Relation.where(from_id: to_id, to_id: from_id).first if ['relates'].include?(rel_type)
+
+              if existing
+                results[:skipped] += 1
+              else
+                from_wp = WorkPackage.find_by(id: from_id)
+                to_wp = WorkPackage.find_by(id: to_id)
+                if from_wp && to_wp
+                  rel = Relation.new(from: from_wp, to: to_wp, relation_type: rel_type)
+                  if rel.save
+                    results[:created] += 1
+                  else
+                    results[:failed] += 1
+                    results[:errors] << {{ from: from_id, to: to_id, error: rel.errors.full_messages.join(', ') }}
+                  end
+                else
+                  results[:failed] += 1
+                  results[:errors] << {{ from: from_id, to: to_id, error: 'WorkPackage not found' }}
+                end
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ from: item['from_id'], to: item['to_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk create relations failed: %s", e)
+            return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(e)}
 
     def batch_create_time_entries(  # noqa: C901
         self,
@@ -4970,16 +6101,32 @@ result.to_json
             "    )",
             "    begin",
             "      wp = WorkPackage.find_by(id: entry[:work_package_id])",
-            "      if wp",
-            "        te.entity = wp",
-            "        te.project = wp.project",
+            "      if wp.nil?",
+            "        failed_count += 1",
+            "        results << { index: entry[:index], success: false, error: 'WorkPackage not found: ' + entry[:work_package_id].to_s }",
+            "        next",
             "      end",
+            "      te.entity = wp",
+            "      te.project = wp.project",
             "    rescue => e",
+            "      failed_count += 1",
+            "      results << { index: entry[:index], success: false, error: 'WorkPackage lookup failed: ' + e.message }",
+            "      next",
             "    end",
             "    begin",
+            "      user = User.find_by(id: entry[:user_id])",
+            "      if user.nil?",
+            "        failed_count += 1",
+            "        results << { index: entry[:index], success: false, error: 'User not found: ' + entry[:user_id].to_s }",
+            "        next",
+            "      end",
+            "      te.user = user",
             "      te.user_id = entry[:user_id]",
             "      te.logged_by_id = entry[:user_id]",
             "    rescue => e",
+            "      failed_count += 1",
+            "      results << { index: entry[:index], success: false, error: 'User lookup failed: ' + e.message }",
+            "      next",
             "    end",
             "    begin",
             "      key = entry[:jira_worklog_key]",
@@ -5078,10 +6225,30 @@ result.to_json
         if not work_packages:
             return {"created": 0, "failed": 0, "results": []}
 
-        # Build batch work package creation script
-        work_packages_json = json.dumps(work_packages)
+        # Write JSON to a temp file in container to avoid escaping issues
+        import tempfile
+        import uuid
+
+        batch_id = uuid.uuid4().hex[:8]
+        container_json_path = f"/tmp/j2o_batch_{batch_id}.json"
+
+        # Write JSON to local temp file, then transfer to container
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(work_packages, f)
+            local_json_path = f.name
+
+        try:
+            from pathlib import Path
+
+            self.docker_client.transfer_file_to_container(Path(local_json_path), Path(container_json_path))
+        finally:
+            import os
+
+            os.unlink(local_json_path)
+
+        # Build batch work package creation script - read JSON from file
         script = f"""
-        work_packages_data = {work_packages_json}
+        work_packages_data = JSON.parse(File.read('{container_json_path}'))
         created_count = 0
         failed_count = 0
         results = []
@@ -5131,7 +6298,7 @@ result.to_json
               wp.assigned_to = User.find(wp_data['assigned_to_id'])
             end
 
-            # Assign provenance custom fields if provided as [{id, value}]
+            # Assign provenance custom fields if provided as [{{id, value}}]
             begin
               cf_items = wp_data['custom_fields']
               if cf_items && cf_items.respond_to?(:each)
@@ -5184,12 +6351,32 @@ result.to_json
         }}
         """
 
+        operation_succeeded = False  # Track success for debug file preservation
         try:
             result = self.execute_json_query(script)
+            operation_succeeded = True
             return result if isinstance(result, dict) else {"created": 0, "failed": len(work_packages), "results": []}
         except Exception as e:
             msg = f"Failed to batch create work packages: {e}"
             raise QueryExecutionError(msg) from e
+        finally:
+            # Clean up container JSON file - preserve on error for debugging
+            preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+            should_cleanup = operation_succeeded or not preserve_on_error
+            if not should_cleanup:
+                self.logger.warning(
+                    "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
+                    container_json_path,
+                )
+            else:
+                try:
+                    self.docker_client.execute_command(f"rm -f {container_json_path}")
+                except Exception as cleanup_err:
+                    self.logger.warning(
+                        "Failed to cleanup container temp file %s: %s",
+                        container_json_path,
+                        cleanup_err,
+                    )
 
     def get_project_enhanced(self, project_id: int) -> dict[str, Any]:
         """Get comprehensive project information with caching."""
@@ -5271,6 +6458,82 @@ result.to_json
             logger.warning("Exception enabling modules on project %s: %s", project_id, e)
             return False
 
+    def bulk_enable_project_modules(
+        self,
+        project_modules: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Enable modules for multiple projects in a single Rails call.
+
+        Args:
+            project_modules: List of dicts with keys:
+                - project_id: int
+                - modules: list[str]
+
+        Returns:
+            Dict with 'success': bool, 'processed': int, 'failed': int
+        """
+        if not project_modules:
+            return {"success": True, "processed": 0, "failed": 0}
+
+        # Build JSON data for Ruby
+        data = []
+        for pm in project_modules:
+            if pm.get("modules"):
+                data.append({
+                    "pid": int(pm["project_id"]),
+                    "modules": [str(m) for m in pm["modules"]],
+                })
+
+        if not data:
+            return {"success": True, "processed": 0, "failed": 0}
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        data_json = json.dumps(data, ensure_ascii=False)
+        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        script = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          results = {{ processed: 0, failed: 0, errors: [] }}
+
+          data.each do |item|
+            begin
+              p = Project.find(item['pid'])
+              names = p.enabled_module_names.map(&:to_s)
+              desired = item['modules']
+              added = false
+              desired.each do |m|
+                unless names.include?(m)
+                  names << m
+                  added = true
+                end
+              end
+              if added
+                p.enabled_module_names = names
+                p.save!
+              end
+              results[:processed] += 1
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ pid: item['pid'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self.execute_json_query(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "processed": 0, "failed": len(data), "error": str(result)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bulk enable project modules failed: %s", e)
+            return {"success": False, "processed": 0, "failed": len(data), "error": str(e)}
+
     def batch_get_users_by_ids(self, user_ids: list[int]) -> dict[int, dict]:
         """Retrieve multiple users in batches."""
         if not user_ids:
@@ -5327,7 +6590,9 @@ result.to_json
             return {"updated": 0, "failed": 0, "results": []}
 
         # Build batch update script
-        updates_json = json.dumps(updates)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        # that Ruby misinterprets as invalid Unicode escape sequences
+        updates_json = json.dumps(updates, ensure_ascii=False)
         script = f"""
         updates = {updates_json}
         updated_count = 0
@@ -5362,6 +6627,86 @@ result.to_json
         except Exception as e:
             msg = f"Failed to batch update work packages: {e}"
             raise QueryExecutionError(msg) from e
+
+    def create_work_package(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Create a single work package.
+
+        Args:
+            payload: Work package data. Can be in API format (with _links)
+                     or direct format (with project_id, type_id, etc.)
+
+        Returns:
+            Created work package data or None on failure
+
+        """
+        # Convert API-style payload to batch format if needed
+        wp_data: dict[str, Any] = {}
+
+        # Handle API-style _links format
+        if "_links" in payload:
+            links = payload["_links"]
+
+            # Extract project ID from href
+            if "project" in links and "href" in links["project"]:
+                href = links["project"]["href"]
+                if match := re.search(r"/projects/(\d+)", href):
+                    wp_data["project_id"] = int(match.group(1))
+
+            # Extract type ID from href
+            if "type" in links and "href" in links["type"]:
+                href = links["type"]["href"]
+                if match := re.search(r"/types/(\d+)", href):
+                    wp_data["type_id"] = int(match.group(1))
+
+            # Extract status ID from href
+            if "status" in links and "href" in links["status"]:
+                href = links["status"]["href"]
+                if match := re.search(r"/statuses/(\d+)", href):
+                    wp_data["status_id"] = int(match.group(1))
+        else:
+            # Direct format - copy relevant fields
+            for key in ["project_id", "type_id", "status_id", "priority_id", "author_id", "assigned_to_id"]:
+                if key in payload:
+                    wp_data[key] = payload[key]
+
+        # Copy subject and description
+        if "subject" in payload:
+            wp_data["subject"] = payload["subject"]
+        if "description" in payload:
+            wp_data["description"] = payload["description"]
+
+        # Call the internal batch method directly for single item
+        # to avoid process_batches wrapper which may alter return format
+        try:
+            result = self._create_work_packages_batch([wp_data])
+            if isinstance(result, dict) and result.get("results"):
+                results = result["results"]
+                if results and len(results) > 0:
+                    return results[0] if isinstance(results[0], dict) else {"id": results[0]}
+        except Exception as e:
+            logger.error("Failed to create work package: %s", e)
+        return None
+
+    def update_work_package(
+        self,
+        wp_id: int,
+        updates: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Update a single work package.
+
+        Args:
+            wp_id: Work package ID
+            updates: Fields to update
+
+        Returns:
+            Updated work package data or None on failure
+
+        """
+        update_data = {"id": wp_id, **updates}
+        result = self.batch_update_work_packages([update_data])
+        if result and result.get("results"):
+            return result["results"][0]
+        return None
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for user email lookups
     def batch_get_users_by_emails(  # noqa: C901
@@ -5698,7 +7043,8 @@ result.to_json
 
         # Use ActiveRecord's built-in parameterization instead of string building
         # This approach delegates sanitization to Rails rather than DIY
-        values_json = json.dumps(values)
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        values_json = json.dumps(values, ensure_ascii=False)
 
         # Add payload byte cap to prevent memory exhaustion (Zen's recommendation)
         payload_bytes = len(values_json.encode("utf-8"))

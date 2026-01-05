@@ -74,7 +74,6 @@ make type-check
 
 # Start and attach to a local tmux session linked to remote Rails console
 make start-rails ATTACH=true
-``` 
 ```
 
 ### Migration Execution
@@ -270,6 +269,31 @@ tests/
 ├── integration/   # External service tests
 ├── end_to_end/    # Complete workflow tests
 └── utils/         # Shared testing utilities
+```
+
+**Running tests:**
+
+| Command | Description |
+|---------|-------------|
+| `make dev-test` | Unit tests locally (fastest feedback) |
+| `make container-test` | Unit tests in Docker (full deps, ~79 tests) |
+| `make container-test-integration` | Integration tests in Docker (~156 tests, mocked) |
+| `make test-slow` | Integration + E2E tests in Docker |
+| `make test-verbose` | Tests with verbose output |
+| `make lint` | Run linting (ruff + mypy) |
+
+**Test environment variables:**
+- `J2O_RUN_INTEGRATION=true` — Enable integration tests locally
+- `J2O_RUN_ALL_TESTS=true` — Enable all test categories
+- `J2O_ENABLE_SSH=true` — Enable SSH-dependent tests
+
+**Running specific tests:**
+```bash
+# Run a specific test pattern
+make container-test TEST_OPTS="-k test_user_migration"
+
+# Run with live SSH connections (requires infrastructure)
+make test-live-ssh
 ```
 
 ## Security

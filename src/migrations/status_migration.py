@@ -649,6 +649,28 @@ class StatusMigration(BaseMigration):
                     migration_status_mapping[str(k)] = v
                 self.mappings.status_mapping = migration_status_mapping
 
+            # Record provenance for successfully migrated statuses
+            # This enables restoration of mappings from OP alone without local files
+            provenance_mappings = [
+                {
+                    "jira_key": str(m.get("jira_id", k)),  # Use Jira status ID as key
+                    "jira_name": m.get("jira_name"),
+                    "op_entity_id": m["openproject_id"],
+                }
+                for k, m in status_mapping.items()
+                if m.get("openproject_id")
+            ]
+            if provenance_mappings:
+                try:
+                    result = self.op_client.bulk_record_entity_provenance("status", provenance_mappings)
+                    logger.info(
+                        "Recorded status provenance: %d success, %d failed",
+                        result.get("success", 0),
+                        result.get("failed", 0),
+                    )
+                except Exception as prov_err:
+                    logger.warning("Failed to record status provenance: %s", prov_err)
+
         logger.info("Status migration completed")
         logger.info("Total Jira statuses processed: %s", len(self.jira_statuses))
         logger.info(
@@ -705,6 +727,52 @@ class StatusMigration(BaseMigration):
             "unmapped_statuses": unmapped[:10],  # Limit to first 10
             "message": f"Found {mapped_statuses}/{total_statuses} mapped statuses",
         }
+
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore status mapping from OpenProject provenance data alone.
+
+        This method rebuilds the status mapping by querying the J2O Migration
+        provenance project for status mapping work packages. It does NOT require
+        Jira data, making it suitable for recovery scenarios where local mapping
+        files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by Jira status ID with OpenProject mapping data
+
+        """
+        logger.info("Restoring status mapping from OpenProject provenance data...")
+
+        # Query provenance registry for status mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("status")
+
+        if not provenance_mappings:
+            logger.info("No status provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        for jira_status_id, prov_data in provenance_mappings.items():
+            mapping[jira_status_id] = {
+                "jira_id": int(jira_status_id) if jira_status_id.isdigit() else jira_status_id,
+                "jira_name": prov_data.get("jira_name"),
+                "openproject_id": prov_data.get("openproject_id"),
+                "matched_by": "j2o_provenance",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+
+        # Persist mapping
+        from src import config as _cfg
+
+        _cfg.mappings.set_mapping("status", mapping)
+        self.status_mapping = mapping
+
+        # Update the mappings instance if available
+        if self.mappings is not None:
+            self.mappings.status_mapping = mapping
+
+        logger.info("Restored %d status mappings from OpenProject provenance", len(mapping))
+        return mapping
 
     def run(self) -> ComponentResult:
         """Run the status migration process.

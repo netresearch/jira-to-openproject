@@ -48,7 +48,15 @@ class DummyOp:
 
     def execute_script_with_data(self, script_content: str, data: object):
         self.last_input = list(data) if isinstance(data, list) else []
-        return {"updated": len(self.last_input), "failed": 0}
+        # Return results in the expected format for attachments_migration._load
+        results = []
+        for i, item in enumerate(self.last_input):
+            results.append({
+                "jira_key": item.get("jira_key"),
+                "filename": item.get("filename"),
+                "attachment_id": 1000 + i,
+            })
+        return {"results": results, "errors": []}
 
 
 @pytest.fixture(autouse=True)

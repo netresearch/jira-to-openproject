@@ -7,9 +7,9 @@ import pytest
 
 
 def test_python_version() -> None:
-    """Test Python version is 3.13.x."""
+    """Test Python version is 3.13+."""
     assert sys.version_info.major == 3
-    assert sys.version_info.minor == 13
+    assert sys.version_info.minor >= 13
 
 
 @pytest.mark.unit

@@ -43,6 +43,11 @@ def create_mock_jira_client() -> JiraClient:
 
     # Provide a generic .get method used by URL-encoding and refresh tests
     mock_client.get = MagicMock()
+
+    # Provide jira attribute for timezone detection
+    mock_client.jira = MagicMock()
+    mock_client.jira.server_info.return_value = {"serverTitle": "Test Jira"}
+
     return mock_client
 
 

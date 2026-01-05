@@ -110,6 +110,51 @@ class GroupMigration(BaseMigration):
         self._save_to_json(groups, self.op_groups_file)
         return groups
 
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore group mapping from OpenProject provenance data alone.
+
+        This method rebuilds the group mapping by querying the J2O Migration
+        provenance project for group mapping work packages. It does NOT require
+        Jira data, making it suitable for recovery scenarios where local mapping
+        files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by group name with OpenProject mapping data
+
+        """
+        self.logger.info("Restoring group mapping from OpenProject provenance data...")
+
+        # Query provenance registry for group mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("group")
+
+        if not provenance_mappings:
+            self.logger.info("No group provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        for group_name, prov_data in provenance_mappings.items():
+            mapping[group_name] = {
+                "jira_name": group_name,
+                "jira_group_id": None,  # Not available from provenance
+                "openproject_id": prov_data.get("openproject_id"),
+                "matched_by": "j2o_provenance",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+
+        # Persist mapping
+        if mapping:
+            config.mappings.set_mapping("group", mapping)
+            self.group_mapping = mapping
+            try:
+                self._save_to_json(mapping, self.group_mapping_file)
+            except Exception:  # noqa: BLE001
+                self.logger.debug("Failed to persist group mapping to %s", self.group_mapping_file)
+
+        self.logger.info("Restored %d group mappings from OpenProject provenance", len(mapping))
+        return mapping
+
     # ------------------------------------------------------------------
     # Core execution
     # ------------------------------------------------------------------
@@ -217,6 +262,28 @@ class GroupMigration(BaseMigration):
                 self._save_to_json(mapping, self.group_mapping_file)
             except Exception:  # noqa: BLE001
                 self.logger.debug("Failed to persist group mapping to %s", self.group_mapping_file)
+
+            # Record provenance for all successfully migrated groups
+            # This enables restoration of mappings from OP alone without local files
+            provenance_mappings = [
+                {
+                    "jira_key": m["jira_name"],  # Use group name as key
+                    "jira_name": m.get("jira_name"),
+                    "op_entity_id": m["openproject_id"],
+                }
+                for m in mapping.values()
+                if m.get("openproject_id")
+            ]
+            if provenance_mappings:
+                try:
+                    result = self.op_client.bulk_record_entity_provenance("group", provenance_mappings)
+                    self.logger.info(
+                        "Recorded group provenance: %d success, %d failed",
+                        result.get("success", 0),
+                        result.get("failed", 0),
+                    )
+                except Exception as prov_err:
+                    self.logger.warning("Failed to record group provenance: %s", prov_err)
 
         membership_updates = self._synchronize_memberships(jira_members_by_group, role_groups, mapping)
         role_updates = self._assign_project_roles(project_role_assignments, mapping)

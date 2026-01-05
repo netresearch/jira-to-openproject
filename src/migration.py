@@ -20,6 +20,7 @@ from rich.console import Console
 
 from src import config
 from src.clients.docker_client import DockerClient
+from src.clients.health_check_client import HealthCheckClient
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.rails_console_client import RailsConsoleClient
@@ -624,6 +625,35 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
 
         config.logger.success("All clients initialized successfully")
 
+        # Initialize health check client for pre-migration and during-migration monitoring
+        health_client = HealthCheckClient(
+            ssh_client=ssh_client,
+            docker_client=docker_client,
+            container_name=config.openproject_config.get(
+                "container_name",
+                config.openproject_config.get("container", "openproject"),
+            ),
+        )
+
+        # Run pre-migration health checks
+        config.logger.info("Running pre-migration health checks...")
+        health_ok, health_issues = health_client.run_pre_migration_checks()
+        if not health_ok:
+            config.logger.error("Pre-migration health checks failed:")
+            for issue in health_issues:
+                config.logger.error("  - %s", issue)
+            # Optionally abort migration on critical health issues
+            if any("CRITICAL" in issue.upper() for issue in health_issues):
+                config.logger.error("Aborting migration due to critical health issues")
+                results.overall["status"] = "failed"
+                results.overall["health_check_failed"] = True
+                results.overall["health_issues"] = health_issues
+                return results
+            config.logger.warning("Continuing migration despite health warnings")
+            results.overall["health_warnings"] = health_issues
+        else:
+            config.logger.success("All pre-migration health checks passed")
+
         # Initialize mappings once via config accessor to avoid double loads
         # Accessing any attribute on config.mappings triggers lazy init via proxy
         _ = config.mappings.get_all_mappings()
@@ -893,6 +923,27 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     )
                     break
 
+                # During-migration health check after each component
+                try:
+                    health_status = health_client.run_during_migration_check()
+                    if not health_status["healthy"]:
+                        for warning in health_status.get("warnings", []):
+                            config.logger.warning("Health check: %s", warning)
+                        # Auto-cleanup temp files if threshold exceeded
+                        if health_status.get("temp_files_exceeded"):
+                            config.logger.info("Auto-cleaning old temp files...")
+                            cleanup_result = health_client.cleanup_temp_files(max_age_minutes=30)
+                            if cleanup_result.success:
+                                config.logger.info(
+                                    "Cleaned up %d temp files, freed %s",
+                                    cleanup_result.files_removed,
+                                    cleanup_result.space_freed_human,
+                                )
+                            else:
+                                config.logger.warning("Temp file cleanup failed: %s", cleanup_result.error)
+                except Exception as health_err:  # noqa: BLE001
+                    config.logger.debug("During-migration health check failed: %s", health_err)
+
                 # Pause for user confirmation between components
                 if (
                     component_name != components[-1] and not no_confirm
@@ -998,6 +1049,27 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 "Focused migration summary saved to %s",
                 summary_file,
             )
+
+        # Post-migration cleanup and final health check
+        try:
+            config.logger.info("Running post-migration cleanup...")
+            cleanup_result = health_client.cleanup_temp_files(max_age_minutes=5)
+            if cleanup_result.success and cleanup_result.files_removed > 0:
+                config.logger.info(
+                    "Post-migration cleanup: removed %d temp files, freed %s",
+                    cleanup_result.files_removed,
+                    cleanup_result.space_freed_human,
+                )
+            # Get final health snapshot for results
+            final_snapshot = health_client.get_health_snapshot()
+            results.overall["final_health"] = {
+                "container_disk_free_mb": final_snapshot.container_disk_free_mb,
+                "temp_file_count": final_snapshot.temp_file_count,
+                "local_disk_free_mb": final_snapshot.local_disk_free_mb,
+                "remote_disk_free_mb": final_snapshot.remote_disk_free_mb,
+            }
+        except Exception as cleanup_err:  # noqa: BLE001
+            config.logger.debug("Post-migration cleanup failed: %s", cleanup_err)
 
         # Print final status
         if results.overall.get("status") == "success":
@@ -1350,8 +1422,8 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
 
         # Display migration results summary
         if migration_result:
-            # Fix: Access MigrationResult properties correctly (it's an object, not a dict)
-            overall_status = migration_result.overall.status if hasattr(migration_result, "overall") else "unknown"
+            # Access overall dict's status key (overall is a dict, not an object)
+            overall_status = migration_result.overall.get("status", "unknown") if hasattr(migration_result, "overall") else "unknown"
 
             # Show summary header based on status
             if overall_status == "success":

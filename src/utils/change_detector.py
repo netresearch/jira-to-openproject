@@ -224,8 +224,10 @@ class ChangeDetector:
 
         """
         # Common ID fields for different entity types
+        # Note: For users, 'key' is more reliable than 'accountId' as many
+        # Jira Server/DC instances have null accountId for all users
         id_field_mapping = {
-            "users": "accountId",
+            "users": "key",
             "projects": "key",
             "issues": "key",
             "worklogs": "id",
@@ -240,12 +242,12 @@ class ChangeDetector:
 
         # Try specific field for entity type
         id_field = id_field_mapping.get(entity_type, "id")
-        if id_field in entity:
+        if id_field in entity and entity[id_field] is not None:
             return str(entity[id_field])
 
         # Fallback to common ID fields
         for field in ["id", "key", "accountId", "name"]:
-            if field in entity:
+            if field in entity and entity[field] is not None:
                 return str(entity[field])
 
         return None

@@ -383,6 +383,124 @@ class ProjectMigration(BaseMigration):
         self._assign_project_lead(op_project_id, jira_project)
         self._persist_project_metadata(op_project_id, jira_project)
 
+    def _bulk_post_project_setup(
+        self, projects: list[tuple[int, dict[str, Any]]]
+    ) -> dict[str, Any]:
+        """Perform post-project setup for multiple projects in bulk.
+
+        Args:
+            projects: List of (op_project_id, jira_project) tuples
+
+        Returns:
+            Dict with counts of processed and failed items
+        """
+        if not projects:
+            return {"modules_processed": 0, "attributes_processed": 0}
+
+        # Collect all modules data
+        modules_data = []
+        for op_id, jira_project in projects:
+            modules = self._determine_project_modules(jira_project)
+            if modules:
+                modules_data.append({"project_id": op_id, "modules": modules})
+
+        # Collect all attributes data
+        attributes_data = []
+        for op_id, jira_project in projects:
+            # Lead information
+            lead_login, lead_display = self._extract_jira_lead(jira_project)
+            if lead_login:
+                op_user_id = self._lookup_op_user_id(lead_login)
+                if op_user_id:
+                    attributes_data.append({
+                        "project_id": op_id,
+                        "name": PROJECT_LEAD_CF_NAME,
+                        "value": str(op_user_id),
+                        "field_format": "user",
+                    })
+                else:
+                    safe_value = self._sanitize_cf_value(lead_login)
+                    attributes_data.append({
+                        "project_id": op_id,
+                        "name": PROJECT_LEAD_CF_NAME,
+                        "value": safe_value,
+                        "field_format": "string",
+                    })
+                if lead_display:
+                    safe_display = self._sanitize_cf_value(lead_display)
+                    attributes_data.append({
+                        "project_id": op_id,
+                        "name": PROJECT_LEAD_DISPLAY_CF_NAME,
+                        "value": safe_display,
+                        "field_format": "string",
+                    })
+
+            # Metadata fields
+            category_name = jira_project.get("project_category_name") or ""
+            if category_name:
+                attributes_data.append({
+                    "project_id": op_id,
+                    "name": PROJECT_CATEGORY_CF_NAME,
+                    "value": self._sanitize_cf_value(str(category_name)),
+                    "field_format": "string",
+                })
+
+            project_type_key = jira_project.get("project_type_key") or ""
+            if project_type_key:
+                display_type = str(project_type_key).replace("_", " ").title()
+                attributes_data.append({
+                    "project_id": op_id,
+                    "name": PROJECT_TYPE_CF_NAME,
+                    "value": self._sanitize_cf_value(display_type),
+                    "field_format": "string",
+                })
+
+            browse_url = jira_project.get("browse_url") or jira_project.get("url")
+            if browse_url:
+                attributes_data.append({
+                    "project_id": op_id,
+                    "name": PROJECT_URL_CF_NAME,
+                    "value": self._sanitize_cf_value(str(browse_url)),
+                    "field_format": "string",
+                })
+
+            avatar_url = jira_project.get("avatar_url")
+            if avatar_url:
+                attributes_data.append({
+                    "project_id": op_id,
+                    "name": PROJECT_AVATAR_CF_NAME,
+                    "value": self._sanitize_cf_value(str(avatar_url)),
+                    "field_format": "string",
+                })
+
+        # Execute bulk operations
+        modules_result = {"processed": 0, "failed": 0}
+        if modules_data:
+            logger.info("Bulk enabling modules for %d projects", len(modules_data))
+            modules_result = self.op_client.bulk_enable_project_modules(modules_data)
+            logger.info(
+                "Bulk modules: %d processed, %d failed",
+                modules_result.get("processed", 0),
+                modules_result.get("failed", 0),
+            )
+
+        attrs_result = {"processed": 0, "failed": 0}
+        if attributes_data:
+            logger.info("Bulk upserting %d project attributes", len(attributes_data))
+            attrs_result = self.op_client.bulk_upsert_project_attributes(attributes_data)
+            logger.info(
+                "Bulk attributes: %d processed, %d failed",
+                attrs_result.get("processed", 0),
+                attrs_result.get("failed", 0),
+            )
+
+        return {
+            "modules_processed": modules_result.get("processed", 0),
+            "modules_failed": modules_result.get("failed", 0),
+            "attributes_processed": attrs_result.get("processed", 0),
+            "attributes_failed": attrs_result.get("failed", 0),
+        }
+
     def _assign_project_lead(self, op_project_id: int, jira_project: dict[str, Any]) -> None:
         lead_login, lead_display = self._extract_jira_lead(jira_project)
         if not lead_login:
@@ -911,6 +1029,9 @@ class ProjectMigration(BaseMigration):
             # This ensures downstream components (work_packages) have 'openproject_id' for Jira projects.
             try:
                 mapping: dict[str, dict[str, Any]] = {}
+                # Collect projects for bulk post-setup
+                bulk_setup_projects: list[tuple[int, dict[str, Any]]] = []
+
                 for jira_project in self.jira_projects:
                     jira_key = jira_project.get("key", "")
                     jira_name = jira_project.get("name", "")
@@ -945,14 +1066,8 @@ class ProjectMigration(BaseMigration):
                             "jira_project_avatar_url": jira_project.get("avatar_url"),
                             "has_tempo_account": jira_project.get("has_tempo_account", False),
                         }
-                        try:
-                            self._post_project_setup(int(existing.get("id")), jira_project)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.debug(
-                                "Post-setup skipped for existing project %s: %s",
-                                jira_key,
-                                exc,
-                            )
+                        # Collect for bulk post-setup instead of individual calls
+                        bulk_setup_projects.append((int(existing.get("id")), jira_project))
                     else:
                         # Record unmapped project explicitly
                         mapping[jira_key] = {
@@ -967,6 +1082,17 @@ class ProjectMigration(BaseMigration):
                             "jira_lead": lead_login,
                             "jira_lead_display": lead_display,
                         }
+
+                # Execute bulk post-setup for all existing projects (2 Rails calls instead of N*7)
+                if bulk_setup_projects:
+                    logger.info(
+                        "Running bulk post-setup for %d existing projects",
+                        len(bulk_setup_projects),
+                    )
+                    try:
+                        self._bulk_post_project_setup(bulk_setup_projects)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Bulk post-setup failed: %s", exc)
 
                 # Persist mapping for downstream usage
                 self.project_mapping = mapping
@@ -1020,6 +1146,8 @@ class ProjectMigration(BaseMigration):
         # This is more reliable than complex bulk scripts
         created_projects = []
         errors = []
+        # Collect projects for bulk post-setup after the loop
+        bulk_setup_projects: list[tuple[int, dict[str, Any]]] = []
 
         logger.info("Creating %d projects individually...", len(projects_data))
 
@@ -1045,14 +1173,10 @@ class ProjectMigration(BaseMigration):
                         project_data["name"],
                         existing_project_details["id"],
                     )
-                    try:
-                        self._post_project_setup(int(existing_project_details["id"]), project_data)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug(
-                            "Post-setup skipped for existing project %s: %s",
-                            project_data.get("jira_key"),
-                            exc,
-                        )
+                    # Collect for bulk post-setup instead of individual calls
+                    bulk_setup_projects.append(
+                        (int(existing_project_details["id"]), project_data)
+                    )
                     created_projects.append(
                         {
                             "jira_key": project_data["jira_key"],
@@ -1227,14 +1351,8 @@ class ProjectMigration(BaseMigration):
                         },
                     )
 
-                    try:
-                        self._post_project_setup(int(result["id"]), project_data)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug(
-                            "Post-setup skipped for new project %s: %s",
-                            project_data.get("jira_key"),
-                            exc,
-                        )
+                    # Collect for bulk post-setup instead of individual calls
+                    bulk_setup_projects.append((int(result["id"]), project_data))
 
                 except QueryExecutionError as e:
                     existing_project_details = self._get_existing_project_details(identifier)
@@ -1255,14 +1373,10 @@ class ProjectMigration(BaseMigration):
                                 "jira_lead_display": project_data.get("lead_display"),
                             },
                         )
-                        try:
-                            self._post_project_setup(int(existing_project_details.get("id")), project_data)
-                        except Exception as exc:  # noqa: BLE001
-                            logger.debug(
-                                "Post-setup skipped for existing project %s after fallback: %s",
-                                project_data.get("jira_key"),
-                                exc,
-                            )
+                        # Collect for bulk post-setup instead of individual calls
+                        bulk_setup_projects.append(
+                            (int(existing_project_details.get("id")), project_data)
+                        )
                         continue
 
                     error_msg = f"Rails validation error: {e}"
@@ -1341,6 +1455,17 @@ class ProjectMigration(BaseMigration):
             # Small delay to avoid overwhelming the Rails console
             time.sleep(0.2)
 
+        # Execute bulk post-setup for all projects (2 Rails calls instead of N*7)
+        if bulk_setup_projects:
+            logger.info(
+                "Running bulk post-setup for %d projects",
+                len(bulk_setup_projects),
+            )
+            try:
+                self._bulk_post_project_setup(bulk_setup_projects)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Bulk post-setup failed: %s", exc)
+
         # Create mapping from results
         mapping = {}
         for project in created_projects:
@@ -1411,6 +1536,28 @@ class ProjectMigration(BaseMigration):
         # Save the mapping via controller
         self.project_mapping = mapping
         config.mappings.set_mapping("project", mapping)
+
+        # Record provenance for all successfully migrated projects
+        # This enables restoration of mappings from OP alone without local files
+        provenance_mappings = [
+            {
+                "jira_key": m["jira_key"],
+                "jira_name": m.get("jira_name"),
+                "op_entity_id": m["openproject_id"],
+            }
+            for m in mapping.values()
+            if m.get("openproject_id") and not m.get("failed")
+        ]
+        if provenance_mappings:
+            try:
+                result = self.op_client.bulk_record_entity_provenance("project", provenance_mappings)
+                logger.info(
+                    "Recorded project provenance: %d success, %d failed",
+                    result.get("success", 0),
+                    result.get("failed", 0),
+                )
+            except Exception as prov_err:
+                logger.warning("Failed to record project provenance: %s", prov_err)
 
         logger.info(
             "Bulk project migration completed: %s created, %s errors",
@@ -1495,6 +1642,46 @@ class ProjectMigration(BaseMigration):
         logger.info("Failed projects: %s", analysis["failed_projects"])
 
         return analysis
+
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore project mapping from OpenProject provenance data alone.
+
+        This method rebuilds the project mapping by querying the J2O Migration
+        provenance project for project mapping work packages. It does NOT require
+        Jira data, making it suitable for recovery scenarios where local mapping
+        files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by Jira project key with OpenProject mapping data
+
+        """
+        logger.info("Restoring project mapping from OpenProject provenance data...")
+
+        # Query provenance registry for project mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("project")
+
+        if not provenance_mappings:
+            logger.info("No project provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        for jira_key, prov_data in provenance_mappings.items():
+            mapping[jira_key] = {
+                "jira_key": jira_key,
+                "jira_name": prov_data.get("jira_name"),
+                "openproject_id": prov_data.get("openproject_id"),
+                "matched_by": "j2o_provenance",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+
+        # Persist mapping via controller
+        self.project_mapping = mapping
+        config.mappings.set_mapping("project", mapping)
+
+        logger.info("Restored %d project mappings from OpenProject provenance", len(mapping))
+        return mapping
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities from Jira for a specific type.

@@ -126,8 +126,8 @@ true
         data = mapped.data or {}
         labels_text: dict[str, str] = data.get("labels_markdown", {}) if isinstance(data, dict) else {}
 
-        updated = 0
-        failed = 0
+        # Collect all CF values for bulk update
+        cf_values_to_set: list[dict] = []
         projects_with_values: set[int] = set()
 
         for jira_key, text in labels_text.items():
@@ -141,21 +141,21 @@ true
             project_id = entry.get("openproject_project_id")
             if project_id:
                 projects_with_values.add(int(project_id))
-            try:
-                val = text.replace("'", "\\'")
-                script = (
-                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                    % (wp_id, cf_id, val, val)
-                )
-                ok = self.op_client.execute_query(script)
-                if ok:
-                    updated += 1
-                else:
-                    failed += 1
-            except Exception:
-                logger.exception("Failed to set labels for %s", jira_key)
-                failed += 1
+            cf_values_to_set.append({
+                "work_package_id": wp_id,
+                "custom_field_id": cf_id,
+                "value": text,
+            })
+
+        # Bulk set all CF values in single Rails call
+        updated = 0
+        failed = 0
+        if cf_values_to_set:
+            logger.info("Bulk setting %d labels values...", len(cf_values_to_set))
+            bulk_result = self.op_client.bulk_set_wp_custom_field_values(cf_values_to_set)
+            updated = bulk_result.get("updated", 0)
+            failed = bulk_result.get("failed", 0)
+            logger.info("Bulk labels: updated=%d, failed=%d", updated, failed)
 
         # Enable CF only for projects that have values
         if projects_with_values:

@@ -15,16 +15,21 @@ from src.main import main
 class TestMainEntryPoint:
     """Test main entry point functions."""
 
-    @patch("src.main.run_migration")
+    @patch("src.migration.run_migration")
+    @patch("src.main.validate_database_configuration")
     @patch("os.environ.get")
     def test_migrate_command(
         self,
         mock_env_get: MagicMock,
+        mock_validate_db: MagicMock,
         mock_run_migration: MagicMock,
     ) -> None:
         """Test the main migration command."""
         from src.models.component_results import ComponentResult
         from src.models.migration_results import MigrationResult
+
+        # Mock database configuration validation to pass
+        mock_validate_db.return_value = None
 
         # Mock environment variables to simulate correct setup
         def mock_get(key: str, default: str | None = None) -> str | None:
@@ -38,6 +43,7 @@ class TestMainEntryPoint:
                 "J2O_SSH_USERNAME": "test",
                 "J2O_SSH_PRIVATE_KEY_PATH": "/path/to/key",
                 "J2O_OPENPROJECT_CONTAINER_NAME": "openproject_web",
+                "POSTGRES_PASSWORD": "test-password",
             }.get(key, default)
 
         mock_env_get.side_effect = mock_get

@@ -58,6 +58,7 @@ migration:
 
   # Performance settings
   batch_size: 1000
+  skeleton_batch_size: 100  # Batch size for work package skeleton creation (increased from 50)
 
   # Behavior settings
   skip_existing: true
@@ -72,6 +73,16 @@ migration:
 
   # Security settings
   ssl_verify: true
+
+  # Debug settings
+  # When true, preserves temp files in container /tmp on errors for debugging
+  # Files are named j2o_* and can be examined via: docker exec <container> ls /tmp/j2o_*
+  preserve_debug_files_on_error: true
+
+  # Time entry bulk creation mode
+  # When false, enables batch file-based creation for speed
+  # When true, uses per-entry API calls (slower, for testing)
+  unit_test_mode: false
 
   # Logging
   log_level: "INFO"

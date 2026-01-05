@@ -784,6 +784,28 @@ class IssueTypeMigration(BaseMigration):
                     final_mapping[jira_id] = op_id
             _cfg.mappings.set_mapping("issue_type_id", final_mapping)
 
+            # Record provenance for successfully migrated issue types
+            # This enables restoration of mappings from OP alone without local files
+            provenance_mappings = [
+                {
+                    "jira_key": str(m.get("jira_id", "")),  # Use Jira type ID as key
+                    "jira_name": m.get("jira_name"),
+                    "op_entity_id": m["openproject_id"],
+                }
+                for m in self.issue_type_mapping.values()
+                if m.get("openproject_id")
+            ]
+            if provenance_mappings:
+                try:
+                    result = self.op_client.bulk_record_entity_provenance("type", provenance_mappings)
+                    self.logger.info(
+                        "Recorded type provenance: %d success, %d failed",
+                        result.get("success", 0),
+                        result.get("failed", 0),
+                    )
+                except Exception as prov_err:
+                    self.logger.warning("Failed to record type provenance: %s", prov_err)
+
             if errors:
                 self.logger.warning("Some work package types failed to create: %s", len(errors))
                 raise MigrationError(f"Failed to create {len(errors)} work package types")
@@ -1052,6 +1074,53 @@ class IssueTypeMigration(BaseMigration):
             msg = f"Migration partially failed: {missing_count} types were not found in OpenProject"
             self.logger.warning(msg)
             raise MigrationError(msg)
+
+    def restore_mapping_from_openproject(self) -> dict[str, Any]:
+        """Restore issue type mapping from OpenProject provenance data alone.
+
+        This method rebuilds the type mapping by querying the J2O Migration
+        provenance project for type mapping work packages. It does NOT require
+        Jira data, making it suitable for recovery scenarios where local mapping
+        files are missing but OP contains provenance data from previous migrations.
+
+        Returns:
+            Dictionary keyed by Jira type ID with OpenProject mapping data
+
+        """
+        self.logger.info("Restoring issue type mapping from OpenProject provenance data...")
+
+        # Query provenance registry for type mappings
+        provenance_mappings = self.op_client.restore_entity_mappings_from_provenance("type")
+
+        if not provenance_mappings:
+            self.logger.info("No type provenance data found in OpenProject")
+            return {}
+
+        # Convert provenance format to standard mapping format
+        mapping: dict[str, Any] = {}
+        id_mapping: dict[int, int] = {}
+
+        for jira_type_id, prov_data in provenance_mappings.items():
+            mapping[jira_type_id] = {
+                "jira_id": int(jira_type_id) if jira_type_id.isdigit() else jira_type_id,
+                "jira_name": prov_data.get("jira_name"),
+                "openproject_id": prov_data.get("openproject_id"),
+                "matched_by": "j2o_provenance",
+                "restored_from_op": True,
+                "provenance_wp_id": prov_data.get("provenance_wp_id"),
+            }
+            if prov_data.get("openproject_id") and jira_type_id.isdigit():
+                id_mapping[int(jira_type_id)] = prov_data["openproject_id"]
+
+        # Persist mappings
+        from src import config as _cfg
+
+        _cfg.mappings.set_mapping("issue_type", mapping)
+        _cfg.mappings.set_mapping("issue_type_id", id_mapping)
+        self.issue_type_mapping = mapping
+
+        self.logger.info("Restored %d type mappings from OpenProject provenance", len(mapping))
+        return mapping
 
     def run(self) -> ComponentResult:
         """Run the issue type migration.

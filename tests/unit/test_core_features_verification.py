@@ -363,7 +363,8 @@ class TestIntegrationVerification:
         required_components = [
             "users",
             "projects",
-            "work_packages",
+            "work_packages_skeleton",  # Phase 1: skeleton creation
+            "work_packages_content",   # Phase 3: content with resolved attachment URLs
             "time_entries",
         ]
 

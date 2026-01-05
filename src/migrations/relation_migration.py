@@ -155,9 +155,9 @@ class RelationMigration(BaseMigration):
 
         batch = _EJC.batch_get_issues(object(), jira_keys)  # type: ignore[misc]
 
-        created = 0
+        # Collect all relations for bulk creation
+        relations_to_create: list[dict[str, Any]] = []
         skipped = 0
-        errors = 0
 
         for key, issue in batch.items():
             if not issue:
@@ -206,29 +206,40 @@ class RelationMigration(BaseMigration):
                     relation_type, swap = mapping
                     a, b = (from_id, to_id) if not swap else (to_id, from_id)
 
-                    # Idempotent creation
-                    existing = self.op_client.find_relation(a, b)
-                    if existing:
-                        skipped += 1
-                        continue
-                    created_ok = self.op_client.create_relation(a, b, relation_type)
-                    if created_ok:
-                        created += 1
-                    else:
-                        errors += 1
+                    # Collect for bulk creation
+                    relations_to_create.append({
+                        "from_id": a,
+                        "to_id": b,
+                        "relation_type": relation_type,
+                    })
                 except Exception:  # noqa: BLE001
-                    errors += 1
+                    skipped += 1
                     continue
+
+        # Bulk create all relations in single Rails call
+        created = 0
+        errors = 0
+        bulk_skipped = 0
+        if relations_to_create:
+            logger.info("Bulk creating %d relations...", len(relations_to_create))
+            bulk_result = self.op_client.bulk_create_relations(relations_to_create)
+            created = bulk_result.get("created", 0)
+            bulk_skipped = bulk_result.get("skipped", 0)
+            errors = bulk_result.get("failed", 0)
+            logger.info(
+                "Bulk relations: created=%d, skipped=%d, failed=%d",
+                created, bulk_skipped, errors,
+            )
 
         result.details.update(
             {
                 "created": created,
-                "skipped": skipped,
+                "skipped": skipped + bulk_skipped,
                 "errors": errors,
             },
         )
         result.success = errors == 0
-        result.message = f"Relations created={created}, skipped={skipped}, errors={errors}"
+        result.message = f"Relations created={created}, skipped={skipped + bulk_skipped}, errors={errors}"
         logger.info(result.message)
         # Save simple summary
         self._save_to_json(result.details, Path("relation_migration_summary.json"))

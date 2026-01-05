@@ -88,9 +88,9 @@ class WatcherMigration(BaseMigration):
             logger.info("No work package mappings; skipping watcher migration")
             return result
 
-        created = 0
+        # Collect all watchers for bulk creation
+        watchers_to_create: list[dict[str, Any]] = []
         skipped = 0
-        errors = 0
 
         # Batch fetch issues with watchers metadata where possible
         from src.clients.enhanced_jira_client import EnhancedJiraClient as _EJC  # noqa: PLC0415
@@ -125,16 +125,31 @@ class WatcherMigration(BaseMigration):
                     if not user_id:
                         skipped += 1
                         continue
-                    if self.op_client.add_watcher(wp_id, user_id):
-                        created += 1
-                    else:
-                        errors += 1
+                    watchers_to_create.append({
+                        "work_package_id": wp_id,
+                        "user_id": user_id,
+                    })
                 except Exception:  # noqa: BLE001
-                    errors += 1
+                    skipped += 1
                     continue
 
-        result.details.update({"created": created, "skipped": skipped, "errors": errors})
+        # Bulk create all watchers in single Rails call
+        created = 0
+        errors = 0
+        bulk_skipped = 0
+        if watchers_to_create:
+            logger.info("Bulk adding %d watchers...", len(watchers_to_create))
+            bulk_result = self.op_client.bulk_add_watchers(watchers_to_create)
+            created = bulk_result.get("created", 0)
+            bulk_skipped = bulk_result.get("skipped", 0)
+            errors = bulk_result.get("failed", 0)
+            logger.info(
+                "Bulk watchers: created=%d, skipped=%d, failed=%d",
+                created, bulk_skipped, errors,
+            )
+
+        result.details.update({"created": created, "skipped": skipped + bulk_skipped, "errors": errors})
         result.success = errors == 0
-        result.message = f"Watchers created={created}, skipped={skipped}, errors={errors}"
+        result.message = f"Watchers created={created}, skipped={skipped + bulk_skipped}, errors={errors}"
         logger.info(result.message)
         return result

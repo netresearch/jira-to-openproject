@@ -832,6 +832,18 @@
                         <span class="nav-icon">⚡</span>
                         Priorities
                     </a>
+                    <a href="#resolutions" class="nav-link">
+                        <span class="nav-icon">✓</span>
+                        Resolutions
+                    </a>
+                    <a href="#workflows" class="nav-link">
+                        <span class="nav-icon">⇢</span>
+                        Workflows
+                    </a>
+                    <a href="#security-levels" class="nav-link">
+                        <span class="nav-icon">🔒</span>
+                        Security Levels
+                    </a>
                 </div>
                 <div class="nav-section">
                     <div class="nav-section-title">Core Content</div>
@@ -847,6 +859,25 @@
                         <span class="nav-icon">💬</span>
                         Comments/Journals
                     </a>
+                    <a href="#issue-history" class="nav-link">
+                        <span class="nav-icon">📜</span>
+                        Issue History
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Classification</div>
+                    <a href="#labels" class="nav-link">
+                        <span class="nav-icon">🏷</span>
+                        Labels / Tags
+                    </a>
+                    <a href="#components" class="nav-link">
+                        <span class="nav-icon">📦</span>
+                        Components
+                    </a>
+                    <a href="#versions" class="nav-link">
+                        <span class="nav-icon">🎯</span>
+                        Versions
+                    </a>
                 </div>
                 <div class="nav-section">
                     <div class="nav-section-title">Relationships</div>
@@ -854,9 +885,32 @@
                         <span class="nav-icon">🔗</span>
                         Issue Links
                     </a>
+                    <a href="#watchers" class="nav-link">
+                        <span class="nav-icon">👁</span>
+                        Watchers
+                    </a>
+                    <a href="#votes" class="nav-link">
+                        <span class="nav-icon">👍</span>
+                        Votes
+                    </a>
+                    <a href="#remote-links" class="nav-link">
+                        <span class="nav-icon">🌐</span>
+                        Remote Links
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Time & Effort</div>
                     <a href="#time-entries" class="nav-link">
                         <span class="nav-icon">⏱</span>
                         Time Entries
+                    </a>
+                    <a href="#estimates" class="nav-link">
+                        <span class="nav-icon">📐</span>
+                        Estimates
+                    </a>
+                    <a href="#story-points" class="nav-link">
+                        <span class="nav-icon">🎲</span>
+                        Story Points
                     </a>
                 </div>
                 <div class="nav-section">
@@ -868,6 +922,44 @@
                     <a href="#epics" class="nav-link">
                         <span class="nav-icon">📊</span>
                         Epics
+                    </a>
+                    <a href="#boards" class="nav-link">
+                        <span class="nav-icon">📌</span>
+                        Agile Boards
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Add-ons</div>
+                    <a href="#simpletasks" class="nav-link">
+                        <span class="nav-icon">✓</span>
+                        Simple Tasklists
+                    </a>
+                    <a href="#tempo" class="nav-link">
+                        <span class="nav-icon">⏰</span>
+                        Tempo Timesheets
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Partial / Not Migrated</div>
+                    <a href="#not-migrated" class="nav-link">
+                        <span class="nav-icon">⚠</span>
+                        Overview
+                    </a>
+                    <a href="#dashboards" class="nav-link">
+                        <span class="nav-icon">📈</span>
+                        Dashboards
+                    </a>
+                    <a href="#filters" class="nav-link">
+                        <span class="nav-icon">🔍</span>
+                        Filters
+                    </a>
+                    <a href="#schemes" class="nav-link">
+                        <span class="nav-icon">⚙</span>
+                        Schemes
+                    </a>
+                    <a href="#automation" class="nav-link">
+                        <span class="nav-icon">🤖</span>
+                        Automation
                     </a>
                 </div>
             </nav>
@@ -1237,10 +1329,107 @@
                     </div>
                 </section>
 
+                <!-- Groups Section -->
+                <section id="groups">
+                    <div class="section-header">
+                        <div class="section-number">4</div>
+                        <div class="section-title">
+                            <h2>Groups</h2>
+                            <span>Jira Group → OpenProject Group with membership sync</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Group</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Group</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Group to group transformation</span>
+                            </div>
+                            <span class="accordion-badge">4 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct copy</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>groupId</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>—</td>
+                                            <td>Stored in mapping for reference</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>members[]</code></td>
+                                            <td><span class="type-badge array">array</span></td>
+                                            <td class="op-col"><code>users[]</code></td>
+                                            <td><span class="type-badge array">array</span></td>
+                                            <td>Via user_mapping lookup</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col"><code>created_at</code></td>
+                                            <td><span class="type-badge date">datetime</span></td>
+                                            <td>Current timestamp</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Limitations</h4>
+                                <span>Known constraints for group migration</span>
+                            </div>
+                            <span class="accordion-badge">3 items</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Group permissions not migrated</strong> — Jira group permissions don't map directly to OP roles</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Nested groups flattened</strong> — OP doesn't support nested group hierarchies</li>
+                                <li><strong>LDAP/AD groups</strong> — External directory groups sync separately from J2O</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- Companies Section -->
                 <section id="companies">
                     <div class="section-header">
-                        <div class="section-number">4</div>
+                        <div class="section-number">5</div>
                         <div class="section-title">
                             <h2>Companies (Tempo)</h2>
                             <span>Tempo Customer → Top-Level Project</span>
@@ -1936,10 +2125,442 @@
                     </div>
                 </section>
 
+                <!-- Priorities Section -->
+                <section id="priorities">
+                    <div class="section-header">
+                        <div class="section-number">10</div>
+                        <div class="section-title">
+                            <h2>Priorities</h2>
+                            <span>Jira Priority → OpenProject IssuePriority</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Priority</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">IssuePriority</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Priority to IssuePriority transformation</span>
+                            </div>
+                            <span class="accordion-badge">5 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>priority.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td>Direct copy (e.g., "High", "Low")</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>priority.id</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>—</td>
+                                            <td>Stored in mapping for reference</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>priority.iconUrl</code></td>
+                                            <td><span class="type-badge string">url</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>—</td>
+                                            <td>Not migrated (OP uses color)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Order in list</td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col"><code>position</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Preserved from Jira order</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col"><code>color_id</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td>Auto-assigned based on priority level</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Common Priority Mappings</h4>
+                                <span>Standard Jira priorities and colors</span>
+                            </div>
+                            <span class="accordion-badge">5 priorities</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Priority</th>
+                                            <th>OpenProject Priority</th>
+                                            <th>Suggested Color</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Highest / Blocker</td>
+                                            <td class="op-col">Highest</td>
+                                            <td><span style="color: #d04437;">■</span> Red</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">High / Critical</td>
+                                            <td class="op-col">High</td>
+                                            <td><span style="color: #f6c342;">■</span> Orange</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Medium / Normal</td>
+                                            <td class="op-col">Normal</td>
+                                            <td><span style="color: #4a6785;">■</span> Blue</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Low / Minor</td>
+                                            <td class="op-col">Low</td>
+                                            <td><span style="color: #14892c;">■</span> Green</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Lowest / Trivial</td>
+                                            <td class="op-col">Lowest</td>
+                                            <td><span style="color: #8993a4;">■</span> Gray</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Resolutions Section -->
+                <section id="resolutions">
+                    <div class="section-header">
+                        <div class="section-number">11</div>
+                        <div class="section-title">
+                            <h2>Resolutions</h2>
+                            <span>Jira Resolution → Custom Field value</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Resolution</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Custom Field: "Resolution"</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Resolution to custom field transformation</span>
+                            </div>
+                            <span class="accordion-badge">3 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>resolution.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "Resolution"</td>
+                                            <td><span class="type-badge list">list</span></td>
+                                            <td>e.g., "Fixed", "Won't Fix", "Duplicate"</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>resolution.id</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>—</td>
+                                            <td>Stored in mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>resolution.description</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>—</td>
+                                            <td>Not migrated (no CF option description)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Notes</h4>
+                                <span>Implementation details</span>
+                            </div>
+                            <span class="accordion-badge">info</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Custom field type:</strong> List (select) — allows dropdown selection</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Only for resolved issues:</strong> Field only populated when Jira issue has a resolution set</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Project enablement:</strong> CF auto-enabled for projects containing resolved issues</li>
+                                <li><strong>No native equivalent:</strong> OP doesn't have a built-in resolution concept; uses custom field workaround</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Workflows Section -->
+                <section id="workflows">
+                    <div class="section-header">
+                        <div class="section-number">12</div>
+                        <div class="section-title">
+                            <h2>Workflows</h2>
+                            <span>Jira Workflow → Simplified Status Flow (Partial)</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Workflow</div>
+                        </div>
+                        <div class="arrow-icon">⇢</div>
+                        <div class="mapping-side op" style="background: linear-gradient(135deg, rgba(255,77,0,0.05), rgba(255,77,0,0.1));">
+                            <h4>OpenProject</h4>
+                            <div class="entity" style="color: var(--orange);">Status Transitions (Partial)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>What IS Migrated</h4>
+                                <span>Workflow elements that transfer</span>
+                            </div>
+                            <span class="accordion-badge success">migrated</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Element</th>
+                                            <th>OpenProject Equivalent</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Workflow states</td>
+                                            <td class="op-col">Statuses</td>
+                                            <td>All states become OP statuses</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">State categories (To Do/In Progress/Done)</td>
+                                            <td class="op-col"><code>is_closed</code> flag</td>
+                                            <td>Done → closed, others → open</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Initial status</td>
+                                            <td class="op-col">Default status</td>
+                                            <td>Configurable in OP admin</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>What is NOT Migrated</h4>
+                                <span>Workflow elements requiring manual setup</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Element</th>
+                                            <th>Reason</th>
+                                            <th>Workaround</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Transitions (allowed paths)</td>
+                                            <td>OP allows any status change by default</td>
+                                            <td>Configure workflow in OP Admin → Workflows</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Transition conditions</td>
+                                            <td>Different permission model</td>
+                                            <td>Use OP role-based permissions</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Transition validators</td>
+                                            <td>No OP equivalent</td>
+                                            <td>Manual validation or custom plugin</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Post-functions</td>
+                                            <td>Platform-specific automation</td>
+                                            <td>Recreate using OP workflows or API</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Transition screens</td>
+                                            <td>OP uses inline editing</td>
+                                            <td>Not applicable</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Workflow schemes (per-project)</td>
+                                            <td>OP workflows are type-based, not project-based</td>
+                                            <td>Configure per Work Package Type</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Security Levels Section -->
+                <section id="security-levels">
+                    <div class="section-header">
+                        <div class="section-number">13</div>
+                        <div class="section-title">
+                            <h2>Security Levels</h2>
+                            <span>Jira Issue Security → Custom Field (Partial)</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Security Level</div>
+                        </div>
+                        <div class="arrow-icon">⇢</div>
+                        <div class="mapping-side op" style="background: linear-gradient(135deg, rgba(255,77,0,0.05), rgba(255,77,0,0.1));">
+                            <h4>OpenProject</h4>
+                            <div class="entity" style="color: var(--orange);">CF: "Security Level" (Partial)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Security level to custom field</span>
+                            </div>
+                            <span class="accordion-badge">2 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Type</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>security.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF: "Security Level"</td>
+                                            <td><span class="type-badge list">list</span></td>
+                                            <td>Level name stored as metadata</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>security.id</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>—</td>
+                                            <td>Stored in mapping</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Limitations</h4>
+                                <span>Why security levels don't fully migrate</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--warning); color: var(--anthracite);">partial</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>No issue-level visibility in OP:</strong> OpenProject uses project-level permissions, not per-issue security</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Stored as metadata only:</strong> Security level name preserved but doesn't restrict access</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Manual setup required:</strong> To enforce access control, use OP project visibility settings or sub-projects</li>
+                                <li><strong>Workaround:</strong> Create separate private projects for sensitive issues, or use OP Enterprise features</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- Work Packages Section -->
                 <section id="work-packages">
                     <div class="section-header">
-                        <div class="section-number">10</div>
+                        <div class="section-number">14</div>
                         <div class="section-title">
                             <h2>Work Packages</h2>
                             <span>Issue → Work Package with two-phase migration</span>
@@ -2539,6 +3160,59 @@
                             </div>
                         </div>
                     </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Inline Reference Conversion</h4>
+                                <span>Post-processing for embedded images and files</span>
+                            </div>
+                            <span class="accordion-badge">inline_refs</span>
+                        </div>
+                        <div class="accordion-content">
+                            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+                                After attachments are uploaded, inline references in work package descriptions and comments are rewritten:
+                            </p>
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Format</th>
+                                            <th>OpenProject Format</th>
+                                            <th>Example</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>!image.png!</code></td>
+                                            <td class="op-col"><code>(attachment:image.png)</code></td>
+                                            <td>Embedded images</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>!image.png|width=300!</code></td>
+                                            <td class="op-col"><code>(attachment:image.png)</code></td>
+                                            <td>Width attribute stripped</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>[^document.pdf]</code></td>
+                                            <td class="op-col"><code>(attachment:document.pdf)</code></td>
+                                            <td>File attachments</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>/secure/attachment/12345/file.png</code></td>
+                                            <td class="op-col"><code>/api/v3/attachments/{id}/content</code></td>
+                                            <td>URL path rewrite</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="color: var(--text-muted); margin-top: 1rem; font-size: 0.875rem;">
+                                <strong>Note:</strong> The <code>InlineRefsMigration</code> runs after attachment upload to match filenames
+                                and rewrite URLs in both WP descriptions and journal (comment) notes.
+                            </p>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- Comments Section -->
@@ -2619,6 +3293,1631 @@
                         </div>
                     </div>
                 </section>
+
+                <!-- Issue History Section -->
+                <section id="issue-history">
+                    <div class="section-header">
+                        <div class="section-number">20</div>
+                        <div class="section-title">
+                            <h2>Issue History / Change Log</h2>
+                            <span>Jira Issue Changelog → OpenProject Journals</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Issue Changelog</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Journals (Activity)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Changes Tracked</h4>
+                                <span>What history is preserved</span>
+                            </div>
+                            <span class="accordion-badge">10 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Change Type</th>
+                                            <th>OpenProject Journal</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Status change</td>
+                                            <td class="op-col">status_id change in journal_data</td>
+                                            <td>Full history preserved</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Assignee change</td>
+                                            <td class="op-col">assigned_to_id change</td>
+                                            <td>Via user mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Priority change</td>
+                                            <td class="op-col">priority_id change</td>
+                                            <td>Full history preserved</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Summary edit</td>
+                                            <td class="op-col">subject change</td>
+                                            <td>Full history preserved</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Description edit</td>
+                                            <td class="op-col">description change</td>
+                                            <td>Diff stored in journal</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Type change</td>
+                                            <td class="op-col">type_id change</td>
+                                            <td>Via type mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Resolution set/changed</td>
+                                            <td class="op-col">Custom field change</td>
+                                            <td>Via Resolution CF</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Due date change</td>
+                                            <td class="op-col">due_date change</td>
+                                            <td>Full history preserved</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Custom field change</td>
+                                            <td class="op-col">CF value change</td>
+                                            <td>Per-field history</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Comment added</td>
+                                            <td class="op-col">Journal with notes</td>
+                                            <td>See Comments section</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Audit Trail Migration</h4>
+                                <span>Timestamp and author preservation</span>
+                            </div>
+                            <span class="accordion-badge">3 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Changelog Field</th>
+                                            <th>OpenProject Journal Field</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>history.author</code></td>
+                                            <td class="op-col"><code>journal.user_id</code></td>
+                                            <td>Via user_mapping lookup</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>history.created</code></td>
+                                            <td class="op-col"><code>journal.created_at</code></td>
+                                            <td>Preserved via Rails direct DB write</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>history.items[]</code></td>
+                                            <td class="op-col"><code>journal_details[]</code></td>
+                                            <td>Individual field changes</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Labels / Tags Section -->
+                <section id="labels">
+                    <div class="section-header">
+                        <div class="section-number">21</div>
+                        <div class="section-title">
+                            <h2>Labels / Tags</h2>
+                            <span>Jira Labels → OpenProject Tags or Custom Field</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Labels</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Tags (native) or Labels CF</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Migration Strategies</h4>
+                                <span>Two approaches available</span>
+                            </div>
+                            <span class="accordion-badge">2 strategies</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Strategy</th>
+                                            <th>OpenProject Target</th>
+                                            <th>Pros</th>
+                                            <th>Cons</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><strong>Native Tags</strong> (default)</td>
+                                            <td class="op-col">Work Package Tags</td>
+                                            <td>Native UI support, tag filtering, colors</td>
+                                            <td>Requires OP 12+ with tags feature</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><strong>Custom Field</strong> (fallback)</td>
+                                            <td class="op-col">CF: "Labels" (multi-select)</td>
+                                            <td>Works with all OP versions</td>
+                                            <td>No tag colors, limited filtering</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Label to tag transformation</span>
+                            </div>
+                            <span class="accordion-badge">3 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>labels[]</code></td>
+                                            <td><span class="type-badge array">array</span></td>
+                                            <td class="op-col"><code>tags[]</code> or CF values</td>
+                                            <td>Each label → one tag/option</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Label name</td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">Tag name / CF option</td>
+                                            <td>Direct copy (case-sensitive)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col">Tag color</td>
+                                            <td>Auto-assigned (native tags only)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Components Section -->
+                <section id="components">
+                    <div class="section-header">
+                        <div class="section-number">22</div>
+                        <div class="section-title">
+                            <h2>Components</h2>
+                            <span>Jira Components → Custom Field (List)</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Component</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">CF: "Component" (list)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Component to custom field transformation</span>
+                            </div>
+                            <span class="accordion-badge">4 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>component.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">CF option value</td>
+                                            <td>Direct copy</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>component.id</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>Stored in mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>component.description</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>Not migrated (no CF option description)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>component.lead</code></td>
+                                            <td><span class="type-badge user">user</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>Stored in mapping for reference</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Notes</h4>
+                                <span>Implementation details</span>
+                            </div>
+                            <span class="accordion-badge">info</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>No native Components in OP:</strong> OpenProject doesn't have a built-in component concept</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Multi-select field:</strong> Issues with multiple components → multi-select CF</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Project-specific:</strong> Component options created per-project</li>
+                                <li><strong>Alternative:</strong> Some users prefer using OP Categories instead</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Versions Section -->
+                <section id="versions">
+                    <div class="section-header">
+                        <div class="section-number">23</div>
+                        <div class="section-title">
+                            <h2>Versions</h2>
+                            <span>Jira Fix/Affects Versions → Shared Versions + Custom Fields</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Version (Fix/Affects)</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Version + Custom Fields</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Version Object Mappings</h4>
+                                <span>Version entity transformation</span>
+                            </div>
+                            <span class="accordion-badge">5 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>version.name</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>version.name</code></td>
+                                            <td>Direct copy</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>version.description</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>version.description</code></td>
+                                            <td>Direct copy</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>version.releaseDate</code></td>
+                                            <td><span class="type-badge date">date</span></td>
+                                            <td class="op-col"><code>version.due_date</code></td>
+                                            <td>Date only</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>version.released</code></td>
+                                            <td><span class="type-badge bool">bool</span></td>
+                                            <td class="op-col"><code>version.status</code></td>
+                                            <td>true → "closed", false → "open"</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>version.archived</code></td>
+                                            <td><span class="type-badge bool">bool</span></td>
+                                            <td class="op-col"><code>version.status</code></td>
+                                            <td>true → "closed"</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Issue-Version Links</h4>
+                                <span>How versions are assigned to work packages</span>
+                            </div>
+                            <span class="accordion-badge">2 fields</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>fixVersions[]</code></td>
+                                            <td class="op-col"><code>version_id</code> + CF: "Fix Version"</td>
+                                            <td>Native version field + multi-version CF</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>affectsVersions[]</code></td>
+                                            <td class="op-col">CF: "Affected Versions"</td>
+                                            <td>Custom field (list, multi-select)</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Watchers Section -->
+                <section id="watchers">
+                    <div class="section-header">
+                        <div class="section-number">24</div>
+                        <div class="section-title">
+                            <h2>Watchers</h2>
+                            <span>Jira Watchers → OpenProject Watchers</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Watcher</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Watcher</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Watcher transformation</span>
+                            </div>
+                            <span class="accordion-badge">3 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>watcher.accountId</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>user_id</code></td>
+                                            <td>Via user_mapping lookup</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>issue.key</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col"><code>watchable_id</code></td>
+                                            <td>Via work_package_mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col"><code>watchable_type</code></td>
+                                            <td>Always "WorkPackage"</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Notes</h4>
+                                <span>Implementation details</span>
+                            </div>
+                            <span class="accordion-badge">info</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Permission required:</strong> User must have "watch" permission in project</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Notifications:</strong> Watchers receive notifications per OP settings</li>
+                                <li><strong>Self-watching:</strong> Reporter automatically watches their own issues</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Votes Section -->
+                <section id="votes">
+                    <div class="section-header">
+                        <div class="section-number">25</div>
+                        <div class="section-title">
+                            <h2>Votes</h2>
+                            <span>Jira Votes → Metadata (Read-Only)</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Votes</div>
+                        </div>
+                        <div class="arrow-icon">⇢</div>
+                        <div class="mapping-side op" style="background: linear-gradient(135deg, rgba(255,77,0,0.05), rgba(255,77,0,0.1));">
+                            <h4>OpenProject</h4>
+                            <div class="entity" style="color: var(--orange);">Custom Field (Partial)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>What's Migrated</h4>
+                                <span>Vote data preservation</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--warning); color: var(--anthracite);">partial</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>OpenProject Equivalent</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>votes</code> (count)</td>
+                                            <td class="op-col">CF: "Vote Count" (int)</td>
+                                            <td>Number stored as read-only</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>voters[]</code> (list)</td>
+                                            <td class="op-col">—</td>
+                                            <td>Stored in mapping file only</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Limitations</h4>
+                                <span>Why votes don't fully migrate</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">limited</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>No native voting in OP:</strong> OpenProject doesn't support issue voting</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Read-only:</strong> Vote count preserved but users cannot add votes in OP</li>
+                                <li><strong>Use case:</strong> Historical reference only; consider alternative prioritization methods</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Remote Links Section -->
+                <section id="remote-links">
+                    <div class="section-header">
+                        <div class="section-number">26</div>
+                        <div class="section-title">
+                            <h2>Remote Links</h2>
+                            <span>Jira Remote Issue Links → Work Package Description/CF</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Remote Issue Link</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Description link or CF</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Remote link transformation</span>
+                            </div>
+                            <span class="accordion-badge">4 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>object.url</code></td>
+                                            <td><span class="type-badge string">url</span></td>
+                                            <td class="op-col">Markdown link in description</td>
+                                            <td>Appended to WP description</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>object.title</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">Link text</td>
+                                            <td>[title](url) format</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>relationship</code></td>
+                                            <td><span class="type-badge string">string</span></td>
+                                            <td class="op-col">Link section header</td>
+                                            <td>e.g., "Related to:", "Caused by:"</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>object.icon</code></td>
+                                            <td><span class="type-badge string">url</span></td>
+                                            <td class="op-col">—</td>
+                                            <td>Not migrated</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Estimates Section -->
+                <section id="estimates">
+                    <div class="section-header">
+                        <div class="section-number">27</div>
+                        <div class="section-title">
+                            <h2>Estimates</h2>
+                            <span>Jira Time Estimates → OpenProject Estimated Hours</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Original Estimate</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Estimated Hours</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Estimate transformation</span>
+                            </div>
+                            <span class="accordion-badge">3 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>timetracking.originalEstimateSeconds</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col"><code>estimated_hours</code></td>
+                                            <td>Seconds ÷ 3600 = hours</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>timetracking.remainingEstimateSeconds</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col"><code>remaining_hours</code></td>
+                                            <td>Seconds ÷ 3600 = hours</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>timetracking.timeSpentSeconds</code></td>
+                                            <td><span class="type-badge int">int</span></td>
+                                            <td class="op-col">Sum of TimeEntries</td>
+                                            <td>See Time Entries section</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Story Points Section -->
+                <section id="story-points">
+                    <div class="section-header">
+                        <div class="section-number">28</div>
+                        <div class="section-title">
+                            <h2>Story Points</h2>
+                            <span>Jira Story Points CF → OpenProject Custom Field</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Story Points (CF)</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">CF: "Story Points" (float)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Field Mappings</h4>
+                                <span>Story points transformation</span>
+                            </div>
+                            <span class="accordion-badge">2 fields</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Field</th>
+                                            <th>Type</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Transformation</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>customfield_10016</code> (typical)</td>
+                                            <td><span class="type-badge float">float</span></td>
+                                            <td class="op-col">CF: "Story Points"</td>
+                                            <td>Direct copy (e.g., 3, 5, 8, 13)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">—</td>
+                                            <td>—</td>
+                                            <td class="op-col"><code>field_format</code></td>
+                                            <td>Set to "float"</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Notes</h4>
+                                <span>Implementation details</span>
+                            </div>
+                            <span class="accordion-badge">info</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>No native Story Points in OP:</strong> Uses custom field workaround</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Agile integration:</strong> Works with OP Backlogs plugin for velocity tracking</li>
+                                <li><strong>Auto-detection:</strong> Jira story points field ID detected automatically or configurable</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Agile Boards Section -->
+                <section id="boards">
+                    <div class="section-header">
+                        <div class="section-number">29</div>
+                        <div class="section-title">
+                            <h2>Agile Boards</h2>
+                            <span>Jira Boards → OpenProject Board Views (Partial)</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Agile Board</div>
+                        </div>
+                        <div class="arrow-icon">⇢</div>
+                        <div class="mapping-side op" style="background: linear-gradient(135deg, rgba(255,77,0,0.05), rgba(255,77,0,0.1));">
+                            <h4>OpenProject</h4>
+                            <div class="entity" style="color: var(--orange);">Board View (Partial)</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>What IS Migrated</h4>
+                                <span>Board elements that transfer</span>
+                            </div>
+                            <span class="accordion-badge success">migrated</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Element</th>
+                                            <th>OpenProject Equivalent</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Board issues</td>
+                                            <td class="op-col">Work Packages in project</td>
+                                            <td>All issues migrated</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Sprint backlog</td>
+                                            <td class="op-col">Iteration assignment</td>
+                                            <td>Via Sprint migration</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Issue status</td>
+                                            <td class="op-col">WP status</td>
+                                            <td>Board columns by status</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>What is NOT Migrated</h4>
+                                <span>Board elements requiring manual setup</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Element</th>
+                                            <th>Reason</th>
+                                            <th>Workaround</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Board configuration</td>
+                                            <td>Different board model in OP</td>
+                                            <td>Create board view in OP</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Column mappings</td>
+                                            <td>OP uses status-based columns</td>
+                                            <td>Configure via Board settings</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Swimlanes</td>
+                                            <td>Different implementation</td>
+                                            <td>Use OP grouping features</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Quick filters</td>
+                                            <td>No equivalent</td>
+                                            <td>Use OP saved queries</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Card colors/layouts</td>
+                                            <td>OP has fixed card design</td>
+                                            <td>Not applicable</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">WIP limits</td>
+                                            <td>Enterprise feature in OP</td>
+                                            <td>OP Enterprise required</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ========================== -->
+                <!-- ADD-ONS SECTIONS           -->
+                <!-- ========================== -->
+
+                <!-- Simple Tasklists Section -->
+                <section id="simpletasks">
+                    <div class="section-header">
+                        <div class="section-number">34</div>
+                        <div class="section-title">
+                            <h2>Simple Tasklists (Add-on)</h2>
+                            <span>Jira Plugin → Markdown Checklists in WP Description</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Simple Tasklists</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Markdown Checklist</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Migration Details</h4>
+                                <span>How tasklist items are converted</span>
+                            </div>
+                            <span class="accordion-badge">simpletasks</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+                                The <strong>Simple Tasklists</strong> Jira add-on stores lightweight inline tasks (not Jira subtasks).
+                                The <code>SimpleTasksMigration</code> converts these to Markdown checklists:
+                            </p>
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira (Simple Tasklists)</th>
+                                            <th>OpenProject (Markdown)</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Task item (incomplete)</td>
+                                            <td class="op-col"><code>- [ ] Task text</code></td>
+                                            <td>Unchecked checkbox</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Task item (complete)</td>
+                                            <td class="op-col"><code>- [x] Task text</code></td>
+                                            <td>Checked checkbox</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Task due date</td>
+                                            <td class="op-col">Inline text</td>
+                                            <td>Appended as "(Due: date)"</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Task assignee</td>
+                                            <td class="op-col">Inline text</td>
+                                            <td>Appended as "@username"</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="color: var(--text-muted); margin-top: 1rem; font-size: 0.875rem;">
+                                <strong>Location:</strong> Checklist is appended to the WP description in a marked section "## Tasklist".
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Limitations</h4>
+                                <span>Features not preserved</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--warning); color: var(--anthracite);">partial</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Interactivity:</strong> OP checklists are not interactive (can't click to complete)</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Progress tracking:</strong> No automatic progress bar or percentage</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Notifications:</strong> No due date reminders or assignee notifications</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>History:</strong> Task completion history not preserved</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Tempo Timesheets Section -->
+                <section id="tempo">
+                    <div class="section-header">
+                        <div class="section-number">35</div>
+                        <div class="section-title">
+                            <h2>Tempo Timesheets (Add-on)</h2>
+                            <span>Tempo Worklogs + Accounts → Time Entries + Custom Fields</span>
+                        </div>
+                    </div>
+
+                    <div class="mapping-arrow">
+                        <div class="mapping-side jira">
+                            <h4>Jira</h4>
+                            <div class="entity">Tempo Account / Worklog</div>
+                        </div>
+                        <div class="arrow-icon">→</div>
+                        <div class="mapping-side op">
+                            <h4>OpenProject</h4>
+                            <div class="entity">Custom Fields + Time Entry</div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Tempo Accounts</h4>
+                                <span>Account structure migration</span>
+                            </div>
+                            <span class="accordion-badge">tempo_accounts</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+                                Tempo Accounts are migrated as Custom Fields on Work Packages:
+                            </p>
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Tempo Field</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col"><code>account.name</code></td>
+                                            <td class="op-col">CF "Account" (list)</td>
+                                            <td>Hierarchical list</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.key</code></td>
+                                            <td class="op-col">CF option value</td>
+                                            <td>Account identifier</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.lead</code></td>
+                                            <td class="op-col">Not migrated</td>
+                                            <td>No equivalent in OP</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col"><code>account.customer</code></td>
+                                            <td class="op-col">CF option parent</td>
+                                            <td>Company/customer link</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Tempo Worklogs</h4>
+                                <span>Extended worklog fields</span>
+                            </div>
+                            <span class="accordion-badge">time_entries</span>
+                        </div>
+                        <div class="accordion-content">
+                            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+                                Tempo-specific worklog attributes are mapped to Time Entry custom fields:
+                            </p>
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Tempo Attribute</th>
+                                            <th>OpenProject Field</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Billable hours</td>
+                                            <td class="op-col">CF "Billable" (bool)</td>
+                                            <td>Or "Billable Hours" (float)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Work attribute</td>
+                                            <td class="op-col">Activity type</td>
+                                            <td>Mapped to OP activities</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Account reference</td>
+                                            <td class="op-col">CF on Time Entry</td>
+                                            <td>Links to account CF</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Not Migrated</h4>
+                                <span>Tempo features without OP equivalent</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">limited</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Tempo Teams:</strong> Team structures not migrated</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Tempo Plans:</strong> Resource planning data not migrated</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Approval workflows:</strong> Timesheet approvals not migrated</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Cost rates:</strong> Hourly rates and cost calculations</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Billing reports:</strong> Invoice generation features</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ========================== -->
+                <!-- NOT MIGRATED SECTIONS      -->
+                <!-- ========================== -->
+
+                <!-- NOT MIGRATED Overview Section -->
+                <section id="not-migrated">
+                    <div class="section-header" style="border-left-color: var(--danger);">
+                        <div class="section-number" style="background: var(--danger);">!</div>
+                        <div class="section-title">
+                            <h2>Not Migrated — Overview</h2>
+                            <span>Jira components without OpenProject equivalent</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Summary Table</h4>
+                                <span>All unmigrated components at a glance</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">15 items</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Component</th>
+                                            <th>Status</th>
+                                            <th>Reason</th>
+                                            <th>Roadmap</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Dashboards</td>
+                                            <td><span class="type-badge" style="background: var(--warning); color: var(--anthracite);">partial</span></td>
+                                            <td>Documented as wiki; widgets not functional</td>
+                                            <td>Wiki reference created</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Filters / Saved Searches</td>
+                                            <td><span class="type-badge" style="background: var(--warning); color: var(--anthracite);">partial</span></td>
+                                            <td>Documented as wiki; JQL not executable</td>
+                                            <td>Wiki reference created</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Permission Schemes</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>Different permission model</td>
+                                            <td>Manual setup</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Notification Schemes</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>Different notification system</td>
+                                            <td>Not planned</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Screen Schemes</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>OP doesn't have screen customization</td>
+                                            <td>Not applicable</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Field Configurations</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>OP uses type-based field visibility</td>
+                                            <td>Manual setup</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Automation Rules</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>Platform-specific</td>
+                                            <td>Recreate in OP</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">ScriptRunner Scripts</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>Jira-specific plugin</td>
+                                            <td>Not applicable</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Webhooks</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>Need recreation in OP</td>
+                                            <td>Manual setup</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Project Roles</td>
+                                            <td><span class="type-badge" style="background: var(--warning); color: var(--anthracite);">partial</span></td>
+                                            <td>Different role model</td>
+                                            <td>Manual mapping</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Roadmaps</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>Different roadmap model</td>
+                                            <td>Use OP Gantt</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Apps/Plugins Data</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>Plugin-specific data</td>
+                                            <td>Except Tempo (migrated)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Issue Linking Types (custom)</td>
+                                            <td><span class="type-badge" style="background: var(--warning); color: var(--anthracite);">partial</span></td>
+                                            <td>OP has fixed relation types</td>
+                                            <td>Map to standard types</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Cascading Select Options</td>
+                                            <td><span class="type-badge" style="background: var(--warning); color: var(--anthracite);">partial</span></td>
+                                            <td>Flattened to single list</td>
+                                            <td>Hierarchy lost</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Issue Ranks (GreenHopper)</td>
+                                            <td><span class="type-badge" style="background: var(--danger);">not migrated</span></td>
+                                            <td>OP uses different ordering</td>
+                                            <td>Manual reorder</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Dashboards Section -->
+                <section id="dashboards">
+                    <div class="section-header" style="border-left-color: var(--warning);">
+                        <div class="section-number" style="background: var(--warning);">⚡</div>
+                        <div class="section-title">
+                            <h2>Dashboards</h2>
+                            <span>Partial — Documented as Wiki, widgets not functional</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>ReportingMigration (Partial)</h4>
+                                <span>Dashboards documented in wiki pages</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--warning);">partial</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+                                The <code>ReportingMigration</code> creates wiki pages documenting dashboard configurations:
+                            </p>
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Dashboard name:</strong> Preserved as wiki page title</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Gadget configuration:</strong> Each gadget's settings documented</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Layout:</strong> Grid positions documented for reference</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>JQL queries:</strong> Filter queries preserved as text</li>
+                            </ul>
+                            <p style="color: var(--text-muted); margin-top: 1rem; font-size: 0.875rem;">
+                                <strong>Location:</strong> Wiki pages created in "j2o-reporting" project alongside filter documentation.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Limitations</h4>
+                                <span>Widgets cannot be recreated automatically</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">blocked</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Different widget systems:</strong> Jira uses gadgets, OP uses built-in widgets</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>No JQL in OP:</strong> Dashboard filters rely on JQL which OP doesn't support</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Layout differences:</strong> Grid systems are incompatible</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Third-party gadgets:</strong> Marketplace gadgets have no OP equivalent</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Workaround</h4>
+                                <span>How to recreate in OpenProject</span>
+                            </div>
+                            <span class="accordion-badge">alternative</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ol style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;">Review wiki pages in j2o-reporting project for dashboard configs</li>
+                                <li style="margin-bottom: 0.5rem;">Use <strong>OP Project Overview</strong> page with customizable widgets</li>
+                                <li style="margin-bottom: 0.5rem;">Create <strong>Saved Queries</strong> (My Page → Add widget)</li>
+                                <li style="margin-bottom: 0.5rem;">Use <strong>Work Package tables</strong> with filters and grouping</li>
+                                <li>Consider <strong>external BI tools</strong> (Metabase, Grafana) connected to OP API</li>
+                            </ol>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Filters Section -->
+                <section id="filters">
+                    <div class="section-header" style="border-left-color: var(--warning);">
+                        <div class="section-number" style="background: var(--warning);">⚡</div>
+                        <div class="section-title">
+                            <h2>Filters / Saved Searches</h2>
+                            <span>Partial — Documented as Wiki, JQL not executable</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>ReportingMigration (Partial)</h4>
+                                <span>Filters documented in wiki pages</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--warning);">partial</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+                                The <code>ReportingMigration</code> component creates a special project with wiki documentation of Jira filters:
+                            </p>
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Jira Entity</th>
+                                            <th>OpenProject Artifact</th>
+                                            <th>Content</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td class="jira-col">Saved Filters</td>
+                                            <td class="op-col">Wiki Pages</td>
+                                            <td>Filter name, JQL, owner, share scope</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="jira-col">Dashboards</td>
+                                            <td class="op-col">Wiki Pages</td>
+                                            <td>Dashboard name, gadgets, layout</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="color: var(--text-muted); margin-top: 1rem; font-size: 0.875rem;">
+                                <strong>Project:</strong> Creates "j2o-reporting" (or custom name) with wiki pages documenting all filters and dashboards for reference.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Limitations</h4>
+                                <span>JQL cannot be executed in OpenProject</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">blocked</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>JQL syntax:</strong> Jira Query Language has no OP equivalent</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Functions:</strong> JQL functions (currentUser(), now(), etc.) don't translate</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Field names:</strong> Jira field references differ from OP</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Operators:</strong> Some JQL operators not available in OP</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Workaround</h4>
+                                <span>Recreating filters in OpenProject</span>
+                            </div>
+                            <span class="accordion-badge">alternative</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ol style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;">Review wiki pages in j2o-reporting project</li>
+                                <li style="margin-bottom: 0.5rem;">Manually translate each JQL to OP query UI</li>
+                                <li style="margin-bottom: 0.5rem;">Save as <strong>Public Query</strong> or <strong>Private Query</strong></li>
+                                <li>For complex filters, use OP API with custom scripts</li>
+                            </ol>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Schemes Section -->
+                <section id="schemes">
+                    <div class="section-header" style="border-left-color: var(--danger);">
+                        <div class="section-number" style="background: var(--danger);">✗</div>
+                        <div class="section-title">
+                            <h2>Schemes</h2>
+                            <span>Not Migrated — Permission, Notification, Screen Schemes</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Permission Schemes</h4>
+                                <span>Why not migrated</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Different model:</strong> Jira uses scheme-based, OP uses role-based permissions</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Granularity:</strong> Jira has finer-grained permissions</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Map Jira project roles to OP roles, configure permissions per role in Admin</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Notification Schemes</h4>
+                                <span>Why not migrated</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>User-controlled:</strong> OP notifications are user-preference based</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>No scheme concept:</strong> Each user configures their own notifications</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Document Jira schemes, provide guidance to users</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Screen / Field Configuration Schemes</h4>
+                                <span>Why not migrated</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>No screen customization:</strong> OP has fixed form layouts</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Type-based visibility:</strong> Custom fields enabled per Work Package Type</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Configure CF visibility in Admin → Custom Fields → Types</li>
+                            </ul>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Automation Section -->
+                <section id="automation">
+                    <div class="section-header" style="border-left-color: var(--danger);">
+                        <div class="section-number" style="background: var(--danger);">✗</div>
+                        <div class="section-title">
+                            <h2>Automation</h2>
+                            <span>Not Migrated — Jira Automation, ScriptRunner, Webhooks</span>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header active" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Jira Automation Rules</h4>
+                                <span>Why not migrated</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
+                        </div>
+                        <div class="accordion-content active">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Platform-specific:</strong> Jira Automation is a proprietary feature</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>No equivalent:</strong> OP has limited built-in automation</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Use OP API with external automation tools (Zapier, n8n, custom scripts)</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>ScriptRunner Scripts</h4>
+                                <span>Why not migrated</span>
+                            </div>
+                            <span class="accordion-badge" style="background: var(--danger);">not applicable</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ul style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;"><strong>Jira-specific:</strong> ScriptRunner is a Jira marketplace app</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Groovy scripts:</strong> Cannot run in OpenProject</li>
+                                <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Rewrite logic using OP API or OP plugins</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="accordion">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div class="accordion-toggle">▶</div>
+                            <div class="accordion-title">
+                                <h4>Webhooks</h4>
+                                <span>How to recreate</span>
+                            </div>
+                            <span class="accordion-badge">manual setup</span>
+                        </div>
+                        <div class="accordion-content">
+                            <ol style="padding-left: 1.25rem; color: var(--text-muted);">
+                                <li style="margin-bottom: 0.5rem;">Document existing Jira webhooks and their endpoints</li>
+                                <li style="margin-bottom: 0.5rem;">Create OP webhooks in Admin → Webhooks (Enterprise feature)</li>
+                                <li style="margin-bottom: 0.5rem;">Or use OP API polling from external systems</li>
+                                <li>Update receiving systems to handle OP event format</li>
+                            </ol>
+                        </div>
+                    </div>
+                </section>
             </div>
         </main>
     </div>
@@ -2627,7 +4926,7 @@
         <div class="container">
             <div class="footer-content">
                 <span>J2O Migration Tool • Netresearch DTT GmbH</span>
-                <span>Jira to OpenProject Migration Reference</span>
+                <span>Jira to OpenProject Migration Reference v2.1</span>
             </div>
         </div>
     </footer>

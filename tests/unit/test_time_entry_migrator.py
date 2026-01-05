@@ -8,6 +8,19 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
+# Test config values to disable batch mode
+_test_migration_config = {"unit_test_mode": True, "enable_time_entry_batch": False}
+
+
+@pytest.fixture(autouse=True)
+def mock_migration_config():
+    """Mock migration_config to disable batch mode in tests."""
+    with patch("src.utils.time_entry_migrator.config") as mock_config:
+        mock_config.migration_config = MagicMock()
+        mock_config.migration_config.get.side_effect = lambda key, default=None: _test_migration_config.get(key, default)
+        yield mock_config
+
+
 from src.utils.time_entry_migrator import TimeEntryMigrator
 
 

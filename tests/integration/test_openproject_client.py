@@ -92,6 +92,8 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_os.access.return_value = True
         self.mock_os.unlink = MagicMock()
         self.mock_os.urandom.return_value = b"1234"  # Mock urandom for deterministic testing
+        # Mock environ.get to return "0" for timeout so explicit params take precedence
+        self.mock_os.environ.get.return_value = "0"
 
         # Initialize OpenProjectClient after all mocks are set up
         self.op_client = OpenProjectClient()
@@ -318,11 +320,11 @@ class TestOpenProjectClient(unittest.TestCase):
 
     def test_is_connected(self) -> None:
         """Test connection check."""
-        # Patch random.randint to return a fixed value
-        with patch("src.clients.openproject_client.random.randint", return_value=12345):
+        # Patch secrets.token_hex to return a fixed value (method uses secrets, not random)
+        with patch("src.clients.openproject_client.secrets.token_hex", return_value="abcdef"):
             # Configure mock for successful validation
             self.mock_rails_client.execute.side_effect = None  # Clear any previous side effects
-            self.mock_rails_client.execute.return_value = "OPENPROJECT_CONNECTION_TEST_12345"
+            self.mock_rails_client.execute.return_value = "OPENPROJECT_CONNECTION_TEST_abcdef"
 
             # Test is_connected
             result = self.op_client.is_connected()

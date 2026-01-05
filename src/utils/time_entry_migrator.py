@@ -547,31 +547,96 @@ class TimeEntryMigrator:
         if config.migration_config.get("unit_test_mode", True):
             use_batch = False
         if use_batch:
-            try:
-                # Start a lightweight heartbeat while batch runs
-                _hb_stop = threading.Event()
-                _batch_start = time.time()
+            # Process in chunks to avoid timeout (batch_size entries per Rails execution)
+            # Adaptive chunk sizing: increase if fast, decrease if slow
+            chunk_size = batch_size
+            total_entries = len(entries_to_migrate)
+            batch_success = True
+            processed_count = 0
+            chunk_num = 0
 
-                def _hb() -> None:
-                    while not _hb_stop.wait(timeout=max(5, heartbeat_sec)):
-                        elapsed = int(time.time() - _batch_start)
-                        self.logger.info("Time entries: batch create in progress (elapsed=%ss)", elapsed)
+            # Adaptive sizing configuration (timeout is 120s in batch_create_time_entries)
+            batch_timeout = 120.0
+            min_chunk_size = 100
+            max_chunk_size = 800  # Capped at 800 - larger sizes risk timeout
+            # Thresholds for adaptive sizing (fraction of timeout)
+            fast_threshold = 0.25  # < 30s: increase chunk size by 1.5x
+            slow_threshold = 0.50  # > 60s: decrease chunk size by 0.75x
 
-                _hb_thread = threading.Thread(target=_hb, daemon=True)
-                _hb_thread.start()
-                batch_result = self.op_client.batch_create_time_entries(entries_to_migrate)
-            except Exception as e:  # noqa: BLE001
-                self.logger.warning("Batch create failed: %s", e)
-                migration_summary["errors"].append(str(e))
-                # fall through to per-entry creation on batch failure
-            else:
-                _hb_stop.set()
-                created = int(batch_result.get("created", 0))
-                failed = int(batch_result.get("failed", 0))
-                migration_summary["successful_migrations"] += created
-                migration_summary["failed_migrations"] += failed
-                ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
-                migration_summary["created_time_entry_ids"].extend(ids)
+            self.logger.info(
+                "Using adaptive batch mode: initial chunk_size=%d, range=[%d-%d], entries=%d",
+                chunk_size,
+                min_chunk_size,
+                max_chunk_size,
+                total_entries,
+            )
+
+            chunk_start = 0
+            while chunk_start < total_entries:
+                chunk_end = min(chunk_start + chunk_size, total_entries)
+                chunk = entries_to_migrate[chunk_start:chunk_end]
+                chunk_num += 1
+                remaining = total_entries - chunk_start
+                est_chunks_left = (remaining + chunk_size - 1) // chunk_size
+
+                try:
+                    self.logger.info(
+                        "Processing chunk %d (%d entries, size=%d, ~%d chunks remaining)",
+                        chunk_num,
+                        len(chunk),
+                        chunk_size,
+                        est_chunks_left,
+                    )
+                    chunk_start_time = time.time()
+                    batch_result = self.op_client.batch_create_time_entries(chunk)
+                    chunk_elapsed = time.time() - chunk_start_time
+
+                    created = int(batch_result.get("created", 0))
+                    failed = int(batch_result.get("failed", 0))
+                    migration_summary["successful_migrations"] += created
+                    migration_summary["failed_migrations"] += failed
+                    ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
+                    migration_summary["created_time_entry_ids"].extend(ids)
+                    processed_count += len(chunk)
+
+                    # Adaptive chunk sizing based on elapsed time
+                    old_chunk_size = chunk_size
+                    time_ratio = chunk_elapsed / batch_timeout
+                    if time_ratio < fast_threshold and chunk_size < max_chunk_size:
+                        # Fast execution: increase chunk size by 1.5x (capped at max)
+                        chunk_size = min(int(chunk_size * 1.5), max_chunk_size)
+                    elif time_ratio > slow_threshold and chunk_size > min_chunk_size:
+                        # Slow execution: decrease chunk size by 0.75x (capped at min)
+                        chunk_size = max(int(chunk_size * 0.75), min_chunk_size)
+
+                    size_change = ""
+                    if chunk_size != old_chunk_size:
+                        size_change = f" [chunk_size: {old_chunk_size}→{chunk_size}]"
+
+                    self.logger.info(
+                        "Chunk %d done: %d ok, %d fail in %.1fs (%.0f%% timeout) - %d/%d total%s",
+                        chunk_num,
+                        created,
+                        failed,
+                        chunk_elapsed,
+                        time_ratio * 100,
+                        processed_count,
+                        total_entries,
+                        size_change,
+                    )
+
+                    # Move to next chunk
+                    chunk_start = chunk_end
+
+                except Exception as e:  # noqa: BLE001
+                    self.logger.warning("Batch chunk %d failed: %s - falling back to per-entry", chunk_num, e)
+                    migration_summary["errors"].append(f"Batch chunk {chunk_num} failed: {e}")
+                    batch_success = False
+                    # Process remaining entries via per-entry fallback
+                    entries_to_migrate = entries_to_migrate[chunk_start:]
+                    break
+
+            if batch_success:
                 processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
                 self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
                 self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]

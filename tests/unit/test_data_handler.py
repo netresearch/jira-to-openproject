@@ -38,13 +38,12 @@ class TestDataHandler(unittest.TestCase):
             details={"total": 10, "success": 8, "failed": 2},
         )
 
-        # Save the model
-        success = data_handler.save(
+        # Save the model (returns None on success, raises on error)
+        data_handler.save(
             test_result,
             self.test_filename,
             directory=self.temp_dir,
         )
-        assert success
         assert self.test_filepath.exists()
 
         # Load the model
@@ -64,13 +63,13 @@ class TestDataHandler(unittest.TestCase):
         """Test saving and loading a dictionary."""
         test_data = {"key1": "value1", "key2": 123, "nested": {"a": 1, "b": 2}}
 
-        # Save the dictionary
-        success = data_handler.save(
+        # Save the dictionary (returns None on success, raises on error)
+        data_handler.save(
             test_data,
             self.test_filename,
             directory=self.temp_dir,
         )
-        assert success
+        assert self.test_filepath.exists()
 
         # Load as a dictionary
         loaded_data = data_handler.load_dict(
@@ -85,13 +84,13 @@ class TestDataHandler(unittest.TestCase):
         """Test saving and loading a list."""
         test_data = [1, 2, 3, {"key": "value"}, [4, 5, 6]]
 
-        # Save the list
-        success = data_handler.save(
+        # Save the list (returns None on success, raises on error)
+        data_handler.save(
             test_data,
             self.test_filename,
             directory=self.temp_dir,
         )
-        assert success
+        assert self.test_filepath.exists()
 
         # Load as a list
         loaded_data = data_handler.load_list(

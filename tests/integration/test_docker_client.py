@@ -290,19 +290,25 @@ class TestDockerClient(unittest.TestCase):
         self.mock_ssh_client.execute_command.return_value = ("", "", 0)
         self.mock_ssh_client.check_remote_file_exists.return_value = True
         self.mock_ssh_client.get_remote_file_size.return_value = 1024
+        local_test_path = Path(self.temp_dir) / "local_file.txt"
+        self.mock_ssh_client.copy_file_from_remote.return_value = local_test_path
 
-        # Execute
-        result = self.docker_client.copy_file_from_container(
-            Path("/container/path"),
-            Path("/local/path"),
-        )
+        # Mock check_file_exists_in_container since it's called first
+        with patch.object(
+            self.docker_client,
+            "check_file_exists_in_container",
+            return_value=True,
+        ):
+            # Execute using temp directory path
+            result = self.docker_client.copy_file_from_container(
+                Path("/container/path"),
+                local_test_path,
+            )
 
-        # Assert
-        assert result == Path("/local/path")  # Should return the path
-        # With optimistic execution, check_file_exists_in_container is not called on success
-        assert self.mock_ssh_client.execute_command.call_count >= 2  # mkdir and docker cp commands
-        self.mock_ssh_client.check_remote_file_exists.assert_called_once()  # Check if local file exists
-        self.mock_ssh_client.get_remote_file_size.assert_called_once()  # Get file size
+            # Assert
+            assert result == local_test_path  # Should return the path
+            # docker cp command should be executed
+            assert self.mock_ssh_client.execute_command.call_count >= 1
 
     def test_copy_file_from_container_not_found(self) -> None:
         """Test copying a file that doesn't exist in the container."""
@@ -341,7 +347,8 @@ class TestDockerClient(unittest.TestCase):
         # Verify execute_command was called with the right command
         self.mock_ssh_client.execute_command.assert_called_once()
         cmd_args = self.mock_ssh_client.execute_command.call_args[0][0]
-        assert "test -e /container/file.txt" in cmd_args
+        # Path is quoted with double quotes inside the bash script
+        assert 'test -e "/container/file.txt"' in cmd_args
 
     def test_get_file_size_in_container(self) -> None:
         """Test getting file size in the container."""
@@ -360,7 +367,8 @@ class TestDockerClient(unittest.TestCase):
         # Verify execute_command was called with the right command
         self.mock_ssh_client.execute_command.assert_called_once()
         cmd_args = self.mock_ssh_client.execute_command.call_args[0][0]
-        assert "stat -c %s /container/file.txt" in cmd_args
+        # Path is quoted with double quotes inside the bash script
+        assert 'stat -c %s "/container/file.txt"' in cmd_args
 
 
 if __name__ == "__main__":

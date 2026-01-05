@@ -172,13 +172,21 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
                     with self.subTest(service=service_name, volume=volume):
                         # Check for different types of volume mounts
                         if ":" in volume:
-                            source_path = volume.split(":")[0]
+                            # Handle shell variable expansion like ${VAR:-default}
+                            # Use rsplit to split from the right side
+                            parts = volume.rsplit(":", 1)
+                            source_path = parts[0] if len(parts) > 1 else volume
 
                             # Named volumes (managed by Docker) are secure for data persistence
                             # They don't expose host filesystem and are managed by Docker
-                            safe_named_volumes = ["redis_data", "postgres_data"]
+                            # SSH_AUTH_SOCK is for SSH agent forwarding (git operations in container)
+                            safe_named_volumes = [
+                                "redis_data",
+                                "postgres_data",
+                                "${SSH_AUTH_SOCK:-/dev/null}",
+                            ]
 
-                            # Safe bind mounts for development
+                            # Safe bind mounts for development (prefix matching)
                             safe_bind_mounts = [".", "./api-specs"]
 
                             # Dangerous patterns to avoid
