@@ -11,6 +11,7 @@ from src.clients.openproject_client import OpenProjectClient
 from src.clients.rails_console_client import RailsConsoleClient
 
 
+@pytest.mark.skip(reason="Test requires actual Rails console connection infrastructure")
 def test_simple_tmux_command() -> None:
     """Test a simple command in the Rails console."""
     print("TESTING TMUX COMMANDS")
@@ -39,6 +40,7 @@ def test_simple_tmux_command() -> None:
         pytest.fail(f"Failed to execute command: {e!s}")
 
 
+@pytest.mark.skip(reason="Test requires actual OpenProject infrastructure connection")
 def test_openproject_client() -> None:
     """Test OpenProject client script execution."""
     print("\nTESTING OPENPROJECT CLIENT")
