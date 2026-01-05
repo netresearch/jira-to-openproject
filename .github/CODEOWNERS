@@ -1,0 +1,23 @@
+# CODEOWNERS - Automatic reviewer assignment
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @CybotTM
+
+# Core migration logic
+/src/migrations/ @CybotTM
+/src/clients/ @CybotTM
+/src/utils/ @CybotTM
+
+# Configuration and infrastructure
+/config/ @CybotTM
+/.github/ @CybotTM
+/Dockerfile* @CybotTM
+
+# Security-sensitive files
+/SECURITY.md @CybotTM
+/.github/workflows/ @CybotTM
+/.github/codeql/ @CybotTM
+
+# Tests
+/tests/ @CybotTM
