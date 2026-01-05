@@ -29,11 +29,18 @@ class DummyJira:
 class DummyOp:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, str]] = []
+        self.bulk_sections: list[dict] = []
 
     def upsert_work_package_description_section(self, work_package_id: int, section_marker: str, content: str):
         assert section_marker == SECTION_TITLE
         self.calls.append((work_package_id, section_marker, content))
         return True
+
+    def bulk_upsert_wp_description_sections(self, sections: list[dict]):
+        self.bulk_sections.extend(sections)
+        for s in sections:
+            self.calls.append((s["work_package_id"], s["section_marker"], s["content"]))
+        return {"updated": len(sections), "failed": 0}
 
 
 @pytest.fixture(autouse=True)
