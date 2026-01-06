@@ -390,8 +390,13 @@ class CustomFieldMigration(BaseMigration):
             self.extract_openproject_custom_fields()
 
         mapping = {}
+        # Track names already used/assigned to detect duplicates
+        used_op_names: set[str] = set()
 
         op_fields_by_name = {field.get("name", "").lower(): field for field in self.op_custom_fields}
+        # Pre-populate used names from existing OP fields
+        for field in self.op_custom_fields:
+            used_op_names.add(field.get("name", "").lower())
 
         def process_field(
             jira_field: dict[str, Any],
@@ -417,13 +422,27 @@ class CustomFieldMigration(BaseMigration):
                 return None
             op_format = self.map_jira_field_to_openproject_format(jira_field)
 
+            # Handle duplicate names by appending Jira field ID
+            op_name = jira_name
+            if op_name.lower() in used_op_names:
+                # Extract numeric part from customfield_XXXXX
+                field_num = jira_id.replace("customfield_", "")
+                op_name = f"{jira_name} ({field_num})"
+                self.logger.warning(
+                    "Duplicate custom field name '%s' - using '%s' for Jira field %s",
+                    jira_name,
+                    op_name,
+                    jira_id,
+                )
+            used_op_names.add(op_name.lower())
+
             mapping_entry = {
                 "jira_id": jira_id,
                 "jira_name": jira_name,
                 "jira_type": jira_field.get("schema", {}).get("type", ""),
                 "jira_custom_type": jira_field.get("schema", {}).get("custom", ""),
                 "openproject_id": None,
-                "openproject_name": jira_name,
+                "openproject_name": op_name,
                 "openproject_type": op_format,
                 "matched_by": "create",
             }
@@ -622,9 +641,11 @@ class CustomFieldMigration(BaseMigration):
                 self.logger.warning("Skipping field without name: %s", field)
                 continue
 
+            # Use openproject_name (may be deduplicated) instead of jira_name
+            op_name = field.get("openproject_name", jira_name)
             field_format = field.get("openproject_type", "text")
             attrs: dict[str, Any] = {
-                "name": jira_name,
+                "name": op_name,
                 "field_format": field_format,
                 "is_required": bool(field.get("is_required", False)),
                 "is_for_all": bool(field.get("is_for_all", True)),
@@ -640,7 +661,7 @@ class CustomFieldMigration(BaseMigration):
             meta.append(
                 {
                     "jira_id": field.get("jira_id"),
-                    "name": jira_name,
+                    "name": op_name,
                 }
             )
 
@@ -709,16 +730,22 @@ class CustomFieldMigration(BaseMigration):
         """Update mapping with OpenProject IDs after creation.
 
         Args:
-            created: List of created custom field records with id/name
+            created: List of created custom field records with index/id (from Ruby bulk create)
             existing: List of existing custom field records with id/name
-            meta: List of metadata with jira_id/name mapping
+            meta: List of metadata with jira_id/name mapping (ordered by bulk creation index)
 
         """
         # Build name→op_id lookup from created and existing
+        # Note: 'created' list from Ruby contains {'index': idx, 'id': op_id} - NOT 'name'
+        # We must use 'meta' list to get the name by index
         name_to_op_id: dict[str, int] = {}
         for rec in created:
-            if rec.get("id") and rec.get("name"):
-                name_to_op_id[rec["name"]] = int(rec["id"])
+            idx = rec.get("index")
+            op_id = rec.get("id")
+            if idx is not None and op_id and 0 <= idx < len(meta):
+                name = meta[idx].get("name")
+                if name:
+                    name_to_op_id[name] = int(op_id)
         for rec in existing:
             if rec.get("id") and rec.get("name"):
                 name_to_op_id[rec["name"]] = int(rec["id"])
@@ -726,9 +753,10 @@ class CustomFieldMigration(BaseMigration):
         # Update mapping entries
         updated_count = 0
         for jira_id, entry in self.mapping.items():
-            jira_name = entry.get("jira_name")
-            if jira_name and jira_name in name_to_op_id:
-                op_id = name_to_op_id[jira_name]
+            # Use openproject_name for lookup (may differ from jira_name due to deduplication)
+            op_name = entry.get("openproject_name") or entry.get("jira_name")
+            if op_name and op_name in name_to_op_id:
+                op_id = name_to_op_id[op_name]
                 if entry.get("openproject_id") != op_id:
                     entry["openproject_id"] = op_id
                     entry["matched_by"] = "created"
