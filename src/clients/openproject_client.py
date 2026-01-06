@@ -1575,38 +1575,32 @@ class OpenProjectClient:
             if end_marker in result:
                 break
 
-        # Parse output - find lines that exactly match our markers
-        lines = result.split("\n")
-        start_idx = -1
-        end_idx = -1
+        # Parse output using regex - markers must be on their own lines (not in command echo)
+        # The command echo looks like: >> puts "MARKER"; puts Model.count; puts "MARKER"
+        # The actual output looks like:
+        # MARKER
+        # 123
+        # MARKER
+        import re
 
+        # Pattern: start_marker alone on line, then digit(s) on next line, then end_marker alone
+        pattern = rf"^{re.escape(start_marker)}$\n(\d+)\n^{re.escape(end_marker)}$"
+        match = re.search(pattern, result, re.MULTILINE)
+        if match:
+            return int(match.group(1))
+
+        # Fallback: scan lines looking for marker sequence (not in command echo)
+        lines = result.split("\n")
         for i, line in enumerate(lines):
             stripped = line.strip()
-            # Require exact match (not substring) to avoid matching echoed commands
-            if stripped == start_marker:
-                start_idx = i
-            elif stripped == end_marker and start_idx != -1:
-                end_idx = i
-                break
-
-        if start_idx != -1 and end_idx != -1:
-            # Extract content between markers
-            for line in lines[start_idx + 1 : end_idx]:
-                stripped = line.strip()
-                if stripped.isdigit():
-                    return int(stripped)
-
-        # Fallback: scan for the count in output after our query
-        # Look for the last occurrence of the marker pattern followed by a number
-        in_our_output = False
-        for line in reversed(lines):
-            stripped = line.strip()
-            if stripped == end_marker:
-                in_our_output = True
-            elif in_our_output and stripped.isdigit():
-                return int(stripped)
-            elif stripped == start_marker:
-                break
+            # Marker must be the entire line content (not part of a puts command)
+            if stripped == start_marker and not line.lstrip().startswith(">>"):
+                # Check next lines for count and end marker
+                if i + 2 < len(lines):
+                    count_line = lines[i + 1].strip()
+                    end_line = lines[i + 2].strip()
+                    if count_line.isdigit() and end_line == end_marker:
+                        return int(count_line)
 
         msg = f"Unable to parse count result for {model}: end_marker={end_marker in result}"
         raise QueryExecutionError(msg)
