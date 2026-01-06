@@ -1534,11 +1534,81 @@ class OpenProjectClient:
             QueryExecutionError: If the count query fails
 
         """
-        result = self.execute_query(f"{model}.count")
+        import shutil
+        import subprocess
 
-        if isinstance(result, str) and result.isdigit():
-            return int(result)
-        msg = "Unable to parse count result."
+        # Use unique markers to extract count reliably from tmux output
+        marker_id = secrets.token_hex(8)
+        start_marker = f"J2O_COUNT_START_{marker_id}"
+        end_marker = f"J2O_COUNT_END_{marker_id}"
+
+        # Simple inline command that prints markers around the count
+        query = f'puts "{start_marker}"; puts {model}.count; puts "{end_marker}"'
+
+        # Get tmux target
+        target = self.rails_client._get_target()  # noqa: SLF001
+        tmux = shutil.which("tmux") or "tmux"
+
+        # Send the command
+        escaped_command = self.rails_client._escape_command(query)  # noqa: SLF001
+        subprocess.run(  # noqa: S603
+            [tmux, "send-keys", "-t", target, escaped_command, "Enter"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        # Wait for the end marker to appear (up to 30 seconds)
+        max_wait = 30
+        start_time = time.time()
+        result = ""
+
+        while time.time() - start_time < max_wait:
+            time.sleep(0.3)
+            cap = subprocess.run(  # noqa: S603
+                [tmux, "capture-pane", "-p", "-S", "-100", "-t", target],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            result = cap.stdout
+            if end_marker in result:
+                break
+
+        # Parse output - find lines that exactly match our markers
+        lines = result.split("\n")
+        start_idx = -1
+        end_idx = -1
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Require exact match (not substring) to avoid matching echoed commands
+            if stripped == start_marker:
+                start_idx = i
+            elif stripped == end_marker and start_idx != -1:
+                end_idx = i
+                break
+
+        if start_idx != -1 and end_idx != -1:
+            # Extract content between markers
+            for line in lines[start_idx + 1 : end_idx]:
+                stripped = line.strip()
+                if stripped.isdigit():
+                    return int(stripped)
+
+        # Fallback: scan for the count in output after our query
+        # Look for the last occurrence of the marker pattern followed by a number
+        in_our_output = False
+        for line in reversed(lines):
+            stripped = line.strip()
+            if stripped == end_marker:
+                in_our_output = True
+            elif in_our_output and stripped.isdigit():
+                return int(stripped)
+            elif stripped == start_marker:
+                break
+
+        msg = f"Unable to parse count result for {model}: end_marker={end_marker in result}"
         raise QueryExecutionError(msg)
 
     # -------------------------------------------------------------
