@@ -92,12 +92,25 @@ class WatcherMigration(BaseMigration):
         watchers_to_create: list[dict[str, Any]] = []
         skipped = 0
 
-        # Batch fetch issues with watchers metadata where possible
-        from src.clients.enhanced_jira_client import EnhancedJiraClient as _EJC  # noqa: PLC0415
+        # Use cached issues if available, otherwise iterate through keys directly
+        issues: dict[str, Any] = {}
+        cache_file = self.data_dir / "jira_issues_cache.json"
+        if cache_file.exists():
+            try:
+                import json  # noqa: PLC0415
 
-        batch = _EJC.batch_get_issues(object(), jira_keys)  # type: ignore[misc]
+                with open(cache_file) as f:
+                    issues = json.load(f)
+                logger.info("Using cached issues for watcher migration (%d issues)", len(issues))
+            except Exception:  # noqa: BLE001
+                issues = {}
 
-        for key, issue in batch.items():
+        # If no cache, create a minimal dict from jira_keys for iteration
+        if not issues:
+            logger.info("No cached issues, will iterate through %d Jira keys", len(jira_keys))
+            issues = {k: {} for k in jira_keys}
+
+        for key, issue in issues.items():
             if not issue:
                 skipped += 1
                 continue
