@@ -27,9 +27,11 @@ class Mappings:
     LINK_TYPE_MAPPING_FILE = Path("link_type_mapping.json")
     CUSTOM_FIELD_MAPPING_FILE = Path("custom_field_mapping.json")
     SPRINT_MAPPING_FILE = Path("sprint_mapping.json")
+    PRIORITY_MAPPING_FILE = Path("priority_mapping.json")
+    WORK_PACKAGE_MAPPING_FILE = Path("work_package_mapping.json")  # Consolidated mapping
     WORK_PACKAGE_MAPPING_FILE_PATTERN = Path(
         "work_package_mapping_{}.json",
-    )  # Per project
+    )  # Per project (legacy)
 
     TEMPO_ACCOUNTS_FILE = Path("tempo_accounts.json")
     OP_PROJECTS_FILE = Path("openproject_projects.json")
@@ -56,9 +58,11 @@ class Mappings:
         self.link_type_mapping = self._load_mapping(self.LINK_TYPE_MAPPING_FILE)
         self.custom_field_mapping = self._load_mapping(self.CUSTOM_FIELD_MAPPING_FILE)
         self.sprint_mapping = self._load_mapping(self.SPRINT_MAPPING_FILE)
+        self.priority_mapping = self._load_mapping(self.PRIORITY_MAPPING_FILE)
 
         # Additional mappings that might be added during runtime
         self.issue_type_id_mapping = self._load_mapping(self.ISSUE_TYPE_ID_MAPPING_FILE)
+        self.work_package_mapping = self._load_mapping(self.WORK_PACKAGE_MAPPING_FILE)
 
         # Check essential mappings
         if not self.project_mapping:
@@ -209,6 +213,7 @@ class Mappings:
             "custom_field_mapping",
             "sprint_mapping",
             "issue_type_id_mapping",
+            "work_package_mapping",
         ]
 
         for attr in mapping_attrs:

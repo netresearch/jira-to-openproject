@@ -569,8 +569,9 @@ class DockerClient:
 
             # Step 3: Set proper permissions as root to ensure Rails can read it
             logger.debug("Setting permissions on file in container: %s", container_path)
+            quoted_path = quote(str(container_path))
             stdout, stderr, rc = self.execute_command(
-                f"chmod 644 {container_path}",
+                f"chmod 644 {quoted_path}",
                 user="root",  # Execute as root user
             )
 
@@ -592,7 +593,8 @@ class DockerClient:
         finally:
             # Clean up the temporary file on the remote server
             try:
-                self.ssh_client.execute_command(f"rm -f {remote_temp_path.as_posix()}")
+                quoted_remote = quote(remote_temp_path.as_posix())
+                self.ssh_client.execute_command(f"rm -f {quoted_remote}")
             except Exception:
                 # Non-critical error, just log it
                 logger.exception(
