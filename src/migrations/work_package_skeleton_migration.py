@@ -91,12 +91,17 @@ class WorkPackageSkeletonMigration(BaseMigration):
             self.issue_type_mapping = config.mappings.get_mapping("issue_type") or {}
             self.issue_type_id_mapping = config.mappings.get_mapping("issue_type_id") or {}
             self.status_mapping = config.mappings.get_mapping("status") or {}
+            # Load user and priority mappings for proper metadata migration
+            self.user_mapping = config.mappings.get_mapping("user") or {}
+            self.priority_mapping = config.mappings.get_mapping("priority") or {}
         except Exception as e:
             self.logger.warning("Failed to load mappings via config: %s", e)
             self.project_mapping = {}
             self.issue_type_mapping = {}
             self.issue_type_id_mapping = {}
             self.status_mapping = {}
+            self.user_mapping = {}
+            self.priority_mapping = {}
 
     def _load_existing_mapping(self) -> None:
         """Load existing work package mapping for incremental migration."""
@@ -212,8 +217,8 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         """
         try:
-            # Minimal fields for skeleton creation
-            fields = "summary,issuetype,status,project"
+            # Include metadata fields for proper attribute migration
+            fields = "summary,issuetype,status,project,priority,assignee,reporter,created,updated"
             return self.jira_client.jira.search_issues(
                 jql,
                 startAt=start_at,
@@ -317,6 +322,42 @@ class WorkPackageSkeletonMigration(BaseMigration):
         # Use admin user (ID 1) as default author for skeleton creation
         return 1
 
+    def _map_priority(self, jira_priority: Any) -> int | None:
+        """Map Jira priority to OpenProject priority ID.
+
+        Args:
+            jira_priority: The Jira priority object (from issue.fields.priority)
+
+        Returns:
+            OpenProject priority ID or None
+        """
+        if not jira_priority:
+            return None
+        priority_name = getattr(jira_priority, "name", None)
+        if not priority_name:
+            return None
+        return self.priority_mapping.get(priority_name)
+
+    def _map_user(self, jira_user: Any) -> int | None:
+        """Map Jira user to OpenProject user ID.
+
+        Args:
+            jira_user: The Jira user object (from issue.fields.assignee/reporter)
+
+        Returns:
+            OpenProject user ID or None
+        """
+        if not jira_user:
+            return None
+        # Try name first (username), then key
+        user_name = getattr(jira_user, "name", None) or getattr(jira_user, "key", None)
+        if not user_name:
+            return None
+        user_entry = self.user_mapping.get(user_name)
+        if isinstance(user_entry, dict):
+            return user_entry.get("openproject_id")
+        return None
+
     def _get_j2o_origin_key_cf_id(self) -> int | None:
         """Get or create the J2O Origin Key custom field ID (cached)."""
         if self._j2o_origin_key_cf_id is not None:
@@ -327,8 +368,6 @@ class WorkPackageSkeletonMigration(BaseMigration):
             cf = self.op_client.ensure_custom_field(
                 name=cf_name,
                 field_format="string",
-                type_ids=[],  # All types
-                is_for_all=True,
             )
             if cf and cf.get("id"):
                 self._j2o_origin_key_cf_id = cf["id"]
@@ -376,24 +415,53 @@ class WorkPackageSkeletonMigration(BaseMigration):
         status_id = self._get_openproject_status_id(jira_issue)
 
         if not type_id or not status_id:
+            jira_type_name = str(jira_issue.fields.issuetype.name) if jira_issue.fields.issuetype else "None"
+            jira_status_id = str(jira_issue.fields.status.id) if jira_issue.fields.status else "None"
             self.logger.warning(
-                "Missing type or status mapping for %s",
+                "Missing mapping for %s: type=%s (id=%s), status_id=%s (have type_id=%s, status_id=%s)",
                 jira_issue.key,
+                jira_type_name,
+                type_id,
+                jira_status_id,
+                type_id,
+                status_id,
             )
             return None
 
-        # Build minimal work package payload
+        # Map priority from Jira (with fallback to default)
+        priority_id = self._map_priority(jira_issue.fields.priority)
+        if not priority_id:
+            priority_id = self._get_default_priority_id()
+
+        # Map author from Jira reporter (with fallback to default)
+        reporter = getattr(jira_issue.fields, "reporter", None)
+        author_id = self._map_user(reporter)
+        if not author_id:
+            author_id = self._get_default_author_id()
+
+        # Map assignee from Jira (can be None)
+        assignee = getattr(jira_issue.fields, "assignee", None)
+        assigned_to_id = self._map_user(assignee)
+
+        # Build work package payload with actual Jira metadata
         payload: dict[str, Any] = {
             "subject": jira_issue.fields.summary[:255],  # Truncate if needed
             "project_id": project_id,
             "type_id": type_id,
             "status_id": status_id,
-            "priority_id": self._get_default_priority_id(),
-            "author_id": self._get_default_author_id(),
-            # Include jira_key for result matching
+            "priority_id": priority_id,
+            "author_id": author_id,
+            # Include jira_key for result matching (stripped before sending to OP)
             "_jira_key": jira_issue.key,
             "_jira_id": str(jira_issue.id),
+            # Original timestamps from Jira (set via update_columns after save)
+            "created_at": getattr(jira_issue.fields, "created", None),
+            "updated_at": getattr(jira_issue.fields, "updated", None),
         }
+
+        # Add assignee if mapped
+        if assigned_to_id:
+            payload["assigned_to_id"] = assigned_to_id
 
         # Add J2O Origin Key custom field
         if j2o_cf_id:
@@ -435,10 +503,15 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
             # Match results back to Jira issues by index
             mappings: list[tuple[str, str, int]] = []
+            failed_details: list[str] = []
             for i, res in enumerate(results_list):
                 if res.get("status") == "created" and res.get("id"):
                     jira_id, jira_key = jira_info[i]
                     mappings.append((jira_id, jira_key, res["id"]))
+                elif res.get("status") == "failed":
+                    jira_id, jira_key = jira_info[i] if i < len(jira_info) else ("?", "?")
+                    errors = res.get("errors", []) or [res.get("error", "Unknown error")]
+                    failed_details.append(f"{jira_key}: {', '.join(errors)}")
 
             self.logger.info(
                 "  Batch result: %d created, %d failed in %s",
@@ -446,6 +519,14 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 failed,
                 project_key,
             )
+
+            # Log first few failure details for debugging
+            if failed_details:
+                for detail in failed_details[:5]:  # Log up to 5 failures per batch
+                    self.logger.warning("  Failed: %s", detail)
+                if len(failed_details) > 5:
+                    self.logger.warning("  ... and %d more failures", len(failed_details) - 5)
+
             return created, failed, mappings
 
         except Exception as e:
