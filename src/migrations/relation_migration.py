@@ -37,15 +37,43 @@ class RelationMigration(BaseMigration):
         # Inverse/direction mapping table
         # tuple of (jira_link_name_lower, direction) -> (op_type, swap)
         # direction is 'outward' or 'inward' from the Jira issue perspective
+        # Note: Jira link type names vary by instance - these are for Netresearch Jira
         self.direction_map: dict[tuple[str, str], tuple[str, bool]] = {
+            # Standard relation types
             ("relates", "outward"): ("relates", False),
             ("relates", "inward"): ("relates", False),
+            ("relation", "outward"): ("relates", False),  # Netresearch: "Relation"
+            ("relation", "inward"): ("relates", False),
+            # Duplicates
             ("duplicates", "outward"): ("duplicates", False),
             ("duplicates", "inward"): ("duplicates", True),  # duplicated by
+            ("duplicate", "outward"): ("duplicates", False),  # Netresearch: "Duplicate"
+            ("duplicate", "inward"): ("duplicates", True),
+            # Blocks
             ("blocks", "outward"): ("blocks", False),
             ("blocks", "inward"): ("blocks", True),  # blocked by => swap
+            ("blockade", "outward"): ("blocks", False),  # Netresearch: "Blockade"
+            ("blockade", "inward"): ("blocks", True),
+            # Precedes/Follows
             ("precedes", "outward"): ("precedes", False),
             ("precedes", "inward"): ("follows", True),
+            # Additional Netresearch link types mapped to relates
+            ("cause", "outward"): ("relates", False),
+            ("cause", "inward"): ("relates", False),
+            ("mention", "outward"): ("relates", False),
+            ("mention", "inward"): ("relates", False),
+            ("deploy", "outward"): ("relates", False),
+            ("deploy", "inward"): ("relates", False),
+            ("collision", "outward"): ("relates", False),
+            ("collision", "inward"): ("relates", False),
+            ("admin", "outward"): ("relates", False),
+            ("admin", "inward"): ("relates", False),
+            ("qa", "outward"): ("relates", False),
+            ("qa", "inward"): ("relates", False),
+            ("resolve", "outward"): ("relates", False),
+            ("resolve", "inward"): ("relates", False),
+            ("side effect", "outward"): ("relates", False),
+            ("side effect", "inward"): ("relates", False),
         }
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -95,6 +123,12 @@ class RelationMigration(BaseMigration):
                 return op_id
             if isinstance(op_id, str) and op_id.isdigit():
                 return int(op_id)
+        # Debug: log first few failures
+        if not hasattr(self, "_resolve_failures"):
+            self._resolve_failures = 0
+        self._resolve_failures += 1
+        if self._resolve_failures <= 5:
+            logger.warning("_resolve_wp_id failed for %s: wp_map_entry=%s, _wp_key_map_has=%s", jira_key, entry, jira_key in (getattr(self, "_wp_key_map", {}) or {}))
         return None
 
     def _map_type_and_direction(
@@ -118,13 +152,16 @@ class RelationMigration(BaseMigration):
         # Load work_package_mapping file if present (guarded inside WPM too)
         # Fallback to mappings store
         wp_map_file = self.data_dir / "work_package_mapping.json"
+        logger.info("Looking for work_package_mapping at: %s (exists=%s)", wp_map_file, wp_map_file.exists())
         work_package_map: dict[str, Any] = {}
         if wp_map_file.exists():
             try:
                 from src.utils import data_handler as _dh  # noqa: PLC0415
 
-                work_package_map = _dh.load(wp_map_file) or {}
-            except Exception:  # noqa: BLE001
+                work_package_map = _dh.load_dict(wp_map_file) or {}
+                logger.info("Loaded work_package_mapping: %d entries", len(work_package_map))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to load work_package_mapping: %s", e)
                 work_package_map = {}
 
         # Assemble set of issues to process using WPM mapping keys
@@ -132,6 +169,7 @@ class RelationMigration(BaseMigration):
             jira_keys: list[str] = [str(v.get("jira_key")) for v in work_package_map.values() if v.get("jira_key")]
         else:
             jira_keys = list((self.mappings.get_mapping("work_package") or {}).keys())
+            logger.info("Using mappings fallback for jira_keys: %d keys", len(jira_keys))
 
         if not jira_keys:
             logger.info("No work package mapping entries found; skipping relations")
@@ -147,19 +185,69 @@ class RelationMigration(BaseMigration):
                     for v in work_package_map.values()
                     if isinstance(v, dict) and v.get("jira_key")
                 }
-        except Exception:  # noqa: BLE001
+            else:
+                # Fallback: build from mappings store
+                # Note: mapping keys are numeric Jira IDs, values have jira_key field
+                wp_mappings = self.mappings.get_mapping("work_package") or {}
+                for _jira_id, entry in wp_mappings.items():
+                    if isinstance(entry, dict):
+                        jira_key = entry.get("jira_key")
+                        op_id = entry.get("openproject_id")
+                        if jira_key and op_id:
+                            self._wp_key_map[str(jira_key)] = op_id
+                logger.info("Built _wp_key_map from mappings fallback: %d entries", len(self._wp_key_map))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to build _wp_key_map: %s", e)
             self._wp_key_map = {}
 
-        # Use EnhancedJiraClient.batch_get_issues without constructing it (avoid connection)
-        from src.clients.enhanced_jira_client import EnhancedJiraClient as _EJC  # noqa: PLC0415
+        # Batch get issues using jira_client
+        # First check for cached issues from work_packages_content migration
+        issues: dict[str, Any] = {}
+        cache_file = self.data_dir / "jira_issues_cache.json"
+        logger.info("Checking for cached issues at: %s (exists=%s)", cache_file, cache_file.exists())
+        if cache_file.exists():
+            try:
+                import json  # noqa: PLC0415
 
-        batch = _EJC.batch_get_issues(object(), jira_keys)  # type: ignore[misc]
+                logger.info("Loading cached issues from %s (size=%d MB)...", cache_file, cache_file.stat().st_size // 1024 // 1024)
+                with open(cache_file) as f:
+                    cached = json.load(f)
+                if isinstance(cached, dict) and len(cached) > 0:
+                    logger.info("Using cached issues from %s (%d issues)", cache_file, len(cached))
+                    issues = cached
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to load cached issues: %s. Will fetch from Jira", e)
+
+        if not issues:
+            logger.info("Fetching %d issues from Jira for relation extraction...", len(jira_keys))
+            try:
+                batch_get = getattr(self.jira_client, "batch_get_issues", None)
+                if callable(batch_get):
+                    batch_result = batch_get(jira_keys)
+                    # batch_get_issues returns a list of dicts from batch processor
+                    if isinstance(batch_result, list):
+                        for batch_dict in batch_result:
+                            if isinstance(batch_dict, dict):
+                                issues.update(batch_dict)
+                    elif isinstance(batch_result, dict):
+                        issues = batch_result
+                    logger.info("Fetched %d issues from Jira", len(issues))
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to batch-get Jira issues for relation extraction")
+                issues = {}
 
         # Collect all relations for bulk creation
         relations_to_create: list[dict[str, Any]] = []
         skipped = 0
+        processed = 0
+        no_links = 0
+        no_from_id = 0
+        no_to_id = 0
+        no_mapping = 0
 
-        for key, issue in batch.items():
+        logger.info("Processing %d issues for relations, _wp_key_map has %d entries", len(issues), len(self._wp_key_map))
+
+        for key, issue in issues.items():
             if not issue:
                 skipped += 1
                 continue
@@ -169,21 +257,40 @@ class RelationMigration(BaseMigration):
                 skipped += 1
                 continue
 
-            links = getattr(getattr(issue, "fields", None), "issuelinks", []) or []
+            # Handle both JIRA objects and raw dicts (from cache)
+            if hasattr(issue, "fields"):
+                links = getattr(issue.fields, "issuelinks", []) or []
+            elif isinstance(issue, dict):
+                fields = issue.get("fields", {}) or {}
+                links = fields.get("issuelinks", []) or []
+            else:
+                links = []
+
             for l in links:
                 try:
-                    lt = getattr(l, "type", None)
+                    # Handle both JIRA objects and raw dicts (from cache)
+                    if hasattr(l, "type"):
+                        lt = l.type
+                        outward = getattr(l, "outwardIssue", None)
+                        inward = getattr(l, "inwardIssue", None)
+                    elif isinstance(l, dict):
+                        lt = l.get("type")
+                        outward = l.get("outwardIssue")
+                        inward = l.get("inwardIssue")
+                    else:
+                        skipped += 1
+                        continue
+
                     if not lt:
                         skipped += 1
                         continue
-                    outward = getattr(l, "outwardIssue", None)
-                    inward = getattr(l, "inwardIssue", None)
+
                     if outward is not None:
                         direction = "outward"
-                        target_key = getattr(outward, "key", None)
+                        target_key = getattr(outward, "key", None) if hasattr(outward, "key") else outward.get("key") if isinstance(outward, dict) else None
                     elif inward is not None:
                         direction = "inward"
-                        target_key = getattr(inward, "key", None)
+                        target_key = getattr(inward, "key", None) if hasattr(inward, "key") else inward.get("key") if isinstance(inward, dict) else None
                     else:
                         skipped += 1
                         continue
@@ -197,8 +304,13 @@ class RelationMigration(BaseMigration):
                         skipped += 1
                         continue
 
-                    # Map type/direction
-                    name = getattr(lt, "name", "") or getattr(lt, "outward", "")
+                    # Map type/direction - handle both JIRA objects and dicts
+                    if hasattr(lt, "name"):
+                        name = lt.name or getattr(lt, "outward", "")
+                    elif isinstance(lt, dict):
+                        name = lt.get("name", "") or lt.get("outward", "")
+                    else:
+                        name = str(lt)
                     mapping = self._map_type_and_direction(name, direction)
                     if not mapping:
                         skipped += 1
