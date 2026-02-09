@@ -99,31 +99,7 @@ class AdminSchemeMigration(BaseMigration):
 
     def _extract(self) -> ComponentResult:
         """Gather Jira project role assignments for mapped projects."""
-        projects = []
-        for project_key, entry in self.project_mapping.items():
-            op_project_id = int(entry.get("openproject_id", 0) or 0) if isinstance(entry, dict) else 0
-            if op_project_id <= 0:
-                continue
-            try:
-                roles = self.jira_client.get_project_roles(project_key)
-                scheme = self.jira_client.get_project_permission_scheme(project_key)
-            except Exception as exc:
-                self.logger.exception(
-                    "Failed to extract admin scheme for project %s: %s",
-                    project_key,
-                    exc,
-                )
-                continue
-
-            projects.append(
-                {
-                    "project_key": project_key,
-                    "openproject_id": op_project_id,
-                    "roles": roles,
-                    "permission_scheme": scheme,
-                },
-            )
-
+        projects = self._get_current_entities_for_type("admin_schemes")
         return ComponentResult(
             success=True,
             data={"projects": projects},

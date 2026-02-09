@@ -1,12 +1,15 @@
 from typing import Any
 
+# Timeout in seconds for Rails console queries fetching default IDs
+_DEFAULT_TIMEOUT = 180
+
 
 def choose_default_type_id(op_client: Any) -> int:
     """Pick a default Type ID, preferring the first by position, else 1."""
     try:
         type_ids = op_client.execute_large_query_to_json_file(
             "Type.order(:position).pluck(:id)",
-            timeout=180,
+            timeout=_DEFAULT_TIMEOUT,
         )
         if isinstance(type_ids, list) and type_ids:
             return int(type_ids[0])
@@ -32,7 +35,7 @@ def apply_required_defaults(
     try:
         status_ids = op_client.execute_large_query_to_json_file(
             "Status.order(:position).pluck(:id)",
-            timeout=180,
+            timeout=_DEFAULT_TIMEOUT,
         )
         if isinstance(status_ids, list) and status_ids:
             default_status_id = int(status_ids[0])
@@ -43,7 +46,7 @@ def apply_required_defaults(
     try:
         pr_ids = op_client.execute_large_query_to_json_file(
             "IssuePriority.order(:position).pluck(:id)",
-            timeout=180,
+            timeout=_DEFAULT_TIMEOUT,
         )
         if isinstance(pr_ids, list) and pr_ids:
             default_priority_id = int(pr_ids[0])
@@ -62,7 +65,7 @@ def apply_required_defaults(
         try:
             admin_ids = op_client.execute_large_query_to_json_file(
                 "User.where(admin: true).limit(1).pluck(:id)",
-                timeout=180,
+                timeout=_DEFAULT_TIMEOUT,
             )
             if isinstance(admin_ids, list) and admin_ids:
                 default_author_id = int(admin_ids[0])

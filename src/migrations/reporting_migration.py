@@ -84,39 +84,24 @@ class ReportingMigration(BaseMigration):
     def _extract(self) -> ComponentResult:
         """Fetch Jira filters and dashboards."""
         try:
-            filters = self.jira_client.get_filters()
+            data_list = self._get_current_entities_for_type("reporting")
+            data = data_list[0] if data_list else {}
+            filters = data.get("filters", [])
+            dashboards = data.get("dashboards", [])
+            return ComponentResult(
+                success=True,
+                data={
+                    "filters": filters,
+                    "dashboards": dashboards,
+                },
+                total_count=len(filters) + len(dashboards),
+            )
         except Exception as exc:
             return ComponentResult(
                 success=False,
                 message=f"Failed to fetch Jira filters: {exc}",
                 error=str(exc),
             )
-
-        try:
-            dashboards = self.jira_client.get_dashboards()
-        except Exception as exc:
-            dashboards = []
-            self.logger.exception("Failed to fetch Jira dashboards: %s", exc)
-
-        dashboard_details: list[dict[str, Any]] = []
-        for dashboard in dashboards:
-            dash_id = dashboard.get("id")
-            if dash_id is None:
-                continue
-            try:
-                detail = self.jira_client.get_dashboard_details(int(dash_id))
-            except Exception:
-                detail = dashboard
-            dashboard_details.append(detail)
-
-        return ComponentResult(
-            success=True,
-            data={
-                "filters": filters,
-                "dashboards": dashboard_details,
-            },
-            total_count=len(filters) + len(dashboard_details),
-        )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Convert filters and dashboard metadata to OpenProject payloads."""

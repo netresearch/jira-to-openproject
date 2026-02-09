@@ -134,84 +134,22 @@ class AgileBoardMigration(BaseMigration):
     def _extract(self) -> ComponentResult:
         """Fetch boards, configurations, and sprints from Jira."""
         try:
-            boards = self.jira_client.get_boards()
+            data_list = self._get_current_entities_for_type("agile_boards")
+            data = data_list[0] if data_list else {}
+            return ComponentResult(
+                success=True,
+                data={
+                    "boards": data.get("boards", []),
+                    "sprints": data.get("sprints", []),
+                },
+                total_count=data.get("total_count", 0),
+            )
         except Exception as exc:
             return ComponentResult(
                 success=False,
                 message=f"Failed to fetch Jira boards: {exc}",
                 error=str(exc),
             )
-
-        board_payloads: list[dict[str, Any]] = []
-        sprint_payloads: list[dict[str, Any]] = []
-
-        for board in boards:
-            board_id = board.get("id")
-            if board_id is None:
-                continue
-
-            try:
-                configuration = self.jira_client.get_board_configuration(board_id)
-            except Exception:
-                configuration = {}
-
-            try:
-                board_sprints = self.jira_client.get_board_sprints(board_id)
-            except Exception:
-                board_sprints = []
-
-            location = board.get("location") or {}
-            project_key = location.get("projectKey") or board.get("locationProjectKey")
-
-            columns = configuration.get("columnConfig", {}).get("columns", [])
-            statuses: list[str] = []
-            for column in columns:
-                column_statuses = column.get("statuses", [])
-                if isinstance(column_statuses, list):
-                    for status in column_statuses:
-                        if isinstance(status, dict):
-                            status_id = status.get("id") or status.get("name")
-                        else:
-                            status_id = status
-                        if status_id:
-                            statuses.append(str(status_id))
-
-            query = configuration.get("filter", {}) or {}
-            filter_jql = query.get("query") or query.get("queryString") or ""
-
-            board_payloads.append(
-                {
-                    "id": board_id,
-                    "name": board.get("name"),
-                    "type": board.get("type"),
-                    "project_key": project_key,
-                    "statuses": statuses,
-                    "filter_jql": filter_jql,
-                },
-            )
-
-            for sprint in board_sprints:
-                sprint_payloads.append(
-                    {
-                        "board_id": board_id,
-                        "project_key": project_key,
-                        "id": sprint.get("id"),
-                        "name": sprint.get("name"),
-                        "goal": sprint.get("goal"),
-                        "state": sprint.get("state"),
-                        "startDate": sprint.get("startDate"),
-                        "endDate": sprint.get("endDate"),
-                    },
-                )
-
-        return ComponentResult(
-            success=True,
-            data={
-                "boards": board_payloads,
-                "sprints": sprint_payloads,
-            },
-            total_count=len(board_payloads),
-        )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Convert board and sprint data into OpenProject payloads."""

@@ -25,11 +25,10 @@ class TestCompanyMigration(unittest.TestCase):
         self.test_data_dir = Path(__file__).parent / "test_data"
         self.test_data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize the company migration with str path
+        # Initialize the company migration
         self.company_migration = CompanyMigration(
             jira_client=self.jira_client,
             op_client=self.op_client,
-            data_dir=str(self.test_data_dir),
         )
 
         # Initialize _created_companies attribute

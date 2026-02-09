@@ -118,65 +118,19 @@ class WorkflowMigration(BaseMigration):
     def _extract(self) -> ComponentResult:
         """Gather workflow schemes, transitions, and OpenProject roles."""
         try:
-            issue_types = self.jira_client.get_issue_types()
-            schemes = self.jira_client.get_workflow_schemes()
-            roles = self.op_client.get_roles()
+            data_list = self._get_current_entities_for_type("workflows")
+            data = data_list[0] if data_list else {}
+            return ComponentResult(
+                success=True,
+                data=data,
+                total_count=len(data.get("workflow_transitions", {})),
+            )
         except Exception as exc:
             return ComponentResult(
                 success=False,
                 message=f"Failed to extract workflow metadata: {exc}",
                 error=str(exc),
             )
-
-        issue_type_by_id = {
-            str(item.get("id")): item.get("name") for item in issue_types if item.get("id") and item.get("name")
-        }
-
-        issue_type_to_workflow: dict[str, str] = {}
-        workflow_names: set[str] = set()
-        for scheme in schemes:
-            mappings = scheme.get("issueTypeMappings") or scheme.get("mappings") or {}
-            if isinstance(mappings, dict):
-                for issue_type_id, workflow_name in mappings.items():
-                    jira_name = issue_type_by_id.get(str(issue_type_id))
-                    if jira_name and isinstance(workflow_name, str) and workflow_name:
-                        issue_type_to_workflow[jira_name] = workflow_name
-                        workflow_names.add(workflow_name)
-            default_workflow = scheme.get("defaultWorkflow")
-            if isinstance(default_workflow, str) and default_workflow and not issue_type_to_workflow:
-                # Fallback: apply default workflow to every known issue type if no explicit mappings
-                for name in issue_type_by_id.values():
-                    if name not in issue_type_to_workflow:
-                        issue_type_to_workflow[name] = default_workflow
-                        workflow_names.add(default_workflow)
-
-        workflow_transitions: dict[str, list[dict[str, Any]]] = {}
-        workflow_statuses: dict[str, list[dict[str, Any]]] = {}
-        for workflow_name in workflow_names:
-            try:
-                transitions = self.jira_client.get_workflow_transitions(workflow_name)
-            except Exception:
-                transitions = []
-            workflow_transitions[workflow_name] = transitions
-
-            try:
-                statuses = self.jira_client.get_workflow_statuses(workflow_name)
-            except Exception:
-                statuses = []
-            workflow_statuses[workflow_name] = statuses if isinstance(statuses, list) else []
-
-        data = {
-            "issue_type_to_workflow": issue_type_to_workflow,
-            "workflow_transitions": workflow_transitions,
-            "workflow_statuses": workflow_statuses,
-            "roles": roles,
-        }
-
-        return ComponentResult(
-            success=True,
-            data=data,
-            total_count=len(workflow_transitions),
-        )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Translate Jira workflows into OpenProject workflow transition payloads."""

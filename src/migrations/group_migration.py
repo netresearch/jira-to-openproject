@@ -40,6 +40,9 @@ class GroupMigration(BaseMigration):
         interface for entity retrieval. Called by run_with_change_detection() to fetch data
         with automatic thread-safe caching.
 
+        Delegates to extract_jira_groups() which handles the actual fetching,
+        instance-level caching (self.jira_groups), and file persistence.
+
         Args:
             entity_type: The type of entities to retrieve (e.g., "groups")
 
@@ -50,31 +53,11 @@ class GroupMigration(BaseMigration):
             ValueError: If entity_type is not supported by this migration
 
         """
-        # Check if this is the entity type we handle
         if entity_type != "groups":
             msg = f"GroupMigration does not support entity type: {entity_type}. Supported types: ['groups']"
             raise ValueError(msg)
 
-        # Fetch Jira groups (API call 1)
-        self.logger.info("Fetching Jira groups and memberships")
-        groups = self.jira_client.get_groups()
-
-        # Fetch members for each group (API call 2 per group)
-        group_members: list[dict[str, Any]] = []
-        for group in groups:
-            name = group.get("name")
-            if not name:
-                continue
-            members = self.jira_client.get_group_members(name)
-            group_payload = {
-                "name": name,
-                "groupId": group.get("groupId"),
-                "members": members,
-            }
-            group_members.append(group_payload)
-
-        self.logger.info("Discovered %s Jira groups", len(group_members))
-        return group_members
+        return self.extract_jira_groups()
 
     # ------------------------------------------------------------------
     # Extraction helpers

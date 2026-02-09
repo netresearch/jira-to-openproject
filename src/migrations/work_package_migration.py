@@ -97,6 +97,9 @@ class WorkPackageMigration(BaseMigration):
         "Flagged",  # Jira flag indicator
     })
 
+    # Default OpenProject role ID for mentioned users (Member role)
+    _DEFAULT_MENTION_ROLE_ID = 4
+
     def __init__(
         self,
         jira_client: JiraClient,
@@ -136,8 +139,8 @@ class WorkPackageMigration(BaseMigration):
         # Key: OpenProject project ID, Value: set of OpenProject user IDs
         self._mentioned_users_by_project: dict[int, set[int]] = {}
 
-        # Default role ID for mentioned users (Member role, typically ID 4)
-        self._mention_role_id: int = 4
+        # Default role ID for mentioned users (Member role)
+        self._mention_role_id: int = self._DEFAULT_MENTION_ROLE_ID
 
         # Initialize markdown converter (will be updated with mappings when available)
         self.markdown_converter = MarkdownConverter()

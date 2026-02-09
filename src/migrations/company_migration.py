@@ -35,14 +35,12 @@ class CompanyMigration(BaseMigration):
         self,
         jira_client: JiraClient,
         op_client: OpenProjectClient,
-        data_dir: str | None = None,
     ) -> None:
         """Initialize the company migration.
 
         Args:
             jira_client: JiraClient instance.
             op_client: OpenProjectClient instance.
-            data_dir: Path to data directory for storing mappings.
 
         """
         super().__init__(jira_client, op_client)

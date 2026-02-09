@@ -105,6 +105,9 @@ class SSHClient:
     - Propagates standard subprocess exceptions for timeouts and process errors
     """
 
+    SSH_CONTROL_PATH = "/tmp/ssh-j2o-%r@%h:%p"
+    SSH_CONTROL_PERSIST_SECONDS = "300"
+
     def __init__(
         self,
         host: str,
@@ -158,6 +161,25 @@ class SSHClient:
         """
         return self.test_connection()
 
+    def _get_common_ssh_options(self) -> list[str]:
+        """Get SSH options shared between ssh and scp commands.
+
+        Returns:
+            List of option flags for ConnectTimeout, multiplexing, and key file
+
+        """
+        opts = [
+            "-o", f"ConnectTimeout={self.connect_timeout}",
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={self.SSH_CONTROL_PATH}",
+            "-o", f"ControlPersist={self.SSH_CONTROL_PERSIST_SECONDS}",
+        ]
+
+        if self.key_file:
+            opts.extend(["-i", self.key_file])
+
+        return opts
+
     def get_ssh_base_command(self) -> list[str]:
         """Get the base SSH command with common options.
 
@@ -165,21 +187,7 @@ class SSHClient:
             List of command parts
 
         """
-        cmd = ["ssh"]
-
-        # Add connect timeout
-        cmd.extend(["-o", f"ConnectTimeout={self.connect_timeout}"])
-
-        # Enable SSH multiplexing for connection reuse (50-200ms saved per call)
-        cmd.extend([
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPath=/tmp/ssh-j2o-%r@%h:%p",
-            "-o", "ControlPersist=300",
-        ])
-
-        # Add key file if specified
-        if self.key_file:
-            cmd.extend(["-i", self.key_file])
+        cmd = ["ssh", *self._get_common_ssh_options()]
 
         # Add user and host
         if self.user:
@@ -196,23 +204,7 @@ class SSHClient:
             List of command parts
 
         """
-        cmd = ["scp"]
-
-        # Add connect timeout
-        cmd.extend(["-o", f"ConnectTimeout={self.connect_timeout}"])
-
-        # Enable SSH multiplexing for connection reuse
-        cmd.extend([
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPath=/tmp/ssh-j2o-%r@%h:%p",
-            "-o", "ControlPersist=300",
-        ])
-
-        # Add key file if specified
-        if self.key_file:
-            cmd.extend(["-i", self.key_file])
-
-        return cmd
+        return ["scp", *self._get_common_ssh_options()]
 
     def test_connection(self) -> bool:
         """Test SSH connection to the remote host.

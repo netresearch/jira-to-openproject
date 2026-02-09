@@ -148,6 +148,76 @@ class HealthCheckClient:
         """Get a threshold value, using custom or default."""
         return self.thresholds.get(name, default)
 
+    def _evaluate_threshold(
+        self,
+        name: str,
+        value: float,
+        warning_threshold: float,
+        error_threshold: float,
+        *,
+        units: str = "",
+        higher_is_worse: bool = True,
+    ) -> HealthStatus:
+        """Evaluate a metric value against warning and error thresholds.
+
+        Args:
+            name: Check name for the HealthStatus
+            value: Current metric value
+            warning_threshold: Threshold at which to issue a warning
+            error_threshold: Threshold at which to issue an error
+            units: Unit label (e.g. "MB", "inodes", "files")
+            higher_is_worse: If True, value >= threshold is bad (e.g. file counts).
+                If False, value < threshold is bad (e.g. free disk space).
+
+        Returns:
+            HealthStatus with appropriate severity based on threshold comparison
+
+        """
+        label = name.replace("_", " ").title()
+
+        if higher_is_worse:
+            is_error = value >= error_threshold
+            is_warning = value >= warning_threshold
+            error_msg = f"{label} critically high: {value}{units} (max {error_threshold}{units})"
+            warning_msg = f"{label} high: {value}{units} (warn at {warning_threshold}{units})"
+            ok_msg = f"{label} OK: {value} {units}".rstrip()
+        else:
+            is_error = value < error_threshold
+            is_warning = value < warning_threshold
+            error_msg = f"{label} critically low: {value}{units} free (need {error_threshold}{units})"
+            warning_msg = f"{label} low: {value}{units} free (want {warning_threshold}{units})"
+            ok_msg = f"{label} OK: {value}{units} free"
+
+        if is_error:
+            return HealthStatus(
+                name=name,
+                healthy=False,
+                metric=value,
+                threshold=error_threshold,
+                units=units,
+                severity="ERROR",
+                message=error_msg,
+            )
+        if is_warning:
+            return HealthStatus(
+                name=name,
+                healthy=False,
+                metric=value,
+                threshold=warning_threshold,
+                units=units,
+                severity="WARNING",
+                message=warning_msg,
+            )
+        return HealthStatus(
+            name=name,
+            healthy=True,
+            metric=value,
+            threshold=warning_threshold,
+            units=units,
+            severity="INFO",
+            message=ok_msg,
+        )
+
     def check_local_disk_space(self) -> HealthStatus:
         """Check available disk space on local system."""
         import shutil
@@ -163,34 +233,9 @@ class HealthCheckClient:
                 "local_disk_error_mb", self.DEFAULT_LOCAL_DISK_ERROR_MB,
             )
 
-            if free_mb < error_threshold:
-                return HealthStatus(
-                    name="local_disk_space",
-                    healthy=False,
-                    metric=free_mb,
-                    threshold=error_threshold,
-                    units="MB",
-                    severity="ERROR",
-                    message=f"Local disk critically low: {free_mb}MB free (need {error_threshold}MB)",
-                )
-            if free_mb < warning_threshold:
-                return HealthStatus(
-                    name="local_disk_space",
-                    healthy=False,
-                    metric=free_mb,
-                    threshold=warning_threshold,
-                    units="MB",
-                    severity="WARNING",
-                    message=f"Local disk low: {free_mb}MB free (want {warning_threshold}MB)",
-                )
-            return HealthStatus(
-                name="local_disk_space",
-                healthy=True,
-                metric=free_mb,
-                threshold=warning_threshold,
-                units="MB",
-                severity="INFO",
-                message=f"Local disk OK: {free_mb}MB free",
+            return self._evaluate_threshold(
+                "local_disk_space", free_mb, warning_threshold, error_threshold,
+                units="MB", higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -231,34 +276,9 @@ class HealthCheckClient:
                 "remote_disk_error_mb", self.DEFAULT_REMOTE_DISK_ERROR_MB,
             )
 
-            if free_mb < error_threshold:
-                return HealthStatus(
-                    name="remote_disk_space",
-                    healthy=False,
-                    metric=free_mb,
-                    threshold=error_threshold,
-                    units="MB",
-                    severity="ERROR",
-                    message=f"Remote disk critically low: {free_mb}MB free",
-                )
-            if free_mb < warning_threshold:
-                return HealthStatus(
-                    name="remote_disk_space",
-                    healthy=False,
-                    metric=free_mb,
-                    threshold=warning_threshold,
-                    units="MB",
-                    severity="WARNING",
-                    message=f"Remote disk low: {free_mb}MB free",
-                )
-            return HealthStatus(
-                name="remote_disk_space",
-                healthy=True,
-                metric=free_mb,
-                threshold=warning_threshold,
-                units="MB",
-                severity="INFO",
-                message=f"Remote disk OK: {free_mb}MB free",
+            return self._evaluate_threshold(
+                "remote_disk_space", free_mb, warning_threshold, error_threshold,
+                units="MB", higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -298,34 +318,9 @@ class HealthCheckClient:
                 "container_disk_error_mb", self.DEFAULT_CONTAINER_DISK_ERROR_MB,
             )
 
-            if free_mb < error_threshold:
-                return HealthStatus(
-                    name="container_disk_space",
-                    healthy=False,
-                    metric=free_mb,
-                    threshold=error_threshold,
-                    units="MB",
-                    severity="ERROR",
-                    message=f"Container disk critically low: {free_mb}MB free",
-                )
-            if free_mb < warning_threshold:
-                return HealthStatus(
-                    name="container_disk_space",
-                    healthy=False,
-                    metric=free_mb,
-                    threshold=warning_threshold,
-                    units="MB",
-                    severity="WARNING",
-                    message=f"Container disk low: {free_mb}MB free",
-                )
-            return HealthStatus(
-                name="container_disk_space",
-                healthy=True,
-                metric=free_mb,
-                threshold=warning_threshold,
-                units="MB",
-                severity="INFO",
-                message=f"Container disk OK: {free_mb}MB free",
+            return self._evaluate_threshold(
+                "container_disk_space", free_mb, warning_threshold, error_threshold,
+                units="MB", higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -364,34 +359,9 @@ class HealthCheckClient:
                 "inodes_error", self.DEFAULT_INODES_ERROR,
             )
 
-            if free_inodes < error_threshold:
-                return HealthStatus(
-                    name="container_inodes",
-                    healthy=False,
-                    metric=free_inodes,
-                    threshold=error_threshold,
-                    units="inodes",
-                    severity="ERROR",
-                    message=f"Container inodes critically low: {free_inodes} free",
-                )
-            if free_inodes < warning_threshold:
-                return HealthStatus(
-                    name="container_inodes",
-                    healthy=False,
-                    metric=free_inodes,
-                    threshold=warning_threshold,
-                    units="inodes",
-                    severity="WARNING",
-                    message=f"Container inodes low: {free_inodes} free",
-                )
-            return HealthStatus(
-                name="container_inodes",
-                healthy=True,
-                metric=free_inodes,
-                threshold=warning_threshold,
-                units="inodes",
-                severity="INFO",
-                message=f"Container inodes OK: {free_inodes} free",
+            return self._evaluate_threshold(
+                "container_inodes", free_inodes, warning_threshold, error_threshold,
+                units="inodes", higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -430,34 +400,9 @@ class HealthCheckClient:
                 "file_count_error", self.DEFAULT_FILE_COUNT_ERROR,
             )
 
-            if file_count >= error_threshold:
-                return HealthStatus(
-                    name="temp_file_count",
-                    healthy=False,
-                    metric=file_count,
-                    threshold=error_threshold,
-                    units="files",
-                    severity="ERROR",
-                    message=f"Too many temp files: {file_count} (max {error_threshold})",
-                )
-            if file_count >= warning_threshold:
-                return HealthStatus(
-                    name="temp_file_count",
-                    healthy=False,
-                    metric=file_count,
-                    threshold=warning_threshold,
-                    units="files",
-                    severity="WARNING",
-                    message=f"High temp file count: {file_count} (warn at {warning_threshold})",
-                )
-            return HealthStatus(
-                name="temp_file_count",
-                healthy=True,
-                metric=file_count,
-                threshold=warning_threshold,
-                units="files",
-                severity="INFO",
-                message=f"Temp file count OK: {file_count} files",
+            return self._evaluate_threshold(
+                "temp_file_count", file_count, warning_threshold, error_threshold,
+                units="files", higher_is_worse=True,
             )
         except Exception as e:
             return HealthStatus(
