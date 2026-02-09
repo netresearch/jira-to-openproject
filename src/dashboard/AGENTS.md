@@ -1,4 +1,4 @@
-<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-12-11 -->
+<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2026-02-09 -->
 # AGENTS.md — src/dashboard
 
 ## Overview
@@ -32,7 +32,6 @@
 - Update templates and static assets together; ensure cache-busting if filenames change.
 - Verify Redis connection fallback paths and broadcast loops via the targeted pytest above.
 - Exercise local run (`uvicorn`) to confirm websockets and metrics streams render correctly.
-- Document new controls or metrics in `README.md` or `docs/dashboard.md` if you add them.
 
 ## Good vs. bad examples
 - Good: `src/dashboard/app.py` — shows async route structure, websocket broadcasting, and Redis lifecycle management.
@@ -42,11 +41,9 @@
 ## When stuck
 - Inspect `tests/test_dashboard_simple.py` for expected routes/resources; extend it when adding endpoints.
 - Review `docs/DEVELOPER_GUIDE.md` for operational expectations and logging patterns.
-- Coordinate UI work through Taskmaster context (`.github/instructions/taskmaster.md`) to keep sprint artifacts aligned.
 
 ## Decision Log
 - Derived runtime expectations and commands from existing Makefile targets and FastAPI module setup.
 - Highlighted CDN usage from current template to ensure future work documents security posture.
 - Documented lack of mypy coverage because `src/dashboard/app.py` currently fails strict type checking.
-- Host sandbox lacks PyPI connectivity, so rely on container pytest runs and keep local checks to `compileall`/static analysis.
 - Added container smoke guidance (`make container-test …`) to align with the docker-first testing workflow.
