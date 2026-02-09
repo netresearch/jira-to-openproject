@@ -7,6 +7,7 @@ to prevent failures due to disk space exhaustion or temp file accumulation.
 from __future__ import annotations
 
 import logging
+import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -274,7 +275,7 @@ class HealthCheckClient:
         """Check available disk space inside container."""
         try:
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} df /tmp | tail -1 | awk '{{print $4}}'",
+                f"docker exec {shlex.quote(self.container_name)} df /tmp | tail -1 | awk '{{print $4}}'",
             )
             if rc != 0:
                 return HealthStatus(
@@ -341,7 +342,7 @@ class HealthCheckClient:
         """Check available inodes in container /tmp."""
         try:
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} df -i /tmp | tail -1 | awk '{{print $4}}'",
+                f"docker exec {shlex.quote(self.container_name)} df -i /tmp | tail -1 | awk '{{print $4}}'",
             )
             if rc != 0:
                 return HealthStatus(
@@ -407,7 +408,7 @@ class HealthCheckClient:
         """Check count of temp files matching pattern in container /tmp."""
         try:
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'",
+                f"docker exec {shlex.quote(self.container_name)} sh -c 'find /tmp -name {shlex.quote(pattern)} 2>/dev/null | wc -l'",
             )
             if rc != 0:
                 return HealthStatus(
@@ -475,7 +476,7 @@ class HealthCheckClient:
         try:
             # Create test file
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} touch {test_file}",
+                f"docker exec {shlex.quote(self.container_name)} touch {shlex.quote(test_file)}",
             )
             if rc != 0:
                 return HealthStatus(
@@ -490,7 +491,7 @@ class HealthCheckClient:
 
             # Delete test file
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} rm -f {test_file}",
+                f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(test_file)}",
             )
             if rc != 0:
                 return HealthStatus(
@@ -505,7 +506,7 @@ class HealthCheckClient:
 
             # Verify file is gone
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} test -f {test_file} && echo exists || echo deleted",
+                f"docker exec {shlex.quote(self.container_name)} test -f {shlex.quote(test_file)} && echo exists || echo deleted",
             )
             if "exists" in stdout:
                 return HealthStatus(
@@ -608,20 +609,20 @@ class HealthCheckClient:
         try:
             # Count files before
             stdout, _, _ = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'",
+                f"docker exec {shlex.quote(self.container_name)} sh -c 'find /tmp -name {shlex.quote(pattern)} 2>/dev/null | wc -l'",
             )
             files_before = int(stdout.strip()) if stdout.strip().isdigit() else 0
 
             # Delete old files
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} find /tmp -name '{pattern}' -mmin +{max_age_minutes} -delete 2>&1",
+                f"docker exec {shlex.quote(self.container_name)} find /tmp -name {shlex.quote(pattern)} -mmin +{int(max_age_minutes)} -delete 2>&1",
             )
             if rc != 0 and stderr:
                 errors.append(f"Cleanup command failed: {stderr}")
 
             # Count files after
             stdout, _, _ = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'",
+                f"docker exec {shlex.quote(self.container_name)} sh -c 'find /tmp -name {shlex.quote(pattern)} 2>/dev/null | wc -l'",
             )
             files_after = int(stdout.strip()) if stdout.strip().isdigit() else 0
 

@@ -99,7 +99,7 @@ def main() -> None:
         print(f"Container file exists check: {exists}")
 
         # Verify permissions
-        stdout, stderr, rc = docker_client.execute_command(f"ls -la {container_path}")
+        stdout, _stderr, _rc = docker_client.execute_command(f"ls -la {container_path}")
         print(f"File permissions: {stdout}")
 
         # Try to load the script in Rails console

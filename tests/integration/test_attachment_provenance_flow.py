@@ -221,7 +221,7 @@ def patched_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(global_config, "mappings", dummy, raising=False)
     monkeypatch.setattr(global_config, "get_mappings", lambda: dummy, raising=False)
     monkeypatch.setattr(
-        global_config, "migration_config", {"attachment_path": attachment_dir.as_posix()}, raising=False
+        global_config, "migration_config", {"attachment_path": attachment_dir.as_posix()}, raising=False,
     )
     monkeypatch.setattr(global_config, "get_path", lambda _name: tmp_path, raising=False)
     return attachment_dir

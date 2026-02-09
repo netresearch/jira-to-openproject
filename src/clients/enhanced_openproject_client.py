@@ -41,7 +41,6 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             kwargs.setdefault("rails_client", _NoopRailsConsoleClient())
 
         super().__init__(**kwargs)
-        self._enhanced_features_enabled = True
         # REST base credentials for direct HTTP operations
         self.server: str | None = kwargs.get("server")
         self.username: str | None = kwargs.get("username")

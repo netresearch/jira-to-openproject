@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from src import config
 from src.config import logger
@@ -27,8 +27,6 @@ if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
     from src.mappings.mappings import Mappings
 
-# Define a type variable for ProgressTracker
-T = TypeVar("T")
 
 
 @register_entity_types("statuses", "status_types")
@@ -46,7 +44,7 @@ class StatusMigration(BaseMigration):
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
         mappings: Mappings | None = None,
-        tracker: ProgressTracker[T] | None = None,
+        tracker: ProgressTracker[Any] | None = None,
     ) -> None:
         """Initialize the status migration tools.
 
@@ -59,7 +57,8 @@ class StatusMigration(BaseMigration):
         """
         super().__init__(jira_client, op_client)
 
-        self.mappings = mappings
+        if mappings is not None:
+            self.mappings = mappings
         self.tracker = tracker
 
         # Initialize empty lists

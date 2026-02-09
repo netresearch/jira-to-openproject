@@ -214,6 +214,7 @@ class Mappings:
             "sprint_mapping",
             "issue_type_id_mapping",
             "work_package_mapping",
+            "priority_mapping",
         ]
 
         for attr in mapping_attrs:

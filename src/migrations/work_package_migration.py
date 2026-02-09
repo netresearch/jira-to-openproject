@@ -482,8 +482,6 @@ class WorkPackageMigration(BaseMigration):
             # Parse JSON if result is a string
             if isinstance(result, str):
                 try:
-                    import json
-
                     result = json.loads(result)
                 except (json.JSONDecodeError, TypeError):
                     pass
@@ -981,10 +979,10 @@ class WorkPackageMigration(BaseMigration):
             all_journal_entries.sort(key=lambda x: x.get("timestamp", ""))
 
             # DEBUG: Log entries to understand why collision detection isn't executing
-            self.logger.info(f"[DEBUG] {jira_key}: all_journal_entries has {len(all_journal_entries)} entries")
+            self.logger.debug(f"[DEBUG] {jira_key}: all_journal_entries has {len(all_journal_entries)} entries")
             if len(all_journal_entries) > 0:
                 for idx, entry in enumerate(all_journal_entries):
-                    self.logger.info(
+                    self.logger.debug(
                         f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}",
                     )
 
@@ -2499,12 +2497,12 @@ class WorkPackageMigration(BaseMigration):
                 all_journal_entries.sort(key=lambda x: x.get("timestamp", ""))
 
                 # DEBUG: Log entries to understand why collision detection isn't executing
-                self.logger.info(
+                self.logger.debug(
                     f"[DEBUG] {jira_key}: all_journal_entries has {len(all_journal_entries)} entries (CREATE path)",
                 )
                 if len(all_journal_entries) > 0:
                     for idx, entry in enumerate(all_journal_entries):
-                        self.logger.info(
+                        self.logger.debug(
                             f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}",
                         )
 

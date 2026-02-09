@@ -311,7 +311,7 @@ class TestWorkPackageMigration(unittest.TestCase):
                 # Two fake issues yielded for the project
                 type("Issue", (), {"id": "1"})(),
                 type("Issue", (), {"id": "2"})(),
-            ]
+            ],
         )
 
         migration = WorkPackageMigration(

@@ -40,7 +40,7 @@ class TestTimestampCollisionDetection:
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 if "T" in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(current_timestamp)
                     dt = dt + timedelta(seconds=1)
                     entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
@@ -63,7 +63,7 @@ class TestTimestampCollisionDetection:
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 if "T" in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(current_timestamp)
                     dt = dt + timedelta(seconds=1)
                     entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
@@ -89,7 +89,7 @@ class TestTimestampCollisionDetection:
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 if "T" in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(current_timestamp)
                     dt = dt + timedelta(seconds=1)
                     entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
@@ -114,7 +114,7 @@ class TestTimestampCollisionDetection:
         for timestamp_str in test_cases:
             try:
                 if "T" in timestamp_str:
-                    dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(timestamp_str)
                     assert dt is not None, f"Failed to parse: {timestamp_str}"
             except Exception as e:
                 pytest.fail(f"Failed to parse {timestamp_str}: {e}")
@@ -133,7 +133,7 @@ class TestTimestampCollisionDetection:
         for entry in entries:
             ts = entry.get("timestamp", "")
             if "T" in ts:
-                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(ts)
                 parsed_timestamps.append(dt)
 
         # Both should parse to the same datetime
@@ -154,7 +154,7 @@ class TestTimestampCollisionDetection:
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 if "T" in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(current_timestamp)
                     dt = dt + timedelta(seconds=1)
                     entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
@@ -175,7 +175,7 @@ class TestTimestampCollisionDetection:
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 if "T" in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(current_timestamp)
                     dt = dt + timedelta(seconds=1)
                     entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
@@ -201,7 +201,7 @@ class TestTimestampCollisionDetection:
 
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 if "T" in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(current_timestamp)
                     dt = dt + timedelta(seconds=1)
                     entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 
@@ -248,7 +248,7 @@ class TestTimestampCollisionIntegration:
             if current_timestamp and previous_timestamp and current_timestamp == previous_timestamp:
                 collision_count += 1
                 if "T" in current_timestamp:
-                    dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(current_timestamp)
                     dt = dt + timedelta(seconds=1)
                     entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
 

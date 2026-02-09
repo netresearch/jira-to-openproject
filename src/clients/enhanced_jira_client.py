@@ -27,7 +27,6 @@ class EnhancedJiraClient(JiraClient):
         rate limiter). Adds a requests session for cached GET endpoints used by tests.
         """
         super().__init__(**kwargs)
-        self._enhanced_features_enabled = True
         # HTTP session for cached endpoints (tests will monkeypatch this)
         self.session: requests.Session = requests.Session()
         # Mirror common attributes expected by tests

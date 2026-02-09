@@ -42,13 +42,6 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         )
         raise ValueError(msg)
 
-    @staticmethod
-    def _issue_project_key(issue_key: str) -> str:
-        try:
-            return str(issue_key).split("-", 1)[0]
-        except Exception:
-            return str(issue_key)
-
     def _extract(self) -> ComponentResult:
         """Collect component names per Jira project from migrated issues."""
         wp_map = self.mappings.get_mapping("work_package") or {}

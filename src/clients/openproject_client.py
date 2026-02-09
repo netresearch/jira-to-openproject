@@ -347,7 +347,7 @@ class OpenProjectClient:
             "  user = User.admin.first || User.active.first || User.first\n"
             "  raise 'no admin user available' unless user\n"
             f"  identifier = '{clean_identifier}'\n"
-            f"  display_name = '{clean_name.replace("'", "\\'")}'\n"
+            f"  display_name = '{escape_ruby_single_quoted(clean_name)}'\n"
             "  project = Project.find_by(identifier: identifier)\n"
             "  created = false\n"
             "  unless project\n"
@@ -1017,7 +1017,7 @@ class OpenProjectClient:
         ruby_json_expr = f"({query}).as_json"
         # Build Ruby that writes JSON to file without printing large output to console
         # IMPORTANT: Do not shell-quote here; we need the actual path string in Ruby.
-        ruby_path_literal = str(container_file).replace("'", "\\'")
+        ruby_path_literal = escape_ruby_single_quoted(str(container_file))
 
         # Build provenance hint: where did this originate?
         # Compose a concise hint like: "j2o: migration/work_packages func=_migrate_work_packages project=NRS ts=..."
@@ -1686,9 +1686,9 @@ class OpenProjectClient:
 
         """
         ruby = f"""
-          cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{name}')
+          cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escape_ruby_single_quoted(name)}')
           if !cf
-            cf = CustomField.new(name: '{name}', field_format: '{field_format}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField')
+            cf = CustomField.new(name: '{escape_ruby_single_quoted(name)}', field_format: '{escape_ruby_single_quoted(field_format)}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField')
             cf.save
           end
           cf && cf.as_json(only: [:id, :name, :field_format])
@@ -1727,9 +1727,9 @@ class OpenProjectClient:
         searchable_str = "true" if searchable else "false"
 
         ruby = f"""
-          cf = CustomField.find_by(type: '{cf_type}', name: '{name}')
+          cf = CustomField.find_by(type: '{escape_ruby_single_quoted(cf_type)}', name: '{escape_ruby_single_quoted(name)}')
           if !cf
-            cf = CustomField.new(name: '{name}', field_format: '{field_format}', is_required: false, type: '{cf_type}')
+            cf = CustomField.new(name: '{escape_ruby_single_quoted(name)}', field_format: '{escape_ruby_single_quoted(field_format)}', is_required: false, type: '{escape_ruby_single_quoted(cf_type)}')
             begin
               cf.is_for_all = true
             rescue
@@ -4535,7 +4535,7 @@ J2O_DATA
 
         """
         try:
-            result = self.execute_query(f"CustomField.where(name: '{name}').first&.id")
+            result = self.execute_query(f"CustomField.where(name: '{escape_ruby_single_quoted(name)}').first&.id")
 
             # Handle nil value from Ruby
             if result is None:
@@ -5880,7 +5880,7 @@ J2O_DATA
             return None
 
         # Escape single quotes for Ruby
-        escaped_comment = comment_text.replace("\\", "\\\\").replace("'", "\\'")
+        escaped_comment = escape_ruby_single_quoted(comment_text)
 
         # OpenProject 15+ requires using journal_notes/journal_user + save!
         script = f"""

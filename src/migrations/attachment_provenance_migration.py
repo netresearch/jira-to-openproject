@@ -146,14 +146,6 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
-    @staticmethod
-    def _issue_project_key(issue_key: str) -> str:
-        """Extract project key from issue key (e.g., 'AAP-1' -> 'AAP')."""
-        try:
-            return str(issue_key).split("-", 1)[0]
-        except Exception:
-            return str(issue_key)
-
     def run(self) -> ComponentResult:
         """Execute attachment provenance migration - memory efficient per-project."""
         self.logger.info("Starting attachment provenance migration (memory-efficient mode)")
