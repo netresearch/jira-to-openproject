@@ -74,24 +74,34 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         except Exception:
             return str(issue_key)
 
-    def _extract(self) -> ComponentResult:
-        """Collect attachments from Jira issues mapped to work packages."""
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map.keys()]
+    def _extract_batch(self, jira_keys: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Extract attachments for a small batch of issues (memory-efficient).
+
+        Args:
+            jira_keys: List of Jira issue keys (e.g., ["AAP-1", "AAP-2"])
+
+        Returns:
+            Dict mapping jira_key to list of attachment info dicts
+        """
         if not jira_keys:
-            return ComponentResult(success=True, extracted=0, data={"attachments": {}})
+            return {}
 
         issues: dict[str, Any] = {}
         try:
-            batch_get = getattr(self.jira_client, "batch_get_issues", None)
-            if callable(batch_get):
-                issues = batch_get(jira_keys)
+            # Use direct JQL search to avoid ThreadPoolExecutor deadlock issues
+            jql = f"key in ({','.join(jira_keys)})"
+            jira_issues = self.jira_client.jira.search_issues(
+                jql,
+                maxResults=len(jira_keys),
+                fields="attachment",
+            )
+            for issue in jira_issues:
+                issues[issue.key] = issue
         except Exception:
-            logger.exception("Failed to batch-get Jira issues for attachments extraction")
-            issues = {}
+            logger.exception("Failed to fetch Jira issues for attachments extraction")
+            return {}
 
         by_key: dict[str, list[dict[str, Any]]] = {}
-        count = 0
         for key, issue in issues.items():
             try:
                 fields = getattr(issue, "fields", None)
@@ -108,7 +118,6 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         if not filename or not url:
                             continue
                         items.append({"id": aid, "filename": filename, "size": size, "url": url})
-                        count += 1
                     except Exception:  # noqa: BLE001
                         continue
                 if items:
@@ -116,20 +125,41 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             except Exception:  # noqa: BLE001
                 continue
 
-        return ComponentResult(success=True, extracted=count, data={"attachments": by_key})
+        return by_key
+
+    def _extract(self) -> ComponentResult:
+        """Collect attachments from Jira issues mapped to work packages.
+
+        NOTE: This method is kept for backwards compatibility but is not used
+        in the memory-efficient run() implementation.
+        """
+        return ComponentResult(success=True, extracted=0, data={"attachments": {}})
 
     def _download_attachment(self, url: str, dest_path: Path) -> Path:
         """Download attachment from Jira to dest_path; return local path.
 
+        Uses Jira client's authenticated session to download.
         Tests may monkeypatch this to avoid network IO.
         """
-        import requests  # local import to ease testing
-
         try:
-            with requests.get(url, stream=True, timeout=60) as r:  # type: ignore[call-arg]
-                r.raise_for_status()
+            # Use Jira client's authenticated session
+            session = getattr(self.jira_client.jira, "_session", None)
+            if session is None:
+                import requests
+                # Fallback to unauthenticated request (unlikely to work)
+                logger.warning("Jira session not available, attempting unauthenticated download")
+                with requests.get(url, stream=True, timeout=60) as r:
+                    r.raise_for_status()
+                    with dest_path.open("wb") as f:
+                        for chunk in r.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+            else:
+                # Use authenticated session (don't pass timeout - Jira session already sets it)
+                response = session.get(url, stream=True)
+                response.raise_for_status()
                 with dest_path.open("wb") as f:
-                    for chunk in r.iter_content(chunk_size=65536):
+                    for chunk in response.iter_content(chunk_size=65536):
                         if chunk:
                             f.write(chunk)
         except Exception as e:  # noqa: BLE001
@@ -201,8 +231,9 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
         # Copy files to container and build data payload for Rails script
+        logger.info("_load: transferring %d files to container", len(ops))
         container_ops: list[dict[str, Any]] = []
-        for op in ops:
+        for idx, op in enumerate(ops):
             try:
                 local_path = Path(str(op["local_path"]))
                 if not local_path.exists():
@@ -214,7 +245,9 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 # Place in /tmp with digest prefix to avoid collisions
                 container_path = f"/tmp/j2o_att_{digest[:12]}_{os.path.basename(filename)}"
                 try:
+                    logger.info("_load: transferring file %d/%d: %s", idx + 1, len(ops), filename)
                     self.op_client.transfer_file_to_container(local_path, container_path)
+                    logger.info("_load: transfer completed for %s", filename)
                 except Exception:
                     logger.exception("File transfer failed for %s", local_path)
                     continue
@@ -233,9 +266,12 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
         # Rails script returns attachment IDs for mapping content migration
+        # Must output JSON between markers for execute_script_with_data to parse
         ruby_runner = (
             "require 'json'\n"
-            "begin\n"
+            "start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'\n"
+            "end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'\n"
+            "result = begin\n"
             "  ops = input_data\n"
             "  results = []\n"
             "  errors = []\n"
@@ -271,13 +307,18 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             "rescue => e\n"
             "  { results: [], errors: [{ error: e.message }] }\n"
             "end\n"
+            "puts start_marker\n"
+            "puts result.to_json\n"
+            "puts end_marker\n"
         )
 
         updated = 0
         failed = 0
         attachment_mapping: dict[str, dict[str, int]] = {}
+        logger.info("_load: all %d files transferred, executing Rails script with %d ops", len(ops), len(container_ops))
         try:
             res = self.op_client.execute_script_with_data(ruby_runner, container_ops)
+            logger.info("_load: Rails script completed")
             if isinstance(res, dict):
                 results = res.get("results", [])
                 errors = res.get("errors", [])
@@ -331,8 +372,171 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         except Exception:
             self.logger.exception("Failed to save attachment mapping")
 
+    def _process_batch_end_to_end(
+        self, jira_keys: list[str], wp_map: dict[str, Any]
+    ) -> tuple[int, int, dict[str, dict[str, int]]]:
+        """Process a batch of issues: extract, download, upload, attach.
+
+        Args:
+            jira_keys: List of Jira issue keys to process
+            wp_map: Work package mapping dict
+
+        Returns:
+            Tuple of (updated_count, failed_count, attachment_mapping)
+        """
+        # Extract attachment metadata for this batch
+        logger.info("_process_batch_end_to_end: starting extract for %d keys", len(jira_keys))
+        att_by_key = self._extract_batch(jira_keys)
+        logger.info("_process_batch_end_to_end: extracted %d issues with attachments", len(att_by_key))
+        if not att_by_key:
+            return 0, 0, {}
+
+        # Download attachments and prepare ops
+        ops: list[dict[str, Any]] = []
+        seen_digests: set[str] = set()
+
+        for key, items in att_by_key.items():
+            # Find work package ID from mapping (key is jira_key like "AAP-1")
+            wp_id = None
+            for entry in wp_map.values():
+                if isinstance(entry, dict) and entry.get("jira_key") == key:
+                    wp_id = entry.get("openproject_id")
+                    break
+            if not wp_id:
+                continue
+
+            for item in items:
+                try:
+                    filename = str(item.get("filename"))
+                    url = str(item.get("url"))
+                    if not filename or not url:
+                        continue
+                    safe_name = filename.replace("/", "_")
+                    local_path = self.attachment_dir / safe_name
+                    # Download
+                    self._download_attachment(url, local_path)
+                    if not local_path.exists():
+                        continue
+                    digest = self._sha256_of(local_path)
+                    seen_digests.add(digest)
+                    ops.append({
+                        "jira_key": key,
+                        "work_package_id": int(wp_id),
+                        "local_path": local_path.as_posix(),
+                        "filename": filename,
+                        "digest": digest,
+                    })
+                except Exception:  # noqa: BLE001
+                    continue
+
+        if not ops:
+            logger.info("_process_batch_end_to_end: no ops to load, returning early")
+            return 0, 0, {}
+
+        # Upload to container and load via Rails
+        logger.info("_process_batch_end_to_end: starting _load with %d ops", len(ops))
+        mapped_result = ComponentResult(success=True, data={"ops": ops})
+        loaded = self._load(mapped_result)
+        logger.info("_process_batch_end_to_end: _load completed")
+
+        # Cleanup local files after upload
+        for op in ops:
+            try:
+                local_path = Path(str(op["local_path"]))
+                if local_path.exists():
+                    local_path.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+
+        return (
+            loaded.updated or 0,
+            loaded.failed or 0,
+            (loaded.data or {}).get("attachment_mapping", {}),
+        )
+
     def run(self) -> ComponentResult:
-        """Execute attachment migration pipeline."""
+        """Execute attachment migration pipeline - memory efficient per-project."""
+        self.logger.info("Starting attachment migration (memory-efficient mode)")
+
+        # Get work package mapping
+        wp_map = self.mappings.get_mapping("work_package") or {}
+        if not wp_map:
+            self.logger.warning("No work package mapping found - skipping attachment migration")
+            return ComponentResult(success=True, updated=0, message="No work packages to process")
+
+        # Group jira keys by project for efficient processing
+        by_project: dict[str, list[str]] = {}
+        for entry in wp_map.values():
+            if isinstance(entry, dict) and "jira_key" in entry:
+                jira_key = str(entry["jira_key"])
+                project_key = self._issue_project_key(jira_key)
+                if project_key not in by_project:
+                    by_project[project_key] = []
+                by_project[project_key].append(jira_key)
+
+        total_issues = sum(len(keys) for keys in by_project.values())
+        self.logger.info(
+            "Processing attachments for %d projects (%d issues total)",
+            len(by_project),
+            total_issues,
+        )
+
+        total_updated = 0
+        total_failed = 0
+        all_mappings: dict[str, dict[str, int]] = {}
+        batch_size = 50  # Process 50 issues at a time to limit memory usage
+
+        for project_key, jira_keys in by_project.items():
+            self.logger.info(
+                "Processing project %s (%d issues)",
+                project_key,
+                len(jira_keys),
+            )
+
+            # Process in small batches
+            for i in range(0, len(jira_keys), batch_size):
+                batch_keys = jira_keys[i : i + batch_size]
+                try:
+                    updated, failed, mapping = self._process_batch_end_to_end(
+                        batch_keys, wp_map
+                    )
+                    total_updated += updated
+                    total_failed += failed
+                    # Merge mapping
+                    for jk, att_map in mapping.items():
+                        if jk not in all_mappings:
+                            all_mappings[jk] = {}
+                        all_mappings[jk].update(att_map)
+                except Exception:
+                    self.logger.exception(
+                        "Batch processing failed for project %s batch %d",
+                        project_key,
+                        i // batch_size,
+                    )
+                    total_failed += len(batch_keys)
+
+            # Log progress after each project
+            self.logger.info(
+                "Project %s complete: %d updated, %d failed so far",
+                project_key,
+                total_updated,
+                total_failed,
+            )
+
+        # Save final attachment mapping
+        self._save_attachment_mapping(all_mappings)
+
+        success = total_failed == 0 or (total_updated > 0 and total_failed < total_updated)
+        return ComponentResult(
+            success=success,
+            updated=total_updated,
+            failed=total_failed,
+            data={"attachment_mapping": all_mappings},
+            message=f"Processed {total_updated} attachments, {total_failed} failures",
+        )
+
+    def run_legacy(self) -> ComponentResult:
+        """Legacy run method - kept for reference but not used."""
         self.logger.info("Starting attachment migration")
 
         extracted = self._extract()

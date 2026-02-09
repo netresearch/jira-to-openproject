@@ -51,12 +51,31 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             return None
         return None
 
-    def _extract(self) -> ComponentResult:
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
-        if not keys:
-            return ComponentResult(success=True, data={"items": []})
-        issues = self.jira_client.batch_get_issues(keys)
+    def _extract_batch(self, jira_keys: list[str]) -> list[dict[str, Any]]:
+        """Extract attachment provenance for a batch of issues (memory-efficient).
+
+        Args:
+            jira_keys: List of Jira issue keys (e.g., ["AAP-1", "AAP-2"])
+
+        Returns:
+            List of attachment provenance items
+        """
+        if not jira_keys:
+            return []
+        try:
+            result = self.jira_client.batch_get_issues(jira_keys)
+            # batch_get_issues returns a list of dicts from batch processor
+            # Merge all batch results into one dict
+            issues: dict[str, Any] = {}
+            if isinstance(result, list):
+                for batch_dict in result:
+                    if isinstance(batch_dict, dict):
+                        issues.update(batch_dict)
+            elif isinstance(result, dict):
+                issues = result
+        except Exception:
+            logger.exception("Failed to batch-get issues for provenance")
+            return []
         items: list[dict[str, Any]] = []
         for k, issue in issues.items():
             fields = getattr(issue, "fields", None)
@@ -77,16 +96,27 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                         "author": author,
                     }
                 )
-        return ComponentResult(success=True, data={"items": items})
+        return items
+
+    def _extract(self) -> ComponentResult:
+        """Legacy extract - kept for backwards compatibility but not used."""
+        return ComponentResult(success=True, data={"items": []})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         items = data.get("items", []) if isinstance(data, dict) else []
         wp_map = self.mappings.get_mapping("work_package") or {}
+
+        # Build a lookup from jira_key to entry since wp_map uses jira_id as keys
+        key_to_entry: dict[str, dict[str, Any]] = {}
+        for entry in wp_map.values():
+            if isinstance(entry, dict) and "jira_key" in entry:
+                key_to_entry[entry["jira_key"]] = entry
+
         out: list[dict[str, Any]] = []
         for it in items:
             jira_key = it.get("jira_key")
-            entry = wp_map.get(jira_key)
+            entry = key_to_entry.get(jira_key)
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
@@ -109,7 +139,9 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=True, updated=0)
         script = (
             "require 'time'\n"
-            "recs = ARGV.first\n"
+            "start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'\n"
+            "end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'\n"
+            "recs = input_data\n"
             "updated = 0; failed = 0\n"
             "recs.each do |r|\n"
             "  begin\n"
@@ -124,32 +156,93 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             "    failed += 1\n"
             "  end\n"
             "end\n"
-            "STDOUT.puts({updated: updated, failed: failed}.to_json)\n"
+            "puts start_marker\n"
+            "puts({updated: updated, failed: failed}.to_json)\n"
+            "puts end_marker\n"
         )
         res = self.op_client.execute_script_with_data(script, updates)
         updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
         failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
+    @staticmethod
+    def _issue_project_key(issue_key: str) -> str:
+        """Extract project key from issue key (e.g., 'AAP-1' -> 'AAP')."""
+        try:
+            return str(issue_key).split("-", 1)[0]
+        except Exception:
+            return str(issue_key)
+
     def run(self) -> ComponentResult:
-        """Execute attachment provenance migration pipeline."""
-        self.logger.info("Starting attachment provenance migration")
+        """Execute attachment provenance migration - memory efficient per-project."""
+        self.logger.info("Starting attachment provenance migration (memory-efficient mode)")
 
-        extracted = self._extract()
-        if not extracted.success:
-            self.logger.error("Attachment provenance extraction failed: %s", extracted.message or extracted.error)
-            return extracted
+        wp_map = self.mappings.get_mapping("work_package") or {}
+        if not wp_map:
+            self.logger.warning("No work package mapping found - skipping provenance migration")
+            return ComponentResult(success=True, updated=0, message="No work packages to process")
 
-        mapped = self._map(extracted)
-        if not mapped.success:
-            self.logger.error("Attachment provenance mapping failed: %s", mapped.message or mapped.error)
-            return mapped
+        # Group jira keys by project for efficient processing
+        by_project: dict[str, list[str]] = {}
+        for entry in wp_map.values():
+            if isinstance(entry, dict) and "jira_key" in entry:
+                jira_key = str(entry["jira_key"])
+                project_key = self._issue_project_key(jira_key)
+                if project_key not in by_project:
+                    by_project[project_key] = []
+                by_project[project_key].append(jira_key)
 
-        loaded = self._load(mapped)
-        if loaded.success:
-            self.logger.info(
-                "Attachment provenance migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed
-            )
-        else:
-            self.logger.error("Attachment provenance migration encountered failures (failed=%s)", loaded.failed)
-        return loaded
+        total_issues = sum(len(keys) for keys in by_project.values())
+        self.logger.info(
+            "Processing provenance for %d projects (%d issues total)",
+            len(by_project),
+            total_issues,
+        )
+
+        total_updated = 0
+        total_failed = 0
+        batch_size = 50  # Process 50 issues at a time
+
+        for project_key, jira_keys in by_project.items():
+            self.logger.info("Processing project %s (%d issues)", project_key, len(jira_keys))
+
+            # Process in small batches
+            for i in range(0, len(jira_keys), batch_size):
+                batch_keys = jira_keys[i : i + batch_size]
+                try:
+                    # Extract provenance for this batch
+                    items = self._extract_batch(batch_keys)
+                    if not items:
+                        continue
+
+                    # Map to OP format
+                    extracted = ComponentResult(success=True, data={"items": items})
+                    mapped = self._map(extracted)
+                    if not mapped.success:
+                        total_failed += len(batch_keys)
+                        continue
+
+                    # Load to OP
+                    loaded = self._load(mapped)
+                    total_updated += loaded.updated or 0
+                    total_failed += loaded.failed or 0
+                except Exception:
+                    self.logger.exception(
+                        "Batch processing failed for project %s batch %d",
+                        project_key,
+                        i // batch_size,
+                    )
+                    total_failed += len(batch_keys)
+
+        success = total_failed == 0 or (total_updated > 0 and total_failed < total_updated)
+        self.logger.info(
+            "Attachment provenance migration completed: %d updated, %d failed",
+            total_updated,
+            total_failed,
+        )
+        return ComponentResult(
+            success=success,
+            updated=total_updated,
+            failed=total_failed,
+            message=f"Processed {total_updated} provenances, {total_failed} failures",
+        )
