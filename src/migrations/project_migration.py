@@ -958,6 +958,14 @@ class ProjectMigration(BaseMigration):
                     jira_name,
                     existing_project.get("id"),
                 )
+                # Add to project mapping so work packages can be migrated
+                self.project_mapping[jira_key] = {
+                    "openproject_id": existing_project.get("id"),
+                    "openproject_identifier": existing_project.get("identifier"),
+                    "jira_key": jira_key,
+                    "jira_name": jira_name,
+                    "matched_existing": True,
+                }
                 continue
             logger.debug(
                 "No existing project found for '%s' (identifier: '%s') - will create",
