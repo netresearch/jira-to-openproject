@@ -4000,9 +4000,6 @@ J2O_DATA
 
         """
         _validate_model_name(model)
-        # Convert Python dict to Ruby hash format
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
 
         # Build Rails command for creating a record
         # Use a simple, single-line approach that works well with tmux console
@@ -4038,8 +4035,9 @@ J2O_DATA
                 )
 
                 # Fallback to simpler command with execute_json_query
+                # Use the safely-escaped attributes_str (not the unsafe ruby_hash)
                 simple_command = f"""
-                record = {model}.create({ruby_hash})
+                record = {model}.create({{{attributes_str}}})
                 if record.persisted?
                   record.as_json
                 else
@@ -4117,16 +4115,27 @@ J2O_DATA
 
         """
         _validate_model_name(model)
-        # Convert Python dict to Ruby hash format
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
+
+        # Build safely-escaped attributes for Ruby
+        def format_value(v: object) -> str:
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            if isinstance(v, str):
+                return f"'{escape_ruby_single_quoted(v)}'"
+            if v is None:
+                return "nil"
+            return str(v)
+
+        attributes_str = ", ".join(
+            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()],
+        )
 
         # Build command to update the record
         command = f"""
         record = {model}.find_by(id: {record_id})
         if record.nil?
           raise "Record not found"
-        elsif record.update({ruby_hash})
+        elsif record.update({{{attributes_str}}})
           record.as_json
         else
           raise "Failed to update record: #{{record.errors.full_messages.join(', ')}}"
@@ -4214,15 +4223,25 @@ J2O_DATA
         # Start building the query
         query = f"{model}"
 
-        # Add conditions if provided
+        # Add conditions if provided (with safe escaping)
         if conditions:
-            conditions_str = json.dumps(conditions).replace('"', "'")
-            query += f".where({conditions_str})"
+
+            def format_cond_value(v: object) -> str:
+                if isinstance(v, bool):
+                    return "true" if v else "false"
+                if isinstance(v, str):
+                    return f"'{escape_ruby_single_quoted(v)}'"
+                if v is None:
+                    return "nil"
+                return str(v)
+
+            cond_parts = [f"'{k}' => {format_cond_value(v)}" for k, v in conditions.items()]
+            query += f".where({{{', '.join(cond_parts)}}})"
 
         # Add includes if provided
         if includes:
-            includes_str = json.dumps(includes).replace('"', "'")
-            query += f".includes({includes_str})"
+            symbols = ", ".join(f":{inc}" for inc in includes)
+            query += f".includes({symbols})"
 
         # Add limit if provided
         if limit:
@@ -5738,7 +5757,8 @@ J2O_DATA
             content = '{safe_content}'
 
             # Find existing section
-            section_regex = /\\n?## {safe_marker}\\n[\\s\\S]*?(?=\\n## |\\z)/
+            escaped_marker = Regexp.escape('## {safe_marker}')
+            section_regex = /\\n?#{{escaped_marker}}\\n[\\s\\S]*?(?=\\n## |\\z)/
             if desc.match?(section_regex)
               # Replace existing section
               new_section = "\\n" + marker + "\\n" + content

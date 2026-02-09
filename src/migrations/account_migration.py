@@ -770,7 +770,7 @@ class AccountMigration(BaseMigration):
                     continue
                 # Escape single quotes and backslashes for Ruby %q{} syntax
                 # This prevents arbitrary Ruby code execution via malicious account names
-                escaped_value = str(value).replace("\\", "\\\\").replace("}", "\\}")
+                escaped_value = str(value).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
                 escaped_values.append(f"%q{{{escaped_value}}}")
 
             # Construct Ruby array using safe literal syntax

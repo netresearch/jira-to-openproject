@@ -566,7 +566,7 @@ class ProjectMigration(BaseMigration):
 
     @staticmethod
     def _sanitize_cf_value(value: str) -> str:
-        sanitized = value.replace("\\", "\\\\").replace("'", "\\'")
+        sanitized = escape_ruby_single_quoted(value)
         if len(sanitized) > 255:
             return sanitized[:255]
         return sanitized

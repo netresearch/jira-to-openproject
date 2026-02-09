@@ -159,7 +159,14 @@ class ConfigLoader:
         secret_file_env = os.environ.get("POSTGRES_PASSWORD_FILE")
         if secret_file_env:
             try:
-                postgres_password = Path(secret_file_env).read_text().strip()
+                secret_path = Path(secret_file_env).resolve()
+                # Warn if path is outside expected secret directories (potential path traversal)
+                _ALLOWED_SECRET_DIRS = ("/run/secrets", "/var/run/secrets", "/etc/secrets")
+                if not any(str(secret_path).startswith(d) for d in _ALLOWED_SECRET_DIRS):
+                    config_logger.warning(
+                        "POSTGRES_PASSWORD_FILE points outside standard secret directories",
+                    )
+                postgres_password = secret_path.read_text().strip()
             except (OSError, PermissionError, FileNotFoundError) as e:
                 # Log only exception class name, not the file path
                 config_logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
@@ -217,6 +224,11 @@ class ConfigLoader:
 
     def _apply_environment_overrides(self) -> None:
         """Override configuration settings with environment variables."""
+        _SENSITIVE_KEYS = frozenset({"api_token", "password", "secret", "token", "api_key", "private_key"})
+
+        def _redact(key: str, value: str) -> str:
+            return "***REDACTED***" if key in _SENSITIVE_KEYS else value
+
         # Use pattern matching to organize environment variable processing
         for env_var, env_value in os.environ.items():
             if not env_var.startswith("J2O_"):
@@ -255,7 +267,7 @@ class ConfigLoader:
                         config_logger.debug(
                             "Applied Jira ScriptRunner config: %s=%s",
                             sr_key,
-                            env_value,
+                            _redact(sr_key, env_value),
                         )
                     else:
                         # Regular Jira config
@@ -263,7 +275,7 @@ class ConfigLoader:
                         config_logger.debug(
                             "Applied Jira config: %s=%s",
                             key,
-                            env_value,
+                            _redact(key, env_value),
                         )
 
                 case ["J2O", "OPENPROJECT", *rest] if rest:
@@ -273,7 +285,7 @@ class ConfigLoader:
                     config_logger.debug(
                         "Applied OpenProject config: %s=%s",
                         key,
-                        env_value,
+                        _redact(key, env_value),
                     )
 
                     # Special handling for tmux_session_name

@@ -48,9 +48,15 @@ migration:
             # Act
             loader._load_database_config()
 
-            # Assert - Warning should log only exception type, not full exception with path
-            mock_logger.warning.assert_called_once()
-            warning_call = mock_logger.warning.call_args
+            # Assert - Warnings should log only exception type, not full exception with path
+            assert mock_logger.warning.call_count >= 1
+            # Find the file-read failure warning (not the path-validation warning)
+            file_error_calls = [
+                c for c in mock_logger.warning.call_args_list
+                if "Failed to read Docker secret" in str(c)
+            ]
+            assert len(file_error_calls) == 1
+            warning_call = file_error_calls[0]
 
             # Should be called with exception class name, not full exception
             assert warning_call[0][0] == "Failed to read Docker secret: %s"
@@ -61,10 +67,11 @@ migration:
                 "PermissionError",
             ]
 
-            # Verify that the sensitive path is NOT in the log message
-            logged_message = warning_call[0][1]
-            assert "/nonexistent/secret/path" not in logged_message
-            assert "postgres_password.txt" not in logged_message
+            # Verify that the sensitive path is NOT in any log message
+            for call in mock_logger.warning.call_args_list:
+                logged_args = str(call)
+                assert "/nonexistent/secret/path" not in logged_args
+                assert "postgres_password.txt" not in logged_args
 
     def test_successful_secret_loading_logs_generic_message(self, temp_dir) -> None:
         """Test that successful secret loading doesn't expose the secret content."""
