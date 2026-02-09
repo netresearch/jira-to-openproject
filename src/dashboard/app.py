@@ -305,7 +305,7 @@ async def startup_event() -> None:
         )
         await redis_client.ping()
         logger.info("Connected to Redis")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("Could not connect to Redis")
         redis_client = None
 
@@ -613,7 +613,7 @@ async def start_migration(
     """Start migration with specified configuration."""
     try:
         if migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="Migration is already running")  # noqa: TRY301
+            raise HTTPException(status_code=400, detail="Migration is already running")
 
         # Start migration in background
         background_tasks.add_task(start_migration_background, control.config or {})
@@ -635,7 +635,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Stop current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")  # noqa: TRY301
+            raise HTTPException(status_code=400, detail="No migration is running")
 
         # Stop migration in background
         background_tasks.add_task(stop_migration_background)
@@ -652,10 +652,10 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Pause current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")  # noqa: TRY301
+            raise HTTPException(status_code=400, detail="No migration is running")
 
         if migration_state["pause_time"]:
-            raise HTTPException(status_code=400, detail="Migration is already paused")  # noqa: TRY301
+            raise HTTPException(status_code=400, detail="Migration is already paused")
 
         # Pause migration in background
         background_tasks.add_task(pause_migration_background)
@@ -672,10 +672,10 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Resume paused migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")  # noqa: TRY301
+            raise HTTPException(status_code=400, detail="No migration is running")
 
         if not migration_state["pause_time"]:
-            raise HTTPException(status_code=400, detail="Migration is not paused")  # noqa: TRY301
+            raise HTTPException(status_code=400, detail="Migration is not paused")
 
         # Resume migration in background
         background_tasks.add_task(resume_migration_background)
@@ -736,6 +736,8 @@ async def websocket_dashboard(websocket: WebSocket) -> None:
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
 
     uvicorn.run(app, host=os.environ.get("J2O_DASHBOARD_HOST", "127.0.0.1"), port=8000)

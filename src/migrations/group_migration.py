@@ -149,7 +149,7 @@ class GroupMigration(BaseMigration):
             self.group_mapping = mapping
             try:
                 self._save_to_json(mapping, self.group_mapping_file)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self.logger.debug("Failed to persist group mapping to %s", self.group_mapping_file)
 
         self.logger.info("Restored %d group mappings from OpenProject provenance", len(mapping))
@@ -158,7 +158,7 @@ class GroupMigration(BaseMigration):
     # ------------------------------------------------------------------
     # Core execution
     # ------------------------------------------------------------------
-    def run(self, batch_size: int | None = None) -> ComponentResult:  # noqa: ARG002
+    def run(self, batch_size: int | None = None) -> ComponentResult:
         try:
             jira_groups = self.extract_jira_groups()
             op_groups = self.extract_openproject_groups()
@@ -208,7 +208,7 @@ class GroupMigration(BaseMigration):
                 groups_to_create.append({"name": name})
 
         role_groups, project_role_assignments = self._collect_project_role_groups(jira_members_by_group)
-        for role_group_name in role_groups.keys():
+        for role_group_name in role_groups:
             if role_group_name.lower() not in existing_groups:
                 groups_to_create.append({"name": role_group_name})
 
@@ -243,7 +243,7 @@ class GroupMigration(BaseMigration):
                 "created_new": name not in self.group_mapping,
             }
 
-        for role_group_name in role_groups.keys():
+        for role_group_name in role_groups:
             op_group = existing_groups.get(role_group_name.lower())
             if not op_group:
                 continue
@@ -260,7 +260,7 @@ class GroupMigration(BaseMigration):
             self.group_mapping = mapping
             try:
                 self._save_to_json(mapping, self.group_mapping_file)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self.logger.debug("Failed to persist group mapping to %s", self.group_mapping_file)
 
             # Record provenance for all successfully migrated groups
@@ -323,7 +323,7 @@ class GroupMigration(BaseMigration):
         assignments: list[dict[str, Any]] = []
         role_groups_lower = {name.lower(): members for name, members in (role_groups or {}).items()}
 
-        for jira_name, entry in mapping.items():
+        for jira_name in mapping:
             group_name = jira_name
             member_keys = set()
             lookup_key = jira_name.lower()
@@ -342,7 +342,7 @@ class GroupMigration(BaseMigration):
                 try:
                     if op_id:
                         openproject_ids.add(int(op_id))
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
             assignments.append({"name": group_name, "user_ids": sorted(openproject_ids)})
 
@@ -366,12 +366,12 @@ class GroupMigration(BaseMigration):
                 continue
             try:
                 op_project_id_int = int(op_project_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
             try:
                 roles = self.jira_client.get_project_roles(project_key)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.logger.warning("Failed to fetch roles for project %s: %s", project_key, exc)
                 continue
 

@@ -13,10 +13,10 @@ in projects where they are irrelevant.
 References:
 - User report on spammy custom fields in all projects
 - OpenProject CustomFieldsProject model for per-project enablement
+
 """
 
 import inspect
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -98,6 +98,7 @@ class TestSelectiveEnablementHelper:
                     project_id: OpenProject project ID
                     value: The actual value set
                     default_value: The default value (if any) to compare against
+
                 """
                 # Only track if value is non-empty and non-default
                 is_meaningful = (
@@ -117,7 +118,7 @@ class TestSelectiveEnablementHelper:
                 return list(self._usage.get(field_name, {}).keys())
 
             def should_enable_for_project(
-                self, field_name: str, project_id: int
+                self, field_name: str, project_id: int,
             ) -> bool:
                 """Check if field should be enabled for a specific project."""
                 return project_id in self._usage.get(field_name, {})
@@ -133,7 +134,7 @@ class TestSelectiveEnablementHelper:
 
         # Project 3: Resolution is default value
         tracker.record_usage(
-            "J2O Resolution", project_id=3, value="None", default_value="None"
+            "J2O Resolution", project_id=3, value="None", default_value="None",
         )
 
         # Project 4: Has actual resolution
@@ -158,7 +159,7 @@ class TestSelectiveEnablementHelper:
                 self._usage: dict[str, set[int]] = {}
 
             def record_usage(
-                self, field_name: str, project_id: int, value: str | int | float | None
+                self, field_name: str, project_id: int, value: str | float | None,
             ) -> None:
                 is_meaningful = False
                 if value is not None:
@@ -207,6 +208,7 @@ class TestSelectiveEnablementHelper:
 
             Returns:
                 Ruby script string for Rails console execution
+
             """
             if not project_ids:
                 return ""
@@ -261,8 +263,8 @@ class TestMigrationIntegrationWithUsageTracking:
         FIX VERIFIED: Migrations now have helper method to enable CFs per-project.
         """
         from src.migrations.resolution_migration import ResolutionMigration
-        from src.migrations.votes_migration import VotesMigration
         from src.migrations.story_points_migration import StoryPointsMigration
+        from src.migrations.votes_migration import VotesMigration
 
         # Verify each migration has the enablement method
         assert hasattr(ResolutionMigration, "_enable_cf_for_projects")
@@ -328,7 +330,7 @@ class TestOpenProjectCustomFieldModel:
         - No entries in custom_fields_projects table needed
         - Creates clutter in projects that don't use the field
         """
-        pass  # Documentation test
+        # Documentation test
 
     def test_is_for_all_false_behavior(self):
         """Document what is_for_all: false does in OpenProject.
@@ -339,7 +341,7 @@ class TestOpenProjectCustomFieldModel:
         - Clean UI - only relevant fields shown
         - Requires CustomFieldsProject join entries
         """
-        pass  # Documentation test
+        # Documentation test
 
     def test_custom_fields_project_model(self):
         """Document CustomFieldsProject model structure.
@@ -352,7 +354,7 @@ class TestOpenProjectCustomFieldModel:
         When is_for_all=false, the field is ONLY visible in projects
         that have a CustomFieldsProject entry.
         """
-        pass  # Documentation test
+        # Documentation test
 
 
 # Run verification after fix
@@ -372,9 +374,7 @@ class TestPostFixVerification:
     def test_migrations_track_project_usage(self):
         """After fix: migrations should track which projects use each field."""
         # Verify migration has usage tracking
-        pass
 
     def test_migrations_enable_per_project(self):
         """After fix: migrations should create CustomFieldsProject entries."""
         # Verify migration creates project-specific entries
-        pass

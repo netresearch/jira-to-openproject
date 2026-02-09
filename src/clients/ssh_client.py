@@ -105,7 +105,7 @@ class SSHClient:
     - Propagates standard subprocess exceptions for timeouts and process errors
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         host: str,
         user: str | None = None,
@@ -173,7 +173,7 @@ class SSHClient:
         # Enable SSH multiplexing for connection reuse (50-200ms saved per call)
         cmd.extend([
             "-o", "ControlMaster=auto",
-            "-o", f"ControlPath=/tmp/ssh-j2o-%r@%h:%p",
+            "-o", "ControlPath=/tmp/ssh-j2o-%r@%h:%p",
             "-o", "ControlPersist=300",
         ])
 
@@ -204,7 +204,7 @@ class SSHClient:
         # Enable SSH multiplexing for connection reuse
         cmd.extend([
             "-o", "ControlMaster=auto",
-            "-o", f"ControlPath=/tmp/ssh-j2o-%r@%h:%p",
+            "-o", "ControlPath=/tmp/ssh-j2o-%r@%h:%p",
             "-o", "ControlPersist=300",
         ])
 
@@ -225,7 +225,7 @@ class SSHClient:
             cmd = self.get_ssh_base_command()
             cmd.extend(["-o", "BatchMode=yes", "echo", "Connection successful"])
 
-            result = subprocess.run(  # noqa: S603
+            result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -233,7 +233,7 @@ class SSHClient:
                 check=False,
             )
 
-            return result.returncode == 0 and "Connection successful" in result.stdout  # noqa: TRY300
+            return result.returncode == 0 and "Connection successful" in result.stdout
 
         except subprocess.SubprocessError:
             logger.exception("SSH connection test failed")
@@ -251,7 +251,7 @@ class SSHClient:
         """
         return True
 
-    def execute_command(  # noqa: C901, PLR0912
+    def execute_command(
         self,
         command: str,
         timeout: int | None = None,
@@ -300,7 +300,7 @@ class SSHClient:
 
                 logger.debug("Executing SSH command: %s", " ".join(cmd))
 
-                result = subprocess.run(  # noqa: S603
+                result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
@@ -310,14 +310,14 @@ class SSHClient:
 
                 # If check=True and command failed, raise our custom error
                 if check and result.returncode != 0:
-                    raise SSHCommandError(  # noqa: TRY301
+                    raise SSHCommandError(
                         command=command,
                         returncode=result.returncode,
                         stdout=result.stdout,
                         stderr=result.stderr,
                     )
 
-                return result.stdout, result.stderr, result.returncode  # noqa: TRY300
+                return result.stdout, result.stderr, result.returncode
 
             except subprocess.TimeoutExpired as e:
                 logger.exception("SSH command timed out after %d seconds", timeout)
@@ -363,7 +363,7 @@ class SSHClient:
         msg = "Command failed after all retry attempts"
         raise RuntimeError(msg)  # Fallback in case of logic error
 
-    def copy_file_to_remote(  # noqa: C901, PLR0912
+    def copy_file_to_remote(
         self,
         local_path: Path | str,
         remote_path: Path | str,
@@ -418,7 +418,7 @@ class SSHClient:
                 logger.debug("Executing SCP command: %s", " ".join(cmd))
 
                 # Execute scp command
-                result = subprocess.run(  # noqa: S603
+                result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
@@ -435,7 +435,7 @@ class SSHClient:
                     )
                     return
                 # This shouldn't be reached due to check=True above
-                raise SSHFileTransferError(  # noqa: TRY301
+                raise SSHFileTransferError(
                     source=str(local_path),
                     destination=f"{self.host}:{remote_path}",
                     message=f"SCP failed with exit code {result.returncode}: {result.stderr}",
@@ -488,7 +488,7 @@ class SSHClient:
         msg = "File copy failed after all retry attempts"
         raise RuntimeError(msg)  # Fallback in case of logic error
 
-    def copy_file_from_remote(  # noqa: C901, PLR0912
+    def copy_file_from_remote(
         self,
         remote_path: Path | str,
         local_path: Path | str,
@@ -549,7 +549,7 @@ class SSHClient:
                 logger.debug("Executing SCP command: %s", " ".join(cmd))
 
                 # Execute scp command
-                result = subprocess.run(  # noqa: S603
+                result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
@@ -560,7 +560,7 @@ class SSHClient:
                 # Verify the command was successful and file exists
                 if result.returncode == 0 and not local_path.exists():
                     msg = f"File download succeeded but file not found at {local_path}"
-                    raise FileNotFoundError(msg)  # noqa: TRY301
+                    raise FileNotFoundError(msg)
 
                 file_size = local_path.stat().st_size
                 logger.debug(
@@ -573,7 +573,7 @@ class SSHClient:
                 # Register the file with the file manager
                 self.file_manager.registry.register(local_path, "temp")
 
-                return local_path  # noqa: TRY300
+                return local_path
 
             except subprocess.CalledProcessError as e:
                 logger.exception("SCP command failed: %s", e.stderr)
@@ -633,7 +633,7 @@ class SSHClient:
             cmd = f"test -e {quote(remote_path_str)} && echo 'EXISTS' || echo 'NOT_EXISTS'"
             stdout, _, returncode = self.execute_command(cmd, check=False)
 
-            return "EXISTS" in stdout and returncode == 0  # noqa: TRY300
+            return "EXISTS" in stdout and returncode == 0
         except Exception:
             logger.exception("Error checking if remote file exists: %s", remote_path)
             return False

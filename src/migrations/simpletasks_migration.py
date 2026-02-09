@@ -21,7 +21,7 @@ from src.config import logger
 
 @register_entity_types("simpletasks")
 class SimpleTasksMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
         # Import via module so tests can monkeypatch src.mappings.Mappings
 

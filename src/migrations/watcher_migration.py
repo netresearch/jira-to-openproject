@@ -20,7 +20,7 @@ from src.config import logger
 class WatcherMigration(BaseMigration):
     """Migrate watchers from Jira issues to OpenProject work packages."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client, op_client)
         self.mappings: Mappings = config.mappings
 
@@ -92,12 +92,12 @@ class WatcherMigration(BaseMigration):
         cache_file = self.data_dir / "jira_issues_cache.json"
         if cache_file.exists():
             try:
-                import json  # noqa: PLC0415
+                import json
 
                 with open(cache_file) as f:
                     issues = json.load(f)
                 logger.info("Using cached issues for watcher migration (%d issues)", len(issues))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 issues = {}
 
         # If no cache, create a minimal dict from jira_keys for iteration
@@ -118,12 +118,12 @@ class WatcherMigration(BaseMigration):
             try:
                 # Prefer explicit API for watchers (more complete)
                 watchers = self.jira_client.get_issue_watchers(str(key))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Fallback to fields if available
                 try:
                     w = getattr(getattr(issue, "fields", None), "watches", None)
                     watchers = getattr(w, "watchers", []) or []
-                except Exception:  # noqa: BLE001
+                except Exception:
                     watchers = []
 
             for w in watchers or []:
@@ -137,7 +137,7 @@ class WatcherMigration(BaseMigration):
                         "work_package_id": wp_id,
                         "user_id": user_id,
                     })
-                except Exception:  # noqa: BLE001
+                except Exception:
                     skipped += 1
                     continue
 

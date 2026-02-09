@@ -15,7 +15,7 @@ from src.display import configure_logging
 
 try:
     from src import config  # type: ignore
-except Exception:  # noqa: BLE001
+except Exception:
     config = None
 from src.utils.file_manager import FileManager
 
@@ -86,7 +86,7 @@ class RailsConsoleClient:
 
         try:
             self._configure_irb_settings()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to configure IRB settings: %s", e)
 
     @staticmethod
@@ -130,7 +130,7 @@ class RailsConsoleClient:
                     unique.append(ln)
             summary = " | ".join(unique)[:500]
             return summary or text.strip()[:300]
-        except Exception:  # noqa: BLE001
+        except Exception:
             return text.strip()[:300]
 
     def _session_exists(self) -> bool:
@@ -143,7 +143,7 @@ class RailsConsoleClient:
         try:
             tmux = self._tmux_path
             cmd = [tmux, "has-session", "-t", self.tmux_session_name]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         except subprocess.SubprocessError:
             logger.exception("Error checking tmux session")
             return False
@@ -207,7 +207,7 @@ class RailsConsoleClient:
         try:
             tmux = self._tmux_path
             send_cmd = [tmux, "send-keys", "-t", target, config_cmd, "Enter"]
-            subprocess.run(send_cmd, capture_output=True, text=True, check=True)  # noqa: S603
+            subprocess.run(send_cmd, capture_output=True, text=True, check=True)
             logger.debug("IRB configuration commands sent successfully")
         except subprocess.SubprocessError as e:
             logger.exception("Failed to configure IRB settings")
@@ -241,7 +241,7 @@ class RailsConsoleClient:
         try:
             tmux = self._tmux_path
             clear_cmd = [tmux, "send-keys", "-t", target, "C-l"]
-            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)  # noqa: S603
+            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
         except subprocess.SubprocessError as e:
             logger.warning("Failed to clear tmux pane: %s", e)
             msg = f"Failed to clear tmux pane: {e}"
@@ -260,18 +260,18 @@ class RailsConsoleClient:
             # Send a space and Enter to reset terminal state
             tmux = self._tmux_path
             send_cmd = [tmux, "send-keys", "-t", target, " ", "Enter"]
-            subprocess.run(send_cmd, capture_output=True, text=True, check=True)  # noqa: S603
+            subprocess.run(send_cmd, capture_output=True, text=True, check=True)
             time.sleep(0.3)
 
             # Clear the screen
             tmux = self._tmux_path
             clear_cmd = [tmux, "send-keys", "-t", target, "C-l"]
-            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)  # noqa: S603
+            subprocess.run(clear_cmd, capture_output=True, text=True, check=True)
             time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
             tmux = self._tmux_path
-            subprocess.run(  # noqa: S603
+            subprocess.run(
                 [tmux, "send-keys", "-t", target, "C-c"],
                 capture_output=True,
                 text=True,
@@ -297,7 +297,7 @@ class RailsConsoleClient:
         """
         return command.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
 
-    def execute(  # noqa: C901, PLR0912, PLR0915
+    def execute(
         self,
         command: str,
         timeout: int | None = None,
@@ -523,7 +523,7 @@ class RailsConsoleClient:
             # 2) Recapture a larger pane slice to find markers
             try:
                 tmux = self._tmux_path
-                recapture = subprocess.run(  # noqa: S603
+                recapture = subprocess.run(
                     [tmux, "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
@@ -567,7 +567,7 @@ class RailsConsoleClient:
                     out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
                     if out_lines:
                         return "\n".join(out_lines).strip()
-            except Exception:  # noqa: BLE001,S110
+            except Exception:
                 # Fall through to strict error below
                 pass
 
@@ -585,7 +585,7 @@ class RailsConsoleClient:
             # One more try: recapture a larger slice in case the marker landed after our first capture
             try:
                 tmux = self._tmux_path
-                recapture = subprocess.run(  # noqa: S603
+                recapture = subprocess.run(
                     [tmux, "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
                     text=True,
@@ -611,7 +611,7 @@ class RailsConsoleClient:
                     between_lines = rec_lines[new_start + 1 : new_end]
                     out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
                     return "\n".join(out_lines).strip()
-            except Exception:  # noqa: BLE001,S110
+            except Exception:
                 # Fall through to existing error handling
                 pass
 
@@ -698,10 +698,10 @@ class RailsConsoleClient:
             ):
                 snippet = self._extract_error_summary(trailing_output)
                 msg = f"Ruby console reported error after end marker: {snippet}"
-                raise RubyError(msg)  # noqa: TRY301
+                raise RubyError(msg)
         except RubyError:
             raise
-        except Exception:  # noqa: BLE001,S110
+        except Exception:
             # If detection itself fails, ignore and continue
             pass
 
@@ -782,7 +782,7 @@ class RailsConsoleClient:
         while time.time() - start_time < timeout:
             try:
                 tmux = self._tmux_path
-                capture = subprocess.run(  # noqa: S603
+                capture = subprocess.run(
                     [tmux, "capture-pane", "-p", "-S", "-500", "-t", target],
                     capture_output=True,
                     text=True,
@@ -798,13 +798,13 @@ class RailsConsoleClient:
                 if marker is not None:
                     # Normalize output by removing newlines to handle markers split
                     # by terminal width wrapping in tmux pane capture
-                    normalized_output = current_output.replace('\n', '').replace('\r', '')
+                    normalized_output = current_output.replace("\n", "").replace("\r", "")
                     if marker in normalized_output:
                         logger.debug("Marker found after %.2fs", time.time() - start_time)
                         return True, current_output
 
                 console_state = self._get_console_state(current_output)
-                if console_state["ready"] and time.time() - start_time > 3:  # noqa: PLR2004
+                if console_state["ready"] and time.time() - start_time > 3:
                     logger.debug("Console ready but marker not found yet")
 
                 time.sleep(poll_interval)
@@ -843,7 +843,7 @@ class RailsConsoleClient:
 
         while time.time() - start_time < timeout:
             try:
-                capture = subprocess.run(  # noqa: S603
+                capture = subprocess.run(
                     [tmux, "capture-pane", "-p", "-S", "-10", "-t", target],
                     capture_output=True,
                     text=True,
@@ -866,7 +866,7 @@ class RailsConsoleClient:
                         "Console in %s state, sending Ctrl+C to reset",
                         console_state["state"],
                     )
-                    subprocess.run(  # noqa: S603
+                    subprocess.run(
                         [tmux, "send-keys", "-t", target, "C-c"],
                         capture_output=True,
                         text=True,
@@ -875,7 +875,7 @@ class RailsConsoleClient:
                     time.sleep(0.3)
                     attempts += 1
 
-                    if attempts >= 2:  # noqa: PLR2004
+                    if attempts >= 2:
                         logger.debug(
                             "Multiple Ctrl+C attempts failed, trying full stabilization",
                         )
@@ -897,7 +897,7 @@ class RailsConsoleClient:
         logger.error("Console not ready after %ss", timeout)
         return False
 
-    def _send_command_to_tmux(  # noqa: C901, PLR0915
+    def _send_command_to_tmux(
         self,
         command: str,
         timeout: int,
@@ -938,7 +938,7 @@ class RailsConsoleClient:
 
             logger.debug("Sending command (length: %s bytes)", len(escaped_command))
             tmux = self._tmux_path
-            subprocess.run(  # noqa: S603
+            subprocess.run(
                 [tmux, "send-keys", "-t", target, escaped_command, "Enter"],
                 capture_output=True,
                 text=True,
@@ -959,16 +959,16 @@ class RailsConsoleClient:
                     if self._has_fatal_console_error(pane_output):
                         snippet = self._extract_error_summary(pane_output)
                         msg = f"Rails console crashed before script-end echo: {snippet}"
-                        raise ConsoleNotReadyError(msg)  # noqa: TRY301
+                        raise ConsoleNotReadyError(msg)
                     msg = "Script end echo not observed in console output"
-                    raise CommandExecutionError(msg)  # noqa: TRY301
+                    raise CommandExecutionError(msg)
 
                 # Wait for any new output beyond script-end echo
                 baseline = pane_output
                 start_wait = time.time()
                 while time.time() - start_wait < max(2, min(timeout, 10)):
                     tmux = self._tmux_path
-                    cap = subprocess.run(  # noqa: S603
+                    cap = subprocess.run(
                         [tmux, "capture-pane", "-p", "-S", "-200", "-t", target],
                         capture_output=True,
                         text=True,
@@ -984,14 +984,14 @@ class RailsConsoleClient:
                 if wait_for_line and not any(wait_for_line in ln for ln in tail_lines):
                     # No further output with EXEC_END → error (nothing should print after EXEC_END)
                     msg = "End marker not found in tail after post-script output"
-                    raise CommandExecutionError(msg)  # noqa: TRY301
+                    raise CommandExecutionError(msg)
 
             # Now ensure prompt is ready before final capture
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)
 
             # After script completes, capture a compact tail; outer parser will locate markers
             tmux = self._tmux_path
-            cap = subprocess.run(  # noqa: S603
+            cap = subprocess.run(
                 [tmux, "capture-pane", "-p", "-S", "-1000", "-t", target],
                 capture_output=True,
                 text=True,

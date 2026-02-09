@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -102,7 +102,7 @@ class TestValidityPeriodCalculation:
     """Test validity period calculation logic."""
 
     def test_validity_period_non_overlapping(
-        self, sample_journal_operations: list[dict[str, Any]]
+        self, sample_journal_operations: list[dict[str, Any]],
     ) -> None:
         """Verify validity periods are non-overlapping."""
         periods = self._calculate_validity_periods(sample_journal_operations)
@@ -116,7 +116,7 @@ class TestValidityPeriodCalculation:
             )
 
     def test_final_journal_has_open_ended_validity(
-        self, sample_journal_operations: list[dict[str, Any]]
+        self, sample_journal_operations: list[dict[str, Any]],
     ) -> None:
         """Verify the last journal has an open-ended validity period."""
         periods = self._calculate_validity_periods(sample_journal_operations)
@@ -125,7 +125,7 @@ class TestValidityPeriodCalculation:
         assert last_period["end"] is None, "Final journal should have NULL end (open-ended)"
 
     def test_duplicate_timestamps_get_synthetic_offsets(
-        self, duplicate_timestamp_operations: list[dict[str, Any]]
+        self, duplicate_timestamp_operations: list[dict[str, Any]],
     ) -> None:
         """Verify duplicate timestamps are offset to prevent overlaps."""
         periods = self._calculate_validity_periods(duplicate_timestamp_operations)
@@ -160,7 +160,7 @@ class TestValidityPeriodCalculation:
         )
 
     def _calculate_validity_periods(
-        self, operations: list[dict[str, Any]]
+        self, operations: list[dict[str, Any]],
     ) -> list[dict[str, datetime | None]]:
         """Calculate validity periods using the same logic as Ruby script.
 
@@ -172,7 +172,7 @@ class TestValidityPeriodCalculation:
         sorted_ops = sorted(
             operations,
             key=lambda op: datetime.fromisoformat(
-                op.get("created_at") or op.get("timestamp") or "1970-01-01T00:00:00+00:00"
+                op.get("created_at") or op.get("timestamp") or "1970-01-01T00:00:00+00:00",
             ),
         )
 
@@ -368,7 +368,7 @@ class TestJournalEdgeCases:
                 "created_at": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC).isoformat(),
                 "user_id": 1,
                 "notes": "Created",
-            }
+            },
         ]
 
         periods = TestValidityPeriodCalculation()._calculate_validity_periods(single_op)

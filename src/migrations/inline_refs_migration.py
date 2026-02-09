@@ -9,11 +9,10 @@ A minimal Rails script is used to, per work package:
 
 from __future__ import annotations
 
-from src.config import logger
+from typing import TYPE_CHECKING
+
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -22,7 +21,7 @@ if TYPE_CHECKING:
 
 @register_entity_types("inline_refs")
 class InlineRefsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _extract(self) -> ComponentResult:
@@ -32,7 +31,7 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             if isinstance(entry, dict) and entry.get("openproject_id"):
                 try:
                     wp_ids.append(int(entry["openproject_id"]))  # type: ignore[arg-type]
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
         return ComponentResult(success=True, data={"work_package_ids": wp_ids})
 

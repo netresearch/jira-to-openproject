@@ -26,7 +26,7 @@ class DummyJira:
     def __init__(self) -> None:
         self.issues = {
             "PRJ-1": DummyIssue(
-                "PRJ-1", [DummyAtt("a.txt", "2024-01-01T00:00:00Z"), DummyAtt("b.txt", "2024-01-02T00:00:00Z")]
+                "PRJ-1", [DummyAtt("a.txt", "2024-01-01T00:00:00Z"), DummyAtt("b.txt", "2024-01-02T00:00:00Z")],
             ),
             "PRJ-2": DummyIssue("PRJ-2", []),
         }

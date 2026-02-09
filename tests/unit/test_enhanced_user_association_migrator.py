@@ -655,7 +655,7 @@ class TestEnhancedUserAssociationMigrator:
         mock_clients,
     ) -> None:
         """Test successful execution of Rails author operations."""
-        jira_client, op_client = mock_clients
+        _jira_client, op_client = mock_clients
 
         # Queue an operation
         migrator_with_mocks._queue_rails_author_operation(
@@ -683,7 +683,7 @@ class TestEnhancedUserAssociationMigrator:
         mock_clients,
     ) -> None:
         """Test Rails author operations execution failure."""
-        jira_client, op_client = mock_clients
+        _jira_client, op_client = mock_clients
 
         # Queue an operation
         migrator_with_mocks._queue_rails_author_operation(

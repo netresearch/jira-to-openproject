@@ -140,7 +140,7 @@ __all__ = [
 # ==================================================================================
 
 # Global mappings state management with thread safety
-_mappings: "Mappings | None" = None
+_mappings: Mappings | None = None
 _mappings_lock = threading.Lock()
 
 
@@ -152,7 +152,7 @@ class MappingsInitializationError(Exception):
     """
 
 
-def get_mappings() -> "Mappings":
+def get_mappings() -> Mappings:
     """Get or initialize the global mappings instance.
 
     Follows optimistic execution pattern - attempts operation directly,
@@ -174,7 +174,7 @@ def get_mappings() -> "Mappings":
             if _mappings is None:  # Double-check pattern
                 try:
                     # Optimistic execution: attempt to create mappings directly
-                    from src.mappings.mappings import Mappings  # noqa: PLC0415
+                    from src.mappings.mappings import Mappings
 
                     _mappings = Mappings(data_dir=get_path("data"))
                     logger.debug("Successfully initialized global mappings instance")
@@ -318,7 +318,7 @@ def validate_config() -> bool:
     return True
 
 
-def update_from_cli_args(args: object) -> None:  # noqa: C901
+def update_from_cli_args(args: object) -> None:
     """Update migration configuration from CLI arguments.
 
     Also applies select Jira/OpenProject overrides that must be available
@@ -337,7 +337,7 @@ def update_from_cli_args(args: object) -> None:  # noqa: C901
                 _config_loader.set_value("jira", "projects", keys)
                 jira_config["projects"] = keys
                 logger.info("Applied CLI Jira project filter: %s", keys)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed applying CLI jira project filter")
 
     # Optional: disable WorkPackageMigration shim
@@ -346,7 +346,7 @@ def update_from_cli_args(args: object) -> None:  # noqa: C901
             _config_loader.set_value("migration", "disable_wpm_shim", value=True)
             migration_config["disable_wpm_shim"] = True
             logger.info("Applied CLI: disable WorkPackageMigration runtime shim")
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("Failed applying CLI disable_wpm_shim")
     if hasattr(args, "dry_run") and args.dry_run:
         migration_config["dry_run"] = True

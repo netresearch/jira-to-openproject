@@ -233,7 +233,7 @@ class TestQueryExecution:
     """Tests for query execution and modification logic."""
 
     @pytest.mark.skip(
-        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored"
+        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored",
     )
     def test_execute_query_to_json_file_uses_pagination_for_collection_query(
         self,
@@ -436,7 +436,7 @@ class TestQueryModificationEdgeCases:
     """
 
     @pytest.mark.skip(
-        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored"
+        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored",
     )
     def test_collection_queries_use_pagination_not_hardcoded_limit(self, op_client) -> None:
         """Regression: ensure no silent truncation via hardcoded limit; use batching."""

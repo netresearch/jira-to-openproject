@@ -38,7 +38,7 @@ def test_time_entry_migrator_enables_time_tracking_once_per_project(monkeypatch,
             "processing_time_seconds": 0.0,
         }
 
-    monkeypatch.setattr(mig, "run_complete_migration", lambda **kwargs: _noop_run(**kwargs))
+    monkeypatch.setattr(mig, "run_complete_migration", _noop_run)
 
     _ = mig.migrate_time_entries_for_issues(migrated)
 

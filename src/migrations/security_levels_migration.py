@@ -6,11 +6,11 @@ the Jira `fields.security.name` for mapped issues.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -21,7 +21,7 @@ SECURITY_LEVEL_CF_NAME = "Security Level"
 
 @register_entity_types("security_levels")
 class SecurityLevelsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -43,7 +43,7 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract Jira security level names per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         issues = self._merge_batch_issues(keys)
 
         sec_by_key: dict[str, str] = {}
@@ -54,7 +54,7 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
                 name = getattr(sec, "name", None)
                 if name:
                     sec_by_key[k] = str(name)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"security": sec_by_key})
 

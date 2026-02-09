@@ -17,7 +17,7 @@ from src.models import ComponentResult
 class WorkflowMigration(BaseMigration):
     """Synchronise Jira workflow transitions with OpenProject workflow records."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     # ------------------------------------------------------------------ #
@@ -95,13 +95,13 @@ class WorkflowMigration(BaseMigration):
         for workflow_name in workflow_names:
             try:
                 transitions = self.jira_client.get_workflow_transitions(workflow_name)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 transitions = []
             workflow_transitions[workflow_name] = transitions
 
             try:
                 statuses = self.jira_client.get_workflow_statuses(workflow_name)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 statuses = []
             workflow_statuses[workflow_name] = statuses if isinstance(statuses, list) else []
 
@@ -121,7 +121,7 @@ class WorkflowMigration(BaseMigration):
             issue_types = self.jira_client.get_issue_types()
             schemes = self.jira_client.get_workflow_schemes()
             roles = self.op_client.get_roles()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return ComponentResult(
                 success=False,
                 message=f"Failed to extract workflow metadata: {exc}",
@@ -155,13 +155,13 @@ class WorkflowMigration(BaseMigration):
         for workflow_name in workflow_names:
             try:
                 transitions = self.jira_client.get_workflow_transitions(workflow_name)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 transitions = []
             workflow_transitions[workflow_name] = transitions
 
             try:
                 statuses = self.jira_client.get_workflow_statuses(workflow_name)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 statuses = []
             workflow_statuses[workflow_name] = statuses if isinstance(statuses, list) else []
 

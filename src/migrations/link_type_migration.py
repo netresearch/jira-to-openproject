@@ -10,7 +10,6 @@ from typing import Any
 from src import config
 from src.clients.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.config import logger
 from src.display import console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.migrations.custom_field_migration import CustomFieldMigration
@@ -752,7 +751,7 @@ class LinkTypeMigration(BaseMigration):
             }
 
         # Create remaining custom fields in one batch
-        batch_ok = custom_field_migration.migrate_custom_fields_via_json(to_create)
+        custom_field_migration.migrate_custom_fields_via_json(to_create)
 
         # Refresh once and update mapping for all created
         try:
@@ -831,7 +830,7 @@ class LinkTypeMigration(BaseMigration):
         if provenance_mappings:
             try:
                 result = self.op_client.bulk_record_entity_provenance(
-                    "link_type", provenance_mappings
+                    "link_type", provenance_mappings,
                 )
                 self.logger.info(
                     "Recorded link type provenance: %d success, %d failed",

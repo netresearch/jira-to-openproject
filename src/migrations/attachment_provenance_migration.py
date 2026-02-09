@@ -16,13 +16,12 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-from src import config
 from src.config import logger
 
 
 @register_entity_types("attachment_provenance")
 class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     @staticmethod
@@ -41,7 +40,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                     rec = umap[v]
                     if isinstance(rec, dict) and rec.get("openproject_id"):
                         return int(rec["openproject_id"])  # type: ignore[arg-type]
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         return None
 
@@ -53,6 +52,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
 
         Returns:
             List of attachment provenance items
+
         """
         if not jira_keys:
             return []
@@ -79,7 +79,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                         "filename": filename,
                         "created": created,
                         "author": author,
-                    }
+                    },
                 )
         return items
 
@@ -109,7 +109,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                     "filename": it.get("filename"),
                     "author_id": author_id,
                     "created_at": created_at,
-                }
+                },
             )
         return ComponentResult(success=True, data={"updates": out})
 

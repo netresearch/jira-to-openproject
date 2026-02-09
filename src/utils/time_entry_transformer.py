@@ -338,7 +338,7 @@ class TimeEntryTransformer:
 
             return dt.strftime("%Y-%m-%d")
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to parse date '%s': %s", date_string, e)
             return datetime.now(tz=UTC).strftime("%Y-%m-%d")
 
@@ -367,7 +367,7 @@ class TimeEntryTransformer:
 
             return str(content)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to extract text from content: %s", e)
             return str(content)
 

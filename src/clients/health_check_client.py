@@ -7,10 +7,9 @@ to prevent failures due to disk space exhaustion or temp file accumulation.
 from __future__ import annotations
 
 import logging
-import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,7 +30,7 @@ class HealthStatus:
     units: str
     severity: str  # "ERROR", "WARNING", "INFO"
     message: str
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -135,6 +134,7 @@ class HealthCheckClient:
             container_name: Name of the OpenProject container
             local_temp_path: Local path to check for disk space
             thresholds: Optional custom thresholds for health checks
+
         """
         self.ssh_client = ssh_client
         self.docker_client = docker_client
@@ -156,10 +156,10 @@ class HealthCheckClient:
             free_mb = usage.free // (1024 * 1024)
 
             warning_threshold = self._get_threshold(
-                "local_disk_warning_mb", self.DEFAULT_LOCAL_DISK_WARNING_MB
+                "local_disk_warning_mb", self.DEFAULT_LOCAL_DISK_WARNING_MB,
             )
             error_threshold = self._get_threshold(
-                "local_disk_error_mb", self.DEFAULT_LOCAL_DISK_ERROR_MB
+                "local_disk_error_mb", self.DEFAULT_LOCAL_DISK_ERROR_MB,
             )
 
             if free_mb < error_threshold:
@@ -206,7 +206,7 @@ class HealthCheckClient:
         """Check available disk space on remote host."""
         try:
             stdout, stderr, rc = self.ssh_client.execute_command(
-                "df /tmp | tail -1 | awk '{print $4}'"
+                "df /tmp | tail -1 | awk '{print $4}'",
             )
             if rc != 0:
                 return HealthStatus(
@@ -224,10 +224,10 @@ class HealthCheckClient:
             free_mb = free_kb // 1024
 
             warning_threshold = self._get_threshold(
-                "remote_disk_warning_mb", self.DEFAULT_REMOTE_DISK_WARNING_MB
+                "remote_disk_warning_mb", self.DEFAULT_REMOTE_DISK_WARNING_MB,
             )
             error_threshold = self._get_threshold(
-                "remote_disk_error_mb", self.DEFAULT_REMOTE_DISK_ERROR_MB
+                "remote_disk_error_mb", self.DEFAULT_REMOTE_DISK_ERROR_MB,
             )
 
             if free_mb < error_threshold:
@@ -274,7 +274,7 @@ class HealthCheckClient:
         """Check available disk space inside container."""
         try:
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} df /tmp | tail -1 | awk '{{print $4}}'"
+                f"docker exec {self.container_name} df /tmp | tail -1 | awk '{{print $4}}'",
             )
             if rc != 0:
                 return HealthStatus(
@@ -291,10 +291,10 @@ class HealthCheckClient:
             free_mb = free_kb // 1024
 
             warning_threshold = self._get_threshold(
-                "container_disk_warning_mb", self.DEFAULT_CONTAINER_DISK_WARNING_MB
+                "container_disk_warning_mb", self.DEFAULT_CONTAINER_DISK_WARNING_MB,
             )
             error_threshold = self._get_threshold(
-                "container_disk_error_mb", self.DEFAULT_CONTAINER_DISK_ERROR_MB
+                "container_disk_error_mb", self.DEFAULT_CONTAINER_DISK_ERROR_MB,
             )
 
             if free_mb < error_threshold:
@@ -341,7 +341,7 @@ class HealthCheckClient:
         """Check available inodes in container /tmp."""
         try:
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} df -i /tmp | tail -1 | awk '{{print $4}}'"
+                f"docker exec {self.container_name} df -i /tmp | tail -1 | awk '{{print $4}}'",
             )
             if rc != 0:
                 return HealthStatus(
@@ -357,10 +357,10 @@ class HealthCheckClient:
             free_inodes = int(stdout.strip())
 
             warning_threshold = self._get_threshold(
-                "inodes_warning", self.DEFAULT_INODES_WARNING
+                "inodes_warning", self.DEFAULT_INODES_WARNING,
             )
             error_threshold = self._get_threshold(
-                "inodes_error", self.DEFAULT_INODES_ERROR
+                "inodes_error", self.DEFAULT_INODES_ERROR,
             )
 
             if free_inodes < error_threshold:
@@ -407,7 +407,7 @@ class HealthCheckClient:
         """Check count of temp files matching pattern in container /tmp."""
         try:
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'"
+                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'",
             )
             if rc != 0:
                 return HealthStatus(
@@ -423,10 +423,10 @@ class HealthCheckClient:
             file_count = int(stdout.strip())
 
             warning_threshold = self._get_threshold(
-                "file_count_warning", self.DEFAULT_FILE_COUNT_WARNING
+                "file_count_warning", self.DEFAULT_FILE_COUNT_WARNING,
             )
             error_threshold = self._get_threshold(
-                "file_count_error", self.DEFAULT_FILE_COUNT_ERROR
+                "file_count_error", self.DEFAULT_FILE_COUNT_ERROR,
             )
 
             if file_count >= error_threshold:
@@ -475,7 +475,7 @@ class HealthCheckClient:
         try:
             # Create test file
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} touch {test_file}"
+                f"docker exec {self.container_name} touch {test_file}",
             )
             if rc != 0:
                 return HealthStatus(
@@ -490,7 +490,7 @@ class HealthCheckClient:
 
             # Delete test file
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} rm -f {test_file}"
+                f"docker exec {self.container_name} rm -f {test_file}",
             )
             if rc != 0:
                 return HealthStatus(
@@ -505,7 +505,7 @@ class HealthCheckClient:
 
             # Verify file is gone
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} test -f {test_file} && echo exists || echo deleted"
+                f"docker exec {self.container_name} test -f {test_file} && echo exists || echo deleted",
             )
             if "exists" in stdout:
                 return HealthStatus(
@@ -540,7 +540,7 @@ class HealthCheckClient:
 
     def get_health_snapshot(self) -> HealthSnapshot:
         """Get a complete health snapshot of the system."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         checks = {}
 
@@ -590,7 +590,7 @@ class HealthCheckClient:
         )
 
     def cleanup_temp_files(
-        self, pattern: str = "j2o_*", max_age_minutes: int = 60
+        self, pattern: str = "j2o_*", max_age_minutes: int = 60,
     ) -> CleanupResult:
         """Clean up old temp files matching pattern.
 
@@ -600,6 +600,7 @@ class HealthCheckClient:
 
         Returns:
             CleanupResult with details of cleanup operation
+
         """
         start_time = time.time()
         errors: list[str] = []
@@ -607,20 +608,20 @@ class HealthCheckClient:
         try:
             # Count files before
             stdout, _, _ = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'"
+                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'",
             )
             files_before = int(stdout.strip()) if stdout.strip().isdigit() else 0
 
             # Delete old files
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} find /tmp -name '{pattern}' -mmin +{max_age_minutes} -delete 2>&1"
+                f"docker exec {self.container_name} find /tmp -name '{pattern}' -mmin +{max_age_minutes} -delete 2>&1",
             )
             if rc != 0 and stderr:
                 errors.append(f"Cleanup command failed: {stderr}")
 
             # Count files after
             stdout, _, _ = self.ssh_client.execute_command(
-                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'"
+                f"docker exec {self.container_name} sh -c 'find /tmp -name \"{pattern}\" 2>/dev/null | wc -l'",
             )
             files_after = int(stdout.strip()) if stdout.strip().isdigit() else 0
 
@@ -651,6 +652,7 @@ class HealthCheckClient:
         Returns:
             Tuple of (passed, issues) where passed is True if all critical checks pass
             and issues is a list of issue messages
+
         """
         logger.info("Running pre-migration health checks...")
         snapshot = self.get_health_snapshot()
@@ -683,7 +685,7 @@ class HealthCheckClient:
         return True, issues
 
     def run_during_migration_check(
-        self, previous_snapshot: HealthSnapshot | None = None
+        self, previous_snapshot: HealthSnapshot | None = None,
     ) -> dict[str, Any]:
         """Run health checks during migration and check for degradation.
 
@@ -692,6 +694,7 @@ class HealthCheckClient:
 
         Returns:
             Dict with keys: healthy, warnings, temp_files_exceeded
+
         """
         current = self.get_health_snapshot()
         previous = previous_snapshot or self._baseline_snapshot
@@ -700,7 +703,7 @@ class HealthCheckClient:
 
         # Check for errors
         if current.has_errors:
-            for name, check in current.checks.items():
+            for check in current.checks.values():
                 if check.severity == "ERROR" and not check.healthy:
                     warnings.append(check.message)
 

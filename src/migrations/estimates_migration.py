@@ -27,13 +27,13 @@ DAYS_PER_WEEK = 5
 
 @register_entity_types("estimates")
 class EstimatesMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _extract(self) -> ComponentResult:
         """Extract issues for which we have work package mappings."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map.keys()]
+        jira_keys = [str(k) for k in wp_map]
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"issues": {}})
 
@@ -135,7 +135,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
                 # Only enqueue if at least one field present
                 if len(update_rec) > 1:
                     updates.append(update_rec)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
         return ComponentResult(success=True, data={"updates": updates}, mapped_fields_count=len(updates))

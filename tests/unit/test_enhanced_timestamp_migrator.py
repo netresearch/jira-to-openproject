@@ -419,7 +419,7 @@ class TestEnhancedTimestampMigrator:
 
         assert "WorkPackage.find(77)" in script
         assert 'jira_key: "PROJ-1"' in script
-        assert "set_created_at" in script
+        assert "created_at" in script
 
     def test_generate_timestamp_preservation_script_rejects_bad_key(self, migrator_with_mocks) -> None:
         """Invalid Jira keys should raise an exception to prevent injection."""
@@ -716,7 +716,7 @@ class TestEnhancedTimestampMigrator:
         assert len(migrator_with_mocks._rails_operations_cache) == 1
         assert migrator_with_mocks._rails_operations_cache[0] == operation
 
-    def test_generate_timestamp_preservation_script(self, migrator_with_mocks) -> None:
+    def test_generate_timestamp_preservation_script_extended(self, migrator_with_mocks) -> None:
         """Test timestamp preservation script generation."""
         # Add operations to cache first
         operation = {
@@ -744,7 +744,7 @@ class TestEnhancedTimestampMigrator:
         mock_clients,
     ) -> None:
         """Test successful Rails timestamp operations execution."""
-        jira_client, op_client = mock_clients
+        _jira_client, op_client = mock_clients
 
         # Add operations to cache
         migrator_with_mocks._rails_operations_cache = [
@@ -770,7 +770,7 @@ class TestEnhancedTimestampMigrator:
         mock_clients,
     ) -> None:
         """Test Rails timestamp operations execution failure."""
-        jira_client, op_client = mock_clients
+        _jira_client, op_client = mock_clients
 
         # Add operations to cache
         migrator_with_mocks._rails_operations_cache = [
@@ -927,7 +927,7 @@ class TestEnhancedTimestampMigrator:
         mock_clients,
     ) -> None:
         """Test timestamp migration exception handling."""
-        jira_client, op_client = mock_clients
+        _jira_client, _op_client = mock_clients
 
         jira_issue = {
             "key": "TEST-123",

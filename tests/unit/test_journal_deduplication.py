@@ -9,13 +9,11 @@ Tests for three identified issues:
 Issue Reference: https://openproject.sobol.nr/projects/nrs/work_packages/5596731/activity
 """
 
-import json
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
-from src.migrations.resolution_migration import RESOLUTION_CF_NAME, ResolutionMigration
+from src.migrations.resolution_migration import ResolutionMigration
 from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 
 
@@ -255,7 +253,7 @@ class TestDuplicateResolutionPrevention:
         monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
     def test_resolution_migration_does_not_create_duplicate_journal(
-        self, mock_jira_client, mock_op_client
+        self, mock_jira_client, mock_op_client,
     ):
         """Test that resolution migration does NOT create separate journal entries.
 
@@ -285,7 +283,7 @@ class TestDuplicateResolutionPrevention:
         )
 
     def test_resolution_migration_only_sets_cf_value(
-        self, mock_jira_client, mock_op_client
+        self, mock_jira_client, mock_op_client,
     ):
         """Test that resolution migration only sets CF value, no journal creation.
 
@@ -365,9 +363,9 @@ class TestCustomFieldProjectEnablement:
         FIX VERIFIED: Custom fields are created with selective enablement
         via the shared BaseMigration._ensure_wp_custom_field method.
         """
-        from src.migrations.base_migration import BaseMigration
-
         import inspect
+
+        from src.migrations.base_migration import BaseMigration
         source = inspect.getsource(BaseMigration._ensure_wp_custom_field)
 
         assert "is_for_all: false" in source, (
@@ -469,7 +467,7 @@ class TestIntegrationDeduplication:
         # - No "The changes were retracted." phantom entries
         pytest.skip(
             "Integration test for resolution deduplication. "
-            "Requires coordination between audit_trail_migrator and resolution_migration."
+            "Requires coordination between audit_trail_migrator and resolution_migration.",
         )
 
     def test_no_phantom_journals_after_full_migration(self):
@@ -484,7 +482,7 @@ class TestIntegrationDeduplication:
         # - All journals should have either notes OR details (not empty)
         pytest.skip(
             "End-to-end test for phantom journal prevention. "
-            "Requires full migration workflow test."
+            "Requires full migration workflow test.",
         )
 
 

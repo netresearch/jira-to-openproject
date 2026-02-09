@@ -41,7 +41,7 @@ from src.utils.rate_limiter import create_openproject_rate_limiter
 try:
     # Prefer shared logger configured at startup
     from src.config import logger
-except Exception:  # noqa: BLE001
+except Exception:
     # Fallback to local configuration if config logger is unavailable
     logger = configure_logging("INFO", None)
 
@@ -101,6 +101,7 @@ def _validate_model_name(model: str) -> None:
 
     Raises:
         ValueError: If the model name is not in the allowlist or has invalid format
+
     """
     if not _RE_MODEL_NAME.match(model):
         msg = f"Invalid model name format: {model!r}"
@@ -111,7 +112,7 @@ def _validate_model_name(model: str) -> None:
 
 
 def escape_ruby_single_quoted(s: str) -> str:
-    """Escape a string for safe inclusion in a Ruby single-quoted literal.
+    r"""Escape a string for safe inclusion in a Ruby single-quoted literal.
 
     In Ruby single-quoted strings, only two escape sequences are recognized:
     \\' (escaped quote) and \\\\ (escaped backslash). All other characters
@@ -146,7 +147,7 @@ class OpenProjectClient:
     All error handling uses exceptions rather than status dictionaries.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         container_name: str | None = None,
         ssh_host: str | None = None,
@@ -384,15 +385,18 @@ class OpenProjectClient:
 
         result = self.execute_query_to_json_file(script, timeout=180)
         if not isinstance(result, dict):
-            raise QueryExecutionError(f"Unexpected response when ensuring reporting project: {result!r}")
+            msg = f"Unexpected response when ensuring reporting project: {result!r}"
+            raise QueryExecutionError(msg)
         if not result.get("success"):
+            msg = f"Failed to ensure reporting project '{clean_identifier}': {result.get('error')}"
             raise QueryExecutionError(
-                f"Failed to ensure reporting project '{clean_identifier}': {result.get('error')}",
+                msg,
             )
         project_id = int(result.get("id", 0) or 0)
         if project_id <= 0:
+            msg = f"Reporting project '{clean_identifier}' returned invalid id: {project_id}"
             raise QueryExecutionError(
-                f"Reporting project '{clean_identifier}' returned invalid id: {project_id}",
+                msg,
             )
         return project_id
 
@@ -404,11 +408,11 @@ class OpenProjectClient:
         deterministic '/tmp/{base_name}.json' to match test expectations.
         """
         if os.getenv("PYTEST_CURRENT_TEST"):
-            return f"/tmp/{base_name}.json"  # noqa: S108
+            return f"/tmp/{base_name}.json"
         timestamp = int(time.time())
         pid = os.getpid()
         random_suffix = secrets.token_hex(3)
-        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"  # noqa: S108
+        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"
 
     def _create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the script content.
@@ -473,7 +477,7 @@ class OpenProjectClient:
             logger.debug("Transferring script from: %s", abs_path)
 
             # Use just the base filename for the container path
-            container_path = Path("/tmp") / local_path.name  # noqa: S108
+            container_path = Path("/tmp") / local_path.name
 
             self.docker_client.transfer_file_to_container(abs_path, container_path)
 
@@ -498,7 +502,7 @@ class OpenProjectClient:
 
         return container_path
 
-    def _cleanup_script_files(self, files_or_local: Any, remote_path: Path | None = None) -> None:  # noqa: ANN401
+    def _cleanup_script_files(self, files_or_local: Any, remote_path: Path | None = None) -> None:
         """Clean up temporary files after execution.
 
         Two supported modes (for backward compatibility and tests):
@@ -512,7 +516,7 @@ class OpenProjectClient:
                     remote_file = name if isinstance(name, str) else getattr(name, "name", str(name))
                     cmd = f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(f'/tmp/{Path(remote_file).name}')}"
                     self.ssh_client.execute_command(cmd)
-                except Exception as e:  # noqa: BLE001 - Suppress cleanup errors
+                except Exception as e:
                     logger.warning("Cleanup failed for %s: %s", name, e)
             return
 
@@ -523,7 +527,7 @@ class OpenProjectClient:
             if isinstance(local_path, Path) and local_path.exists():
                 local_path.unlink()
                 logger.debug("Cleaned up local script file: %s", local_path)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Non-critical error cleaning up local file: %s", e)
 
         # Clean up remote file
@@ -536,7 +540,7 @@ class OpenProjectClient:
                 ]
                 self.ssh_client.execute_command(" ".join(command))
                 logger.debug("Cleaned up remote script file: %s", remote_path)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Non-critical error cleaning up remote file: %s", e)
 
     def execute(self, script_content: str) -> dict[str, Any]:
@@ -559,10 +563,10 @@ class OpenProjectClient:
         except (json.JSONDecodeError, TypeError):
             return {"result": result}
 
-    def execute_script_with_data(  # noqa: C901, PLR0912, PLR0915
+    def execute_script_with_data(
         self,
         script_content: str,
-        data: Any,  # noqa: ANN401
+        data: Any,
         timeout: int | None = None,
     ) -> dict[str, Any]:
         """Execute a Ruby script in the Rails console with structured input data.
@@ -598,7 +602,7 @@ class OpenProjectClient:
             raise QueryExecutionError(err_msg) from e
 
         # Compose Ruby script with a small header that loads JSON into `input_data`
-        container_data_path = Path("/tmp") / local_data_path.name  # noqa: S108
+        container_data_path = Path("/tmp") / local_data_path.name
         header = f"require 'json'\ninput_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
         full_script = header + script_content
 
@@ -662,7 +666,7 @@ class OpenProjectClient:
 
                     # Normalize output by removing newlines to handle markers split
                     # by terminal width wrapping in tmux pane capture
-                    normalized = output.replace('\n', '').replace('\r', '')
+                    normalized = output.replace("\n", "").replace("\r", "")
 
                     # Check for markers in normalized output (handles line wrapping)
                     # Use rfind to find LAST occurrence (actual JSON output, not command echo)
@@ -675,7 +679,7 @@ class OpenProjectClient:
                             next_char_pos = start_pos + len(unique_start_marker)
                             if next_char_pos < len(normalized):
                                 next_char = normalized[next_char_pos]
-                                if next_char in '[{':  # Actual JSON content
+                                if next_char in "[{":  # Actual JSON content
                                     end_pos = normalized.find(unique_end_marker, next_char_pos)
                                     if end_pos != -1 and end_pos > start_pos:
                                         found_markers = True
@@ -693,7 +697,7 @@ class OpenProjectClient:
             except Exception as e:
                 # Fallback: if Rails console crashed or is unstable (e.g., Reline/IRB errors),
                 # execute via non-interactive runner to avoid TTY/Reline issues.
-                from src.clients.rails_console_client import (  # noqa: PLC0415
+                from src.clients.rails_console_client import (
                     CommandExecutionError,
                     ConsoleNotReadyError,
                     RubyError,
@@ -727,7 +731,7 @@ class OpenProjectClient:
             # Extract JSON payload between unique markers (JSON_OUTPUT_START_{exec_id} / JSON_OUTPUT_END_{exec_id})
             # Normalize output by removing newlines to handle markers split by terminal width wrapping
             # This is safe because JSON from Rails is output on a single line
-            normalized_output = output.replace('\n', '').replace('\r', '')
+            normalized_output = output.replace("\n", "").replace("\r", "")
 
             # Find markers in normalized output - use rfind to get the LAST occurrence
             # (the first occurrence is in the command echo: $j2o_start_marker = '...')
@@ -757,17 +761,16 @@ class OpenProjectClient:
                 json_str = output[start_idx + len(unique_start_marker) : end_idx].strip()
 
                 # Fallback parsing with sanitization to guard against stray control chars from IRB/tmux
-                def _try_parse(s: str) -> Any:  # noqa: ANN401
+                def _try_parse(s: str) -> Any:
                     return json.loads(s)
 
                 def _sanitize_control_chars(s: str) -> str:
                     s = _RE_ANSI_ESCAPE.sub("", s)
                     s = _RE_OSC_ESCAPE.sub("", s)
                     s = _RE_OTHER_ESCAPE.sub("", s)
-                    s = _RE_CTRL_CHARS.sub("", s)
-                    return s
+                    return _RE_CTRL_CHARS.sub("", s)
 
-                def _extract_first_json_block(s: str) -> str | None:  # noqa: C901
+                def _extract_first_json_block(s: str) -> str | None:
                     # Attempt to isolate the first balanced JSON object/array
                     for i, ch in enumerate(s):
                         if ch in "{[":
@@ -800,10 +803,10 @@ class OpenProjectClient:
                 json_str = _sanitize_control_chars(json_str)
                 try:
                     parsed = _try_parse(json_str)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     try:
                         parsed = _try_parse(json_str)  # Already sanitized
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         candidate = _extract_first_json_block(json_str)
                         if candidate is None:
                             candidate = _extract_first_json_block(_sanitize_control_chars(json_str)) or json_str
@@ -952,7 +955,7 @@ class OpenProjectClient:
 
         # Use provided timeout or default to 30 seconds for complex operations
         effective_timeout = timeout if timeout is not None else 30
-        return self.rails_client._send_command_to_tmux(  # noqa: SLF001
+        return self.rails_client._send_command_to_tmux(
             f"puts ({query})",
             effective_timeout,
         )
@@ -977,7 +980,7 @@ class OpenProjectClient:
         try:
             # Always prefer file-based execution for reliability
             _ts = int(__import__("time").time())
-            container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"  # noqa: S108
+            container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"
             return self.execute_large_query_to_json_file(
                 query,
                 container_file=container_file,
@@ -990,10 +993,10 @@ class OpenProjectClient:
             logger.exception("Error in execute_query_to_json_file")
             raise QueryExecutionError(str(e)) from e
 
-    def execute_large_query_to_json_file(  # noqa: C901, PLR0912, PLR0915
+    def execute_large_query_to_json_file(
         self,
         query: str,
-        container_file: str = "/tmp/j2o_query.json",  # noqa: S108
+        container_file: str = "/tmp/j2o_query.json",
         timeout: int | None = None,
     ) -> dict[str, Any]:
         """Execute a Rails query by writing JSON to a container file, then read it back.
@@ -1097,7 +1100,7 @@ class OpenProjectClient:
         use_runner = (script_lines >= max_lines) or (len(ruby_script) >= char_threshold)
 
         if use_runner:
-            runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
+            runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
             local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
             local_tmp.parent.mkdir(parents=True, exist_ok=True)
             with local_tmp.open("w", encoding="utf-8") as f:
@@ -1156,7 +1159,7 @@ class OpenProjectClient:
                         "Rails console failed during large query (%s); falling back to rails runner",
                         type(e).__name__,
                     )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     with local_tmp.open("w", encoding="utf-8") as f:
@@ -1278,7 +1281,7 @@ class OpenProjectClient:
 
     # Removed rails runner helper; all scripts go through persistent tmux console
 
-    def _execute_batched_query(  # noqa: C901, PLR0912, PLR0915
+    def _execute_batched_query(
         self,
         model_name: str,
         timeout: int | None = None,
@@ -1320,7 +1323,7 @@ class OpenProjectClient:
                 else:
                     return []
 
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug(
                     "Simple query failed, falling back to batched approach",
                 )
@@ -1395,7 +1398,7 @@ class OpenProjectClient:
             # Should not reach here; safe default
             return []
 
-    def _parse_rails_output(self, result_output: str) -> object:  # noqa: C901, PLR0911, PLR0912, PLR0915
+    def _parse_rails_output(self, result_output: str) -> object:
         """Parse Rails console output to extract JSON or scalar values.
 
         Handles various Rails console output formats including:
@@ -1427,7 +1430,7 @@ class OpenProjectClient:
                 text = ansi_re.sub("", text)
                 # 2) Remove remaining control chars (except \t, \n, \r)
                 text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug("ANSI/control char sanitization failed; continuing with raw text")
 
             # If it's plain JSON, parse immediately
@@ -1488,7 +1491,7 @@ class OpenProjectClient:
                     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
                     try:
                         return json.loads(cleaned)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         raise JsonParseError(str(e)) from e
             lb = text.find("{")
             rb = text.rfind("}")
@@ -1499,7 +1502,7 @@ class OpenProjectClient:
                     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
                     try:
                         return json.loads(cleaned)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         raise JsonParseError(str(e)) from e
 
             # Special case: prompt + JSON + => nil (common Rails console pattern)
@@ -1542,7 +1545,7 @@ class OpenProjectClient:
                 return t[1:-1]
 
             _msg = "Unable to parse Rails console output"
-            raise JsonParseError(_msg)  # noqa: TRY301
+            raise JsonParseError(_msg)
 
         except JsonParseError:
             # Re-raise JsonParseError
@@ -1551,7 +1554,7 @@ class OpenProjectClient:
             # Normalize any JSON decoding errors to JsonParseError as tests expect
             raise JsonParseError(str(e)) from e
         except Exception as e:
-            logger.exception("Failed to process query result: %s", repr(e))  # noqa: TRY401
+            logger.exception("Failed to process query result: %s", repr(e))
             logger.exception("Raw output: %s", result_output[:200])
             # Raise an exception instead of returning None to ensure proper error handling
             msg = f"Failed to parse Rails console output: {e}"
@@ -1609,12 +1612,12 @@ class OpenProjectClient:
         query = f'puts "{start_marker}"; puts {model}.count; puts "{end_marker}"'
 
         # Get tmux target
-        target = self.rails_client._get_target()  # noqa: SLF001
+        target = self.rails_client._get_target()
         tmux = shutil.which("tmux") or "tmux"
 
         # Send the command
-        escaped_command = self.rails_client._escape_command(query)  # noqa: SLF001
-        subprocess.run(  # noqa: S603
+        escaped_command = self.rails_client._escape_command(query)
+        subprocess.run(
             [tmux, "send-keys", "-t", target, escaped_command, "Enter"],
             capture_output=True,
             text=True,
@@ -1628,7 +1631,7 @@ class OpenProjectClient:
 
         while time.time() - start_time < max_wait:
             time.sleep(0.3)
-            cap = subprocess.run(  # noqa: S603
+            cap = subprocess.run(
                 [tmux, "capture-pane", "-p", "-S", "-100", "-t", target],
                 capture_output=True,
                 text=True,
@@ -1694,7 +1697,8 @@ class OpenProjectClient:
             result = self.execute_json_query(ruby)
             if isinstance(result, dict) and result.get("id"):
                 return result
-            raise QueryExecutionError("Failed ensuring WorkPackage custom field")
+            msg = "Failed ensuring WorkPackage custom field"
+            raise QueryExecutionError(msg)
         except Exception as e:
             msg = f"Failed to ensure custom field '{name}': {e}"
             raise QueryExecutionError(msg) from e
@@ -1773,7 +1777,8 @@ class OpenProjectClient:
             result = self.execute_json_query(ruby)
             if isinstance(result, dict) and result.get("id"):
                 return result
-            raise QueryExecutionError(f"Failed ensuring {cf_type} '{name}'")
+            msg = f"Failed ensuring {cf_type} '{name}'"
+            raise QueryExecutionError(msg)
         except Exception as e:
             msg = f"Failed to ensure custom field '{name}' ({cf_type}): {e}"
             raise QueryExecutionError(msg) from e
@@ -1806,7 +1811,8 @@ class OpenProjectClient:
             result = self.execute_json_query(ruby)
             if isinstance(result, dict):
                 return {"removed": int(result.get("removed", 0) or 0)}
-            raise QueryExecutionError("Unexpected response removing custom field")
+            msg = "Unexpected response removing custom field"
+            raise QueryExecutionError(msg)
         except Exception as e:
             msg = f"Failed to remove custom field '{name}'"
             raise QueryExecutionError(msg) from e
@@ -1829,7 +1835,7 @@ class OpenProjectClient:
                 ensured["work_package"].append(
                     self.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField"),
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning("Failed ensuring WP CF %s: %s", name, e)
 
         # NOTE: This OpenProject instance does not support Project custom fields via this path.
@@ -1844,7 +1850,7 @@ class OpenProjectClient:
         ):
             try:
                 ensured["user"].append(self.ensure_custom_field(name, field_format=fmt, cf_type="UserCustomField"))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning("Failed ensuring User CF %s: %s", name, e)
 
         for name, fmt in (
@@ -1859,7 +1865,7 @@ class OpenProjectClient:
                 ensured["time_entry"].append(
                     self.ensure_custom_field(name, field_format=fmt, cf_type="TimeEntryCustomField"),
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning("Failed ensuring TE CF %s: %s", name, e)
 
         return ensured
@@ -2007,7 +2013,8 @@ class OpenProjectClient:
 
         """
         if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
-            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+            msg = f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}"
+            raise ValueError(msg)
 
         # Ensure infrastructure exists
         project_id = self.ensure_j2o_migration_project()
@@ -2016,7 +2023,8 @@ class OpenProjectClient:
 
         type_id = type_ids.get(entity_type)
         if not type_id:
-            raise QueryExecutionError(f"Failed to get type ID for {entity_type}")
+            msg = f"Failed to get type ID for {entity_type}"
+            raise QueryExecutionError(msg)
 
         # Build work package subject (unique identifier for this mapping)
         subject = f"{entity_type.upper()}: {jira_key}"
@@ -2032,7 +2040,7 @@ class OpenProjectClient:
             "begin\n"
             f"  project = Project.find({project_id})\n"
             f"  wp_type = Type.find({type_id})\n"
-            f"  subject = {repr(subject)}\n"
+            f"  subject = {subject!r}\n"
             "  status = Status.default || Status.first\n"
             "  priority = IssuePriority.default || IssuePriority.first\n"
             "  # Find existing or create new\n"
@@ -2086,7 +2094,8 @@ class OpenProjectClient:
 
         """
         if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
-            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+            msg = f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}"
+            raise ValueError(msg)
 
         # Get the project and type IDs (may not exist if never recorded)
         try:
@@ -2192,7 +2201,8 @@ class OpenProjectClient:
 
         """
         if entity_type not in self.J2O_PROVENANCE_ENTITY_TYPES:
-            raise ValueError(f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}")
+            msg = f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}"
+            raise ValueError(msg)
 
         if not mappings:
             return {"success": 0, "failed": 0, "errors": []}
@@ -2221,7 +2231,7 @@ class OpenProjectClient:
                 if jira_name:
                     subject = f"{subject} ({jira_name})"
                 ruby_mappings.append(
-                    f"  {{ subject: {repr(subject)}, op_entity_id: {op_entity_id} }}"
+                    f"  {{ subject: {subject!r}, op_entity_id: {op_entity_id} }}",
                 )
 
         if not ruby_mappings:
@@ -2261,7 +2271,7 @@ class OpenProjectClient:
             "      success += 1\n"
             "    rescue => e\n"
             "      failed += 1\n"
-            "      errors << \"#{m[:subject]}: #{e.message}\"\n"
+            '      errors << "#{m[:subject]}: #{e.message}"\n'
             "    end\n"
             "  end\n"
             "  { success: success, failed: failed, errors: errors.first(10) }\n"
@@ -2285,7 +2295,8 @@ class OpenProjectClient:
             result = self.execute_json_query(ruby)
             if isinstance(result, list):
                 return result
-            raise QueryExecutionError("Unexpected OpenProject role payload")
+            msg = "Unexpected OpenProject role payload"
+            raise QueryExecutionError(msg)
         except Exception as e:
             msg = f"Failed to fetch OpenProject roles: {e}"
             raise QueryExecutionError(msg) from e
@@ -2301,7 +2312,8 @@ class OpenProjectClient:
             result = self.execute_json_query(ruby)
             if isinstance(result, list):
                 return result
-            raise QueryExecutionError("Unexpected OpenProject group payload")
+            msg = "Unexpected OpenProject group payload"
+            raise QueryExecutionError(msg)
         except Exception as e:
             msg = f"Failed to fetch OpenProject groups: {e}"
             raise QueryExecutionError(msg) from e
@@ -2320,8 +2332,8 @@ class OpenProjectClient:
             with payload_path.open("w", encoding="utf-8") as handle:
                 json.dump(assignments, handle)
 
-            container_input = Path("/tmp") / payload_path.name  # noqa: S108
-            container_output = Path("/tmp") / (payload_path.name + ".result")  # noqa: S108
+            container_input = Path("/tmp") / payload_path.name
+            container_output = Path("/tmp") / (payload_path.name + ".result")
             self.transfer_file_to_container(payload_path, container_input)
 
             ruby = (
@@ -2381,8 +2393,8 @@ class OpenProjectClient:
             with payload_path.open("w", encoding="utf-8") as handle:
                 json.dump(assignments, handle)
 
-            container_input = Path("/tmp") / payload_path.name  # noqa: S108
-            container_output = Path("/tmp") / (payload_path.name + ".result")  # noqa: S108
+            container_input = Path("/tmp") / payload_path.name
+            container_output = Path("/tmp") / (payload_path.name + ".result")
             self.transfer_file_to_container(payload_path, container_input)
 
             ruby = (
@@ -2516,8 +2528,8 @@ end
             with payload_path.open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
 
-            container_payload = Path("/tmp") / payload_path.name  # noqa: S108
-            container_output = Path("/tmp") / (payload_path.name + ".result")  # noqa: S108
+            container_payload = Path("/tmp") / payload_path.name
+            container_output = Path("/tmp") / (payload_path.name + ".result")
             self.transfer_file_to_container(payload_path, container_payload)
 
             ruby = (
@@ -2576,12 +2588,12 @@ end
         local_path: Path,
     ) -> dict[str, Any]:
         """Helper to read JSON results from container with cat fallback."""
-        for attempt in range(10):
+        for _attempt in range(10):
             try:
                 stdout, _stderr, rc = self.docker_client.execute_command(
                     f"cat {container_path.as_posix()}",
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 stdout, rc = "", 1
 
             if rc == 0 and stdout.strip():
@@ -2882,7 +2894,7 @@ JSON_DATA
         try:
             result = self.execute_query_to_json_file(script)
             return bool(isinstance(result, dict) and result.get("success"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning("Failed to upsert project origin attributes for %s: %s", project_id, e)
             return False
 
@@ -2956,7 +2968,7 @@ JSON_DATA
         try:
             result = self.execute_query_to_json_file(ruby)
             return bool(isinstance(result, dict) and result.get("success"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning("Failed to upsert project attribute %s for %s: %s", name, project_id, e)
             return False
 
@@ -2975,6 +2987,7 @@ JSON_DATA
 
         Returns:
             Dict with 'success': bool, 'processed': int, 'failed': int
+
         """
         if not attributes:
             return {"success": True, "processed": 0, "failed": 0}
@@ -3066,7 +3079,7 @@ J2O_DATA
             if isinstance(result, dict):
                 return result
             return {"success": False, "processed": 0, "failed": len(attributes), "error": str(result)}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning("Bulk upsert project attributes failed: %s", e)
             return {"success": False, "processed": 0, "failed": len(attributes), "error": str(e)}
 
@@ -3090,7 +3103,7 @@ J2O_DATA
         try:
             result = self.execute_query_to_json_file(ruby)
             return bool(isinstance(result, dict) and result.get("success"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning("Failed to rename project attribute %s -> %s: %s", old_name, new_name, e)
             return False
 
@@ -3125,7 +3138,8 @@ J2O_DATA
         """
         data = self.execute_large_query_to_json_file(ruby, timeout=120)
         if not isinstance(data, list):
-            raise QueryExecutionError("Invalid snapshot from OpenProject")
+            msg = "Invalid snapshot from OpenProject"
+            raise QueryExecutionError(msg)
         return data
 
     def set_wp_last_update_date_by_keys(
@@ -3187,7 +3201,7 @@ J2O_DATA
         try:
             result = self.execute_query_to_json_file(ruby)
             return result if isinstance(result, dict) else {"updated": 0, "examined": 0}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning(
                 "Failed to set J2O Last Update Date for project %s: %s",
                 project_id,
@@ -3195,7 +3209,7 @@ J2O_DATA
             )
             return {"updated": 0, "examined": 0, "error": str(e)}
 
-    def bulk_create_records(  # noqa: PLR0915
+    def bulk_create_records(
         self,
         model: str,
         records: list[dict[str, Any]],
@@ -3241,7 +3255,7 @@ J2O_DATA
             raise QueryExecutionError(_msg) from e
 
         # Transfer JSON to container
-        container_json = Path("/tmp") / local_json.name  # noqa: S108
+        container_json = Path("/tmp") / local_json.name
         self.transfer_file_to_container(local_json, container_json)
 
         # BUG #32 FIX: Load journal creation .rb file content as template for WorkPackage migrations
@@ -3276,11 +3290,11 @@ J2O_DATA
                 result_name = base + unique_suffix
         else:
             result_name = f"bulk_result_{model.lower()}_{int(time.time())}_{os.getpid()}_{os.urandom(3).hex()}.json"
-        container_result = Path("/tmp") / result_name  # noqa: S108
+        container_result = Path("/tmp") / result_name
         local_result = temp_dir / result_name
 
         # Progress file within the container, mirrored locally for monitoring
-        container_progress = Path("/tmp") / (result_name + ".progress")  # noqa: S108
+        container_progress = Path("/tmp") / (result_name + ".progress")
         local_progress = local_result.with_suffix(local_result.suffix + ".progress")
 
         # Compose minimal Ruby script
@@ -3528,7 +3542,7 @@ J2O_DATA
 
         output: str | None = None
         if use_runner:
-            runner_script_path = f"/tmp/j2o_bulk_{os.urandom(4).hex()}.rb"  # noqa: S108
+            runner_script_path = f"/tmp/j2o_bulk_{os.urandom(4).hex()}.rb"
             local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
             local_tmp.parent.mkdir(parents=True, exist_ok=True)
             with local_tmp.open("w", encoding="utf-8") as f:
@@ -3545,8 +3559,9 @@ J2O_DATA
                     )
                 except Exception as e:
                     if not allow_runner_fallback:
+                        msg = "Rails console execution failed and runner fallback is disabled"
                         raise QueryExecutionError(
-                            "Rails console execution failed and runner fallback is disabled",
+                            msg,
                         ) from e
                     runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     try:
@@ -3566,10 +3581,11 @@ J2O_DATA
                                 f'pkill -f "rails runner {runner_script_path}" || true',
                                 timeout=10,
                             )
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             pass
+                        msg = f"rails runner timed out for {runner_script_path}"
                         raise QueryExecutionError(
-                            f"rails runner timed out for {runner_script_path}",
+                            msg,
                         ) from te
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -3595,10 +3611,11 @@ J2O_DATA
                             f'pkill -f "rails runner {runner_script_path}" || true',
                             timeout=10,
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
+                    msg = f"rails runner timed out for {runner_script_path}"
                     raise QueryExecutionError(
-                        f"rails runner timed out for {runner_script_path}",
+                        msg,
                     ) from te
                 if rc != 0:
                     q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -3645,7 +3662,7 @@ J2O_DATA
                 except FileNotFoundError:
                     # Race: file appeared in stat but not yet readable; keep polling
                     pass
-                except Exception:  # noqa: BLE001
+                except Exception:
                     # Fall back to next poll iteration
                     pass
 
@@ -3661,7 +3678,7 @@ J2O_DATA
                         logger.error("Bulk runner error: %s", err_txt)
                     except Exception:
                         pass
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             # Probe progress file occasionally to provide live feedback and detect stalls
@@ -3708,8 +3725,9 @@ J2O_DATA
                                         )
                                 except Exception:
                                     pass
+                                msg = f"bulk_create_records stalled for {stall_seconds}s without progress"
                                 raise QueryExecutionError(
-                                    f"bulk_create_records stalled for {stall_seconds}s without progress",
+                                    msg,
                                 )
                             last_heartbeat_logged = waited
                         except Exception:
@@ -3786,7 +3804,7 @@ J2O_DATA
             raise RecordNotFoundError(msg)
         return result
 
-    def _retry_with_exponential_backoff(  # noqa: PLR0913
+    def _retry_with_exponential_backoff(
         self,
         operation: Callable[[], object],
         operation_name: str,
@@ -3881,7 +3899,7 @@ J2O_DATA
         raise QueryExecutionError(_msg)
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for batch record lookups
-    def batch_find_records(  # noqa: C901
+    def batch_find_records(
         self,
         model: str,
         ids: list[int | str],
@@ -3947,7 +3965,7 @@ J2O_DATA
                                 original_id = original_id_map[record_id_str]
                                 results[original_id] = record
 
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning(
                     "Failed to fetch batch of %s records (IDs %s) after retries: %s",
                     model,
@@ -3967,7 +3985,7 @@ J2O_DATA
 
         return results
 
-    def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:  # noqa: C901
+    def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:
         """Create a new record.
 
         Args:
@@ -4056,7 +4074,7 @@ J2O_DATA
                         if found_record:
                             logger.info("Successfully found created %s record", model)
                             return found_record
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.debug("Could not find created record: %s", e)
 
                 # If all else fails, create a minimal response
@@ -4068,7 +4086,7 @@ J2O_DATA
                     "attributes": attributes,
                 }
 
-            return result  # noqa: TRY300
+            return result
 
         except RubyError as e:
             msg = f"Failed to create {model}."
@@ -4217,7 +4235,7 @@ J2O_DATA
             # Prefer file-based for multi-record results to avoid console artifacts
             data = self.execute_large_query_to_json_file(
                 ruby_expr,
-                container_file=f"/tmp/j2o_{model.lower()}_records.json",  # noqa: S108
+                container_file=f"/tmp/j2o_{model.lower()}_records.json",
                 timeout=60,
             )
             if data is None:
@@ -4359,7 +4377,7 @@ J2O_DATA
             logger.info("Retrieved %d users from OpenProject", len(self._users_cache))
             return self._users_cache
 
-    def get_user(self, user_identifier: int | str) -> dict[str, Any]:  # noqa: C901, PLR0912
+    def get_user(self, user_identifier: int | str) -> dict[str, Any]:
         """Get a single user by id, email, or login.
 
         This is a convenience wrapper over ``find_record`` and existing helpers,
@@ -4383,7 +4401,7 @@ J2O_DATA
                 identifier = user_identifier.strip()
                 if not identifier:
                     msg = "Empty user identifier"
-                    raise ValueError(msg)  # noqa: TRY301
+                    raise ValueError(msg)
             else:
                 identifier = int(user_identifier)
 
@@ -4402,7 +4420,7 @@ J2O_DATA
                                 return user
                             if isinstance(uid, str) and uid.isdigit() and int(uid) == identifier:
                                 return user
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             logger.debug("Malformed user cache entry encountered")
                             continue
 
@@ -4430,7 +4448,7 @@ J2O_DATA
             email = user.get("mail") or user.get("email")
             if isinstance(email, str):
                 self._users_by_email_cache[email.lower()] = user
-            return user  # noqa: TRY300
+            return user
 
         except RecordNotFoundError:
             raise
@@ -4479,7 +4497,7 @@ J2O_DATA
                 return user
 
             msg = f"User with email '{email}' not found"
-            raise RecordNotFoundError(msg)  # noqa: TRY301
+            raise RecordNotFoundError(msg)
 
         except RecordNotFoundError:
             raise  # Re-raise RecordNotFoundError
@@ -4522,7 +4540,7 @@ J2O_DATA
             # Handle nil value from Ruby
             if result is None:
                 msg = f"Custom field '{name}' not found"
-                raise RecordNotFoundError(msg)  # noqa: TRY301
+                raise RecordNotFoundError(msg)
 
             # Handle integer result
             if isinstance(result, int):
@@ -4537,7 +4555,7 @@ J2O_DATA
                     raise QueryExecutionError(msg) from None
 
             msg = f"Unexpected result type: {type(result)}"
-            raise QueryExecutionError(msg)  # noqa: TRY301
+            raise QueryExecutionError(msg)
 
         except RecordNotFoundError:
             raise  # Re-raise RecordNotFoundError
@@ -4592,7 +4610,7 @@ J2O_DATA
             msg = "Failed to get custom fields."
             raise QueryExecutionError(msg) from e
 
-    def get_statuses(self) -> list[dict[str, Any]]:  # noqa: C901, PLR0912, PLR0915
+    def get_statuses(self) -> list[dict[str, Any]]:
         """Get all statuses from OpenProject.
 
         Returns:
@@ -4615,13 +4633,14 @@ J2O_DATA
             try:
                 # Skip console attempt entirely if forced runner mode
                 if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
-                    from src.clients.rails_console_client import ConsoleNotReadyError  # noqa: PLC0415
-                    raise ConsoleNotReadyError("Forced runner mode via J2O_FORCE_RAILS_RUNNER")
+                    from src.clients.rails_console_client import ConsoleNotReadyError
+                    msg = "Forced runner mode via J2O_FORCE_RAILS_RUNNER"
+                    raise ConsoleNotReadyError(msg)
                 output = self.rails_client.execute(write_query, suppress_output=True)
                 self._check_console_output_for_errors(output or "", context="get_statuses")
                 logger.debug("Successfully executed statuses write command")
             except Exception as e:
-                from src.clients.rails_console_client import (  # noqa: PLC0415
+                from src.clients.rails_console_client import (
                     CommandExecutionError,
                     ConsoleNotReadyError,
                     RubyError,
@@ -4635,7 +4654,7 @@ J2O_DATA
                         "Rails console failed for statuses (%s); falling back to rails runner",
                         type(e).__name__,
                     )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     ruby_runner = (
@@ -4709,7 +4728,7 @@ J2O_DATA
             msg = "Failed to get statuses."
             raise QueryExecutionError(msg) from e
 
-    def get_work_package_types(self) -> list[dict[str, Any]]:  # noqa: C901, PLR0912, PLR0915
+    def get_work_package_types(self) -> list[dict[str, Any]]:
         """Get all work package types from OpenProject.
 
         Returns:
@@ -4734,12 +4753,13 @@ J2O_DATA
             try:
                 # Skip console attempt entirely if forced runner mode
                 if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
-                    from src.clients.rails_console_client import ConsoleNotReadyError  # noqa: PLC0415
-                    raise ConsoleNotReadyError("Forced runner mode via J2O_FORCE_RAILS_RUNNER")
+                    from src.clients.rails_console_client import ConsoleNotReadyError
+                    msg = "Forced runner mode via J2O_FORCE_RAILS_RUNNER"
+                    raise ConsoleNotReadyError(msg)
                 self.rails_client.execute(write_query, suppress_output=True)
                 logger.debug("Successfully executed work package types write command")
             except Exception as e:
-                from src.clients.rails_console_client import (  # noqa: PLC0415
+                from src.clients.rails_console_client import (
                     CommandExecutionError,
                     ConsoleNotReadyError,
                     RubyError,
@@ -4752,7 +4772,7 @@ J2O_DATA
                         "Rails console failed for work package types (%s); falling back to rails runner",
                         type(e).__name__,
                     )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     ruby_runner = (
@@ -4826,7 +4846,7 @@ J2O_DATA
             msg = "Failed to get work package types."
             raise QueryExecutionError(msg) from e
 
-    def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:  # noqa: C901, PLR0915, PLR0912
+    def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:
         """Get projects from OpenProject using file-based approach.
 
         Args:
@@ -4871,7 +4891,7 @@ J2O_DATA
                 self._check_console_output_for_errors(out or "", context="get_projects")
                 logger.debug("Successfully executed projects write command")
             except Exception as e:
-                from src.clients.rails_console_client import (  # noqa: PLC0415
+                from src.clients.rails_console_client import (
                     CommandExecutionError,
                     ConsoleNotReadyError,
                     RubyError,
@@ -4884,7 +4904,7 @@ J2O_DATA
                         "Rails console failed for projects (%s); falling back to rails runner",
                         type(e).__name__,
                     )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"  # noqa: S108
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
                     local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     top_selector_line = (
@@ -4925,7 +4945,7 @@ J2O_DATA
                     stderr,
                 )
                 msg = f"SSH command failed with code {returncode}: {stderr}"
-                raise QueryExecutionError(msg)  # noqa: TRY301
+                raise QueryExecutionError(msg)
 
             file_content = stdout.strip()
             logger.debug(
@@ -4954,7 +4974,7 @@ J2O_DATA
                     str(result)[:200],
                 )
                 msg = f"Invalid projects data format - expected list, got {type(result)}"
-                raise QueryExecutionError(msg)  # noqa: TRY301
+                raise QueryExecutionError(msg)
 
             # Validate and clean project data
             validated_projects = []
@@ -4995,7 +5015,7 @@ J2O_DATA
                 "Retrieved %d projects using file-based method",
                 len(validated_projects),
             )
-            return validated_projects  # noqa: TRY300
+            return validated_projects
 
         except Exception as e:
             logger.exception("Failed to get projects using file-based method")
@@ -5151,7 +5171,7 @@ J2O_DATA
         try:
             result = self.execute_large_query_to_json_file(
                 query,
-                container_file="/tmp/j2o_time_entry_activities.json",  # noqa: S108
+                container_file="/tmp/j2o_time_entry_activities.json",
                 timeout=60,
             )
             return result if isinstance(result, list) else []
@@ -5159,7 +5179,7 @@ J2O_DATA
             msg = f"Failed to retrieve time entry activities: {e}"
             raise QueryExecutionError(msg) from e
 
-    def create_time_entry(  # noqa: C901
+    def create_time_entry(
         self,
         time_entry_data: dict[str, Any],
     ) -> dict[str, Any] | None:
@@ -5306,7 +5326,7 @@ J2O_DATA
                 return result
 
             logger.warning("Unexpected time entry creation result: %s", result)
-            return None  # noqa: TRY300
+            return None
 
         except Exception as e:
             msg = f"Failed to create time entry: {e}"
@@ -5358,7 +5378,7 @@ J2O_DATA
 
         try:
             # Use a unique container file to avoid collisions across concurrent calls
-            unique_name = f"/tmp/j2o_time_entries_{os.getpid()}_{int(time.time())}_{os.urandom(2).hex()}.json"  # noqa: S108
+            unique_name = f"/tmp/j2o_time_entries_{os.getpid()}_{int(time.time())}_{os.urandom(2).hex()}.json"
             result = self.execute_large_query_to_json_file(
                 query,
                 container_file=unique_name,
@@ -5522,6 +5542,7 @@ result.to_json
 
         Returns:
             Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
+
         """
         if not watchers:
             return {"success": True, "created": 0, "skipped": 0, "failed": 0}
@@ -5596,7 +5617,7 @@ J2O_DATA
             if isinstance(result, dict):
                 return result
             return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(result)}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Bulk add watchers failed: %s", e)
             return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(e)}
 
@@ -5614,6 +5635,7 @@ J2O_DATA
 
         Returns:
             Dict with 'success': bool, 'updated': int, 'failed': int
+
         """
         if not cf_values:
             return {"success": True, "updated": 0, "failed": 0}
@@ -5681,7 +5703,7 @@ J2O_DATA
             if isinstance(result, dict):
                 return result
             return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(result)}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Bulk set WP CF values failed: %s", e)
             return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(e)}
 
@@ -5700,6 +5722,7 @@ J2O_DATA
 
         Returns:
             True if successful, False otherwise
+
         """
         # Escape content for Ruby single-quoted string
         safe_content = escape_ruby_single_quoted(content).replace("\n", "\\n")
@@ -5738,7 +5761,7 @@ J2O_DATA
             if isinstance(result, dict):
                 return result.get("success", False)
             return False
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to upsert WP description section: %s", e)
             return False
 
@@ -5756,6 +5779,7 @@ J2O_DATA
 
         Returns:
             Dict with 'success': bool, 'updated': int, 'failed': int
+
         """
         if not sections:
             return {"success": True, "updated": 0, "failed": 0}
@@ -5827,7 +5851,7 @@ J2O_DATA
             if isinstance(result, dict):
                 return result
             return {"success": False, "updated": 0, "failed": len(sections), "error": str(result)}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Bulk upsert WP description sections failed: %s", e)
             return {"success": False, "updated": 0, "failed": len(sections), "error": str(e)}
 
@@ -5844,6 +5868,7 @@ J2O_DATA
 
         Returns:
             Created journal data or None on failure
+
         """
         comment = activity_data.get("comment", {})
         if isinstance(comment, dict):
@@ -5876,7 +5901,7 @@ J2O_DATA
                 return result
             logger.debug("Failed to create activity: %s", result)
             return None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("Failed to create activity for WP#%d: %s", work_package_id, e)
             return None
 
@@ -5894,6 +5919,7 @@ J2O_DATA
 
         Returns:
             Dict with 'success': bool, 'created': int, 'failed': int
+
         """
         if not activities:
             return {"success": True, "created": 0, "failed": 0}
@@ -5965,7 +5991,7 @@ J2O_DATA
             if isinstance(result, dict):
                 return result
             return {"success": False, "created": 0, "failed": len(activities), "error": str(result)}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Bulk create WP activities failed: %s", e)
             return {"success": False, "created": 0, "failed": len(activities), "error": str(e)}
 
@@ -5986,11 +6012,11 @@ J2O_DATA
         try:
             result = self.execute_large_query_to_json_file(
                 query,
-                container_file="/tmp/j2o_find_relation.json",  # noqa: S108
+                container_file="/tmp/j2o_find_relation.json",
                 timeout=30,
             )
             return result if isinstance(result, dict) else None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to find relation: %s", e)
             return None
 
@@ -6035,7 +6061,7 @@ J2O_DATA
                     return None
                 return result
             logger.warning("Unexpected relation creation result: %s", result)
-            return None  # noqa: TRY300
+            return None
         except Exception as e:
             msg = f"Failed to create relation: {e}"
             raise QueryExecutionError(msg) from e
@@ -6054,6 +6080,7 @@ J2O_DATA
 
         Returns:
             Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
+
         """
         if not relations:
             return {"success": True, "created": 0, "skipped": 0, "failed": 0}
@@ -6121,11 +6148,11 @@ J2O_DATA
             if isinstance(result, dict):
                 return result
             return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(result)}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Bulk create relations failed: %s", e)
             return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(e)}
 
-    def batch_create_time_entries(  # noqa: C901
+    def batch_create_time_entries(
         self,
         time_entries: list[dict[str, Any]],
     ) -> dict[str, Any]:
@@ -6192,11 +6219,11 @@ J2O_DATA
             json.dump(entries_data, f)
 
         # Transfer JSON to container and define result path
-        container_json = Path("/tmp") / local_json.name  # noqa: S108
+        container_json = Path("/tmp") / local_json.name
         self.transfer_file_to_container(local_json, container_json)
 
         result_name = f"bulk_result_time_entries_{os.urandom(3).hex()}.json"
-        container_result = Path("/tmp") / result_name  # noqa: S108
+        container_result = Path("/tmp") / result_name
         local_result = temp_dir / result_name
 
         # Build Ruby runner that writes results JSON to file via helper assembly
@@ -6288,7 +6315,7 @@ J2O_DATA
                     "require 'logger'",
                     *header_lines,
                     *ruby_lines,
-                ]
+                ],
             )
             + "\n"
         )
@@ -6307,7 +6334,7 @@ J2O_DATA
             try:
                 self.transfer_file_from_container(container_result, local_result)
                 break
-            except Exception:  # noqa: BLE001
+            except Exception:
                 time.sleep(poll_interval)
                 waited += poll_interval
 
@@ -6603,7 +6630,7 @@ J2O_DATA
                 return True
             logger.warning("Failed to enable modules on project %s: %s", project_id, result)
             return False
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Exception enabling modules on project %s: %s", project_id, e)
             return False
 
@@ -6620,6 +6647,7 @@ J2O_DATA
 
         Returns:
             Dict with 'success': bool, 'processed': int, 'failed': int
+
         """
         if not project_modules:
             return {"success": True, "processed": 0, "failed": 0}
@@ -6679,7 +6707,7 @@ J2O_DATA
             if isinstance(result, dict):
                 return result
             return {"success": False, "processed": 0, "failed": len(data), "error": str(result)}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Bulk enable project modules failed: %s", e)
             return {"success": False, "processed": 0, "failed": len(data), "error": str(e)}
 
@@ -6859,7 +6887,7 @@ J2O_DATA
         return None
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for user email lookups
-    def batch_get_users_by_emails(  # noqa: C901
+    def batch_get_users_by_emails(
         self,
         emails: list[str],
         batch_size: int | None = None,
@@ -6900,7 +6928,7 @@ J2O_DATA
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",  # noqa: PLR2004
+                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",
                 )
 
                 if batch_results:
@@ -6915,7 +6943,7 @@ J2O_DATA
                             if email in batch_emails:
                                 results[email] = record
 
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning(
                     "Failed to fetch batch of user emails %s after retries: %s",
                     batch_emails,
@@ -6930,7 +6958,7 @@ J2O_DATA
         return results
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for project identifier lookups
-    def batch_get_projects_by_identifiers(  # noqa: C901
+    def batch_get_projects_by_identifiers(
         self,
         identifiers: list[str],
         batch_size: int | None = None,
@@ -6976,7 +7004,7 @@ J2O_DATA
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"Batch fetch projects by identifier "
-                    f"{batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",  # noqa: PLR2004
+                    f"{batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",
                 )
 
                 if batch_results:
@@ -6991,7 +7019,7 @@ J2O_DATA
                             if identifier in batch_identifiers:
                                 results[identifier] = record
 
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning(
                     "Failed to fetch batch of project identifiers %s after retries: %s",
                     batch_identifiers,
@@ -7012,7 +7040,7 @@ J2O_DATA
     @batch_idempotent(
         ttl=7200,
     )  # 2 hour TTL for custom field lookups (less frequent changes)
-    def batch_get_custom_fields_by_names(  # noqa: C901
+    def batch_get_custom_fields_by_names(
         self,
         names: list[str],
         batch_size: int | None = None,
@@ -7053,7 +7081,7 @@ J2O_DATA
                 # Execute batch operation with retry logic (with idempotency key propagation)
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
-                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",  # noqa: PLR2004
+                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",
                 )
 
                 if batch_results:
@@ -7068,7 +7096,7 @@ J2O_DATA
                             if name in batch_names:
                                 results[name] = record
 
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning(
                     "Failed to fetch batch of custom field names %s after retries: %s",
                     batch_names,

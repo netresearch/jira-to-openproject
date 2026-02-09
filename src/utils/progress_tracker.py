@@ -120,7 +120,7 @@ class ProgressTracker:
                 results_dir.mkdir(parents=True, exist_ok=True)
                 ts = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
                 self.output_file = str(results_dir / f"progress_{ts}.json")
-            except Exception:  # noqa: BLE001 - best-effort file output setup
+            except Exception:
                 self.output_file = None
         else:
             self.output_file = output_file

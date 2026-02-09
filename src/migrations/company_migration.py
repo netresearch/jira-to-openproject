@@ -15,8 +15,6 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 from src.utils import data_handler
 
-from src.config import logger
-
 
 @register_entity_types("companies", "tempo_companies")
 class CompanyMigration(BaseMigration):
@@ -1237,6 +1235,7 @@ class CompanyMigration(BaseMigration):
 
         Returns:
             Dictionary with build results including count of mappings created.
+
         """
         results: dict[str, Any] = {
             "accounts_processed": 0,
@@ -1317,6 +1316,7 @@ class CompanyMigration(BaseMigration):
 
         Returns:
             Dictionary with update results including updated count, skipped, and errors.
+
         """
         results: dict[str, Any] = {
             "updated": 0,

@@ -8,7 +8,6 @@ import pytest
 from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
 from src.migrations.attachments_migration import AttachmentsMigration
 from src.migrations.time_entry_migration import TimeEntryMigration
-from src.models import ComponentResult
 
 
 class DummyMappings:
@@ -26,12 +25,14 @@ def dummy_mapping_data():
 
 
 def configure_config(module, monkeypatch, tmp_path, mapping_data, extra_config=None):
+    import src.config as cfg_mod
+
     dummy = DummyMappings(mapping_data)
-    monkeypatch.setattr(module.config, "get_mappings", lambda: dummy, raising=False)
-    monkeypatch.setattr(module.config, "mappings", dummy, raising=False)
-    monkeypatch.setattr(module.config, "get_path", lambda name: tmp_path, raising=False)
+    monkeypatch.setattr(cfg_mod, "get_mappings", lambda: dummy, raising=False)
+    monkeypatch.setattr(cfg_mod, "mappings", dummy, raising=False)
+    monkeypatch.setattr(cfg_mod, "get_path", lambda name: tmp_path, raising=False)
     cfg = dict(extra_config or {})
-    monkeypatch.setattr(module.config, "migration_config", cfg, raising=False)
+    monkeypatch.setattr(cfg_mod, "migration_config", cfg, raising=False)
 
 
 def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapping_data):

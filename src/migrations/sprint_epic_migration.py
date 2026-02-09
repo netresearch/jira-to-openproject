@@ -21,13 +21,12 @@ if TYPE_CHECKING:
 from src import config
 from src.config import logger
 
-
 SPRINT_CF_NAME = "Sprint"
 
 
 @register_entity_types("sprint_epic")
 class SprintEpicMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
@@ -83,7 +82,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                 name = getattr(sprint_field_value, "name", None)
                 if isinstance(name, str) and name.strip():
                     out.append(name.strip())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
         return out
 
@@ -105,7 +104,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                     ln = n.lower().replace(" ", "")
                     if all(tok in la for tok in ln.split("_")):
                         return getattr(obj, attr)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         return None
 
@@ -125,7 +124,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                     "cf_available": False,
                 },
             )
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         if not keys:
             return ComponentResult(success=True, data={"sprint": {}, "epic": []})
 
@@ -162,7 +161,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                     epic_key = self._get_attr_ci(fields, "epic_link", "epicLink")
                 if isinstance(epic_key, str) and epic_key.strip():
                     epic_links.append((k, epic_key.strip()))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
         return ComponentResult(success=True, data={"sprint": sprint_by_key, "epic": epic_links})

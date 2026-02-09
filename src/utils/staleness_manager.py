@@ -142,7 +142,7 @@ class StalenessManager:
                 seconds = int(duration_str[:-1])
                 return timedelta(seconds=seconds)
             msg = f"Invalid duration format: {duration_str}. Use format like '24h', '2d', '30m'"
-            raise ValueError(  # noqa: TRY301
+            raise ValueError(
                 msg,
             )
         except (ValueError, TypeError) as e:
@@ -283,7 +283,7 @@ class StalenessManager:
                     attempt + 1,
                 )
 
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning(
                     "Failed to refresh user %s (attempt %d): %s",
                     user_key,
@@ -326,7 +326,7 @@ class StalenessManager:
         try:
             # This calls the existing method that needs to be implemented in JiraClient
             return self.jira_client.get_user_info(user_key)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.debug(
                 "Failed to get user data from Jira for %s: %s",
                 user_key,

@@ -215,7 +215,7 @@ class ConfigLoader:
 
         config_logger.debug("Database configuration loaded successfully")
 
-    def _apply_environment_overrides(self) -> None:  # noqa: C901, PLR0912
+    def _apply_environment_overrides(self) -> None:
         """Override configuration settings with environment variables."""
         # Use pattern matching to organize environment variable processing
         for env_var, env_value in os.environ.items():

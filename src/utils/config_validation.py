@@ -179,7 +179,7 @@ class SecurityValidator:
                     value,
                     f"valid {expected_type.__name__}",
                     f"Conversion failed: {e}",
-                )
+                ) from e
         elif not isinstance(value, expected_type):
             # Try to convert compatible types
             try:
@@ -190,7 +190,7 @@ class SecurityValidator:
                     value,
                     f"{expected_type.__name__} (got {type(value).__name__})",
                     f"Type conversion failed: {e}",
-                )
+                ) from e
 
         # Bounds validation
         if value < min_val:
@@ -334,7 +334,7 @@ class SecurityValidator:
                     value,
                     "valid file path",
                     f"Path resolution failed: {e}",
-                )
+                ) from e
         elif isinstance(value, Path):
             path_obj = value.resolve()
         else:

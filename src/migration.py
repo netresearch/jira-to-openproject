@@ -151,7 +151,7 @@ PREDEFINED_PROFILES: dict[str, list[ComponentName]] = {
 
 
 # Helper: strictly detect any error condition in a component result
-def _component_has_errors(result: ComponentResult | None) -> bool:  # noqa: C901, PLR0911
+def _component_has_errors(result: ComponentResult | None) -> bool:
     """Return True if the component result contains any errors or failed items.
 
     This treats as error when:
@@ -287,7 +287,7 @@ def _extract_counts(result: ComponentResult) -> tuple[int, int, int]:
 class Migration:
     """Main migration orchestrator class."""
 
-    def __init__(self, components: list[ComponentName] | None = None) -> None:  # noqa: D107
+    def __init__(self, components: list[ComponentName] | None = None) -> None:
         self.components = components or []
 
     async def run(
@@ -313,7 +313,7 @@ class Migration:
 def _build_component_factories(
     jira_client: JiraClient,
     op_client: OpenProjectClient,
-) -> dict[str, Callable[[], "BaseMigration"]]:
+) -> dict[str, Callable[[], BaseMigration]]:
     """Return lazy factories for all available components.
 
     This avoids side-effects and log spam from constructing every component
@@ -446,7 +446,7 @@ def restore_backup(backup_dir: Path) -> bool:
             config.logger.info("Backup was created on: %s", metadata.get("timestamp"))
             files_count = len(metadata.get("files_backed_up", []))
             config.logger.info("Contains %s files", files_count)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             config.logger.warning("Could not read backup metadata: %s", e)
 
     # Copy all files from backup to data directory
@@ -464,7 +464,7 @@ def restore_backup(backup_dir: Path) -> bool:
     return True
 
 
-async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
+async def run_migration(
     *,
     components: list[ComponentName] | None = None,
     stop_on_error: bool = False,
@@ -493,7 +493,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
             config.logger.warning(
                 "Running in DRY RUN mode - no changes will be made to OpenProject",
             )
-            import asyncio as _asyncio  # noqa: PLC0415
+            import asyncio as _asyncio
 
             await _asyncio.sleep(1)  # Give the user a moment to see this warning
             mode = "DRY RUN"
@@ -747,13 +747,13 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                 break
                             # Skip executing this component but continue with others
                             continue
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         config.logger.warning("Preflight mapping check error: %s", e)
 
                 # Run the component (diagnose if base run is invoked)
                 try:
                     try:
-                        from src.migrations.base_migration import (  # noqa: PLC0415
+                        from src.migrations.base_migration import (
                             BaseMigration,  # local import to avoid cycles
                         )
 
@@ -799,9 +799,9 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                         results.overall["status"] = "failed"
                                     # Skip the normal run() call
                                     continue
-                            except Exception:  # noqa: BLE001, S110
+                            except Exception:
                                 pass
-                    except Exception:  # noqa: BLE001, S110
+                    except Exception:
                         pass
 
                     # j2o-50: Use idempotent workflow with caching by default
@@ -888,7 +888,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                     results.overall["status"] = "interrupted"
                     break
 
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     # Handle unexpected errors during component execution
                     config.logger.exception(
                         f"Error during '{component_name}' migration: {e}",
@@ -941,7 +941,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                                 )
                             else:
                                 config.logger.warning("Temp file cleanup failed: %s", cleanup_result.error)
-                except Exception as health_err:  # noqa: BLE001
+                except Exception as health_err:
                     config.logger.debug("During-migration health check failed: %s", health_err)
 
                 # Pause for user confirmation between components
@@ -1068,7 +1068,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
                 "local_disk_free_mb": final_snapshot.local_disk_free_mb,
                 "remote_disk_free_mb": final_snapshot.remote_disk_free_mb,
             }
-        except Exception as cleanup_err:  # noqa: BLE001
+        except Exception as cleanup_err:
             config.logger.debug("Post-migration cleanup failed: %s", cleanup_err)
 
         # Print final status
@@ -1094,7 +1094,7 @@ async def run_migration(  # noqa: C901, PLR0913, PLR0912, PLR0915
         config.logger.info("Migration complete")
         return results
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Handle unexpected errors at the top level
         config.logger.exception(e)
         config.logger.error("Unexpected error during migration: %s", e)
@@ -1185,7 +1185,7 @@ def parse_args() -> argparse.Namespace:
 
 def setup_tmux_session() -> bool:
     """Create and set up a tmux session for Rails console."""
-    from src import config  # noqa: PLC0415
+    from src import config
 
     session_name = config.openproject_config.get("tmux_session_name", "rails_console")
 
@@ -1196,13 +1196,13 @@ def setup_tmux_session() -> bool:
 
     try:
         # Check if tmux is installed
-        import shutil as _shutil  # noqa: PLC0415
+        import shutil as _shutil
 
         tmux_bin = _shutil.which("tmux") or "tmux"
-        subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)  # noqa: S603
+        subprocess.run([tmux_bin, "-V"], check=True, capture_output=True)
 
         # Check if session already exists
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             [tmux_bin, "has-session", "-t", session_name],
             check=False,
             capture_output=True,
@@ -1215,7 +1215,7 @@ def setup_tmux_session() -> bool:
             return True
 
         # Create a new session
-        subprocess.run([tmux_bin, "new-session", "-d", "-s", session_name], check=True)  # noqa: S603
+        subprocess.run([tmux_bin, "new-session", "-d", "-s", session_name], check=True)
 
         config.logger.success("Created tmux session '%s'", session_name)
         config.logger.info("To attach to this session, run:")
@@ -1254,7 +1254,7 @@ def setup_tmux_session() -> bool:
             "After running Rails console, you can use the direct migration features.",
         )
 
-        return True  # noqa: TRY300
+        return True
     except (subprocess.SubprocessError, FileNotFoundError):
         config.logger.error("tmux is not installed or not available in PATH")
         config.logger.info("Please install tmux first:")
@@ -1264,7 +1264,7 @@ def setup_tmux_session() -> bool:
         return False
 
 
-def main() -> None:  # noqa: C901, PLR0912, PLR0915
+def main() -> None:
     """Run the migration tool."""
     # Parse command-line arguments
     args = parse_args()

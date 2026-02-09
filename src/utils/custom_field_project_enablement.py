@@ -32,8 +32,8 @@ class CustomFieldProjectTracker:
         self,
         field_name: str,
         project_id: int,
-        value: str | int | float | None,
-        default_value: str | int | float | None = None,
+        value: str | float | None,
+        default_value: str | float | None = None,
     ) -> None:
         """Record that a project has a value for a custom field.
 
@@ -55,15 +55,15 @@ class CustomFieldProjectTracker:
 
     def _is_meaningful_value(
         self,
-        value: str | int | float | None,
-        default_value: str | int | float | None = None,
+        value: str | float | None,
+        default_value: str | float | None = None,
     ) -> bool:
         """Check if a value is meaningful (non-empty, non-default)."""
         if value is None:
             return False
 
         if isinstance(value, (int, float)):
-            # Numeric: non-zero is meaningful
+            # Numeric: non-zero is meaningful  # noqa: ERA001
             if value == 0:
                 return False
             # Unless default is also non-zero
@@ -71,7 +71,7 @@ class CustomFieldProjectTracker:
                 return False
             return True
 
-        # String: non-empty is meaningful
+        # String: non-empty is meaningful  # noqa: ERA001
         str_value = str(value).strip()
         if str_value == "":
             return False
@@ -193,7 +193,7 @@ puts "\\nDone! All J2O custom fields now have selective project enablement."
 
 
 def create_cf_with_selective_enablement(
-    op_client: "OpenProjectClient",
+    op_client: OpenProjectClient,
     cf_name: str,
     field_format: str,
     project_ids: list[int] | set[int],

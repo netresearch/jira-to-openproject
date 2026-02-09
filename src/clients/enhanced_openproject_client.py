@@ -92,7 +92,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             try:
                 if temp_path is not None and hasattr(temp_path, "unlink"):
                     temp_path.unlink()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug("Temp file cleanup failed: %s", e)
 
     def _create_temp_work_packages_file(self, work_packages: list[dict[str, Any]]) -> pathlib.Path:
@@ -121,7 +121,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         ]
 
         try:
-            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)  # noqa: S603
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
         except Exception as e:
             msg = f"Rails runner execution failed: {e}"
             raise EnhancedOpenProjectClient.ExecutionError(msg) from e
@@ -159,7 +159,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             try:
                 if temp_path is not None and hasattr(temp_path, "unlink"):
                     temp_path.unlink()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug("Temp file cleanup failed: %s", e)
 
     def _create_temp_updates_file(self, updates: list[dict[str, Any]]) -> pathlib.Path:
@@ -176,7 +176,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             str(temp_file),
         ]
         try:
-            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)  # noqa: S603
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
         except Exception as e:
             msg = f"Rails runner execution failed: {e}"
             raise EnhancedOpenProjectClient.ExecutionError(msg) from e
@@ -212,7 +212,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         for idx, wp_id in enumerate(ids_list):
             try:
                 data = futures[idx].result()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 data = None
             results[wp_id] = data
         return results
@@ -226,7 +226,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
             resp = self.session.get(f"/api/v3/work_packages/{wp_id}")
             resp.raise_for_status()
             return resp.json()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     # =====================================
@@ -287,12 +287,12 @@ class EnhancedOpenProjectClient(OpenProjectClient):
     # Internal helpers
     # =====================================
 
-    def _cleanup_temp_file(self, temp_path: Any) -> None:  # noqa: ANN401
+    def _cleanup_temp_file(self, temp_path: Any) -> None:
         """Best-effort cleanup of a temp file-like object used in tests."""
         try:
             if temp_path is not None and hasattr(temp_path, "unlink"):
                 temp_path.unlink()
-        except Exception:  # noqa: BLE001, S110
+        except Exception:
             # Tests ignore cleanup failures
             pass
 
@@ -302,10 +302,10 @@ class _NoopSSHClient:
 
     def execute_command(
         self,
-        command: str,  # noqa: ARG002
-        timeout: int | None = None,  # noqa: ARG002
-        check: bool = True,  # noqa: ARG002, FBT001, FBT002
-        retry: bool = True,  # noqa: ARG002, FBT001, FBT002
+        command: str,
+        timeout: int | None = None,
+        check: bool = True,
+        retry: bool = True,
     ) -> tuple[str, str, int]:
         return ("", "", 0)
 
@@ -317,18 +317,18 @@ class _NoopDockerClient:
 
     def transfer_file_to_container(
         self,
-        local_path: Any,  # noqa: ANN401, ARG002
-        container_path: Any,  # noqa: ANN401, ARG002
+        local_path: Any,
+        container_path: Any,
     ) -> None:
         return None
 
     def execute_command(
         self,
-        command: str,  # noqa: ARG002
-        user: str | None = None,  # noqa: ARG002
-        workdir: Any | None = None,  # noqa: ANN401, ARG002
-        timeout: int | None = None,  # noqa: ARG002
-        env: dict[str, str] | None = None,  # noqa: ARG002
+        command: str,
+        user: str | None = None,
+        workdir: Any | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
     ) -> tuple[str, str, int]:
         return ("", "", 0)
 
@@ -336,5 +336,5 @@ class _NoopDockerClient:
 class _NoopRailsConsoleClient:
     """Test-time stub for Rails console client."""
 
-    def execute(self, *args: Any, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401, ARG002
+    def execute(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return {}

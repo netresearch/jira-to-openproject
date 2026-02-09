@@ -15,7 +15,7 @@ from src import config
 from src.clients.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
 
 # Import RailsConsolePexpect to handle direct Rails console execution
-from src.display import ProgressTracker, console
+from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
@@ -23,8 +23,7 @@ if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
     from src.clients.rails_console_client import RailsConsoleClient
 
-# Create rich console instance
-console = console
+# Rich console instance imported from base_migration
 
 
 @register_entity_types("custom_fields")
@@ -662,7 +661,7 @@ class CustomFieldMigration(BaseMigration):
                 {
                     "jira_id": field.get("jira_id"),
                     "name": op_name,
-                }
+                },
             )
 
         if not records:
@@ -752,7 +751,7 @@ class CustomFieldMigration(BaseMigration):
 
         # Update mapping entries
         updated_count = 0
-        for jira_id, entry in self.mapping.items():
+        for entry in self.mapping.values():
             # Use openproject_name for lookup (may differ from jira_name due to deduplication)
             op_name = entry.get("openproject_name") or entry.get("jira_name")
             if op_name and op_name in name_to_op_id:
@@ -783,7 +782,7 @@ class CustomFieldMigration(BaseMigration):
         if provenance_mappings:
             try:
                 result = self.op_client.bulk_record_entity_provenance(
-                    "custom_field", provenance_mappings
+                    "custom_field", provenance_mappings,
                 )
                 self.logger.info(
                     "Recorded custom field provenance: %d success, %d failed",

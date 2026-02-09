@@ -17,12 +17,11 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-from src.config import logger
 
 
 @register_entity_types("native_tags")
 class NativeTagsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     @staticmethod
@@ -32,7 +31,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         labels = getattr(fields, "labels", None)
         try:
             return [v.strip() for v in labels or [] if isinstance(v, str) and v.strip()]
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
 
     @staticmethod
@@ -47,7 +46,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
 
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         if not keys:
             return ComponentResult(success=True, data={"by_key": {}})
         issues = self._merge_batch_issues(keys)
@@ -58,7 +57,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
                 labels = self._coerce_labels(fields)
                 if labels:
                     by_key[k] = sorted(set(labels))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"by_key": by_key})
 

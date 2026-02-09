@@ -330,6 +330,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             OpenProject priority ID or None
+
         """
         if not jira_priority:
             return None
@@ -346,6 +347,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         Returns:
             OpenProject user ID or None
+
         """
         if not jira_user:
             return None
@@ -624,7 +626,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 # Process batch when full
                 if len(batch_payloads) >= self.batch_size:
                     created, failed, mappings = self._create_skeletons_batch(
-                        batch_payloads, project_key
+                        batch_payloads, project_key,
                     )
                     project_results["created"] += created
                     project_results["failed"] += failed
@@ -652,7 +654,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
             # Process remaining items in last batch
             if batch_payloads:
                 created, failed, mappings = self._create_skeletons_batch(
-                    batch_payloads, project_key
+                    batch_payloads, project_key,
                 )
                 project_results["created"] += created
                 project_results["failed"] += failed

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable  # noqa: TC003
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -240,7 +240,7 @@ class BaseMigration:
         else:
             try:
                 self.op_client = OpenProjectClient()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger = configure_logging("INFO", None)
                 self.logger.debug(
                     "OpenProjectClient unavailable; proceeding without it: %s",
@@ -415,7 +415,7 @@ class BaseMigration:
                 entity_cache[entity_type] = entities
                 cache_invalidated.discard(entity_type)
 
-            return entities  # noqa: TRY300
+            return entities
 
         except Exception:
             self.logger.exception("Critical error in cache retrieval for %s", entity_type)
@@ -525,7 +525,7 @@ class BaseMigration:
                     change_report["changes_by_type"],
                 )
 
-            return should_skip, change_report  # noqa: TRY300
+            return should_skip, change_report
 
         except Exception as e:
             # If change detection fails, proceed with migration to be safe
@@ -842,14 +842,14 @@ class BaseMigration:
             Custom field ID, or 0 if creation failed
 
         """
-        from src.clients.openproject_client import escape_ruby_single_quoted  # noqa: PLC0415
+        from src.clients.openproject_client import escape_ruby_single_quoted
 
         try:
             cf = self.op_client.get_custom_field_by_name(name)
             cf_id = int(cf.get("id")) if isinstance(cf, dict) else None
             if cf_id:
                 return cf_id
-        except Exception:  # noqa: BLE001
+        except Exception:
             self.logger.info("CF '%s' not found; will create (format=%s)", name, field_format)
 
         escaped = escape_ruby_single_quoted(name)
@@ -888,7 +888,7 @@ class BaseMigration:
             self.op_client.execute_query(script)
             display = cf_name or str(cf_id)
             self.logger.info("Enabled %s CF for %d projects", display, len(project_ids))
-        except Exception:  # noqa: BLE001
+        except Exception:
             self.logger.warning("Failed to enable CF for some projects")
 
     def _run_etl_pipeline(self, name: str) -> ComponentResult:

@@ -27,7 +27,7 @@ STORY_POINTS_CF_NAME = "Story Points"
 
 @register_entity_types("story_points")
 class StoryPointsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
@@ -55,7 +55,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         if isinstance(value, str):
             try:
                 return float(value)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return None
         return None
 
@@ -76,14 +76,14 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
                     num = StoryPointsMigration._coerce_number(getattr(fields, name, None))
                     if num is not None:
                         return num
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         return None
 
     def _extract(self) -> ComponentResult:
         """Extract Jira story points per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         if not keys:
             return ComponentResult(success=True, data={"sp": {}})
 
@@ -96,7 +96,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
                 num = self._extract_story_points_from_fields(fields) if fields else None
                 if isinstance(num, (int, float)):
                     sp_by_key[k] = float(num)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"sp": sp_by_key})
 

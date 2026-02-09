@@ -37,7 +37,7 @@ class Mappings:
     OP_PROJECTS_FILE = Path("openproject_projects.json")
     TEMPO_COMPANIES_FILE = Path("tempo_companies.json")
 
-    def __init__(  # noqa: D107
+    def __init__(
         self,
         data_dir: Path | None = None,
     ) -> None:
@@ -77,7 +77,7 @@ class Mappings:
             )
         # Add checks for other critical mappings as needed
 
-    def __setitem__(self, key: str, value: Any) -> None:  # noqa: ANN401
+    def __setitem__(self, key: str, value: Any) -> None:
         """Support dictionary-style item assignment for compatibility with migration modules.
 
         Args:
@@ -91,7 +91,7 @@ class Mappings:
             logger.warning("Setting unknown mapping attribute: %s", key)
             setattr(self, key, value)
 
-    def __getitem__(self, key: str) -> Any:  # noqa: ANN401
+    def __getitem__(self, key: str) -> Any:
         """Support dictionary-style item access for compatibility with migration modules.
 
         Args:

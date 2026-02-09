@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-from src import config
 from src.config import logger
 
 
@@ -19,7 +18,7 @@ from src.config import logger
 class PriorityMigration(BaseMigration):
     """Migrate priorities and set on work packages."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -57,8 +56,7 @@ class PriorityMigration(BaseMigration):
         if not mapped.success:
             return mapped
 
-        loaded = self._load(mapped)
-        return loaded
+        return self._load(mapped)
 
     def _extract(self) -> ComponentResult:
         """Extract Jira priorities (names and order)."""
@@ -116,7 +114,7 @@ class PriorityMigration(BaseMigration):
         updates: list[dict[str, Any]] = []
 
         # Get Jira issues by keys present in wp_map
-        jira_keys = [str(k) for k in wp_map.keys()]
+        jira_keys = [str(k) for k in wp_map]
         if not jira_keys:
             return ComponentResult(success=True, updated=0)
 
@@ -145,7 +143,7 @@ class PriorityMigration(BaseMigration):
                     continue
 
                 updates.append({"id": int(wp_id), "priority_id": int(pr_id)})
-            except Exception:  # noqa: BLE001
+            except Exception:
                 failed += 1
 
         if not updates:

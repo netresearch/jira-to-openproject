@@ -17,7 +17,7 @@ from src.models import ComponentResult
 class AgileBoardMigration(BaseMigration):
     """Create OpenProject queries for Jira boards and map sprints to versions."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.project_mapping = config.mappings.get_mapping("project") or {}
         self.sprint_mapping = config.mappings.get_mapping("sprint") or {}
@@ -69,13 +69,13 @@ class AgileBoardMigration(BaseMigration):
             # Fetch board configuration (API call 2 per board)
             try:
                 configuration = self.jira_client.get_board_configuration(board_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 configuration = {}
 
             # Fetch board sprints (API call 3 per board)
             try:
                 board_sprints = self.jira_client.get_board_sprints(board_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 board_sprints = []
 
             location = board.get("location") or {}
@@ -135,7 +135,7 @@ class AgileBoardMigration(BaseMigration):
         """Fetch boards, configurations, and sprints from Jira."""
         try:
             boards = self.jira_client.get_boards()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return ComponentResult(
                 success=False,
                 message=f"Failed to fetch Jira boards: {exc}",
@@ -152,12 +152,12 @@ class AgileBoardMigration(BaseMigration):
 
             try:
                 configuration = self.jira_client.get_board_configuration(board_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 configuration = {}
 
             try:
                 board_sprints = self.jira_client.get_board_sprints(board_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 board_sprints = []
 
             location = board.get("location") or {}

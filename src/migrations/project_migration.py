@@ -221,7 +221,7 @@ class ProjectMigration(BaseMigration):
         """Build a lookup of role names to IDs for project membership operations."""
         try:
             roles = self.op_client.get_roles()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("Failed to fetch OpenProject roles: %s", exc)
             return {}
 
@@ -270,7 +270,7 @@ class ProjectMigration(BaseMigration):
             detail = self.jira_client.jira.project(jira_key)
             self._jira_project_detail_cache[jira_key] = detail
             return detail
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("Failed to fetch Jira project detail for %s: %s", jira_key, exc)
             self._jira_project_detail_cache[jira_key] = None
             return None
@@ -379,7 +379,7 @@ class ProjectMigration(BaseMigration):
         self._persist_project_metadata(op_project_id, jira_project)
 
     def _bulk_post_project_setup(
-        self, projects: list[tuple[int, dict[str, Any]]]
+        self, projects: list[tuple[int, dict[str, Any]]],
     ) -> dict[str, Any]:
         """Perform post-project setup for multiple projects in bulk.
 
@@ -388,6 +388,7 @@ class ProjectMigration(BaseMigration):
 
         Returns:
             Dict with counts of processed and failed items
+
         """
         if not projects:
             return {"modules_processed": 0, "attributes_processed": 0}
@@ -522,7 +523,7 @@ class ProjectMigration(BaseMigration):
                             value=safe_display,
                             field_format="string",
                         )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.debug("Failed to upsert textual project lead attribute: %s", exc)
             return
 
@@ -548,7 +549,7 @@ class ProjectMigration(BaseMigration):
                 value=str(op_user_id),
                 field_format="user",
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("Failed to upsert project lead attribute: %s", exc)
 
         if lead_display:
@@ -560,7 +561,7 @@ class ProjectMigration(BaseMigration):
                     value=safe_display,
                     field_format="string",
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug("Failed to upsert project lead display attribute: %s", exc)
 
     @staticmethod
@@ -599,7 +600,7 @@ class ProjectMigration(BaseMigration):
                     value=safe_value,
                     field_format="string",
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug(
                     "Failed to upsert project metadata attribute %s for %s: %s",
                     field_name,
@@ -876,7 +877,7 @@ class ProjectMigration(BaseMigration):
 
         # Prepare project data for bulk creation
         projects_data = []
-        for i, jira_project in enumerate(self.jira_projects):
+        for _i, jira_project in enumerate(self.jira_projects):
             # Note: no refresh here; we haven't written anything yet. Reuse cached list during analysis.
 
             jira_key = jira_project.get("key", "")
@@ -1094,7 +1095,7 @@ class ProjectMigration(BaseMigration):
                     )
                     try:
                         self._bulk_post_project_setup(bulk_setup_projects)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         logger.warning("Bulk post-setup failed: %s", exc)
 
                 # Persist mapping for downstream usage
@@ -1178,7 +1179,7 @@ class ProjectMigration(BaseMigration):
                     )
                     # Collect for bulk post-setup instead of individual calls
                     bulk_setup_projects.append(
-                        (int(existing_project_details["id"]), project_data)
+                        (int(existing_project_details["id"]), project_data),
                     )
                     created_projects.append(
                         {
@@ -1327,7 +1328,7 @@ class ProjectMigration(BaseMigration):
                         )
                         # Collect for bulk post-setup instead of individual calls
                         bulk_setup_projects.append(
-                            (int(existing_project_details.get("id")), project_data)
+                            (int(existing_project_details.get("id")), project_data),
                         )
                         continue
 
@@ -1415,7 +1416,7 @@ class ProjectMigration(BaseMigration):
             )
             try:
                 self._bulk_post_project_setup(bulk_setup_projects)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Bulk post-setup failed: %s", exc)
 
         # Create mapping from results

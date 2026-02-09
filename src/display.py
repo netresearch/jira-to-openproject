@@ -87,7 +87,7 @@ _LOGGER: logging.Logger | None = None
 _LOG_LEVEL_NUM: int | None = None
 
 
-def configure_logging(  # noqa: C901, PLR0912, PLR0915
+def configure_logging(
     level: str = "INFO",
     log_file: Path | None = None,
 ) -> ExtendedLogger:
@@ -109,7 +109,7 @@ def configure_logging(  # noqa: C901, PLR0912, PLR0915
         try:
             current_root = logging.getLogger()
             current_level = current_root.getEffectiveLevel()
-        except Exception:  # noqa: BLE001
+        except Exception:
             current_level = logging.INFO
 
         # Compute requested numeric level (including custom levels)
@@ -263,7 +263,7 @@ class ProgressTracker[T]:
         self.log_panel = None
         self.live: Live | None = None
 
-    def __enter__(self) -> "ProgressTracker[T]":
+    def __enter__(self) -> ProgressTracker[T]:
         """Start the live display when entering context."""
         self.live = Live(
             console=console,

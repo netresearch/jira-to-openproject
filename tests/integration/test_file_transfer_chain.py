@@ -425,7 +425,7 @@ class FileTransferChainTest(unittest.TestCase):
                 SSHClient,
             ), "SSH client is not initialized"
             cls.ssh_client.execute_command(f"mkdir -p {remote_dir}")
-            stdout, stderr, rc = cls.ssh_client.execute_command(
+            stdout, _stderr, _rc = cls.ssh_client.execute_command(
                 f"test -d {remote_dir} && echo 'DIR_EXISTS'",
             )
             print(f"Remote directory exists: {'DIR_EXISTS' in stdout}")
@@ -446,7 +446,7 @@ class FileTransferChainTest(unittest.TestCase):
                 DockerClient,
             ), "Docker client is not initialized"
             cls.docker_client.execute_command(f"mkdir -p {container_dir}")
-            stdout, stderr, rc = cls.docker_client.execute_command(
+            stdout, _stderr, _rc = cls.docker_client.execute_command(
                 f"test -d {container_dir} && echo 'DIR_EXISTS'",
             )
             print(f"Container directory exists: {'DIR_EXISTS' in stdout}")
@@ -635,7 +635,7 @@ class FileTransferChainTest(unittest.TestCase):
                 SSHClient,
             ), "SSH client is not initialized"
             is_connected = self.__class__.ssh_client.is_connected()
-            stdout, stderr, rc = self.__class__.ssh_client.execute_command(
+            stdout, _stderr, rc = self.__class__.ssh_client.execute_command(
                 "echo 'SSH connection successful'",
             )
             return is_connected and rc == 0 and "SSH connection successful" in stdout
@@ -652,7 +652,7 @@ class FileTransferChainTest(unittest.TestCase):
                 DockerClient,
             ), "Docker client is not initialized"
             container_exists = self.__class__.docker_client.check_container_exists()
-            stdout, stderr, rc = self.__class__.docker_client.execute_command(
+            stdout, _stderr, rc = self.__class__.docker_client.execute_command(
                 "echo 'Docker command successful'",
             )
             return container_exists and rc == 0 and "Docker command successful" in stdout
@@ -684,7 +684,7 @@ class FileTransferChainTest(unittest.TestCase):
         filename = f"chain_test_{random.randint(1000, 9999)}.txt"
 
         # 2. Create and transfer the file through each step of the chain
-        local_file, remote_file, container_file = self._create_and_transfer_test_file(
+        _local_file, remote_file, container_file = self._create_and_transfer_test_file(
             content=test_content,
             local_filename=filename,
         )
@@ -716,7 +716,7 @@ class FileTransferChainTest(unittest.TestCase):
             ), "SSH client is not initialized"
 
             # First check if file exists
-            stdout, stderr, rc = self.__class__.ssh_client.execute_command(
+            stdout, _stderr, _rc = self.__class__.ssh_client.execute_command(
                 f"test -f {file_path} && echo 'FILE_EXISTS'",
             )
             if "FILE_EXISTS" not in stdout:
@@ -725,7 +725,7 @@ class FileTransferChainTest(unittest.TestCase):
 
             # Then get file content
             try:
-                stdout, stderr, rc = self.__class__.ssh_client.execute_command(
+                stdout, _stderr, _rc = self.__class__.ssh_client.execute_command(
                     f"cat {file_path}",
                 )
                 content_match = stdout.strip() == expected_content
@@ -759,7 +759,7 @@ class FileTransferChainTest(unittest.TestCase):
             ), "Docker client is not initialized"
 
             # First check if file exists
-            stdout, stderr, rc = self.__class__.docker_client.execute_command(
+            stdout, _stderr, _rc = self.__class__.docker_client.execute_command(
                 f"test -f {file_path} && echo 'FILE_EXISTS'",
             )
             if "FILE_EXISTS" not in stdout:
@@ -768,7 +768,7 @@ class FileTransferChainTest(unittest.TestCase):
 
             # Then get file content
             try:
-                stdout, stderr, rc = self.__class__.docker_client.execute_command(
+                stdout, _stderr, _rc = self.__class__.docker_client.execute_command(
                     f"cat {file_path}",
                 )
                 content_match = stdout.strip() == expected_content

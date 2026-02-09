@@ -89,14 +89,14 @@ class RateLimitConfig:
             # Validate burst recovery rate (custom bounds)
             if not isinstance(self.burst_recovery_rate, (int, float)):
                 msg = "burst_recovery_rate"
-                raise ConfigurationValidationError(  # noqa: TRY301
+                raise ConfigurationValidationError(
                     msg,
                     self.burst_recovery_rate,
                     f"numeric value (got {type(self.burst_recovery_rate).__name__})",
                 )
             if self.burst_recovery_rate <= 0 or self.burst_recovery_rate > MAX_BURST_RECOVERY_RATE:
                 msg = "burst_recovery_rate"
-                raise ConfigurationValidationError(  # noqa: TRY301
+                raise ConfigurationValidationError(
                     msg,
                     self.burst_recovery_rate,
                     "0.1 to 100.0 requests per second",
@@ -112,7 +112,7 @@ class RateLimitConfig:
             # Validate strategy enum
             if not isinstance(self.strategy, RateLimitStrategy):
                 msg = "strategy"
-                raise ConfigurationValidationError(  # noqa: TRY301
+                raise ConfigurationValidationError(
                     msg,
                     self.strategy,
                     f"RateLimitStrategy enum value (got {type(self.strategy).__name__})",
@@ -345,7 +345,7 @@ class RateLimiter:
                 self.config.max_delay,
             )
 
-    def _parse_rate_limit_headers(self, headers: dict[str, str]) -> None:  # noqa: C901
+    def _parse_rate_limit_headers(self, headers: dict[str, str]) -> None:
         """Parse rate limit headers and adjust accordingly."""
         # Common rate limit headers
         remaining_headers = [

@@ -52,7 +52,7 @@ class EnhancedJiraClient(JiraClient):
             issues = self.jira.search_issues(jql, maxResults=len(issue_keys), expand="changelog")
             found_map = {issue.key: issue for issue in issues}
             return {key: found_map.get(key) for key in issue_keys}
-        except Exception:  # noqa: BLE001
+        except Exception:
             # On error, return None for all keys in this batch (tests expect this)
             return dict.fromkeys(issue_keys)
 
@@ -76,7 +76,7 @@ class EnhancedJiraClient(JiraClient):
                 try:
                     batch_result = fut.result()
                     results.update(batch_result)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     failed_keys = future_to_keys.get(fut, [])
                     if failed_keys:
                         logger.warning(
@@ -119,7 +119,7 @@ class EnhancedJiraClient(JiraClient):
                     else:
                         results[f"batch-{idx}"] = batch_result
                         idx += 1
-                except Exception:  # noqa: BLE001
+                except Exception:
                     results[f"batch-{idx}"] = []
                     idx += 1
 
@@ -155,7 +155,7 @@ class EnhancedJiraClient(JiraClient):
                     else:
                         # Unexpected shape; ignore for unit tests
                         pass
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.debug("Skipping batch due to failure")
 
         return results
@@ -177,7 +177,7 @@ class EnhancedJiraClient(JiraClient):
         while True:
             try:
                 issues = self.jira.search_issues(jql, startAt=start_at, maxResults=page_size)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 break
 
             if not issues:
@@ -227,14 +227,14 @@ class EnhancedJiraClient(JiraClient):
         return statuses
 
     # ----- Backwards-compat wrappers expected by tests -----
-    def get_issue(self, issue_key: str) -> Any:  # noqa: ANN401
+    def get_issue(self, issue_key: str) -> Any:
         """Return a Jira issue by key using the underlying client."""
         if not self.jira:
             msg = "Jira client is not initialized"
             raise RuntimeError(msg)
         return self.jira.issue(issue_key)
 
-    def create_issue(self, **fields: object) -> Any:  # noqa: ANN401
+    def create_issue(self, **fields: object) -> Any:
         """Create a Jira issue via the underlying client."""
         if not self.jira:
             msg = "Jira client is not initialized"

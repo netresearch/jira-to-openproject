@@ -22,7 +22,7 @@ from src.config import logger
 
 @register_entity_types("versions")
 class VersionsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -58,7 +58,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract fixVersion names per Jira project from known work package issues."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map.keys()]
+        jira_keys = [str(k) for k in wp_map]
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"by_project": {}})
 
@@ -80,13 +80,13 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                         name = getattr(v, "name", None)
                     if name and isinstance(name, str) and name.strip():
                         by_project.setdefault(pj, set()).add(name.strip())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
-        materialized = {k: sorted(list(v)) for k, v in by_project.items() if v}
+        materialized = {k: sorted(v) for k, v in by_project.items() if v}
         # Cache issues for reuse in _load() to avoid second Jira API call
         return ComponentResult(
-            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized, "issues": issues}
+            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized, "issues": issues},
         )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
@@ -131,7 +131,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 name = str(r.get("name"))
                 vid = int(r.get("id"))
                 by_pid_name_to_id.setdefault(str(pid), {})[name] = vid
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
         to_create: list[dict[str, Any]] = []
@@ -164,7 +164,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                             name = str(r.get("name"))
                             vid = int(r.get("id"))
                             by_pid_name_to_id.setdefault(str(pid), {})[name] = vid
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             continue
             except Exception:
                 logger.exception("Failed to refresh Version map after creation")
@@ -189,7 +189,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            jira_keys = [str(k) for k in wp_map.keys()]
+            jira_keys = [str(k) for k in wp_map]
             issues = self._merge_batch_issues(jira_keys)
 
         updates: list[dict[str, Any]] = []
@@ -235,7 +235,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 if not ver_id:
                     continue
                 updates.append({"id": int(wp_id), "version_id": int(ver_id)})
-            except Exception:  # noqa: BLE001
+            except Exception:
                 failed += 1
 
         if not updates:

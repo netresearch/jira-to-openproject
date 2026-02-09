@@ -25,7 +25,7 @@ from src.config import logger
 class RelationMigration(BaseMigration):
     """Create OpenProject relations from Jira issue links using mappings."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client, op_client)
         self.mappings: Mappings = config.mappings
 
@@ -99,7 +99,7 @@ class RelationMigration(BaseMigration):
         wp_map = {}
         try:
             wp_map = self.mappings.get_mapping("work_package") or {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             wp_map = {}
 
         entry = wp_map.get(jira_key)
@@ -151,11 +151,11 @@ class RelationMigration(BaseMigration):
         work_package_map: dict[str, Any] = {}
         if wp_map_file.exists():
             try:
-                from src.utils import data_handler as _dh  # noqa: PLC0415
+                from src.utils import data_handler as _dh
 
                 work_package_map = _dh.load_dict(wp_map_file) or {}
                 logger.info("Loaded work_package_mapping: %d entries", len(work_package_map))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("Failed to load work_package_mapping: %s", e)
                 work_package_map = {}
 
@@ -184,14 +184,14 @@ class RelationMigration(BaseMigration):
                 # Fallback: build from mappings store
                 # Note: mapping keys are numeric Jira IDs, values have jira_key field
                 wp_mappings = self.mappings.get_mapping("work_package") or {}
-                for _jira_id, entry in wp_mappings.items():
+                for entry in wp_mappings.values():
                     if isinstance(entry, dict):
                         jira_key = entry.get("jira_key")
                         op_id = entry.get("openproject_id")
                         if jira_key and op_id:
                             self._wp_key_map[str(jira_key)] = op_id
                 logger.info("Built _wp_key_map from mappings fallback: %d entries", len(self._wp_key_map))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to build _wp_key_map: %s", e)
             self._wp_key_map = {}
 
@@ -202,7 +202,7 @@ class RelationMigration(BaseMigration):
         logger.info("Checking for cached issues at: %s (exists=%s)", cache_file, cache_file.exists())
         if cache_file.exists():
             try:
-                import json  # noqa: PLC0415
+                import json
 
                 logger.info("Loading cached issues from %s (size=%d MB)...", cache_file, cache_file.stat().st_size // 1024 // 1024)
                 with open(cache_file) as f:
@@ -210,7 +210,7 @@ class RelationMigration(BaseMigration):
                 if isinstance(cached, dict) and len(cached) > 0:
                     logger.info("Using cached issues from %s (%d issues)", cache_file, len(cached))
                     issues = cached
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("Failed to load cached issues: %s. Will fetch from Jira", e)
 
         if not issues:
@@ -221,11 +221,6 @@ class RelationMigration(BaseMigration):
         # Collect all relations for bulk creation
         relations_to_create: list[dict[str, Any]] = []
         skipped = 0
-        processed = 0
-        no_links = 0
-        no_from_id = 0
-        no_to_id = 0
-        no_mapping = 0
 
         logger.info("Processing %d issues for relations, _wp_key_map has %d entries", len(issues), len(self._wp_key_map))
 
@@ -306,7 +301,7 @@ class RelationMigration(BaseMigration):
                         "to_id": b,
                         "relation_type": relation_type,
                     })
-                except Exception:  # noqa: BLE001
+                except Exception:
                     skipped += 1
                     continue
 

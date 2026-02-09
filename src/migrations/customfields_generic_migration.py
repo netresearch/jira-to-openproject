@@ -21,7 +21,7 @@ from src.config import logger
 
 @register_entity_types("customfields_generic")
 class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     @staticmethod
@@ -54,7 +54,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract unmapped customfield_* values per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         issues = self._merge_batch_issues(keys)
 
         # Use existing CF mapping to decide names/types

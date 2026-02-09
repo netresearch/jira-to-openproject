@@ -150,9 +150,9 @@ class TimeEntryMigration(BaseMigration):
 
         # Determine larger batch size for time entries (env overrides default)
         try:
-            batch_size_env = int(__import__("os").environ.get("J2O_TIME_ENTRY_BATCH_SIZE") or "200")
+            int(__import__("os").environ.get("J2O_TIME_ENTRY_BATCH_SIZE") or "200")
         except Exception:
-            batch_size_env = 200
+            pass
 
         try:
             result = self.time_entry_migrator.migrate_time_entries_for_issues(
@@ -167,7 +167,7 @@ class TimeEntryMigration(BaseMigration):
             total_migrated = result.get("total_time_entries", {}).get("migrated", 0)
             total_failed = result.get("total_time_entries", {}).get("failed", 0)
             total_discovered = result.get("jira_work_logs", {}).get("discovered", 0) + result.get(
-                "tempo_time_entries", {}
+                "tempo_time_entries", {},
             ).get("discovered", 0)
 
             # Zero-created gating: discovered > 0 but migrated == 0 should fail

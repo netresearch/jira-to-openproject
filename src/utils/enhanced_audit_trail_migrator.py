@@ -513,7 +513,7 @@ class EnhancedAuditTrailMigrator:
         from_project_mapping = None
         for key, info in self.project_mapping.items():
             jira_name = info.get("jira_name", "")
-            if jira_name == from_project or key == from_project:
+            if from_project in (jira_name, key):
                 from_project_mapping = info
                 break
 
@@ -724,10 +724,10 @@ class EnhancedAuditTrailMigrator:
         )
 
         try:
-            from src import config as _cfg  # noqa: PLC0415
+            from src import config as _cfg
 
             use_client_exec = bool(_cfg.migration_config.get("audit_use_client", False))
-        except Exception:  # noqa: BLE001
+        except Exception:
             use_client_exec = False
 
         events: list[dict[str, Any]] = []

@@ -167,7 +167,7 @@ class AccountMigration(BaseMigration):
                 return accounts
             error_msg = "Failed to retrieve Tempo accounts using JiraClient"
             self.logger.error(error_msg)
-            raise MigrationError(error_msg)  # noqa: TRY301
+            raise MigrationError(error_msg)
 
         except (JiraAuthenticationError, JiraApiError) as e:
             # Make 401/authorization failures fatal to avoid silent data loss
@@ -335,7 +335,7 @@ class AccountMigration(BaseMigration):
 
         return mapping
 
-    def create_account_custom_field(self) -> int:  # noqa: C901
+    def create_account_custom_field(self) -> int:
         """Create a custom field in OpenProject for Tempo accounts.
 
         Returns:
@@ -361,7 +361,7 @@ class AccountMigration(BaseMigration):
                     )
                     return self.account_custom_field_id
             self.logger.info("Tempo Account custom field not found, will create it")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning("Error checking existing custom fields via file: %s", e)
 
         # Try file-based Ruby script approach to avoid console parsing issues
@@ -384,7 +384,7 @@ class AccountMigration(BaseMigration):
             elif isinstance(output, str):
                 out = output.strip()
                 # Some consoles echo with prefix/suffix; extract trailing digits
-                import re as _re  # noqa: PLC0415
+                import re as _re
 
                 m = _re.search(r"(\d+)$", out)
                 if m:
@@ -400,7 +400,7 @@ class AccountMigration(BaseMigration):
 
             if not cf_id:
                 msg = "Failed to determine Tempo Account custom field ID"
-                raise MigrationError(msg)  # noqa: TRY301
+                raise MigrationError(msg)
             self.account_custom_field_id = cf_id
         except Exception as e:
             msg = f"Failed to create or retrieve Tempo Account custom field: {e}"
@@ -730,13 +730,13 @@ class AccountMigration(BaseMigration):
             if existing_id is None:
                 self.logger.info("No existing 'Tempo Account' custom field found")
                 msg = "Tempo Account custom field does not exist"
-                raise MigrationError(msg)  # noqa: TRY301
+                raise MigrationError(msg)
 
             self.logger.info(
                 "Found existing 'Tempo Account' custom field with ID: %d",
                 existing_id,
             )
-            return existing_id  # noqa: TRY300
+            return existing_id
         except MigrationError:
             # Re-raise migration errors
             raise
@@ -809,7 +809,7 @@ class AccountMigration(BaseMigration):
 
             error_msg = f"Failed to create custom field via Rails. Result: {result}"
             self.logger.warning(error_msg)
-            raise MigrationError(error_msg)  # noqa: TRY301
+            raise MigrationError(error_msg)
 
         except MigrationError:
             # Re-raise migration errors
@@ -839,7 +839,7 @@ class AccountMigration(BaseMigration):
                 validated_field_id = int(field_id)
                 if validated_field_id <= 0:
                     msg = "Field ID must be positive"
-                    raise ValueError(msg)  # noqa: TRY301
+                    raise ValueError(msg)
             except (ValueError, TypeError) as e:
                 error_msg = f"Invalid field_id provided: {field_id!r} (must be positive integer)"
                 raise MigrationError(error_msg) from e
@@ -877,7 +877,7 @@ class AccountMigration(BaseMigration):
             else:
                 error_msg = f"Failed to activate custom field for all types. Result: {result}"
                 self.logger.warning(error_msg)
-                raise MigrationError(error_msg)  # noqa: TRY301
+                raise MigrationError(error_msg)
 
         except MigrationError:
             # Re-raise migration errors

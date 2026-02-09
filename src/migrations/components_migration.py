@@ -16,7 +16,7 @@ from src.config import logger
 
 @register_entity_types("components")
 class ComponentsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -52,7 +52,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Collect component names per Jira project from migrated issues."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map.keys()]
+        jira_keys = [str(k) for k in wp_map]
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"by_project": {}})
 
@@ -74,13 +74,13 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
                         name = getattr(c, "name", None)
                     if name and isinstance(name, str) and name.strip():
                         by_project.setdefault(pj, set()).add(name.strip())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
-        materialized = {k: sorted(list(v)) for k, v in by_project.items() if v}
+        materialized = {k: sorted(v) for k, v in by_project.items() if v}
         # Cache issues for reuse in _load() to avoid second Jira API call
         return ComponentResult(
-            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized, "issues": issues}
+            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized, "issues": issues},
         )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
@@ -125,7 +125,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
                 name = str(r.get("name"))
                 cid = int(r.get("id"))
                 by_pid_name_to_id.setdefault(str(pid), {})[name] = cid
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
         to_create: list[dict[str, Any]] = []
@@ -158,7 +158,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
                             name = str(r.get("name"))
                             cid = int(r.get("id"))
                             by_pid_name_to_id.setdefault(str(pid), {})[name] = cid
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             continue
             except Exception:
                 logger.exception("Failed to refresh Category map after creation")
@@ -183,7 +183,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            jira_keys = [str(k) for k in wp_map.keys()]
+            jira_keys = [str(k) for k in wp_map]
             issues = self._merge_batch_issues(jira_keys)
 
         updates: list[dict[str, Any]] = []
@@ -229,7 +229,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
                 if not cat_id:
                     continue
                 updates.append({"id": int(wp_id), "category_id": int(cat_id)})
-            except Exception:  # noqa: BLE001
+            except Exception:
                 failed += 1
 
         if not updates:

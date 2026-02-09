@@ -56,7 +56,7 @@ class SafeJSONEncoder(json.JSONEncoder):
             # For objects with __dict__, try to serialize their attributes
             try:
                 return obj.__dict__
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug("JSON default encode failed for __dict__: %s", e)
         elif hasattr(obj, "__iter__") and not isinstance(
             obj,
@@ -65,7 +65,7 @@ class SafeJSONEncoder(json.JSONEncoder):
             # For iterables, convert to list
             try:
                 return list(obj)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug("JSON default encode failed for iterable: %s", e)
 
         # Reject objects we can't safely serialize
@@ -204,7 +204,7 @@ class IdempotencyKeyManager:
 
             if redis is None:
                 msg = "redis module not available"
-                raise RuntimeError(msg)  # noqa: TRY301
+                raise RuntimeError(msg)
             self._redis_client = redis.Redis.from_url(self.redis_url, **redis_params)
 
             # Test connection
@@ -218,7 +218,7 @@ class IdempotencyKeyManager:
             self._redis_available = True
             logger.info("Redis connection established for idempotency management")
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Redis connection failed, using in-memory fallback: %s", e)
             self._redis_available = False
             self._redis_client = None
@@ -252,7 +252,7 @@ class IdempotencyKeyManager:
         try:
             # Parse as UUID and verify it's version 4
             parsed_uuid = uuid.UUID(key)
-            return parsed_uuid.version == UUID_V4  # noqa: TRY300
+            return parsed_uuid.version == UUID_V4
         except (ValueError, AttributeError):
             return False
 
@@ -272,7 +272,7 @@ class IdempotencyKeyManager:
                 msg = "Unsafe JSON object type"
                 raise TypeError(msg)
 
-            return result  # noqa: TRY300
+            return result
 
         except json.JSONDecodeError as e:
             msg = f"Invalid JSON: {e}"
@@ -347,7 +347,7 @@ class IdempotencyKeyManager:
 
                 with self._lock:
                     self._metrics["keys_cached"] += 1
-                return True  # noqa: TRY300
+                return True
 
             except RedisError as e:
                 logger.warning("Redis error during set: %s", e)
@@ -363,9 +363,9 @@ class IdempotencyKeyManager:
 
             with self._lock:
                 self._metrics["keys_cached"] += 1
-            return True  # noqa: TRY300
+            return True
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Failed to cache in memory: %s", e)
             return False
 

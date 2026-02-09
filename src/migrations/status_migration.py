@@ -102,7 +102,7 @@ class StatusMigration(BaseMigration):
 
             # Use the REST API endpoint for status retrieval
             response = self.jira_client.jira._get_json("status")
-            return response if response else []
+            return response or []
 
         # Raise error for unsupported types
         msg = (
@@ -155,7 +155,7 @@ class StatusMigration(BaseMigration):
 
             # Use the REST API endpoint for status retrieval
             response = self.jira_client.jira._get_json("status")
-            statuses = response if response else []
+            statuses = response or []
 
             if not statuses:
                 logger.warning("No statuses found in Jira")

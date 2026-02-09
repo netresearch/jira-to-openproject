@@ -32,7 +32,7 @@ ROLE_NAME_MAPPING = {
 class AdminSchemeMigration(BaseMigration):
     """Synchronise Jira project role actors to OpenProject roles and memberships."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.project_mapping = config.mappings.get_mapping("project") or {}
         self.user_mapping = config.mappings.get_mapping("user") or {}
@@ -175,7 +175,7 @@ class AdminSchemeMigration(BaseMigration):
             if group_name in self.group_mapping:
                 return group_name
             # Some mappings may store case-variant names
-            for known in self.group_mapping.keys():
+            for known in self.group_mapping:
                 if known.lower() == group_name.lower():
                     return known
             return None
@@ -367,7 +367,7 @@ class AdminSchemeMigration(BaseMigration):
         """Populate group mapping directly from OpenProject when absent."""
         try:
             groups = self.op_client.get_groups()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.warning("Unable to refresh group mapping: %s", exc)
             return
 
@@ -387,5 +387,5 @@ class AdminSchemeMigration(BaseMigration):
             self.group_mapping = mapping
             try:
                 config.mappings.set_mapping("group", mapping)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self.logger.debug("Persisting refreshed group mapping failed; continuing in-memory only")

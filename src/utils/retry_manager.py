@@ -245,7 +245,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def retry(  # noqa: PLR0913
+def retry(
     max_attempts: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 60.0,

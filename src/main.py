@@ -28,7 +28,7 @@ def validate_database_configuration() -> None:
 
     """
     try:
-        from src.config_loader import ConfigLoader  # noqa: PLC0415
+        from src.config_loader import ConfigLoader
 
         # ConfigLoader initialization will raise RuntimeError if POSTGRES_PASSWORD is missing
         # or empty, so we don't need additional validation here
@@ -42,7 +42,7 @@ def validate_database_configuration() -> None:
             "or as a Docker secret at /run/secrets/postgres_password",
         )
         sys.exit(1)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("Unexpected error validating database configuration: %s", e)
         sys.exit(1)
 
@@ -97,7 +97,7 @@ def _ensure_singleton_lock(lock_file: Path) -> None:
             # Stale lock
             try:
                 lock_file.unlink(missing_ok=True)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     # Create the lock exclusively if possible
@@ -124,7 +124,7 @@ def _ensure_singleton_lock(lock_file: Path) -> None:
             content = lock_file.read_text(encoding="utf-8").strip()
             if content == str(current_pid):
                 lock_file.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     atexit.register(_cleanup_lock)
@@ -236,7 +236,7 @@ def main() -> None:
         update_from_cli_args(args)
 
         # Lazily import migration helpers now that config is updated
-        from src.migration import (  # noqa: PLC0415
+        from src.migration import (
             PREDEFINED_PROFILES,
             restore_backup,
             run_migration,
@@ -257,7 +257,7 @@ def main() -> None:
             _ensure_singleton_lock(Path("var/run/j2o_migrate.pid"))
         except SystemExit:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("Failed to acquire singleton lock: %s", e)
             sys.exit(1)
 
@@ -294,7 +294,7 @@ def main() -> None:
                 components_to_run = profile_components
 
         # Run the migration with new options
-        import asyncio  # noqa: PLC0415
+        import asyncio
 
         result = asyncio.run(
             run_migration(
@@ -335,6 +335,6 @@ if __name__ == "__main__":
     except (ConnectionError, TimeoutError) as e:
         logger.error("Network connectivity error: %s", e)
         sys.exit(1)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("Unexpected error occurred during migration: %s", e)
         sys.exit(1)

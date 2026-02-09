@@ -463,7 +463,7 @@ class TestConfigurationValidation:
     ) -> None:
         """Verify that invalid duration format falls back to defaults."""
         # Arrange
-        jira_client, op_client = mock_clients
+        jira_client, _op_client = mock_clients
         with patch(
             "src.utils.enhanced_user_association_migrator.config",
         ) as mock_config:
@@ -495,7 +495,7 @@ class TestConfigurationValidation:
     ) -> None:
         """Verify that missing admin user ID for assign_admin strategy logs a warning."""
         # Arrange
-        jira_client, op_client = mock_clients
+        jira_client, _op_client = mock_clients
         with patch(
             "src.utils.enhanced_user_association_migrator.config",
         ) as mock_config:

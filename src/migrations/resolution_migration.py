@@ -11,7 +11,7 @@ duplicate journal entries.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
@@ -22,13 +22,12 @@ if TYPE_CHECKING:
 
 from src.config import logger
 
-
 RESOLUTION_CF_NAME = "Resolution"
 
 
 @register_entity_types("resolutions")
 class ResolutionMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -50,7 +49,7 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract Jira resolution per migrated issue (via work_package mapping)."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         issues = self._merge_batch_issues(keys)
         reso_by_key: dict[str, str] = {}
         for k, issue in issues.items():
@@ -60,7 +59,7 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
                 name = getattr(res, "name", None)
                 if name:
                     reso_by_key[k] = str(name)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"resolution": reso_by_key})
 
@@ -70,7 +69,7 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=False, failed=1)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
-        project_map = self.mappings.get_mapping("project") or {}
+        self.mappings.get_mapping("project") or {}
         reso_by_key: dict[str, str] = (mapped.data or {}).get("resolution", {})  # type: ignore[assignment]
 
         updated = 0

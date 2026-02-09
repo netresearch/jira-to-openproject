@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from src import config
-from src.config import logger
 from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
@@ -79,7 +78,7 @@ class UserMigration(BaseMigration):
         # If mapping is empty but OP might have provenance data, try to restore
         if not self.user_mapping:
             self.logger.info(
-                "User mapping is empty - will attempt restoration from OP on first use"
+                "User mapping is empty - will attempt restoration from OP on first use",
             )
 
         # Caches for provenance helpers
@@ -503,7 +502,7 @@ class UserMigration(BaseMigration):
                         legacy_cf,
                         removed_count,
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.logger.debug(
                     "Failed to remove legacy user custom field '%s': %s",
                     legacy_cf,
@@ -526,7 +525,7 @@ class UserMigration(BaseMigration):
                 )
                 if isinstance(cf, dict) and cf.get("id"):
                     ids[name] = int(cf["id"])
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.logger.warning("Unable to ensure user custom field %s: %s", name, exc)
 
         self._origin_cf_id_map = ids
@@ -558,7 +557,7 @@ class UserMigration(BaseMigration):
                 parts.append(str(version))
 
             label = " ".join(part for part in parts if part).strip()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.debug("Failed to derive Jira origin label: %s", exc)
 
         self._origin_system_label_cache = label or "Jira"
@@ -576,7 +575,7 @@ class UserMigration(BaseMigration):
                 server_info = jira_client.jira.server_info()
             if isinstance(server_info, dict):
                 base_url = str(server_info.get("baseUrl") or "").strip()
-        except Exception:  # noqa: BLE001
+        except Exception:
             base_url = ""
 
         if not base_url:
@@ -598,7 +597,7 @@ class UserMigration(BaseMigration):
                 self._supported_languages = normalized
             else:
                 self._supported_languages = set()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.debug("Failed to fetch supported languages: %s", exc)
             self._supported_languages = set()
 
@@ -640,7 +639,7 @@ class UserMigration(BaseMigration):
 
         try:
             op_id_int = int(op_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
         jira_key = mapping.get("jira_key") or meta.get("user_key")
@@ -661,7 +660,7 @@ class UserMigration(BaseMigration):
 
         try:
             self.op_client.ensure_local_avatars_enabled()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.warning("Failed to ensure local avatars are enabled: %s", exc)
             return {"uploaded": 0, "skipped": len(jobs)}
 
@@ -701,16 +700,16 @@ class UserMigration(BaseMigration):
             try:
                 with local_path.open("wb") as handle:
                     handle.write(data)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.logger.warning("Failed to persist avatar for %s: %s", jira_key, exc)
                 skipped += 1
                 continue
 
             container_name = f"j2o_avatar_{job['openproject_id']}_{uuid.uuid4().hex}.{ext}"
-            container_path = Path("/tmp") / container_name  # noqa: S108
+            container_path = Path("/tmp") / container_name
             try:
                 self.op_client.transfer_file_to_container(local_path, container_path)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.logger.warning("Failed to copy avatar for %s to container: %s", jira_key, exc)
                 skipped += 1
                 with suppress(OSError):
@@ -724,7 +723,7 @@ class UserMigration(BaseMigration):
                     filename=filename,
                     content_type=content_type,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self.logger.warning("Failed to set avatar for %s: %s", jira_key, exc)
                 skipped += 1
                 result = {"success": False}
@@ -734,7 +733,7 @@ class UserMigration(BaseMigration):
                         f"rm -f {container_path.as_posix()}",
                         timeout=10,
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
             with suppress(OSError):
@@ -757,7 +756,7 @@ class UserMigration(BaseMigration):
         if content_type:
             candidate = (mimetypes.guess_extension(content_type) or "").lstrip(".")
         if not candidate and avatar_url:
-            path_ext = avatar_url.split("?")[0].rsplit(".", 1)
+            path_ext = avatar_url.split("?", maxsplit=1)[0].rsplit(".", 1)
             if len(path_ext) == 2:
                 candidate = path_ext[1]
         if not candidate:
@@ -767,7 +766,7 @@ class UserMigration(BaseMigration):
     def _save_avatar_cache(self) -> None:
         try:
             self._save_to_json(self._avatar_cache, self.avatar_cache_file)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.debug("Failed to persist avatar cache: %s", exc)
 
     def _get_jira_user_index(self) -> dict[str, dict[str, Any]]:
@@ -797,7 +796,7 @@ class UserMigration(BaseMigration):
 
         try:
             details = self.jira_client.get_user_info(str(key))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.debug("Failed to enrich Jira user %s: %s", key, exc)
             return
 
@@ -920,7 +919,7 @@ class UserMigration(BaseMigration):
                         display_name = user["jira_display_name"].strip() if user["jira_display_name"] else ""
                         names = ["User", user["jira_name"]] if not display_name else display_name.split(" ", 1)
 
-                        first_name = names[0].strip() if names[0].strip() else "User"
+                        first_name = names[0].strip() or "User"
                         last_name = names[1].strip() if len(names) > 1 and names[1].strip() else user["jira_name"]
 
                         # Ensure first_name and last_name are valid (non-empty, alphanumeric start)
@@ -975,28 +974,28 @@ class UserMigration(BaseMigration):
                                 {
                                     "id": cf_ids["J2O Origin System"],
                                     "value": origin_meta["origin_system"],
-                                }
+                                },
                             )
                         if origin_meta.get("user_id") and cf_ids.get("J2O User ID"):
                             cf_payload.append(
                                 {
                                     "id": cf_ids["J2O User ID"],
                                     "value": origin_meta["user_id"],
-                                }
+                                },
                             )
                         if origin_meta.get("user_key") and cf_ids.get("J2O User Key"):
                             cf_payload.append(
                                 {
                                     "id": cf_ids["J2O User Key"],
                                     "value": origin_meta["user_key"],
-                                }
+                                },
                             )
                         if origin_meta.get("external_url") and cf_ids.get("J2O External URL"):
                             cf_payload.append(
                                 {
                                     "id": cf_ids["J2O External URL"],
                                     "value": origin_meta["external_url"],
-                                }
+                                },
                             )
 
                         user_record: dict[str, Any] = {
@@ -1105,22 +1104,22 @@ class UserMigration(BaseMigration):
                                 target_mapping["openproject_id"] = op_id
                                 target_mapping["openproject_login"] = existing_op_user.get("login")
                                 target_mapping["openproject_email"] = existing_op_user.get("mail") or existing_op_user.get(
-                                    "email"
+                                    "email",
                                 )
                                 target_mapping["matched_by"] = "username_existing"
 
                                 # Merge provenance data into cached OpenProject users
-                                def _apply_provenance(op_user: dict[str, Any]) -> None:
-                                    if origin_meta.get("origin_system"):
-                                        op_user["j2o_origin_system"] = origin_meta.get("origin_system")
-                                    if origin_meta.get("user_id"):
-                                        op_user["j2o_user_id"] = origin_meta.get("user_id")
-                                    if origin_meta.get("user_key"):
-                                        op_user["j2o_user_key"] = origin_meta.get("user_key")
-                                    if origin_meta.get("external_url"):
-                                        op_user["j2o_external_url"] = origin_meta.get("external_url")
-                                    if origin_meta.get("time_zone"):
-                                        op_user["time_zone"] = origin_meta.get("time_zone")
+                                def _apply_provenance(op_user: dict[str, Any], meta: dict[str, Any] = origin_meta) -> None:
+                                    if meta.get("origin_system"):
+                                        op_user["j2o_origin_system"] = meta.get("origin_system")
+                                    if meta.get("user_id"):
+                                        op_user["j2o_user_id"] = meta.get("user_id")
+                                    if meta.get("user_key"):
+                                        op_user["j2o_user_key"] = meta.get("user_key")
+                                    if meta.get("external_url"):
+                                        op_user["j2o_external_url"] = meta.get("external_url")
+                                    if meta.get("time_zone"):
+                                        op_user["time_zone"] = meta.get("time_zone")
                                     op_user.pop("jira_user_key", None)
 
                                 existing_entry = next(
@@ -1155,7 +1154,7 @@ class UserMigration(BaseMigration):
                                         "login": m.get("login"),
                                         "mail": m.get("mail"),
                                         "id": item.get("id"),
-                                    }
+                                    },
                                 )
 
                         # Log a few errors safely
@@ -1228,7 +1227,7 @@ class UserMigration(BaseMigration):
         for op_user in self.op_users:
             try:
                 uid = int(op_user.get("id"))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             op_users_by_id[uid] = op_user
 
@@ -1244,7 +1243,7 @@ class UserMigration(BaseMigration):
 
             try:
                 op_id_int = int(op_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
             op_user = op_users_by_id.get(op_id_int)
@@ -1499,7 +1498,7 @@ class UserMigration(BaseMigration):
                     provenance_stats.get("errors", 0),
                     provenance_stats.get("avatars_uploaded", 0),
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.warning("Failed to backfill user origin metadata: %s", e)
 
             # Success if failure rate is below threshold (allow partial success for data quality issues)

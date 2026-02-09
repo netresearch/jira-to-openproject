@@ -541,8 +541,7 @@ class MarkdownConverter:
 
         # Apply both patterns
         text = self.attachment_pattern.sub(replace_attachment, text)
-        text = self.attachment_ref_pattern.sub(replace_attachment_ref, text)
-        return text
+        return self.attachment_ref_pattern.sub(replace_attachment_ref, text)
 
     def _convert_horizontal_rules(self, text: str) -> str:
         """Convert Jira horizontal rules to markdown horizontal rules."""
@@ -667,7 +666,7 @@ class MarkdownConverter:
 
         return self.panel_pattern.sub(replace_panel, text)
 
-    def _convert_advanced_macros(self, text: str) -> str:  # noqa: C901
+    def _convert_advanced_macros(self, text: str) -> str:
         """Convert advanced Jira macros to markdown equivalents."""
 
         def parse_title(params: str | None) -> str:

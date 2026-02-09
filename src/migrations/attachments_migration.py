@@ -28,7 +28,7 @@ from src.config import logger
 
 @register_entity_types("attachments")
 class AttachmentsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
         # Attachment directory
         try:
@@ -76,6 +76,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Dict mapping jira_key to list of attachment info dicts
+
         """
         if not jira_keys:
             return {}
@@ -112,11 +113,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         if not filename or not url:
                             continue
                         items.append({"id": aid, "filename": filename, "size": size, "url": url})
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         continue
                 if items:
                     by_key[key] = items
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
         return by_key
@@ -156,7 +157,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     for chunk in response.iter_content(chunk_size=65536):
                         if chunk:
                             f.write(chunk)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Attachment download failed for %s: %s", url, e)
         return dest_path
 
@@ -214,7 +215,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                             "digest": digest,
                         },
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
 
         return ComponentResult(success=True, data={"ops": ops})
@@ -253,7 +254,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         "container_path": container_path,
                     },
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
         if not container_ops:
@@ -344,6 +345,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
         Args:
             mapping: {jira_key: {filename: openproject_attachment_id}}
+
         """
         mapping_file = Path(self.data_dir) / "attachment_mapping.json"
         try:
@@ -367,7 +369,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             self.logger.exception("Failed to save attachment mapping")
 
     def _process_batch_end_to_end(
-        self, jira_keys: list[str], wp_map: dict[str, Any]
+        self, jira_keys: list[str], wp_map: dict[str, Any],
     ) -> tuple[int, int, dict[str, dict[str, int]]]:
         """Process a batch of issues: extract, download, upload, attach.
 
@@ -377,6 +379,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
         Returns:
             Tuple of (updated_count, failed_count, attachment_mapping)
+
         """
         # Extract attachment metadata for this batch
         logger.info("_process_batch_end_to_end: starting extract for %d keys", len(jira_keys))
@@ -420,7 +423,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         "filename": filename,
                         "digest": digest,
                     })
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
 
         if not ops:
@@ -439,7 +442,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 local_path = Path(str(op["local_path"]))
                 if local_path.exists():
                     local_path.unlink()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
         return (
@@ -492,7 +495,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 batch_keys = jira_keys[i : i + batch_size]
                 try:
                     updated, failed, mapping = self._process_batch_end_to_end(
-                        batch_keys, wp_map
+                        batch_keys, wp_map,
                     )
                     total_updated += updated
                     total_failed += failed

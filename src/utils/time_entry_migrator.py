@@ -11,7 +11,6 @@ This module provides complete time tracking data migration capabilities:
 
 import json
 import os
-import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -217,7 +216,7 @@ class TimeEntryMigrator:
                 len(self.activity_mapping),
             )
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning("Failed to load activity mappings: %s", e)
             # Honor stop-on-error if configured to avoid silent partial migrations
             try:
@@ -372,7 +371,7 @@ class TimeEntryMigrator:
             else:
                 self.logger.info("No Tempo time entries found")
 
-            return result_entries  # noqa: TRY300
+            return result_entries
 
         except Exception as e:
             error_msg = f"Failed to extract Tempo time entries: {e}"
@@ -628,7 +627,7 @@ class TimeEntryMigrator:
                     # Move to next chunk
                     chunk_start = chunk_end
 
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     self.logger.warning("Batch chunk %d failed: %s - falling back to per-entry", chunk_num, e)
                     migration_summary["errors"].append(f"Batch chunk {chunk_num} failed: {e}")
                     batch_success = False
@@ -658,7 +657,7 @@ class TimeEntryMigrator:
         except Exception:
             concurrency = 8
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         total_to_process = len(entries_to_migrate)
         processed_total = 0
@@ -689,7 +688,7 @@ class TimeEntryMigrator:
                         if isinstance(res, dict) and res.get("id"):
                             return True, int(res["id"]), None
                         return False, None, None
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         return False, None, str(e)
 
                 with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
@@ -698,7 +697,7 @@ class TimeEntryMigrator:
                         ok, new_id, err = False, None, None
                         try:
                             ok, new_id, err = fut.result()
-                        except Exception as e:  # noqa: BLE001
+                        except Exception as e:
                             ok, err = False, str(e)
                         if err:
                             migration_summary["errors"].append(err)
@@ -742,7 +741,7 @@ class TimeEntryMigrator:
                             created_ids.append(res["id"])
                         else:
                             migration_summary["failed_migrations"] += 1
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         migration_summary["failed_migrations"] += 1
                         migration_summary["errors"].append(str(e))
 
@@ -920,7 +919,7 @@ class TimeEntryMigrator:
                     self._ff_cutoff = best
                     if best:
                         self.logger.info("Fast-forward enabled: cutoff=%s field=%s", best.isoformat(), self._ff_field)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     self.logger.warning("Failed to compute fast-forward cutoff: %s", e)
                     self._ff_cutoff = None
 

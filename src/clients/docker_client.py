@@ -99,7 +99,7 @@ class DockerClient:
                 return False
 
             logger.error("Container not found: %s", self.container_name)
-            return False  # noqa: TRY300
+            return False
         except Exception:
             logger.exception("Error checking if container exists")
             raise
@@ -177,7 +177,7 @@ class DockerClient:
             cmd = f"docker cp {quote(str(local_path))} {quote(self.container_name)}:{quote(str(container_path))}"
 
             # Execute the command
-            stdout, stderr, returncode = self.ssh_client.execute_command(
+            _stdout, stderr, returncode = self.ssh_client.execute_command(
                 cmd,
                 check=True,
                 timeout=self.command_timeout,
@@ -192,7 +192,7 @@ class DockerClient:
                         container_path,
                     )
                     msg = f"File not found in container after copy: {container_path}"
-                    raise ValueError(msg)  # noqa: TRY301
+                    raise ValueError(msg)
 
                 # Get file size in container
                 size = self.get_file_size_in_container(container_path)
@@ -205,7 +205,7 @@ class DockerClient:
             else:
                 logger.error("Failed to copy file to container: %s", stderr)
                 msg = f"Failed to copy file to container: {stderr}"
-                raise ValueError(msg)  # noqa: TRY301
+                raise ValueError(msg)
 
         except FileNotFoundError:
             # Re-raise file not found errors
@@ -245,12 +245,12 @@ class DockerClient:
         try:
             # Use a temporary file on the remote server for intermediate storage
             temp_filename = f"docker_transfer_{uuid.uuid4().hex}.tmp"
-            remote_temp_path = f"/tmp/{temp_filename}"  # noqa: S108
+            remote_temp_path = f"/tmp/{temp_filename}"
 
             # Step 1: Copy from container to temporary location on remote server
             cmd = f"docker cp {quote(self.container_name)}:{quote(str(container_path))} {quote(remote_temp_path)}"
 
-            stdout, stderr, returncode = self.ssh_client.execute_command(
+            _stdout, stderr, returncode = self.ssh_client.execute_command(
                 cmd,
                 check=True,
                 timeout=self.command_timeout,
@@ -259,7 +259,7 @@ class DockerClient:
             if returncode != 0:
                 logger.error("Failed to copy file from container: %s", stderr)
                 msg = f"Failed to copy file from container: {stderr}"
-                raise ValueError(msg)  # noqa: TRY301
+                raise ValueError(msg)
 
             # Step 2: Copy from remote server to actual local path
             try:
@@ -285,7 +285,7 @@ class DockerClient:
                 try:
                     cleanup_cmd = f"rm -f {quote(remote_temp_path)}"
                     self.ssh_client.execute_command(cleanup_cmd, check=False)
-                except Exception as cleanup_error:  # noqa: BLE001
+                except Exception as cleanup_error:
                     logger.warning(
                         "Failed to clean up temporary file %s: %s",
                         remote_temp_path,
@@ -330,7 +330,7 @@ class DockerClient:
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
             return stdout.strip() == "EXISTS" and returncode == 0
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Error checking if file exists in container: %s", e)
             return False
 
@@ -367,11 +367,11 @@ class DockerClient:
                     stdout.strip(),
                 )
                 return None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Error getting file size in container: %s", e)
             return None
 
-    def run_container(  # noqa: PLR0913, PLR0912, C901
+    def run_container(
         self,
         image: str,
         name: str | None = None,
@@ -486,12 +486,12 @@ class DockerClient:
             if returncode != 0:
                 logger.error("Failed to inspect container: %s", stderr)
                 msg = f"Failed to inspect container: {stderr}"
-                raise ValueError(msg)  # noqa: TRY301
+                raise ValueError(msg)
 
             inspect_data = json.loads(stdout)
             if not inspect_data:
                 msg = f"No data returned for container: {self.container_name}"
-                raise ValueError(msg)  # noqa: TRY301
+                raise ValueError(msg)
 
             container_info = inspect_data[0]
 
@@ -541,7 +541,7 @@ class DockerClient:
         container_path = Path(container_path) if isinstance(container_path, str) else container_path
 
         # Use a temporary path on the remote server
-        remote_temp_path = Path(f"/tmp/{local_path.name}")  # noqa: S108
+        remote_temp_path = Path(f"/tmp/{local_path.name}")
 
         try:
             # Step 1: Transfer from local to remote server via SSH
@@ -568,7 +568,7 @@ class DockerClient:
             # Step 3: Set proper permissions as root to ensure Rails can read it
             logger.debug("Setting permissions on file in container: %s", container_path)
             quoted_path = quote(str(container_path))
-            stdout, stderr, rc = self.execute_command(
+            _stdout, stderr, rc = self.execute_command(
                 f"chmod 644 {quoted_path}",
                 user="root",  # Execute as root user
             )

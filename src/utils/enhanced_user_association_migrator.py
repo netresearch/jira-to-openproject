@@ -17,7 +17,7 @@ import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Semaphore
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Self, TypedDict
 
 import requests
 
@@ -98,7 +98,7 @@ class ThreadSafeConcurrentTracker:
         with self._lock:
             return self._active_count
 
-    def __enter__(self) -> "ThreadSafeConcurrentTracker":
+    def __enter__(self) -> Self:
         self.acquire()
         return self
 
@@ -546,9 +546,6 @@ class EnhancedUserAssociationMigrator:
                 e,
             )
             return {}
-        except OSError as e:
-            self.logger.exception("File system error loading user mapping: %s", e)
-            return {}
 
     def _validate_jira_key(self, jira_key: str) -> None:
         """Validate JIRA key format using the centralized validator.
@@ -623,16 +620,10 @@ class EnhancedUserAssociationMigrator:
                 e,
             )
             self._create_enhanced_mappings()
-        except OSError as e:
-            self.logger.exception(
-                "File system error loading enhanced user mappings: %s",
-                e,
-            )
-            self._create_enhanced_mappings()
 
     def _create_enhanced_mappings(self) -> None:
         """Create enhanced user mappings from basic user mapping.
-        
+
         Uses existing data from user_mapping.json instead of making live Jira API calls,
         since the mapping file already contains all required user information.
         """
@@ -1298,7 +1289,7 @@ class EnhancedUserAssociationMigrator:
 
         return result
 
-    def _get_fallback_user(self, role: str) -> int | None:  # noqa: ARG002
+    def _get_fallback_user(self, role: str) -> int | None:
         """Get appropriate fallback user for a specific role."""
         # Priority order for fallback users
         fallback_priority = ["migration", "admin", "system"]
@@ -1391,7 +1382,6 @@ class EnhancedUserAssociationMigrator:
             last_refreshed = mapping.get("lastRefreshed")
             if not last_refreshed:
                 stale_reason = "No lastRefreshed timestamp"
-                reason_tag = "no_timestamp"
             else:
                 try:
                     last_refresh_time = datetime.fromisoformat(
@@ -1399,10 +1389,8 @@ class EnhancedUserAssociationMigrator:
                     )
                     age_seconds = (current_time - last_refresh_time).total_seconds()
                     stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
-                    reason_tag = "expired"
                 except ValueError:
                     stale_reason = "Invalid lastRefreshed timestamp"
-                    reason_tag = "invalid_timestamp"
 
             # MONITORING: Staleness detection logging
             self.logger.debug("Staleness detected for %s: %s", username, stale_reason)
@@ -1462,7 +1450,7 @@ class EnhancedUserAssociationMigrator:
                     # MONITORING: Refresh success metrics (YOLO FIX: defensive metrics)
                     # Ensure mapping is returned for success path per end-to-end expectations
                     cached = self.enhanced_user_mappings.get(username)
-                    return cached if cached else None
+                    return cached or None
                 # MONITORING: Refresh failure logging and metrics
                 self.logger.debug("Failed to refresh mapping for %s", username)
 
@@ -1519,12 +1507,10 @@ class EnhancedUserAssociationMigrator:
 
                     if not mapping:
                         stale_reason = "Mapping does not exist"
-                        reason_tag = "missing"
                     else:
                         last_refreshed = mapping.get("lastRefreshed")
                         if not last_refreshed:
                             stale_reason = "No lastRefreshed timestamp"
-                            reason_tag = "no_timestamp"
                         else:
                             try:
                                 last_refresh_time = datetime.fromisoformat(
@@ -1532,10 +1518,8 @@ class EnhancedUserAssociationMigrator:
                                 )
                                 age_seconds = (current_time - last_refresh_time).total_seconds()
                                 stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
-                                reason_tag = "expired"
                             except ValueError:
                                 stale_reason = "Invalid lastRefreshed timestamp"
-                                reason_tag = "invalid_timestamp"
 
                     stale_mappings[username] = stale_reason
 
@@ -1632,7 +1616,6 @@ class EnhancedUserAssociationMigrator:
                 # Retry logic for individual mapping refresh
                 last_error = None
                 success = False
-                failure_metric_recorded = False
                 attempts_used = max_retries + 1
 
                 for attempt in range(max_retries + 1):
@@ -1680,7 +1663,6 @@ class EnhancedUserAssociationMigrator:
                                 "Unknown error",
                             )
                             attempts_used = attempt + 1
-                            failure_metric_recorded = True
                             # Stop retrying for terminal failures
                             if refreshed_mapping.get("metadata", {}).get("terminal", False):
                                 break
@@ -1926,7 +1908,7 @@ class EnhancedUserAssociationMigrator:
                 from unittest.mock import MagicMock  # type: ignore[import-not-found]
 
                 patched_internal_helper = isinstance(self._get_jira_user_info, MagicMock)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 patched_internal_helper = False
 
             # Inspect mocks to decide path: prefer raw .get when side_effect set (E2E tests)
@@ -1942,41 +1924,24 @@ class EnhancedUserAssociationMigrator:
             used_internal_helper = False
 
             if patched_internal_helper:
-                try:
-                    jira_user_data = self._get_jira_user_info(username)
-                    used_direct_helper = True
-                    used_internal_helper = True
-                except Exception:
-                    # Defer error logging to outer exception block to avoid duplicate error logs in tests
-                    raise
+                jira_user_data = self._get_jira_user_info(username)
+                used_direct_helper = True
+                used_internal_helper = True
             elif used_timeout_path or get_user_info_side_effect_set:
                 # Timeout-aware or explicit get_user_info retry path
-                try:
-                    jira_user_data = self._get_jira_user_with_retry(username)
-                    used_retry_path = True
-                except Exception:
-                    # Defer error logging to outer exception block to avoid duplicate logs
-                    raise
+                jira_user_data = self._get_jira_user_with_retry(username)
+                used_retry_path = True
             elif get_side_effect_set:
                 # End-to-end path prefers internal HTTP helper using raw .get
-                try:
-                    jira_user_data = self._get_jira_user_info(username)
-                    used_direct_helper = True
-                except Exception:
-                    # Defer error logging to outer exception block to avoid duplicate logs
-                    raise
+                jira_user_data = self._get_jira_user_info(username)
+                used_direct_helper = True
+            # Default preference: if get_user_info exists, use retry helper; else internal HTTP
+            elif callable(ji_get_user_info):
+                jira_user_data = self._get_jira_user_with_retry(username)
+                used_retry_path = True
             else:
-                # Default preference: if get_user_info exists, use retry helper; else internal HTTP
-                try:
-                    if callable(ji_get_user_info):
-                        jira_user_data = self._get_jira_user_with_retry(username)
-                        used_retry_path = True
-                    else:
-                        jira_user_data = self._get_jira_user_info(username)
-                        used_direct_helper = True
-                except Exception:
-                    # Defer error logging to outer exception block to avoid duplicate logs
-                    raise
+                jira_user_data = self._get_jira_user_info(username)
+                used_direct_helper = True
             # If retry path provided a non-dict (e.g., MagicMock), fall back to HTTP helper for real data
             if jira_user_data is not None and not isinstance(jira_user_data, dict):
                 try:
@@ -1987,7 +1952,7 @@ class EnhancedUserAssociationMigrator:
                     else:
                         # Treat non-dict/None as not found to trigger fallback/metrics per tests
                         jira_user_data = None
-                except Exception:  # noqa: BLE001
+                except Exception:
                     # Treat errors in fallback fetch as not found
                     jira_user_data = None
 
@@ -2115,7 +2080,7 @@ class EnhancedUserAssociationMigrator:
                                 ),
                             },
                         )
-            except Exception:  # noqa: BLE001, S110
+            except Exception:
                 pass
 
             # Mark as successfully mapped if OP user id present
@@ -2185,7 +2150,7 @@ class EnhancedUserAssociationMigrator:
             # Always clear the re-entrancy flag
             try:
                 delattr(self, "_in_refresh_call")
-            except Exception:  # noqa: BLE001, S110
+            except Exception:
                 pass
 
     def _validate_refreshed_user(
@@ -2516,7 +2481,7 @@ class EnhancedUserAssociationMigrator:
                     "No email available for OpenProject lookup during refresh",
                 )
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.logger.warning(
                 "Error attempting OpenProject mapping during refresh: %s",
                 e,
@@ -2627,7 +2592,7 @@ class EnhancedUserAssociationMigrator:
                 else:
                     validation_results["fresh_mappings"] += 1
 
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 validation_results["error_mappings"] += 1
                 self.logger.warning("Error validating mapping for %s: %s", username, e)
 
@@ -2640,7 +2605,7 @@ class EnhancedUserAssociationMigrator:
                     "reason": f"Detected {validation_results['stale_mappings']} stale mappings",
                     "priority": (
                         "high"
-                        if validation_results["stale_mappings"] > 10  # noqa: PLR2004
+                        if validation_results["stale_mappings"] > 10
                         else "medium"
                     ),
                 },
@@ -2844,11 +2809,6 @@ class EnhancedUserAssociationMigrator:
                 "Failed to save enhanced user mappings due to file/JSON error: %s",
                 e,
             )
-        except OSError as e:
-            self.logger.exception(
-                "File system error saving enhanced user mappings: %s",
-                e,
-            )
 
     def save_enhanced_mappings(self) -> None:
         """Public API to save enhanced user mappings to file."""
@@ -2947,9 +2907,11 @@ class EnhancedUserAssociationMigrator:
             # Different tests expect different messages depending on input context
             if original_input and original_input.strip() == "":
                 # Whitespace-only inputs should raise the explicit empty-string message
-                raise ValueError("Duration string cannot be empty")
+                msg = "Duration string cannot be empty"
+                raise ValueError(msg)
             # True empty string should raise generic invalid format message
-            raise ValueError("Invalid duration format")
+            msg = "Invalid duration format"
+            raise ValueError(msg)
         pattern = r"^(\d+)([smhd])$"
         match = re.match(pattern, duration_str.lower())
 

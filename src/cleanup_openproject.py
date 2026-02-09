@@ -172,7 +172,7 @@ class OpenProjectCleaner:
 
         return 0
 
-    def run_cleanup(self) -> dict[str, int]:  # noqa: C901, PLR0912
+    def run_cleanup(self) -> dict[str, int]:
         """Run the complete cleanup process for specified entities.
 
         Returns:

@@ -6,11 +6,11 @@ Jira `fields.votes.votes` count for mapped issues.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -21,7 +21,7 @@ VOTES_CF_NAME = "Votes"
 
 @register_entity_types("votes_reactions")
 class VotesMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
@@ -43,7 +43,7 @@ class VotesMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract Jira votes count per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         issues = self._merge_batch_issues(keys)
 
         votes_by_key: dict[str, int] = {}
@@ -54,7 +54,7 @@ class VotesMigration(BaseMigration):  # noqa: D101
                 count = getattr(votes_obj, "votes", None)
                 if isinstance(count, int):
                     votes_by_key[k] = count
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"votes": votes_by_key})
 

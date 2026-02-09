@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
-from src.config import logger
 from src.display import console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
@@ -709,7 +708,7 @@ class IssueTypeMigration(BaseMigration):
             _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
             # Also persist the ID mapping for downstream components
             final_mapping: dict[int, int] = {}
-            for type_name, mapping in self.issue_type_mapping.items():
+            for mapping in self.issue_type_mapping.values():
                 jira_id = mapping.get("jira_id")
                 op_id = mapping.get("openproject_id")
                 if jira_id is not None and op_id:
@@ -733,7 +732,7 @@ class IssueTypeMigration(BaseMigration):
                         {
                             "jira_type_name": mapping.get("jira_name"),
                             "proposed_name": mapping.get("openproject_name"),
-                        }
+                        },
                     )
                     records.append(
                         {
@@ -741,7 +740,7 @@ class IssueTypeMigration(BaseMigration):
                             "is_milestone": bool(mapping.get("is_milestone", False)),
                             "is_default": bool(mapping.get("is_default", False)),
                             # Color creation/linking moved to Python pre-processing later if needed
-                        }
+                        },
                     )
 
             result = self.op_client.bulk_create_records(
@@ -772,7 +771,7 @@ class IssueTypeMigration(BaseMigration):
 
             _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
             final_mapping = {}
-            for type_name, m in self.issue_type_mapping.items():
+            for m in self.issue_type_mapping.values():
                 jira_id = m["jira_id"]
                 op_id = m.get("openproject_id")
                 if op_id:
@@ -803,7 +802,8 @@ class IssueTypeMigration(BaseMigration):
 
             if errors:
                 self.logger.warning("Some work package types failed to create: %s", len(errors))
-                raise MigrationError(f"Failed to create {len(errors)} work package types")
+                msg = f"Failed to create {len(errors)} work package types"
+                raise MigrationError(msg)
 
         except Exception as e:
             msg = f"Error during Type bulk creation: {e}"

@@ -184,7 +184,7 @@ class WorkPackageContentMigration(BaseMigration):
                 continue
             op_login = user_dict.get("openproject_login")
             op_id = user_dict.get("openproject_id")
-            op_user = op_login if op_login else (str(op_id) if op_id else None)
+            op_user = op_login or (str(op_id) if op_id else None)
             if op_user:
                 user_mapping[username] = op_user
                 jira_account_id = user_dict.get("jira_account_id") or user_dict.get("jira_id")
@@ -313,8 +313,7 @@ class WorkPackageContentMigration(BaseMigration):
                 return f"WP#{wp_id}"
             return jira_key  # Keep original if not found
 
-        converted = jira_key_pattern.sub(replace_key, converted)
-        return converted
+        return jira_key_pattern.sub(replace_key, converted)
 
     def _get_wp_id_for_issue(self, jira_issue: Issue) -> int | None:
         """Get OpenProject WP ID for a Jira issue.
@@ -514,6 +513,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             Dict with collected data for bulk operations
+
         """
         collected: dict[str, Any] = {
             "wp_id": wp_id,
@@ -555,7 +555,7 @@ class WorkPackageContentMigration(BaseMigration):
                 if body:
                     converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
                     collected["comments"].append(converted_body)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         # Collect watchers
@@ -567,7 +567,7 @@ class WorkPackageContentMigration(BaseMigration):
                     op_user_id = self.user_mapping[jira_username].get("openproject_id")
                     if op_user_id:
                         collected["watchers"].append(op_user_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         return collected
@@ -583,6 +583,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         Returns:
             Dict with counts: descriptions_updated, custom_fields_updated, comments_migrated, watchers_added
+
         """
         results = {
             "descriptions_updated": 0,
@@ -607,7 +608,7 @@ class WorkPackageContentMigration(BaseMigration):
             try:
                 result = self.op_client.batch_update_work_packages(description_updates)
                 results["descriptions_updated"] = result.get("updated", 0)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.debug("Bulk description update failed: %s", e)
 
         # Batch 2: Custom fields (using batch_update_work_packages)
@@ -623,7 +624,7 @@ class WorkPackageContentMigration(BaseMigration):
             try:
                 result = self.op_client.batch_update_work_packages(cf_updates)
                 results["custom_fields_updated"] = result.get("updated", 0)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.debug("Bulk custom field update failed: %s", e)
 
         # Batch 3: Comments (using bulk_create_work_package_activities)
@@ -639,7 +640,7 @@ class WorkPackageContentMigration(BaseMigration):
             try:
                 result = self.op_client.bulk_create_work_package_activities(all_comments)
                 results["comments_migrated"] = result.get("created", 0)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.logger.debug("Bulk comment creation failed: %s", e)
 
         # Batch 4: Watchers (using bulk_add_watchers)
@@ -658,7 +659,7 @@ class WorkPackageContentMigration(BaseMigration):
                 try:
                     result = self.op_client.bulk_add_watchers(all_watchers)
                     results["watchers_added"] = result.get("created", 0)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     self.logger.debug("Bulk watcher addition failed: %s", e)
 
         return results

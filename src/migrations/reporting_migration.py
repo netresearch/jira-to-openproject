@@ -20,7 +20,7 @@ REPORTING_PROJECT_NAME_DEFAULT = "Jira Dashboards"
 class ReportingMigration(BaseMigration):
     """Create OpenProject artefacts representing Jira saved filters and dashboards."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
         self.project_mapping = config.mappings.get_mapping("project") or {}
 
@@ -68,7 +68,7 @@ class ReportingMigration(BaseMigration):
                 continue
             try:
                 detail = self.jira_client.get_dashboard_details(int(dash_id))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 detail = dashboard
             dashboard_details.append(detail)
 
@@ -85,7 +85,7 @@ class ReportingMigration(BaseMigration):
         """Fetch Jira filters and dashboards."""
         try:
             filters = self.jira_client.get_filters()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return ComponentResult(
                 success=False,
                 message=f"Failed to fetch Jira filters: {exc}",
@@ -105,7 +105,7 @@ class ReportingMigration(BaseMigration):
                 continue
             try:
                 detail = self.jira_client.get_dashboard_details(int(dash_id))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 detail = dashboard
             dashboard_details.append(detail)
 

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 @register_entity_types("category_defaults")
 class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
@@ -51,12 +51,12 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
         # Expect jira_client.get_project_components(project_key) to yield components with 'name' and 'lead' (name/mail)
         proj_map = self.mappings.get_mapping("project") or {}
         components_by_project: dict[str, list[dict[str, Any]]] = {}
-        for jira_key in (proj_map or {}).keys():
+        for jira_key in (proj_map or {}):
             try:
                 comps = self.jira_client.get_project_components(jira_key)  # type: ignore[attr-defined]
                 if isinstance(comps, list) and comps:
                     components_by_project[jira_key] = comps
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"components": components_by_project})
 
@@ -79,7 +79,7 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
                 rec = umap[user_hint]
                 if isinstance(rec, dict) and rec.get("openproject_id"):
                     return int(rec["openproject_id"])  # type: ignore[arg-type]
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         return None
 

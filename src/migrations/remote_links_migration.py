@@ -21,7 +21,7 @@ SECTION_TITLE = "Remote Links"
 
 @register_entity_types("remote_links")
 class RemoteLinksMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     @staticmethod
@@ -55,13 +55,13 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
                     if not isinstance(title, str) or not title.strip():
                         title = url
                     links.append((title.strip(), url.strip()))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return links
         return links
 
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         if not keys:
             return ComponentResult(success=True, data={"links": {}})
         issues = self._merge_batch_issues(keys)
@@ -72,7 +72,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
                 pairs = self._extract_links_from_fields(fields)
                 if pairs:
                     links_by_key[k] = pairs
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"links": links_by_key})
 

@@ -37,7 +37,7 @@ def with_idempotency(
             # Get idempotency manager
             try:
                 manager = get_idempotency_manager()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("Failed to initialize idempotency manager: %s", e)
                 # Fall back to executing function without idempotency
                 return func(*args, **kwargs)
@@ -47,7 +47,7 @@ def with_idempotency(
             if header_extractor:
                 try:
                     headers = header_extractor(*args, **kwargs)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.debug("Failed to extract headers: %s", e)
 
             # Parse or generate idempotency key
@@ -69,7 +69,7 @@ def with_idempotency(
                 if result_processor:
                     try:
                         processed = result_processor(result)
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         logger.warning(
                             "Result processor failed for key %s: %s",
                             idempotency_key,
@@ -98,8 +98,8 @@ def with_idempotency(
             return cached_result.value
 
         # Add idempotency metadata
-        wrapper._has_idempotency = True  # noqa: SLF001
-        wrapper._original_function = func  # noqa: SLF001
+        wrapper._has_idempotency = True
+        wrapper._original_function = func
 
         return wrapper
 
@@ -123,10 +123,10 @@ def extract_headers_from_kwargs(key: str = "headers") -> Callable:
     return extractor
 
 
-def extract_headers_from_request() -> Callable:  # noqa: C901
+def extract_headers_from_request() -> Callable:
     """Extract headers from request object (Flask or Django style)."""
 
-    def extractor(*args: object, **kwargs: object) -> dict[str, str]:  # noqa: C901, PLR0912
+    def extractor(*args: object, **kwargs: object) -> dict[str, str]:
         # Look for request object in args or kwargs
         request = None
         for arg in args:

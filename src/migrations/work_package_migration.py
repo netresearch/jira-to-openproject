@@ -1,4 +1,4 @@
-"""Work package migration module for Jira to OpenProject migration.
+r"""Work package migration module for Jira to OpenProject migration.
 Handles the migration of issues from Jira to work packages in OpenProject.
 
 IMPORTANT: Journal Migration Reference
@@ -294,7 +294,7 @@ class WorkPackageMigration(BaseMigration):
 
         # Build secondary indices
         secondary_entries: dict[str, dict[str, Any]] = {}
-        for _primary_key, user_dict in self.user_mapping.items():
+        for user_dict in self.user_mapping.values():
             if not isinstance(user_dict, dict):
                 continue
 
@@ -323,7 +323,7 @@ class WorkPackageMigration(BaseMigration):
             self.user_mapping.update(secondary_entries)
             self.logger.debug(
                 f"Augmented user_mapping with {len(secondary_entries)} secondary indices "
-                f"(total keys: {len(self.user_mapping)})"
+                f"(total keys: {len(self.user_mapping)})",
             )
 
     def _update_markdown_converter_mappings(self) -> None:
@@ -409,7 +409,7 @@ class WorkPackageMigration(BaseMigration):
             return result
 
         self.logger.info(
-            f"Assigning memberships for {len(mentioned_user_ids)} mentioned users in project {project_id}"
+            f"Assigning memberships for {len(mentioned_user_ids)} mentioned users in project {project_id}",
         )
 
         for user_id in mentioned_user_ids:
@@ -430,7 +430,7 @@ class WorkPackageMigration(BaseMigration):
                     error_msg = assign_result.get("error", "Unknown error")
                     result["errors"].append(f"User {user_id}: {error_msg}")
                     self.logger.warning(
-                        f"Failed to add user {user_id} to project {project_id}: {error_msg}"
+                        f"Failed to add user {user_id} to project {project_id}: {error_msg}",
                     )
             except Exception as e:
                 result["errors"].append(f"User {user_id}: {e}")
@@ -439,7 +439,7 @@ class WorkPackageMigration(BaseMigration):
         if result["users_added"] > 0:
             self.logger.info(
                 f"Added {result['users_added']} mentioned users to project {project_id} "
-                f"(skipped {result['users_skipped']} existing members)"
+                f"(skipped {result['users_skipped']} existing members)",
             )
 
         return result
@@ -491,7 +491,7 @@ class WorkPackageMigration(BaseMigration):
                 version_id = int(result["id"])
                 self._version_cache[cache_key] = version_id
                 self.logger.debug(
-                    f"[VERSION] Found existing version '{version_name}' (ID: {version_id}) in project {project_id}"
+                    f"[VERSION] Found existing version '{version_name}' (ID: {version_id}) in project {project_id}",
                 )
                 return version_id
         except Exception as e:
@@ -517,7 +517,7 @@ class WorkPackageMigration(BaseMigration):
                     version_id = int(result["id"])
                     self._version_cache[cache_key] = version_id
                     self.logger.info(
-                        f"[VERSION] Created version '{version_name}' (ID: {version_id}) in project {project_id}"
+                        f"[VERSION] Created version '{version_name}' (ID: {version_id}) in project {project_id}",
                     )
                     return version_id
                 if result.get("error"):
@@ -714,8 +714,7 @@ class WorkPackageMigration(BaseMigration):
                 payload = {}
 
         timestamp_value = payload.get("last_success_at") or payload.get("timestamp") or row["updated_at"]
-        parsed = self._parse_datetime(timestamp_value)
-        return parsed
+        return self._parse_datetime(timestamp_value)
 
     def _derive_snapshot_timestamp(self, snapshot: list[dict[str, Any]]) -> datetime | None:
         """Derive the most recent migration timestamp from existing OpenProject rows."""
@@ -837,7 +836,7 @@ class WorkPackageMigration(BaseMigration):
             if path.exists():
                 rotated = path.with_suffix(f"{path.suffix}.{datetime.now(tz=UTC).strftime('%Y%m%d%H%M%S')}.bak")
                 path.rename(rotated)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.logger.warning("Failed to rotate checkpoint store: %s", exc)
         finally:
             try:
@@ -961,7 +960,7 @@ class WorkPackageMigration(BaseMigration):
                         "type": "comment",
                         "timestamp": comment.get("created", ""),
                         "data": comment,
-                    }
+                    },
                 )
 
             # Add changelog entries as journal entries
@@ -971,7 +970,7 @@ class WorkPackageMigration(BaseMigration):
                         "type": "changelog",
                         "timestamp": entry.get("created", ""),
                         "data": entry,
-                    }
+                    },
                 )
 
             # If no journal entries, return
@@ -986,7 +985,7 @@ class WorkPackageMigration(BaseMigration):
             if len(all_journal_entries) > 0:
                 for idx, entry in enumerate(all_journal_entries):
                     self.logger.info(
-                        f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}"
+                        f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}",
                     )
 
             # Fix Attempt #5: Detect and resolve timestamp collisions
@@ -1003,13 +1002,13 @@ class WorkPackageMigration(BaseMigration):
                         if "T" in current_timestamp:
                             # ISO8601 format: 2011-08-23T13:41:21.000+0000
                             # Parse timestamp
-                            dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                            dt = datetime.fromisoformat(current_timestamp)
                             # Add 1 SECOND to separate colliding entries (OpenProject uses second-precision timestamps)
                             dt = dt + timedelta(seconds=1)
                             # Convert back to ISO8601 format
                             all_journal_entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
                             self.logger.info(
-                                f"Resolved timestamp collision for {jira_key}: {previous_timestamp} → {all_journal_entries[i]['timestamp']}"
+                                f"Resolved timestamp collision for {jira_key}: {previous_timestamp} → {all_journal_entries[i]['timestamp']}",
                             )
                     except Exception as e:
                         self.logger.warning(f"Failed to resolve timestamp collision for {jira_key}: {e}")
@@ -1119,7 +1118,6 @@ class WorkPackageMigration(BaseMigration):
                     # Bug #15 fix Attempt #2: Open-ended range for most recent journal version
                     # Mark this as open-ended by setting validity_end_iso to None
                     validity_end_iso = None
-                    validity_period = f'["{validity_start_iso}",)'  # Open-ended range: no end time
                 else:
                     # Not last: closed range ending at next journal entry's timestamp
                     next_journal_entry = new_journal_entries[i + 1]
@@ -1143,7 +1141,7 @@ class WorkPackageMigration(BaseMigration):
                                     validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                                 except ValueError as e:
                                     self.logger.warning(
-                                        f"Failed to parse timestamp '{comment_created}': {e}, using as-is"
+                                        f"Failed to parse timestamp '{comment_created}': {e}, using as-is",
                                     )
                                     validity_start_iso = comment_created
                     else:
@@ -1171,9 +1169,9 @@ class WorkPackageMigration(BaseMigration):
 
                     # Only set validity_period string if validity_end_iso is not None
                     if validity_end_iso is not None:
-                        validity_period = f'["{validity_start_iso}", "{validity_end_iso}")'
+                        pass
                     else:
-                        validity_period = None
+                        pass
 
                 # Bug #14/#15 fix - Build Ruby validity_period code as single-line expressions
                 if validity_end_iso is None:
@@ -1263,7 +1261,7 @@ class WorkPackageMigration(BaseMigration):
                     end
                 """
 
-                result = self.op_client.execute_large_query_to_json_file(rails_code, timeout=60)
+                self.op_client.execute_large_query_to_json_file(rails_code, timeout=60)
 
             if len(new_journal_entries) > 0:
                 self.logger.info(f"Added {len(new_journal_entries)} new journal entries to {jira_key} (WP#{wp_id})")
@@ -1309,7 +1307,7 @@ class WorkPackageMigration(BaseMigration):
                         "type": "comment",
                         "timestamp": comment.get("created", ""),
                         "data": comment,
-                    }
+                    },
                 )
             for entry in changelog_entries:
                 all_entries.append(
@@ -1317,7 +1315,7 @@ class WorkPackageMigration(BaseMigration):
                         "type": "changelog",
                         "timestamp": entry.get("created", ""),
                         "data": entry,
-                    }
+                    },
                 )
 
             if not all_entries:
@@ -1575,7 +1573,7 @@ class WorkPackageMigration(BaseMigration):
         batch_data = []
 
         def fetch_and_build(item):
-            issue, existing_wp, project_id = item
+            issue, existing_wp, _project_id = item
             jira_key = getattr(issue, "key", "unknown")
             wp_id = existing_wp.get("id")
             rails_ops = self._build_rails_ops_for_issue(issue, existing_wp)
@@ -1629,7 +1627,7 @@ class WorkPackageMigration(BaseMigration):
                             created = r.get("created", 0)
                             if created > 0:
                                 self.logger.debug(
-                                    f"Added {created} journals to {r.get('jira_key')} (WP#{r.get('wp_id')})"
+                                    f"Added {created} journals to {r.get('jira_key')} (WP#{r.get('wp_id')})",
                                 )
                             success_count += 1
                 else:
@@ -2240,8 +2238,9 @@ class WorkPackageMigration(BaseMigration):
                         class MigrationError(Exception):
                             pass
 
+                    msg = f"Stopping due to JSON serialization failure for project {project_key}: {e}"
                     raise MigrationError(
-                        f"Stopping due to JSON serialization failure for project {project_key}: {e}",
+                        msg,
                     ) from e
 
             return all_issues
@@ -2291,7 +2290,7 @@ class WorkPackageMigration(BaseMigration):
             for name, fmt, searchable in cf_specs:
                 try:
                     cf = self.op_client.ensure_custom_field(
-                        name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable
+                        name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable,
                     )
                     if isinstance(cf, dict) and cf.get("id"):
                         cf_ids[name] = int(cf["id"])
@@ -2478,7 +2477,7 @@ class WorkPackageMigration(BaseMigration):
                         "type": "comment",
                         "timestamp": comment.get("created", ""),
                         "data": comment,
-                    }
+                    },
                 )
 
             # Add changelog entries as journal entries
@@ -2488,12 +2487,12 @@ class WorkPackageMigration(BaseMigration):
                         "type": "changelog",
                         "timestamp": entry.get("created", ""),
                         "data": entry,
-                    }
+                    },
                 )
 
             if all_journal_entries:
                 self.logger.debug(
-                    f"Found {len(comments)} comment(s) and {len(changelog_entries)} changelog entries for {jira_key}"
+                    f"Found {len(comments)} comment(s) and {len(changelog_entries)} changelog entries for {jira_key}",
                 )
 
                 # Sort ALL entries chronologically by timestamp
@@ -2501,12 +2500,12 @@ class WorkPackageMigration(BaseMigration):
 
                 # DEBUG: Log entries to understand why collision detection isn't executing
                 self.logger.info(
-                    f"[DEBUG] {jira_key}: all_journal_entries has {len(all_journal_entries)} entries (CREATE path)"
+                    f"[DEBUG] {jira_key}: all_journal_entries has {len(all_journal_entries)} entries (CREATE path)",
                 )
                 if len(all_journal_entries) > 0:
                     for idx, entry in enumerate(all_journal_entries):
                         self.logger.info(
-                            f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}"
+                            f"[DEBUG] {jira_key}: Entry[{idx}] type={entry.get('type')} timestamp={entry.get('timestamp')}",
                         )
 
                 # Fix Attempt #6 (Bug #32): Detect and resolve timestamp collisions
@@ -2529,7 +2528,7 @@ class WorkPackageMigration(BaseMigration):
                         try:
                             if "T" in current_timestamp:
                                 # ISO8601 format: 2011-08-23T13:41:21.000+0000
-                                original_dt = datetime.fromisoformat(current_timestamp.replace("Z", "+00:00"))
+                                original_dt = datetime.fromisoformat(current_timestamp)
 
                                 # Keep incrementing by 1 second until we find an unused timestamp
                                 offset_seconds = 1
@@ -2544,7 +2543,7 @@ class WorkPackageMigration(BaseMigration):
                                         all_journal_entries[i]["timestamp"] = new_timestamp
                                         used_timestamps.add(new_timestamp)
                                         self.logger.info(
-                                            f"Resolved timestamp collision for {jira_key}: {current_timestamp} → {new_timestamp} (+{offset_seconds}s)"
+                                            f"Resolved timestamp collision for {jira_key}: {current_timestamp} → {new_timestamp} (+{offset_seconds}s)",
                                         )
                                         break
 
@@ -2552,7 +2551,7 @@ class WorkPackageMigration(BaseMigration):
                                     if offset_seconds > 100:
                                         # Safety limit - should never reach this
                                         self.logger.error(
-                                            f"Failed to resolve timestamp collision for {jira_key} after 100 attempts"
+                                            f"Failed to resolve timestamp collision for {jira_key} after 100 attempts",
                                         )
                                         used_timestamps.add(current_timestamp)
                                         break
@@ -2570,7 +2569,7 @@ class WorkPackageMigration(BaseMigration):
                     work_package["_rails_operations"] = []
                 else:
                     self.logger.debug(
-                        f"[BUG23] {jira_key}: _rails_operations already exists, has {len(work_package['_rails_operations'])} items"
+                        f"[BUG23] {jira_key}: _rails_operations already exists, has {len(work_package['_rails_operations'])} items",
                     )
 
                 for entry in all_journal_entries:
@@ -2593,7 +2592,7 @@ class WorkPackageMigration(BaseMigration):
                                     if comment_author_id:
                                         author_name = author_data[key]
                                         self.logger.debug(
-                                            f"{jira_key}: Found user via {key}: {author_name} → {comment_author_id}"
+                                            f"{jira_key}: Found user via {key}: {author_name} → {comment_author_id}",
                                         )
                                         break
 
@@ -2606,7 +2605,7 @@ class WorkPackageMigration(BaseMigration):
                                 if k in author_data
                             }
                             self.logger.warning(
-                                f"[BUG32] {jira_key}: User not found in mapping for comment (tried: {attempted_fields}), using fallback user {comment_author_id}"
+                                f"[BUG32] {jira_key}: User not found in mapping for comment (tried: {attempted_fields}), using fallback user {comment_author_id}",
                             )
                         raw_comment_body = entry_data.get("body", "")
                         # Convert Jira wiki markup to OpenProject markdown
@@ -2624,10 +2623,10 @@ class WorkPackageMigration(BaseMigration):
                                 "user_id": comment_author_id,
                                 "notes": comment_body,
                                 "created_at": entry_timestamp,
-                            }
+                            },
                         )
                         self.logger.debug(
-                            f"[BUG23] {jira_key}: Added comment operation, total operations: {len(work_package['_rails_operations'])}"
+                            f"[BUG23] {jira_key}: Added comment operation, total operations: {len(work_package['_rails_operations'])}",
                         )
                     elif entry_type == "changelog":
                         # Bug #32 fix: Enhanced user attribution - try multiple fields
@@ -2644,7 +2643,7 @@ class WorkPackageMigration(BaseMigration):
                                     if changelog_author_id:
                                         author_name = author_data[key]
                                         self.logger.debug(
-                                            f"{jira_key}: Found user via {key}: {author_name} → {changelog_author_id}"
+                                            f"{jira_key}: Found user via {key}: {author_name} → {changelog_author_id}",
                                         )
                                         break
 
@@ -2657,7 +2656,7 @@ class WorkPackageMigration(BaseMigration):
                                 if k in author_data
                             }
                             self.logger.warning(
-                                f"[BUG32] {jira_key}: User not found in mapping for changelog (tried: {attempted_fields}), using fallback user {changelog_author_id}"
+                                f"[BUG32] {jira_key}: User not found in mapping for changelog (tried: {attempted_fields}), using fallback user {changelog_author_id}",
                             )
 
                         # Bug #28 fix: Process field changes as structured data
@@ -2715,18 +2714,18 @@ class WorkPackageMigration(BaseMigration):
                                 if field_name == "Workflow" and workflow_cf_id:
                                     cf_field_changes[workflow_cf_id] = [from_val or None, to_val or None]
                                     self.logger.info(
-                                        f"[BUG21] {jira_key}: Workflow CF change: '{from_val}' → '{to_val}'"
+                                        f"[BUG21] {jira_key}: Workflow CF change: '{from_val}' → '{to_val}'",
                                     )
                                 elif field_name == "resolution" and resolution_cf_id:
                                     cf_field_changes[resolution_cf_id] = [from_val or None, to_val or None]
                                     self.logger.info(
-                                        f"[BUG21] {jira_key}: Resolution CF change: '{from_val}' → '{to_val}'"
+                                        f"[BUG21] {jira_key}: Resolution CF change: '{from_val}' → '{to_val}'",
                                     )
                                 elif field_name == "Version" and affects_version_cf_id:
                                     # Jira "Version" = Affects Version (where bug occurs)
                                     cf_field_changes[affects_version_cf_id] = [from_val or None, to_val or None]
                                     self.logger.info(
-                                        f"{jira_key}: Affects Version CF change: '{from_val}' → '{to_val}'"
+                                        f"{jira_key}: Affects Version CF change: '{from_val}' → '{to_val}'",
                                     )
                                 else:
                                     # BUG #60 FIX: Check if this is a custom field with OpenProject mapping
@@ -2738,7 +2737,7 @@ class WorkPackageMigration(BaseMigration):
                                         # Track as structured CF change instead of text note
                                         cf_field_changes[op_cf_id] = [from_val or None, to_val or None]
                                         self.logger.info(
-                                            f"[BUG60] {jira_key}: CF '{field_name}' change tracked: '{from_val}' → '{to_val}'"
+                                            f"[BUG60] {jira_key}: CF '{field_name}' change tracked: '{from_val}' → '{to_val}'",
                                         )
                                     elif field_name == "Key" and from_val:
                                         # Project move: Key field shows issue key change (e.g., NRTECH-468 → NRS-182)
@@ -2751,7 +2750,7 @@ class WorkPackageMigration(BaseMigration):
                                             )
                                             if op_identifier:
                                                 unmapped_changes.append(
-                                                    f"Moved from [{from_val}](/projects/{op_identifier}/work_packages)"
+                                                    f"Moved from [{from_val}](/projects/{op_identifier}/work_packages)",
                                                 )
                                             else:
                                                 unmapped_changes.append(f"Moved from {from_val}")
@@ -2770,7 +2769,7 @@ class WorkPackageMigration(BaseMigration):
                                             op_identifier = from_project_mapping.get("openproject_identifier", "").lower()
                                             if op_identifier:
                                                 unmapped_changes.append(
-                                                    f"Moved from project [{from_val}](/projects/{op_identifier})"
+                                                    f"Moved from project [{from_val}](/projects/{op_identifier})",
                                                 )
                                             else:
                                                 unmapped_changes.append(f"Moved from project '{from_val}'")
@@ -2780,12 +2779,12 @@ class WorkPackageMigration(BaseMigration):
                                         # BUG #60 FIX: Skip fields that should not create journal notes
                                         if field_name in self.IGNORED_CHANGELOG_FIELDS:
                                             self.logger.debug(
-                                                f"[BUG60] {jira_key}: Ignoring changelog field '{field_name}' (internal Jira field)"
+                                                f"[BUG60] {jira_key}: Ignoring changelog field '{field_name}' (internal Jira field)",
                                             )
                                         else:
                                             # Other unmapped fields still go to notes
                                             unmapped_changes.append(
-                                                f"Jira: {field_name} changed from '{from_val}' to '{to_val}'"
+                                                f"Jira: {field_name} changed from '{from_val}' to '{to_val}'",
                                             )
 
                         # Bug #16 fix: Generate notes for unmapped field changes
@@ -2812,13 +2811,13 @@ class WorkPackageMigration(BaseMigration):
                         if cf_field_changes:
                             operation["cf_field_changes"] = cf_field_changes
                             self.logger.info(
-                                f"[BUG21] {jira_key}: Added {len(cf_field_changes)} CF field changes to operation"
+                                f"[BUG21] {jira_key}: Added {len(cf_field_changes)} CF field changes to operation",
                             )
 
                         # Bug #16 debug: Log when unmapped changes are captured
                         if unmapped_changes:
                             self.logger.info(
-                                f"[BUG16] {jira_key}: Captured {len(unmapped_changes)} unmapped field changes as notes"
+                                f"[BUG16] {jira_key}: Captured {len(unmapped_changes)} unmapped field changes as notes",
                             )
 
                         # BUG #60 FIX: Skip creating empty journal operations
@@ -2829,13 +2828,13 @@ class WorkPackageMigration(BaseMigration):
                         )
                         if not has_meaningful_content:
                             self.logger.debug(
-                                f"[BUG60] {jira_key}: Skipping empty changelog entry (all fields ignored)"
+                                f"[BUG60] {jira_key}: Skipping empty changelog entry (all fields ignored)",
                             )
                             continue
 
                         work_package["_rails_operations"].append(operation)
                         self.logger.info(
-                            f"[BUG23] {jira_key}: Added changelog operation with {len(field_changes)} field changes, total operations: {len(work_package['_rails_operations'])}"
+                            f"[BUG23] {jira_key}: Added changelog operation with {len(field_changes)} field changes, total operations: {len(work_package['_rails_operations'])}",
                         )
 
                 # BUG #9 FIX (CRITICAL): Build progressive state snapshots for all operations
@@ -2851,7 +2850,7 @@ class WorkPackageMigration(BaseMigration):
                             key=lambda op: op.get("created_at") or op.get("timestamp") or "9999-12-31T23:59:59",
                         )
                         self.logger.info(
-                            f"[BUG12] {jira_key}: Sorted {len(work_package['_rails_operations'])} operations by timestamp before state_snapshot assignment"
+                            f"[BUG12] {jira_key}: Sorted {len(work_package['_rails_operations'])} operations by timestamp before state_snapshot assignment",
                         )
 
                         # BUG #10 FIX: Initialize current_state with ACTUAL FINAL values
@@ -2876,7 +2875,7 @@ class WorkPackageMigration(BaseMigration):
                         }
                         # BUG #10 DEBUG: Log initial state values for validation
                         self.logger.info(
-                            f"[BUG10] {jira_key}: Initial state - type_id={type_id}, status_id={status_op_id}, assigned_to_id={assigned_to_id}, author_id={author_id}"
+                            f"[BUG10] {jira_key}: Initial state - type_id={type_id}, status_id={status_op_id}, assigned_to_id={assigned_to_id}, author_id={author_id}",
                         )
 
                         # Process operations in REVERSE (most recent to oldest)
@@ -2898,7 +2897,7 @@ class WorkPackageMigration(BaseMigration):
                                             current_state[field_name] = old_value
 
                         self.logger.info(
-                            f"[BUG9] {jira_key}: Built state snapshots for {len(work_package['_rails_operations'])} operations"
+                            f"[BUG9] {jira_key}: Built state snapshots for {len(work_package['_rails_operations'])} operations",
                         )
                         # BUG #11 DEBUG: Log state_snapshot type_id and status_id for first, middle, and last operations
                         ops = work_package["_rails_operations"]
@@ -2906,7 +2905,7 @@ class WorkPackageMigration(BaseMigration):
                             if debug_idx < len(ops):
                                 ss = ops[debug_idx].get("state_snapshot", {})
                                 self.logger.info(
-                                    f"[BUG11] {jira_key}: Op {debug_idx + 1} state_snapshot: type_id={ss.get('type_id')}, status_id={ss.get('status_id')}"
+                                    f"[BUG11] {jira_key}: Op {debug_idx + 1} state_snapshot: type_id={ss.get('type_id')}, status_id={ss.get('status_id')}",
                                 )
 
                         # BUG #21 FIX: Build CF state snapshots for Workflow/Resolution/Affects Version tracking
@@ -2938,7 +2937,7 @@ class WorkPackageMigration(BaseMigration):
                                             # Apply NEW value to get state AFTER this operation
                                             current_cf_state[cf_id] = new_value
                                             self.logger.info(
-                                                f"[BUG21] {jira_key}: Op {i + 1} ({op_type}): Applied CF {cf_id}={new_value}"
+                                                f"[BUG21] {jira_key}: Op {i + 1} ({op_type}): Applied CF {cf_id}={new_value}",
                                             )
 
                                 # Store CF state as snapshot (CF values AFTER this operation)
@@ -2947,11 +2946,11 @@ class WorkPackageMigration(BaseMigration):
                                 # Debug: Log snapshot for first few and last operations
                                 if i < 3 or i >= len(work_package["_rails_operations"]) - 2:
                                     self.logger.info(
-                                        f"[BUG21] {jira_key}: Op {i + 1} ({op_type}): cf_state_snapshot={current_cf_state}"
+                                        f"[BUG21] {jira_key}: Op {i + 1} ({op_type}): cf_state_snapshot={current_cf_state}",
                                     )
 
                             self.logger.info(
-                                f"[BUG21] {jira_key}: Built CF state snapshots for {len(work_package['_rails_operations'])} operations"
+                                f"[BUG21] {jira_key}: Built CF state snapshots for {len(work_package['_rails_operations'])} operations",
                             )
                     except Exception as snapshot_error:
                         self.logger.warning(f"[BUG9] {jira_key}: Failed to build state snapshots: {snapshot_error}")
@@ -2964,7 +2963,6 @@ class WorkPackageMigration(BaseMigration):
             )
 
         # Update work package data with description (work_package_data was created earlier)
-        work_package = work_package
         work_package["description"] = description
 
         # Add optional fields if available
@@ -3030,7 +3028,7 @@ class WorkPackageMigration(BaseMigration):
                 for name, fmt, searchable in cf_specs:
                     try:
                         cf = self.op_client.ensure_custom_field(
-                            name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable
+                            name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable,
                         )
                         if isinstance(cf, dict) and cf.get("id"):
                             cf_ids[name] = int(cf["id"])  # type: ignore[arg-type]
@@ -3218,8 +3216,8 @@ class WorkPackageMigration(BaseMigration):
             "assignee": "assigned_to_id",
             "priority": "priority_id",
             "issuetype": "type_id",
-            # "resolution": "resolution",  # NOT a valid Journal::WorkPackageJournal attribute
-            # "labels": "tags",  # NOT a valid Journal::WorkPackageJournal attribute
+            # "resolution": "resolution",  # NOT a valid Journal::WorkPackageJournal attribute  # noqa: ERA001
+            # "labels": "tags",  # NOT a valid Journal::WorkPackageJournal attribute  # noqa: ERA001
             "Fix Version": "version_id",  # On-the-fly version creation enabled
             # "component": "category_id",  # Requires category_mapping - falls through to Bug #16 notes for now
             "reporter": "author_id",
@@ -3289,7 +3287,7 @@ class WorkPackageMigration(BaseMigration):
 
             # BUG #11 DEBUG: Log type mapping results
             self.logger.info(
-                f"[BUG11-TYPE] issuetype change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}"
+                f"[BUG11-TYPE] issuetype change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}",
             )
 
             # BUG #19 FIX: Skip no-change mappings
@@ -3316,7 +3314,7 @@ class WorkPackageMigration(BaseMigration):
 
             # BUG #11 DEBUG: Log status mapping results
             self.logger.info(
-                f"[BUG11-STATUS] status change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}"
+                f"[BUG11-STATUS] status change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}",
             )
 
             # BUG #19 FIX: Skip no-change mappings
@@ -3342,7 +3340,7 @@ class WorkPackageMigration(BaseMigration):
                     to_version_id = self._get_or_create_version(to_version_name, self._current_project_id)
 
             self.logger.info(
-                f"[FIXVERSION] project_id={self._current_project_id}, from='{from_version_name}' -> {from_version_id}, to='{to_version_name}' -> {to_version_id}"
+                f"[FIXVERSION] project_id={self._current_project_id}, from='{from_version_name}' -> {from_version_id}, to='{to_version_name}' -> {to_version_id}",
             )
 
             # Skip no-change mappings
@@ -3377,7 +3375,7 @@ class WorkPackageMigration(BaseMigration):
             to_hours = seconds_to_hours(to_seconds)
 
             self.logger.info(
-                f"[BUG17-TIME] {field} change: from={from_seconds}s ({from_hours}h) -> to={to_seconds}s ({to_hours}h)"
+                f"[BUG17-TIME] {field} change: from={from_seconds}s ({from_hours}h) -> to={to_seconds}s ({to_hours}h)",
             )
 
             # BUG #19 FIX: Skip no-change mappings
@@ -3592,7 +3590,7 @@ class WorkPackageMigration(BaseMigration):
                     for n, fmt in cf_names:
                         try:
                             cf = self.op_client.ensure_custom_field(
-                                n, field_format=fmt, cf_type="WorkPackageCustomField"
+                                n, field_format=fmt, cf_type="WorkPackageCustomField",
                             )
                             if isinstance(cf, dict) and cf.get("id"):
                                 cf_ids[n] = int(cf["id"])  # type: ignore[arg-type]
@@ -3986,7 +3984,7 @@ class WorkPackageMigration(BaseMigration):
         else:
             # Fall back to projects in mapping if no config
             jira_projects = list(
-                {entry.get("jira_key") for entry in (self.project_mapping or {}).values() if entry.get("jira_key")}
+                {entry.get("jira_key") for entry in (self.project_mapping or {}).values() if entry.get("jira_key")},
             )
             self.logger.info(f"No configured projects, using {len(jira_projects)} projects from mapping")
 
@@ -4033,14 +4031,14 @@ class WorkPackageMigration(BaseMigration):
                         }
                     else:
                         self.logger.warning(
-                            f"Project {project_key} not found in OpenProject (tried identifier '{identifier}'); skipping"
+                            f"Project {project_key} not found in OpenProject (tried identifier '{identifier}'); skipping",
                         )
                         results["projects"].append({"project_key": project_key, "created": 0, "skipped": True})
                         continue
                 except Exception as e:
                     self.logger.error(f"Failed to lookup OpenProject project for {project_key}: {e}")
                     results["projects"].append(
-                        {"project_key": project_key, "created": 0, "skipped": True, "error": str(e)}
+                        {"project_key": project_key, "created": 0, "skipped": True, "error": str(e)},
                     )
                     continue
 
@@ -4193,11 +4191,12 @@ class WorkPackageMigration(BaseMigration):
                                         self.data_dir,
                                     )
                                     # Break out of the issue iteration loop
-                                    raise StopIteration("Early termination due to 100% failure rate")
+                                    msg = "Early termination due to 100% failure rate"
+                                    raise StopIteration(msg)
                         except StopIteration:
                             # Early termination triggered - exit cleanly
                             self.logger.warning(
-                                "Migration stopped early for %s after %d failed attempts", project_key, total_attempted
+                                "Migration stopped early for %s after %d failed attempts", project_key, total_attempted,
                             )
                             break
                         except Exception as e:
@@ -4262,7 +4261,7 @@ class WorkPackageMigration(BaseMigration):
                                                 sub_e,
                                             )
                                 self.logger.info(
-                                    "Fallback batching complete for %s; created so far: %s", project_key, created_count
+                                    "Fallback batching complete for %s; created so far: %s", project_key, created_count,
                                 )
                             except Exception as fb_e:
                                 self.logger.warning("Fallback batching aborted for %s: %s", project_key, fb_e)
@@ -4430,7 +4429,7 @@ class WorkPackageMigration(BaseMigration):
                                             sub_e,
                                         )
                             self.logger.info(
-                                "Tail fallback batching complete for %s; created so far: %s", project_key, created_count
+                                "Tail fallback batching complete for %s; created so far: %s", project_key, created_count,
                             )
                         except Exception as fb_e:
                             self.logger.warning("Tail fallback batching aborted for %s: %s", project_key, fb_e)
@@ -4486,7 +4485,7 @@ class WorkPackageMigration(BaseMigration):
                     membership_result = self._assign_memberships_for_mentioned_users(int(op_project_id))
                     if membership_result.get("users_added", 0) > 0:
                         self.logger.info(
-                            f"Added {membership_result['users_added']} mentioned users as members of {project_key}"
+                            f"Added {membership_result['users_added']} mentioned users as members of {project_key}",
                         )
                 except Exception as e:
                     self.logger.warning(f"Failed to assign memberships for mentioned users in {project_key}: {e}")

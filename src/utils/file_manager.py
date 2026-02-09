@@ -280,7 +280,8 @@ class FileManager:
 
         except Exception as e:
             logger.exception("Failed to create data file: %s", e)
-            raise OSError("Failed to create data file") from e
+            msg = "Failed to create data file"
+            raise OSError(msg) from e
 
     def create_script_file(
         self,
@@ -323,7 +324,8 @@ class FileManager:
                 logger.debug("Created script file: %s (%d bytes)", file_path, file_size)
             else:
                 logger.error("Failed to create script file: %s", file_path)
-                raise OSError("Failed to create script file")  # noqa: TRY301
+                msg = "Failed to create script file"
+                raise OSError(msg)
 
             # Register the file
             self.registry.register(file_path, "script")
@@ -411,7 +413,8 @@ class FileManager:
                 )
             else:
                 logger.error("Failed to copy file: %s -> %s", source_path, dest_path)
-                raise OSError("Failed to copy file")  # noqa: TRY301
+                msg = "Failed to copy file"
+                raise OSError(msg)
 
             # Register the file
             self.registry.register(dest_path, "temp")

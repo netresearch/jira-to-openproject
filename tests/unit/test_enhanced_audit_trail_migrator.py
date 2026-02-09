@@ -501,7 +501,7 @@ class TestEnhancedAuditTrailMigrator:
                 "created": "2023-01-17T12:00:00.000+0000",
                 "author": {"name": "john.doe"},
                 "body": "Reviewed change",
-            }
+            },
         ]
 
         migrator.changelog_data = {

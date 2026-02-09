@@ -17,13 +17,12 @@ if TYPE_CHECKING:
 
 from src.config import logger
 
-
 AFFECTS_VERSIONS_CF_NAME = "Affects Versions"
 
 
 @register_entity_types("affects_versions")
 class AffectsVersionsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
+    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
@@ -44,7 +43,7 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
 
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map.keys()]
+        keys = [str(k) for k in wp_map]
         if not keys:
             return ComponentResult(success=True, data={"versions": {}})
         issues = self._merge_batch_issues(keys)
@@ -61,7 +60,7 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
                             names.append(name.strip())
                     if names:
                         versions_by_key[k] = names
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return ComponentResult(success=True, data={"versions": versions_by_key})
 

@@ -318,14 +318,14 @@ class EnhancedTimestampMigrator:
                             "type": "set_journal_created_at",
                             "jira_key": jira_key,
                             "timestamp": created_timestamp,
-                        }
+                        },
                     )
                     result["rails_operations"].append(
                         {
                             "type": "set_journal_user",
                             "jira_key": jira_key,
                             "user_id": author_id,
-                        }
+                        },
                     )
             if creation_result["warnings"]:
                 result["warnings"].extend(creation_result["warnings"])
@@ -537,7 +537,7 @@ class EnhancedTimestampMigrator:
 
                     if dt is None:
                         msg = f"Could not parse timestamp: {timestamp_str}"
-                        raise ValueError(msg)
+                        raise ValueError(msg) from None
 
             # Ensure timezone aware
             if dt.tzinfo is None:
