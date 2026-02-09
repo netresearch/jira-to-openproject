@@ -188,7 +188,7 @@ class ConnectionManager:
         await self.broadcast(
             {
                 "type": "progress_update",
-                "data": progress.dict(),
+                "data": progress.model_dump(),
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
@@ -198,7 +198,7 @@ class ConnectionManager:
         await self.broadcast(
             {
                 "type": "metrics_update",
-                "data": metrics.dict(),
+                "data": metrics.model_dump(),
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
@@ -208,7 +208,7 @@ class ConnectionManager:
         await self.broadcast(
             {
                 "type": "event",
-                "data": event.dict(),
+                "data": event.model_dump(),
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
@@ -506,7 +506,7 @@ async def get_progress(migration_id: str | None = None) -> JSONResponse:
                 status="idle",
             )
 
-        return JSONResponse(content=progress.dict())
+        return JSONResponse(content=progress.model_dump())
 
     except Exception as e:
         logger.exception("Error getting progress")
@@ -547,7 +547,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
             error_rate=error_rate,
         )
 
-        return JSONResponse(content=metrics.dict())
+        return JSONResponse(content=metrics.model_dump())
 
     except Exception as e:
         logger.exception("Error getting metrics")
