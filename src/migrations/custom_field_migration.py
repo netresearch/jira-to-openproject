@@ -68,9 +68,7 @@ class CustomFieldMigration(BaseMigration):
         )
         self.op_custom_fields = self._load_from_json(Path("op_custom_fields.json"), [])
         # Load via mapping controller when available to keep in-memory state canonical
-        from src import config as _cfg
-
-        self.mapping = _cfg.mappings.get_mapping("custom_field") or {}
+        self.mapping = config.mappings.get_mapping("custom_field") or {}
 
         analysis_data = self._load_from_json(Path("custom_field_analysis.json"), {})
         self.analysis = {} if analysis_data is None else analysis_data
@@ -477,9 +475,7 @@ class CustomFieldMigration(BaseMigration):
                 tracker.increment()
 
         # Persist via mapping controller only
-        from src import config as _cfg
-
-        _cfg.mappings.set_mapping("custom_field", mapping)
+        config.mappings.set_mapping("custom_field", mapping)
 
         total_fields = len(mapping)
         matched_fields = sum(1 for field in mapping.values() if field["matched_by"] == "name")
@@ -763,8 +759,7 @@ class CustomFieldMigration(BaseMigration):
 
         if updated_count:
             # Persist updated mapping
-            from src import config as _cfg
-            _cfg.mappings.set_mapping("custom_field", self.mapping)
+            config.mappings.set_mapping("custom_field", self.mapping)
             self.logger.info("Updated %d custom field mappings with OP IDs", updated_count)
 
     def _record_custom_field_provenance(self) -> None:
@@ -826,9 +821,8 @@ class CustomFieldMigration(BaseMigration):
             }
 
         # Persist mapping via controller
-        from src import config as _cfg
         self.mapping = mapping
-        _cfg.mappings.set_mapping("custom_field", mapping)
+        config.mappings.set_mapping("custom_field", mapping)
 
         self.logger.info("Restored %d custom field mappings from OpenProject provenance", len(mapping))
         return mapping
@@ -895,9 +889,7 @@ class CustomFieldMigration(BaseMigration):
         self._last_analysis_time = time.time()
 
         if not self.mapping:
-            from src import config as _cfg
-
-            self.mapping = _cfg.mappings.get_mapping("custom_field") or {}
+            self.mapping = config.mappings.get_mapping("custom_field") or {}
             if not self.mapping:
                 self.logger.error(
                     "No custom field mapping found. Run create_custom_field_mapping() first.",

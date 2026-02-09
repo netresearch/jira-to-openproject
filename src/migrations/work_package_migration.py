@@ -202,13 +202,11 @@ class WorkPackageMigration(BaseMigration):
 
         # Load mappings via controller to ensure single source of truth
         try:
-            from src import config as _cfg
-
-            self.project_mapping = _cfg.mappings.get_mapping("project") or {}
-            self.user_mapping = _cfg.mappings.get_mapping("user") or {}
-            self.issue_type_mapping = _cfg.mappings.get_mapping("issue_type") or {}
-            self.issue_type_id_mapping = _cfg.mappings.get_mapping("issue_type_id") or {}
-            self.status_mapping = _cfg.mappings.get_mapping("status") or {}
+            self.project_mapping = config.mappings.get_mapping("project") or {}
+            self.user_mapping = config.mappings.get_mapping("user") or {}
+            self.issue_type_mapping = config.mappings.get_mapping("issue_type") or {}
+            self.issue_type_id_mapping = config.mappings.get_mapping("issue_type_id") or {}
+            self.status_mapping = config.mappings.get_mapping("status") or {}
         except Exception:
             # Fallback to direct file reads
             self.project_mapping = data_handler.load_dict(

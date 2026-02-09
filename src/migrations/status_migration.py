@@ -438,9 +438,7 @@ class StatusMigration(BaseMigration):
                 }
 
         self.status_mapping = mapping
-        from src import config as _cfg
-
-        _cfg.mappings.set_mapping("status", mapping)
+        config.mappings.set_mapping("status", mapping)
 
         return mapping
 
@@ -512,9 +510,7 @@ class StatusMigration(BaseMigration):
                     status_mapping[str(jira_id)] = status_mapping.pop(jira_id)
 
             # Save status mapping via controller only
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("status", status_mapping)
+            config.mappings.set_mapping("status", status_mapping)
             logger.info(
                 f"[DRY RUN] Found {already_exists_count} existing statuses, would create {created_count} new statuses",
             )
@@ -631,9 +627,7 @@ class StatusMigration(BaseMigration):
 
         # Save status mapping
         if status_mapping:
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("status", status_mapping)
+            config.mappings.set_mapping("status", status_mapping)
 
             # Update the mappings instance
             if self.mappings is not None:
@@ -690,9 +684,7 @@ class StatusMigration(BaseMigration):
         logger.info("Analyzing status mapping...")
 
         if not self.status_mapping:
-            from src import config as _cfg
-
-            self.status_mapping = _cfg.mappings.get_mapping("status") or {}
+            self.status_mapping = config.mappings.get_mapping("status") or {}
 
         if not self.status_mapping:
             return {
@@ -756,9 +748,7 @@ class StatusMigration(BaseMigration):
             }
 
         # Persist mapping
-        from src import config as _cfg
-
-        _cfg.mappings.set_mapping("status", mapping)
+        config.mappings.set_mapping("status", mapping)
         self.status_mapping = mapping
 
         # Update the mappings instance if available
@@ -831,9 +821,7 @@ class StatusMigration(BaseMigration):
                         }
 
                 # Save the mapping via controller
-                from src import config as _cfg
-
-                _cfg.mappings.set_mapping("status", self.status_mapping)
+                config.mappings.set_mapping("status", self.status_mapping)
 
                 # If we have a mappings object, update it
                 if self.mappings:

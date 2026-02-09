@@ -347,9 +347,7 @@ class LinkTypeMigration(BaseMigration):
             # No link types available; return empty mapping and treat as success
             self.logger.info("No Jira link types available; creating empty mapping")
             self.link_type_mapping = {}
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
+            config.mappings.set_mapping("link_type", self.link_type_mapping)
             self._build_id_mapping()
             self.analyze_link_type_mapping()
             return self.link_type_mapping
@@ -505,9 +503,7 @@ class LinkTypeMigration(BaseMigration):
                 mapping[jira_id] = match_info
 
         self.link_type_mapping = mapping
-        from src import config as _cfg
-
-        _cfg.mappings.set_mapping("link_type", mapping)
+        config.mappings.set_mapping("link_type", mapping)
         self._build_id_mapping()
         self.analyze_link_type_mapping()
         return mapping
@@ -527,9 +523,7 @@ class LinkTypeMigration(BaseMigration):
 
         """
         if not self.link_type_mapping:
-            from src import config as _cfg
-
-            self.link_type_mapping = _cfg.mappings.get_mapping("link_type") or {}
+            self.link_type_mapping = config.mappings.get_mapping("link_type") or {}
             if not self.link_type_mapping:
                 self.logger.error(
                     "No link type mapping found. Run create_link_type_mapping() first.",
@@ -737,9 +731,7 @@ class LinkTypeMigration(BaseMigration):
 
         # If nothing to create, persist mapping and return
         if not to_create:
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
+            config.mappings.set_mapping("link_type", self.link_type_mapping)
             return {
                 "success": True,
                 "success_count": success_count,
@@ -797,9 +789,7 @@ class LinkTypeMigration(BaseMigration):
 
         # Save the updated mapping if any fields are now mapped
         if success_count > 0 or error_details:
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("link_type", self.link_type_mapping)
+            config.mappings.set_mapping("link_type", self.link_type_mapping)
 
             # Record provenance for link types with custom fields
             self._record_link_type_provenance()
@@ -876,9 +866,8 @@ class LinkTypeMigration(BaseMigration):
             }
 
         # Persist mapping via controller
-        from src import config as _cfg
         self.link_type_mapping = mapping
-        _cfg.mappings.set_mapping("link_type", mapping)
+        config.mappings.set_mapping("link_type", mapping)
 
         self.logger.info("Restored %d link type mappings from OpenProject provenance", len(mapping))
         return mapping

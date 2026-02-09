@@ -17,7 +17,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
-from src.clients.exceptions import ConnectionError, RateLimitError
+from src.clients.exceptions import J2OConnectionError, RateLimitError
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.migration import Migration
@@ -303,7 +303,7 @@ class TestNetworkResilienceAndRecovery:
             # Simulate network partition for first 2 attempts
             if len(connection_attempts) <= 2:
                 msg = "Network unreachable"
-                raise ConnectionError(msg)
+                raise J2OConnectionError(msg)
 
             # Recovery on 3rd attempt
             return ("command output", "", 0)
@@ -376,7 +376,7 @@ class TestNetworkResilienceAndRecovery:
             # First command fails due to session loss
             if len(session_attempts) == 1:
                 msg = "Rails console session lost"
-                raise ConnectionError(msg)
+                raise J2OConnectionError(msg)
 
             # Subsequent commands succeed after session restoration
             return f"Rails output for: {command}"

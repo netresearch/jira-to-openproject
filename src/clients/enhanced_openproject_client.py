@@ -282,18 +282,6 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         resp.raise_for_status()
         return resp.json()
 
-    # =====================================
-    # Internal helpers
-    # =====================================
-
-    def _cleanup_temp_file(self, temp_path: Any) -> None:
-        """Best-effort cleanup of a temp file-like object used in tests."""
-        try:
-            if temp_path is not None and hasattr(temp_path, "unlink"):
-                temp_path.unlink()
-        except Exception:
-            # Tests ignore cleanup failures
-            pass
 
 
 class _NoopSSHClient:

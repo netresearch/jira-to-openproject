@@ -47,5 +47,5 @@ class RateLimitError(ClientError):
 
 
 # Backwards-compatible alias expected by some tests
-class ConnectionError(ClientConnectionError):
-    """Alias for client connection errors for compatibility with tests."""
+# Named J2OConnectionError to avoid shadowing Python's builtin ConnectionError
+J2OConnectionError = ClientConnectionError

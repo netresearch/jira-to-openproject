@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
+from src.clients.openproject_client import escape_ruby_single_quoted
 from src.display import console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
@@ -111,12 +112,8 @@ class IssueTypeMigration(BaseMigration):
             [],
         )
         # Load via mapping controller to keep cache authoritative
-        from src import config as _cfg
-
-        self.issue_type_mapping = _cfg.mappings.get_mapping("issue_type") or {}
-        from src import config as _cfg
-
-        self.issue_type_id_mapping = _cfg.mappings.get_mapping("issue_type_id") or {}
+        self.issue_type_mapping = config.mappings.get_mapping("issue_type") or {}
+        self.issue_type_id_mapping = config.mappings.get_mapping("issue_type_id") or {}
         self.logger.info("Loaded %s Jira issue types", len(self.jira_issue_types))
         self.logger.info(
             "Loaded %s OpenProject work package types",
@@ -488,7 +485,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Check if the type already exists to avoid duplicates
         # Use parameterized query to prevent Rails injection
-        safe_type_name = self.ruby_escape(type_name)
+        safe_type_name = escape_ruby_single_quoted(type_name)
         check_command = f"existing_type = Type.where(\"name ilike ?\", '{safe_type_name}').first"
         check_result = self.op_client.execute_query(check_command)
         self.logger.debug(
@@ -548,7 +545,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Create the type with proper escaping to prevent Rails injection
         milestone_flag = "true" if is_milestone else "false"
-        safe_type_color = self.ruby_escape(type_color)
+        safe_type_color = escape_ruby_single_quoted(type_color)
 
         command = f"""
         begin
@@ -703,9 +700,7 @@ class IssueTypeMigration(BaseMigration):
         if not types_to_create:
             self.logger.info("No new work package types to create")
             # Persist the current in-memory mapping so orchestrator can see it
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
+            config.mappings.set_mapping("issue_type", self.issue_type_mapping)
             # Also persist the ID mapping for downstream components
             final_mapping: dict[int, int] = {}
             for mapping in self.issue_type_mapping.values():
@@ -713,7 +708,7 @@ class IssueTypeMigration(BaseMigration):
                 op_id = mapping.get("openproject_id")
                 if jira_id is not None and op_id:
                     final_mapping[jira_id] = op_id
-            _cfg.mappings.set_mapping("issue_type_id", final_mapping)
+            config.mappings.set_mapping("issue_type_id", final_mapping)
             return
 
         self.logger.info(
@@ -767,16 +762,14 @@ class IssueTypeMigration(BaseMigration):
                             mapping["matched_by"] = "created"
 
             # Persist mappings
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
+            config.mappings.set_mapping("issue_type", self.issue_type_mapping)
             final_mapping = {}
             for m in self.issue_type_mapping.values():
                 jira_id = m["jira_id"]
                 op_id = m.get("openproject_id")
                 if op_id:
                     final_mapping[jira_id] = op_id
-            _cfg.mappings.set_mapping("issue_type_id", final_mapping)
+            config.mappings.set_mapping("issue_type_id", final_mapping)
 
             # Record provenance for successfully migrated issue types
             # This enables restoration of mappings from OP alone without local files
@@ -861,9 +854,7 @@ class IssueTypeMigration(BaseMigration):
             if op_id:
                 final_mapping[jira_id] = op_id
 
-        from src import config as _cfg
-
-        _cfg.mappings.set_mapping("issue_type_id", final_mapping)
+        config.mappings.set_mapping("issue_type_id", final_mapping)
 
         return self.analyze_issue_type_mapping()
 
@@ -1049,9 +1040,7 @@ class IssueTypeMigration(BaseMigration):
 
         # Save the updated mapping through controller
         if updated_count > 0:
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("issue_type", self.issue_type_mapping)
+            config.mappings.set_mapping("issue_type", self.issue_type_mapping)
             self.logger.info("Updated mapping for %s work package types", updated_count)
         else:
             self.logger.info("No mapping updates needed")
@@ -1108,10 +1097,8 @@ class IssueTypeMigration(BaseMigration):
                 id_mapping[int(jira_type_id)] = prov_data["openproject_id"]
 
         # Persist mappings
-        from src import config as _cfg
-
-        _cfg.mappings.set_mapping("issue_type", mapping)
-        _cfg.mappings.set_mapping("issue_type_id", id_mapping)
+        config.mappings.set_mapping("issue_type", mapping)
+        config.mappings.set_mapping("issue_type_id", id_mapping)
         self.issue_type_mapping = mapping
 
         self.logger.info("Restored %d type mappings from OpenProject provenance", len(mapping))

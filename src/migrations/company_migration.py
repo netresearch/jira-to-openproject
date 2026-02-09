@@ -1440,8 +1440,7 @@ puts results.to_json
                 if result.get("errors"):
                     results["errors"].extend(result["errors"][:10])
             elif isinstance(result, str):
-                import json as json_mod
-                parsed = json_mod.loads(result)
+                parsed = json.loads(result)
                 results["updated"] = parsed.get("updated", 0)
                 results["already_correct"] = parsed.get("already_correct", 0)
                 if parsed.get("errors"):

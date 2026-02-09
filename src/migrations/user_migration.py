@@ -71,9 +71,8 @@ class UserMigration(BaseMigration):
         # Load existing data if available
         self.jira_users = self._load_from_json(Path("jira_users.json")) or []
         self.op_users = self._load_from_json(Path("op_users.json")) or []
-        from src import config as _cfg
 
-        self.user_mapping = _cfg.mappings.get_mapping("user") or {}
+        self.user_mapping = config.mappings.get_mapping("user") or {}
 
         # If mapping is empty but OP might have provenance data, try to restore
         if not self.user_mapping:
@@ -312,9 +311,7 @@ class UserMigration(BaseMigration):
                 tracker.increment()
 
         # Save the mapping via controller only
-        from src import config as _cfg
-
-        _cfg.mappings.set_mapping("user", mapping)
+        config.mappings.set_mapping("user", mapping)
         self.user_mapping = mapping
 
         # Persist the refreshed OpenProject user snapshot with provenance values
@@ -435,9 +432,7 @@ class UserMigration(BaseMigration):
 
         # Persist the restored mapping
         if mapping:
-            from src import config as _cfg
-
-            _cfg.mappings.set_mapping("user", mapping)
+            config.mappings.set_mapping("user", mapping)
             self.user_mapping = mapping
             self._save_to_json(self.op_users, Path("op_users.json"))
 
