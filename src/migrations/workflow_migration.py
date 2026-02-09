@@ -19,7 +19,6 @@ class WorkflowMigration(BaseMigration):
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = config.mappings
 
     # ------------------------------------------------------------------ #
     # BaseMigration overrides                                            #

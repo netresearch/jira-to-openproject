@@ -6,18 +6,11 @@ the Jira `fields.security.name` for mapped issues.
 
 from __future__ import annotations
 
-from src.display import configure_logging
+from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
-try:
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-
 from typing import TYPE_CHECKING
-
-from src import config
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -30,8 +23,6 @@ SECURITY_LEVEL_CF_NAME = "Security Level"
 class SecurityLevelsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-
-        self.mappings = config.mappings
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for change detection.
@@ -49,59 +40,11 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
         """
         return []
 
-    def _ensure_security_cf(self) -> int:
-        """Ensure the Security Level CF exists; return its ID."""
-        try:
-            cf = self.op_client.get_custom_field_by_name(SECURITY_LEVEL_CF_NAME)
-            cf_id = int(cf.get("id")) if isinstance(cf, dict) else None
-            if cf_id:
-                return cf_id
-        except Exception:  # noqa: BLE001
-            logger.info("Security Level CF not found; will create")
-
-        # Create CF with is_for_all: false (selective project enablement)
-        script = (
-            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{SECURITY_LEVEL_CF_NAME}'); "
-            f"if !cf; cf = CustomField.new(name: '{SECURITY_LEVEL_CF_NAME}', field_format: 'string', is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-        )
-        cf_id = self.op_client.execute_query(script)
-        return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
-
-    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int]) -> None:
-        """Enable custom field for specific projects only."""
-        if not project_ids:
-            return
-        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
-        script = f"""
-cf = CustomField.find({cf_id})
-[{project_ids_str}].each do |pid|
-  begin
-    project = Project.find(pid)
-    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)
-  rescue ActiveRecord::RecordNotFound
-  end
-end
-true
-""".strip()
-        try:
-            self.op_client.execute_query(script)
-            logger.info("Enabled %s CF for %d projects", SECURITY_LEVEL_CF_NAME, len(project_ids))
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to enable CF for some projects")
-
     def _extract(self) -> ComponentResult:
         """Extract Jira security level names per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
-        result = self.jira_client.batch_get_issues(keys)
-        # batch_get_issues returns a list of dicts from batch processor
-        issues: dict[str, Any] = {}
-        if isinstance(result, list):
-            for batch_dict in result:
-                if isinstance(batch_dict, dict):
-                    issues.update(batch_dict)
-        elif isinstance(result, dict):
-            issues = result
+        issues = self._merge_batch_issues(keys)
 
         sec_by_key: dict[str, str] = {}
         for k, issue in issues.items():
@@ -115,12 +58,8 @@ true
                 continue
         return ComponentResult(success=True, data={"security": sec_by_key})
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:
-        data = extracted.data or {}
-        return ComponentResult(success=True, data=data)
-
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        cf_id = self._ensure_security_cf()
+        cf_id = self._ensure_wp_custom_field(SECURITY_LEVEL_CF_NAME, "string")
         if not cf_id:
             return ComponentResult(success=False, failed=1)
 
@@ -158,42 +97,10 @@ true
 
         # Enable CF only for projects that have values
         if projects_with_values:
-            self._enable_cf_for_projects(cf_id, projects_with_values)
+            self._enable_cf_for_projects(cf_id, projects_with_values, cf_name=SECURITY_LEVEL_CF_NAME)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run security levels migration using ETL pattern."""
-        logger.info("Starting security levels migration...")
-        try:
-            extracted = self._extract()
-            if not extracted.success:
-                return ComponentResult(
-                    success=False,
-                    message="Security levels extraction failed",
-                    errors=extracted.errors or ["security levels extraction failed"],
-                )
-
-            mapped = self._map(extracted)
-            if not mapped.success:
-                return ComponentResult(
-                    success=False,
-                    message="Security levels mapping failed",
-                    errors=mapped.errors or ["security levels mapping failed"],
-                )
-
-            result = self._load(mapped)
-            logger.info(
-                "Security levels migration completed: success=%s, updated=%s, failed=%s",
-                result.success,
-                result.updated,
-                result.failed,
-            )
-            return result
-        except Exception as e:
-            logger.exception("Security levels migration failed")
-            return ComponentResult(
-                success=False,
-                message=f"Security levels migration failed: {e}",
-                errors=[str(e)],
-            )
+        """Run Security levels migration."""
+        return self._run_etl_pipeline("Security levels")

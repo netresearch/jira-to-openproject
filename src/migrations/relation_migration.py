@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -18,12 +17,8 @@ if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
     from src.mappings.mappings import Mappings
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src import config
+from src.config import logger
 
 
 @register_entity_types("relations", "issue_links")
@@ -220,21 +215,8 @@ class RelationMigration(BaseMigration):
 
         if not issues:
             logger.info("Fetching %d issues from Jira for relation extraction...", len(jira_keys))
-            try:
-                batch_get = getattr(self.jira_client, "batch_get_issues", None)
-                if callable(batch_get):
-                    batch_result = batch_get(jira_keys)
-                    # batch_get_issues returns a list of dicts from batch processor
-                    if isinstance(batch_result, list):
-                        for batch_dict in batch_result:
-                            if isinstance(batch_dict, dict):
-                                issues.update(batch_dict)
-                    elif isinstance(batch_result, dict):
-                        issues = batch_result
-                    logger.info("Fetched %d issues from Jira", len(issues))
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to batch-get Jira issues for relation extraction")
-                issues = {}
+            issues = self._merge_batch_issues(jira_keys)
+            logger.info("Fetched %d issues from Jira", len(issues))
 
         # Collect all relations for bulk creation
         relations_to_create: list[dict[str, Any]] = []

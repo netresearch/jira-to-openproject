@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -16,12 +15,7 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src.config import logger
 
 
 AFFECTS_VERSIONS_CF_NAME = "Affects Versions"
@@ -31,7 +25,6 @@ AFFECTS_VERSIONS_CF_NAME = "Affects Versions"
 class AffectsVersionsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = config.mappings
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
         """Get current entities for change detection.
@@ -49,59 +42,12 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         """
         return []
 
-    def _ensure_cf(self) -> int:
-        try:
-            cf = self.op_client.get_custom_field_by_name(AFFECTS_VERSIONS_CF_NAME)
-            cf_id = int(cf.get("id")) if isinstance(cf, dict) else None
-            if cf_id:
-                return cf_id
-        except Exception:  # noqa: BLE001
-            logger.info("Affects Versions CF not found; will create")
-
-        # Create CF with is_for_all: false (selective project enablement)
-        script = (
-            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{AFFECTS_VERSIONS_CF_NAME}'); "
-            f"if !cf; cf = CustomField.new(name: '{AFFECTS_VERSIONS_CF_NAME}', field_format: 'text', is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-        )
-        cf_id = self.op_client.execute_query(script)
-        return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
-
-    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int]) -> None:
-        """Enable custom field for specific projects only."""
-        if not project_ids:
-            return
-        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
-        script = f"""
-cf = CustomField.find({cf_id})
-[{project_ids_str}].each do |pid|
-  begin
-    project = Project.find(pid)
-    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)
-  rescue ActiveRecord::RecordNotFound
-  end
-end
-true
-""".strip()
-        try:
-            self.op_client.execute_query(script)
-            logger.info("Enabled %s CF for %d projects", AFFECTS_VERSIONS_CF_NAME, len(project_ids))
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to enable CF for some projects")
-
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
             return ComponentResult(success=True, data={"versions": {}})
-        result = self.jira_client.batch_get_issues(keys)
-        # batch_get_issues returns a list of dicts from batch processor
-        issues: dict[str, Any] = {}
-        if isinstance(result, list):
-            for batch_dict in result:
-                if isinstance(batch_dict, dict):
-                    issues.update(batch_dict)
-        elif isinstance(result, dict):
-            issues = result
+        issues = self._merge_batch_issues(keys)
         versions_by_key: dict[str, list[str]] = {}
         for k, issue in issues.items():
             try:
@@ -130,7 +76,7 @@ true
         return ComponentResult(success=True, data={"affects_versions_text": norm})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        cf_id = self._ensure_cf()
+        cf_id = self._ensure_wp_custom_field(AFFECTS_VERSIONS_CF_NAME, "text")
         if not cf_id:
             return ComponentResult(success=False, failed=1)
 
@@ -171,29 +117,10 @@ true
 
         # Enable CF only for projects that have values
         if projects_with_values:
-            self._enable_cf_for_projects(cf_id, projects_with_values)
+            self._enable_cf_for_projects(cf_id, projects_with_values, cf_name=AFFECTS_VERSIONS_CF_NAME)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Execute migration pipeline."""
-        self.logger.info("Starting %s migration", self.__class__.__name__)
-
-        extracted = self._extract()
-        if not extracted.success:
-            self.logger.error("%s extraction failed: %s", self.__class__.__name__, extracted.message or extracted.error)
-            return extracted
-
-        mapped = self._map(extracted)
-        if not mapped.success:
-            self.logger.error("%s mapping failed: %s", self.__class__.__name__, mapped.message or mapped.error)
-            return mapped
-
-        loaded = self._load(mapped)
-        if loaded.success:
-            self.logger.info(
-                "%s migration completed (updated=%s, failed=%s)", self.__class__.__name__, loaded.updated, loaded.failed
-            )
-        else:
-            self.logger.error("%s migration encountered failures (failed=%s)", self.__class__.__name__, loaded.failed)
-        return loaded
+        """Run Affects versions migration."""
+        return self._run_etl_pipeline("Affects versions")

@@ -15,7 +15,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -23,19 +22,14 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src import config
+from src.config import logger
 
 
 @register_entity_types("attachments")
 class AttachmentsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = config.mappings
         # Attachment directory
         try:
             ap = config.migration_config.get("attachment_path")  # type: ignore[assignment]

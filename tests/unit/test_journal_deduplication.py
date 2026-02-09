@@ -362,18 +362,17 @@ class TestCustomFieldProjectEnablement:
     def test_custom_field_uses_is_for_all_false(self):
         """Verify custom fields now use is_for_all: false.
 
-        FIX VERIFIED: Custom fields are created with selective enablement.
+        FIX VERIFIED: Custom fields are created with selective enablement
+        via the shared BaseMigration._ensure_wp_custom_field method.
         """
-        from src.migrations import resolution_migration
+        from src.migrations.base_migration import BaseMigration
 
-        # Get the source code to verify is_for_all pattern
         import inspect
-        source = inspect.getsource(resolution_migration.ResolutionMigration._ensure_resolution_cf)
+        source = inspect.getsource(BaseMigration._ensure_wp_custom_field)
 
-        # After fix: should use is_for_all: false
         assert "is_for_all: false" in source, (
-            "Resolution migration should use is_for_all: false for selective "
-            "project enablement"
+            "BaseMigration._ensure_wp_custom_field should use is_for_all: false "
+            "for selective project enablement"
         )
 
     def test_custom_field_has_enable_method(self):

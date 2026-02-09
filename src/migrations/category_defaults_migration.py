@@ -8,16 +8,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
+from src.clients.openproject_client import escape_ruby_single_quoted
+from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
-
-try:
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-
-from src import config
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -28,8 +22,6 @@ if TYPE_CHECKING:
 class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-
-        self.mappings = config.mappings
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for transformation.
@@ -91,10 +83,6 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
             return None
         return None
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:
-        """No transformation needed; pass through extracted data."""
-        return ComponentResult(success=True, data=extracted.data)
-
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         components_by_project: dict[str, list[dict[str, Any]]] = (
@@ -127,7 +115,7 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
                     script = (
                         "p = Project.find(%d); c = Category.find_by(project: p, name: '%s'); "
                         "if c; c.assigned_to = User.find(%d); c.save!; true; else; false; end"
-                        % (project_id, name.replace("'", "\\'"), user_id)
+                        % (project_id, escape_ruby_single_quoted(name), user_id)
                     )
                     ok = self.op_client.execute_query(script)
                     if ok:
@@ -141,37 +129,5 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run category defaults migration using ETL pattern."""
-        logger.info("Starting category defaults migration...")
-        try:
-            extracted = self._extract()
-            if not extracted.success:
-                return ComponentResult(
-                    success=False,
-                    message="Category defaults extraction failed",
-                    errors=extracted.errors or ["category defaults extraction failed"],
-                )
-
-            mapped = self._map(extracted)
-            if not mapped.success:
-                return ComponentResult(
-                    success=False,
-                    message="Category defaults mapping failed",
-                    errors=mapped.errors or ["category defaults mapping failed"],
-                )
-
-            result = self._load(mapped)
-            logger.info(
-                "Category defaults migration completed: success=%s, updated=%s, failed=%s",
-                result.success,
-                result.updated,
-                result.failed,
-            )
-            return result
-        except Exception as e:
-            logger.exception("Category defaults migration failed")
-            return ComponentResult(
-                success=False,
-                message=f"Category defaults migration failed: {e}",
-                errors=[str(e)],
-            )
+        """Run Category defaults migration."""
+        return self._run_etl_pipeline("Category defaults")

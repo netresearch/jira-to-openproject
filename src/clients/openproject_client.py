@@ -1,11 +1,12 @@
 """OpenProject client for interacting with OpenProject instances via SSH and Rails console."""
 
-import inspect
 import json
 import os
 import random
 import re
 import secrets
+import shlex
+import shutil
 import subprocess
 import time
 from collections.abc import Callable, Iterator
@@ -52,8 +53,78 @@ BATCH_LABEL_SAMPLE = 3
 USERS_CACHE_TTL_SECONDS = 300
 
 
-class SSHConnection:
-    """SSH connection class for testing purposes."""
+# Pre-compiled regex patterns for control character sanitization (hot path)
+_RE_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_RE_OSC_ESCAPE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
+_RE_OTHER_ESCAPE = re.compile(r"\x1b[^[]]")
+_RE_CTRL_CHARS = re.compile(r"[\x00-\x08\x0A-\x0D\x0E-\x1F\x7f]")
+
+# Allowlist of Rails model names that may be accessed via generic record operations.
+# Prevents arbitrary model access through the Rails console.
+_ALLOWED_MODELS = frozenset({
+    "Attachment",
+    "Color",
+    "CustomField",
+    "CustomOption",
+    "CustomValue",
+    "EnabledModule",
+    "Enumeration",
+    "Group",
+    "IssuePriority",
+    "Journal",
+    "Member",
+    "MemberRole",
+    "Principal",
+    "Project",
+    "ProjectCustomField",
+    "Query",
+    "Relation",
+    "Role",
+    "Status",
+    "TimeEntry",
+    "Type",
+    "User",
+    "Version",
+    "Watcher",
+    "Wiki",
+    "WikiPage",
+    "WorkPackage",
+    "WorkPackageCustomField",
+})
+
+# Also validate model names match a safe pattern (PascalCase identifier)
+_RE_MODEL_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+
+
+def _validate_model_name(model: str) -> None:
+    """Validate that a model name is safe to use in Rails console queries.
+
+    Raises:
+        ValueError: If the model name is not in the allowlist or has invalid format
+    """
+    if not _RE_MODEL_NAME.match(model):
+        msg = f"Invalid model name format: {model!r}"
+        raise ValueError(msg)
+    if model not in _ALLOWED_MODELS:
+        msg = f"Model {model!r} is not in the allowed models list"
+        raise ValueError(msg)
+
+
+def escape_ruby_single_quoted(s: str) -> str:
+    """Escape a string for safe inclusion in a Ruby single-quoted literal.
+
+    In Ruby single-quoted strings, only two escape sequences are recognized:
+    \\' (escaped quote) and \\\\ (escaped backslash). All other characters
+    are treated literally.
+
+    Also replaces newlines and carriage returns with their literal escape
+    sequences to prevent tmux console line-break issues.
+    """
+    if not s:
+        return ""
+    return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
+
+
 
 
 class OpenProjectError(Exception):
@@ -118,6 +189,8 @@ class OpenProjectClient:
         self._users_cache: list[dict[str, Any]] | None = None
         self._users_cache_time: float | None = None
         self._users_by_email_cache: dict[str, dict[str, Any]] = {}
+        self._custom_fields_cache: list[dict[str, Any]] | None = None
+        self._custom_fields_cache_time: float = 0.0
 
         # Get config values
         op_config = config.openproject_config
@@ -437,7 +510,7 @@ class OpenProjectClient:
             for name in files_or_local:
                 try:
                     remote_file = name if isinstance(name, str) else getattr(name, "name", str(name))
-                    cmd = f"docker exec {self.container_name} rm -f /tmp/{Path(remote_file).name}"
+                    cmd = f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(f'/tmp/{Path(remote_file).name}')}"
                     self.ssh_client.execute_command(cmd)
                 except Exception as e:  # noqa: BLE001 - Suppress cleanup errors
                     logger.warning("Cleanup failed for %s: %s", name, e)
@@ -543,9 +616,6 @@ class OpenProjectClient:
             # Execute the script inside Rails console.
             # IMPORTANT: We use a unique execution ID to distinguish this run's output
             # from any previous runs still visible in the tmux buffer.
-            import shutil
-            import subprocess
-
             exec_id = os.urandom(8).hex()
             unique_start_marker = f"JSON_OUTPUT_START_{exec_id}"
             unique_end_marker = f"JSON_OUTPUT_END_{exec_id}"
@@ -691,14 +761,10 @@ class OpenProjectClient:
                     return json.loads(s)
 
                 def _sanitize_control_chars(s: str) -> str:
-                    # Remove ANSI escape sequences (colors, cursor movement, etc.)
-                    s = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", s)
-                    # Also remove OSC sequences (e.g., \x1b]...BEL or ST)
-                    s = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?", "", s)
-                    # Remove other escape sequences
-                    s = re.sub(r"\x1b[^[]]", "", s)
-                    # Remove ASCII control chars except tab (CR/LF are NOT preserved - they corrupt JSON)
-                    s = re.sub(r"[\x00-\x08\x0A-\x0D\x0E-\x1F\x7f]", "", s)
+                    s = _RE_ANSI_ESCAPE.sub("", s)
+                    s = _RE_OSC_ESCAPE.sub("", s)
+                    s = _RE_OTHER_ESCAPE.sub("", s)
+                    s = _RE_CTRL_CHARS.sub("", s)
                     return s
 
                 def _extract_first_json_block(s: str) -> str | None:  # noqa: C901
@@ -862,9 +928,9 @@ class OpenProjectClient:
             # Check if the unique ID is in the response
             if f"OPENPROJECT_CONNECTION_TEST_{unique_id}" in result:
                 return True
+            return False
         except Exception:
             logger.exception("Connection test failed.")
-        else:
             return False
 
     def execute_query(self, query: str, timeout: int | None = None) -> str:
@@ -952,30 +1018,30 @@ class OpenProjectClient:
 
         # Build provenance hint: where did this originate?
         # Compose a concise hint like: "j2o: migration/work_packages func=_migrate_work_packages project=NRS ts=..."
+        _SKIP_CLIENT_FILES = (
+            "/src/clients/openproject_client.py",
+            "/src/clients/rails_console_client.py",
+            "/src/clients/docker_client.py",
+            "/src/clients/ssh_client.py",
+        )
+
         def _caller_hint(default_component: str) -> str:
             try:
-                stack = inspect.stack()
-                # Prefer first non-client frame under src/, ideally from migrations/
+                import sys
+
+                # Use sys._getframe instead of inspect.stack (O(1) per frame, no source loading)
                 path: str | None = None
                 func: str | None = None
-                for fr in stack[1:50]:
-                    filename = fr.filename
-                    if "/src/" not in filename:
-                        continue
-                    # Skip internal client plumbing to surface the actual caller/component
-                    if any(
-                        skip in filename
-                        for skip in (
-                            "/src/clients/openproject_client.py",
-                            "/src/clients/rails_console_client.py",
-                            "/src/clients/docker_client.py",
-                            "/src/clients/ssh_client.py",
-                        )
-                    ):
-                        continue
-                    path = filename.split("/src/")[-1]
-                    func = fr.function
-                    break
+                frame = sys._getframe(1)
+                for _ in range(49):
+                    if frame is None:
+                        break
+                    filename = frame.f_code.co_filename
+                    if "/src/" in filename and not any(skip in filename for skip in _SKIP_CLIENT_FILES):
+                        path = filename.split("/src/")[-1]
+                        func = frame.f_code.co_name
+                        break
+                    frame = frame.f_back
 
                 # Derive a concise component label from path
                 component = default_component
@@ -1105,7 +1171,7 @@ class OpenProjectClient:
                     raise
 
         # Read file back from container via SSH (avoids tmux buffer limits)
-        ssh_command = f"docker exec {self.container_name} cat {container_file}"
+        ssh_command = f"docker exec {shlex.quote(self.container_name)} cat {shlex.quote(container_file)}"
 
         # Retry loop to handle race where file write completes slightly after command returns
         wait_env = os.environ.get("J2O_QUERY_RESULT_WAIT_SECONDS")
@@ -1534,9 +1600,6 @@ class OpenProjectClient:
             QueryExecutionError: If the count query fails
 
         """
-        import shutil
-        import subprocess
-
         # Use unique markers to extract count reliably from tmux output
         marker_id = secrets.token_hex(8)
         start_marker = f"J2O_COUNT_START_{marker_id}"
@@ -2796,36 +2859,6 @@ JSON_DATA
         marker_start = "<!-- J2O_ORIGIN_START -->"
         marker_end = "<!-- J2O_ORIGIN_END -->"
         payload = f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
-
-    def upsert_project_origin_attributes(
-        self,
-        project_id: int,
-        *,
-        origin_system: str,
-        project_key: str,
-        external_id: str | None = None,
-        external_url: str | None = None,
-    ) -> bool:
-        """Persist origin metadata into Project attributes (description) idempotently.
-
-        We embed a small, machine-readable block between HTML comment markers so we can
-        replace it deterministically on subsequent runs without duplicating data.
-
-        Args:
-            project_id: OpenProject project ID
-            origin_system: e.g. "jira"
-            project_key: upstream project key (e.g. "SRVEP")
-            external_id: upstream immutable project id (stringified)
-            external_url: upstream canonical URL
-
-        Returns:
-            True on success, False otherwise.
-
-        """
-        # Escape braces in f-string; Ruby string content uses literal markers.
-        marker_start = "<!-- J2O_ORIGIN_START -->"
-        marker_end = "<!-- J2O_ORIGIN_END -->"
-        payload = f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
         # Ruby script to insert/replace the origin block in description
         script = (
             "project = Project.find(%d)\n" % project_id
@@ -3735,6 +3768,7 @@ J2O_DATA
             QueryExecutionError: If query fails
 
         """
+        _validate_model_name(model)
         try:
             if isinstance(id_or_conditions, int):
                 query = f"{model}.find_by(id: {id_or_conditions})&.as_json"
@@ -3747,10 +3781,10 @@ J2O_DATA
         except (QueryExecutionError, JsonParseError) as e:
             msg = f"Error finding record for {model}."
             raise QueryExecutionError(msg) from e
-            if result is None:
-                msg = f"No {model} found with {id_or_conditions}"
-                raise RecordNotFoundError(msg)
-            return result
+        if result is None:
+            msg = f"No {model} found with {id_or_conditions}"
+            raise RecordNotFoundError(msg)
+        return result
 
     def _retry_with_exponential_backoff(  # noqa: PLR0913
         self,
@@ -3762,7 +3796,6 @@ J2O_DATA
         backoff_factor: float = 2.0,
         *,
         jitter: bool = True,
-        headers: dict[str, str] | None = None,  # noqa: ARG002
     ) -> object:
         """Execute an operation with exponential backoff retry logic.
 
@@ -3853,7 +3886,6 @@ J2O_DATA
         model: str,
         ids: list[int | str],
         batch_size: int | None = None,
-        headers: dict[str, str] | None = None,
     ) -> dict[int | str, dict[str, Any]]:
         """Find multiple records by IDs in batches with idempotency support.
 
@@ -3896,7 +3928,6 @@ J2O_DATA
                     batch_operation,
                     f"{label_prefix}{sample_label}",
                     jitter=True,
-                    headers=headers,
                 )
 
                 if batch_results:
@@ -3950,6 +3981,7 @@ J2O_DATA
             QueryExecutionError: If creation fails
 
         """
+        _validate_model_name(model)
         # Convert Python dict to Ruby hash format
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
@@ -3961,7 +3993,7 @@ J2O_DATA
             if isinstance(v, bool):
                 return "true" if v else "false"
             if isinstance(v, str):
-                return f"'{v}'"
+                return f"'{escape_ruby_single_quoted(v)}'"
             return str(v)
 
         attributes_str = ", ".join(
@@ -4066,6 +4098,7 @@ J2O_DATA
             QueryExecutionError: If update fails
 
         """
+        _validate_model_name(model)
         # Convert Python dict to Ruby hash format
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         ruby_hash = json.dumps(attributes, ensure_ascii=False).replace('"', "'")
@@ -4114,6 +4147,7 @@ J2O_DATA
             QueryExecutionError: If deletion fails
 
         """
+        _validate_model_name(model)
         command = f"""
         record = {model}.find_by(id: {record_id})
         if record.nil?
@@ -4622,7 +4656,7 @@ J2O_DATA
 
             operation_succeeded = False  # Track success for debug file preservation
             try:
-                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                ssh_command = f"docker exec {shlex.quote(self.container_name)} cat {shlex.quote(file_path)}"
                 stdout = ""
                 stderr = ""
                 returncode = 1
@@ -4663,7 +4697,7 @@ J2O_DATA
                 else:
                     try:
                         self.ssh_client.execute_command(
-                            f"docker exec {self.container_name} rm -f {file_path}",
+                            f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(file_path)}",
                         )
                     except Exception as cleanup_err:
                         logger.warning(
@@ -4739,7 +4773,7 @@ J2O_DATA
 
             operation_succeeded = False  # Track success for debug file preservation
             try:
-                ssh_command = f"docker exec {self.container_name} cat {file_path}"
+                ssh_command = f"docker exec {shlex.quote(self.container_name)} cat {shlex.quote(file_path)}"
                 stdout = ""
                 stderr = ""
                 returncode = 1
@@ -4780,7 +4814,7 @@ J2O_DATA
                 else:
                     try:
                         self.ssh_client.execute_command(
-                            f"docker exec {self.container_name} rm -f {file_path}",
+                            f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(file_path)}",
                         )
                     except Exception as cleanup_err:
                         logger.warning(
@@ -4879,7 +4913,7 @@ J2O_DATA
 
             # Read the JSON directly from the Docker container file system via SSH
             # Use SSH to read the file from the Docker container
-            ssh_command = f"docker exec {self.container_name} cat {file_path}"
+            ssh_command = f"docker exec {shlex.quote(self.container_name)} cat {shlex.quote(file_path)}"
             try:
                 stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
             except Exception as e:
@@ -5398,8 +5432,8 @@ J2O_DATA
         content_type: str,
     ) -> dict[str, Any]:
         """Upload and assign a local avatar for a user."""
-        safe_content_type = (content_type or "image/png").replace("'", "")
-        safe_filename = filename.replace("'", "")
+        safe_content_type = escape_ruby_single_quoted(content_type or "image/png")
+        safe_filename = escape_ruby_single_quoted(filename)
         head = (
             f"user_id = {int(user_id)}\n"
             f"file_path = '{container_path.as_posix()}'\n"
@@ -5605,14 +5639,20 @@ J2O_DATA
 
           results = {{ updated: 0, failed: 0, errors: [] }}
 
+          # Pre-fetch all referenced WPs and CFs to avoid N+1 queries
+          wp_ids = data.map {{ |d| d['wp_id'] }}.compact.uniq
+          cf_ids = data.map {{ |d| d['cf_id'] }}.compact.uniq
+          wps = WorkPackage.where(id: wp_ids).index_by(&:id)
+          cfs = CustomField.where(id: cf_ids).index_by(&:id)
+
           data.each do |item|
             begin
               wp_id = item['wp_id']
               cf_id = item['cf_id']
               val = item['value']
 
-              wp = WorkPackage.find_by(id: wp_id)
-              cf = CustomField.find_by(id: cf_id)
+              wp = wps[wp_id]
+              cf = cfs[cf_id]
               if wp && cf
                 cv = wp.custom_value_for(cf)
                 if cv
@@ -5661,9 +5701,9 @@ J2O_DATA
         Returns:
             True if successful, False otherwise
         """
-        # Escape content for Ruby
-        safe_content = content.replace("'", "\\'").replace("\n", "\\n")
-        safe_marker = section_marker.replace("'", "\\'")
+        # Escape content for Ruby single-quoted string
+        safe_content = escape_ruby_single_quoted(content).replace("\n", "\\n")
+        safe_marker = escape_ruby_single_quoted(section_marker)
 
         script = f"""
           wp = WorkPackage.find_by(id: {work_package_id})
@@ -5885,16 +5925,22 @@ J2O_DATA
           results = {{ created: 0, failed: 0, errors: [] }}
           default_user = User.current || User.find_by(admin: true)
 
+          # Pre-fetch all referenced WPs and Users to avoid N+1 queries
+          wp_ids = data.map {{ |d| d['work_package_id'] }}.compact.uniq
+          user_ids = data.map {{ |d| d['user_id'] }}.compact.uniq
+          wps = WorkPackage.where(id: wp_ids).index_by(&:id)
+          users = User.where(id: user_ids).index_by(&:id)
+
           data.each do |item|
             begin
-              wp = WorkPackage.find_by(id: item['work_package_id'])
+              wp = wps[item['work_package_id']]
               unless wp
                 results[:failed] += 1
                 results[:errors] << {{ wp_id: item['work_package_id'], error: 'WorkPackage not found' }}
                 next
               end
 
-              user = item['user_id'] ? User.find_by(id: item['user_id']) : default_user
+              user = item['user_id'] ? (users[item['user_id']] || default_user) : default_user
               user ||= default_user
 
               comment_text = item['comment'].to_s
@@ -6330,6 +6376,25 @@ J2O_DATA
         failed_count = 0
         results = []
 
+        # Pre-fetch all referenced entities to avoid N+1 queries (6N -> 5 constant queries)
+        project_ids = work_packages_data.map {{ |d| d['project_id'] }}.compact.uniq
+        type_ids = work_packages_data.map {{ |d| d['type_id'] }}.compact.uniq
+        type_names = work_packages_data.map {{ |d| d['type_name'] }}.compact.uniq
+        status_ids = work_packages_data.map {{ |d| d['status_id'] }}.compact.uniq
+        status_names = work_packages_data.map {{ |d| d['status_name'] }}.compact.uniq
+        priority_ids = work_packages_data.map {{ |d| d['priority_id'] }}.compact.uniq
+        priority_names = work_packages_data.map {{ |d| d['priority_name'] }}.compact.uniq
+        user_ids = work_packages_data.flat_map {{ |d| [d['author_id'], d['assigned_to_id']] }}.compact.uniq
+
+        projects_by_id = Project.where(id: project_ids).index_by(&:id)
+        types_by_id = Type.where(id: type_ids).index_by(&:id)
+        types_by_name = Type.where(name: type_names).index_by(&:name)
+        statuses_by_id = Status.where(id: status_ids).index_by(&:id)
+        statuses_by_name = Status.where(name: status_names).index_by(&:name)
+        priorities_by_id = IssuePriority.where(id: priority_ids).index_by(&:id)
+        priorities_by_name = IssuePriority.where(name: priority_names).index_by(&:name)
+        users_by_id = User.where(id: user_ids).index_by(&:id)
+
         work_packages_data.each do |wp_data|
           begin
             # Create work package with provided attributes
@@ -6339,40 +6404,40 @@ J2O_DATA
             wp.subject = wp_data['subject'] if wp_data['subject']
             wp.description = wp_data['description'] if wp_data['description']
 
-            # Set project (required)
+            # Set project (required) - using pre-fetched lookup
             if wp_data['project_id']
-              wp.project = Project.find(wp_data['project_id'])
+              wp.project = projects_by_id[wp_data['project_id']]
             end
 
-            # Set type (required)
+            # Set type (required) - using pre-fetched lookup
             if wp_data['type_id']
-              wp.type = Type.find(wp_data['type_id'])
+              wp.type = types_by_id[wp_data['type_id']]
             elsif wp_data['type_name']
-              wp.type = Type.find_by(name: wp_data['type_name'])
+              wp.type = types_by_name[wp_data['type_name']]
             end
 
-            # Set status
+            # Set status - using pre-fetched lookup
             if wp_data['status_id']
-              wp.status = Status.find(wp_data['status_id'])
+              wp.status = statuses_by_id[wp_data['status_id']]
             elsif wp_data['status_name']
-              wp.status = Status.find_by(name: wp_data['status_name'])
+              wp.status = statuses_by_name[wp_data['status_name']]
             end
 
-            # Set priority
+            # Set priority - using pre-fetched lookup
             if wp_data['priority_id']
-              wp.priority = IssuePriority.find(wp_data['priority_id'])
+              wp.priority = priorities_by_id[wp_data['priority_id']]
             elsif wp_data['priority_name']
-              wp.priority = IssuePriority.find_by(name: wp_data['priority_name'])
+              wp.priority = priorities_by_name[wp_data['priority_name']]
             end
 
-            # Set author
+            # Set author - using pre-fetched lookup
             if wp_data['author_id']
-              wp.author = User.find(wp_data['author_id'])
+              wp.author = users_by_id[wp_data['author_id']]
             end
 
-            # Set assignee
+            # Set assignee - using pre-fetched lookup
             if wp_data['assigned_to_id']
-              wp.assigned_to = User.find(wp_data['assigned_to_id'])
+              wp.assigned_to = users_by_id[wp_data['assigned_to_id']]
             end
 
             # Assign provenance custom fields if provided as [{{id, value}}]
@@ -6624,7 +6689,7 @@ J2O_DATA
             return {}
 
         # Get all users and filter to requested IDs
-        all_users = self.get_all_users()
+        all_users = self.get_users()
         return {user["id"]: user for user in all_users if user["id"] in user_ids}
 
     def stream_work_packages_for_project(
@@ -6798,7 +6863,6 @@ J2O_DATA
         self,
         emails: list[str],
         batch_size: int | None = None,
-        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple users by email addresses in batches with idempotency support.
 
@@ -6837,7 +6901,6 @@ J2O_DATA
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",  # noqa: PLR2004
-                    headers=headers,
                 )
 
                 if batch_results:
@@ -6871,7 +6934,6 @@ J2O_DATA
         self,
         identifiers: list[str],
         batch_size: int | None = None,
-        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple projects by identifiers in batches with idempotency support.
 
@@ -6915,7 +6977,6 @@ J2O_DATA
                     batch_operation,
                     f"Batch fetch projects by identifier "
                     f"{batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",  # noqa: PLR2004
-                    headers=headers,
                 )
 
                 if batch_results:
@@ -6955,7 +7016,6 @@ J2O_DATA
         self,
         names: list[str],
         batch_size: int | None = None,
-        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple custom fields by names in batches with idempotency support.
 
@@ -6994,7 +7054,6 @@ J2O_DATA
                 batch_results = self._retry_with_exponential_backoff(
                     batch_operation,
                     f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",  # noqa: PLR2004
-                    headers=headers,
                 )
 
                 if batch_results:

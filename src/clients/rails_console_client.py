@@ -4,7 +4,6 @@ Client for executing commands on a Rails console running in a tmux session.
 Uses exception-based error handling for all operations.
 """
 
-import inspect
 import os
 import shutil
 import subprocess
@@ -74,6 +73,7 @@ class RailsConsoleClient:
         self.inactivity_timeout = inactivity_timeout
         self.file_manager = FileManager()
         self._rails_command = "bundle exec rails console"
+        self._tmux_path = shutil.which("tmux") or "tmux"
 
         # Skip tmux session check if forced runner mode (tmux not needed)
         if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
@@ -141,7 +141,7 @@ class RailsConsoleClient:
 
         """
         try:
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             cmd = [tmux, "has-session", "-t", self.tmux_session_name]
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
         except subprocess.SubprocessError:
@@ -205,7 +205,7 @@ class RailsConsoleClient:
         target = self._get_target()
 
         try:
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             send_cmd = [tmux, "send-keys", "-t", target, config_cmd, "Enter"]
             subprocess.run(send_cmd, capture_output=True, text=True, check=True)  # noqa: S603
             logger.debug("IRB configuration commands sent successfully")
@@ -239,7 +239,7 @@ class RailsConsoleClient:
         target = self._get_target()
 
         try:
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             clear_cmd = [tmux, "send-keys", "-t", target, "C-l"]
             subprocess.run(clear_cmd, capture_output=True, text=True, check=True)  # noqa: S603
         except subprocess.SubprocessError as e:
@@ -258,19 +258,19 @@ class RailsConsoleClient:
             target = self._get_target()
 
             # Send a space and Enter to reset terminal state
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             send_cmd = [tmux, "send-keys", "-t", target, " ", "Enter"]
             subprocess.run(send_cmd, capture_output=True, text=True, check=True)  # noqa: S603
             time.sleep(0.3)
 
             # Clear the screen
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             clear_cmd = [tmux, "send-keys", "-t", target, "C-l"]
             subprocess.run(clear_cmd, capture_output=True, text=True, check=True)  # noqa: S603
             time.sleep(0.2)
 
             # Send Ctrl+C to abort any pending operation
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             subprocess.run(  # noqa: S603
                 [tmux, "send-keys", "-t", target, "C-c"],
                 capture_output=True,
@@ -388,29 +388,30 @@ class RailsConsoleClient:
         end_with_comment = script_end_comment_out
 
         # Build provenance header for every console execution
+        _SKIP_FILES = (
+            "/src/clients/openproject_client.py",
+            "/src/clients/rails_console_client.py",
+            "/src/clients/docker_client.py",
+            "/src/clients/ssh_client.py",
+        )
+
         def _provenance_hint() -> str:
             try:
-                stack = inspect.stack()
+                import sys
+
                 path = None
                 func = None
-                # Prefer callers under migrations/, and skip client plumbing
-                for fr in stack[2:50]:
-                    filename = fr.filename
-                    if "/src/" not in filename:
-                        continue
-                    if any(
-                        skip in filename
-                        for skip in (
-                            "/src/clients/openproject_client.py",
-                            "/src/clients/rails_console_client.py",
-                            "/src/clients/docker_client.py",
-                            "/src/clients/ssh_client.py",
-                        )
-                    ):
-                        continue
-                    path = filename.split("/src/")[-1]
-                    func = fr.function
-                    break
+                # Walk frames with sys._getframe (O(1) per frame, no source loading)
+                frame = sys._getframe(2)
+                for _ in range(48):
+                    if frame is None:
+                        break
+                    filename = frame.f_code.co_filename
+                    if "/src/" in filename and not any(skip in filename for skip in _SKIP_FILES):
+                        path = filename.split("/src/")[-1]
+                        func = frame.f_code.co_name
+                        break
+                    frame = frame.f_back
                 parts: list[str] = ["j2o:"]
                 if path:
                     parts.append(
@@ -521,7 +522,7 @@ class RailsConsoleClient:
 
             # 2) Recapture a larger pane slice to find markers
             try:
-                tmux = shutil.which("tmux") or "tmux"
+                tmux = self._tmux_path
                 recapture = subprocess.run(  # noqa: S603
                     [tmux, "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
@@ -583,7 +584,7 @@ class RailsConsoleClient:
         if end_line_index == -1:
             # One more try: recapture a larger slice in case the marker landed after our first capture
             try:
-                tmux = shutil.which("tmux") or "tmux"
+                tmux = self._tmux_path
                 recapture = subprocess.run(  # noqa: S603
                     [tmux, "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
                     capture_output=True,
@@ -780,7 +781,7 @@ class RailsConsoleClient:
 
         while time.time() - start_time < timeout:
             try:
-                tmux = shutil.which("tmux") or "tmux"
+                tmux = self._tmux_path
                 capture = subprocess.run(  # noqa: S603
                     [tmux, "capture-pane", "-p", "-S", "-500", "-t", target],
                     capture_output=True,
@@ -835,7 +836,7 @@ class RailsConsoleClient:
 
         """
         logger.debug("Waiting for console ready state (timeout: %ss)", timeout)
-        tmux = shutil.which("tmux") or "tmux"
+        tmux = self._tmux_path
         start_time = time.time()
         poll_interval = 0.05
         attempts = 0
@@ -936,7 +937,7 @@ class RailsConsoleClient:
             # Removed TMUX_CMD_* markers; rely solely on EXEC_* markers from the script
 
             logger.debug("Sending command (length: %s bytes)", len(escaped_command))
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             subprocess.run(  # noqa: S603
                 [tmux, "send-keys", "-t", target, escaped_command, "Enter"],
                 capture_output=True,
@@ -966,7 +967,7 @@ class RailsConsoleClient:
                 baseline = pane_output
                 start_wait = time.time()
                 while time.time() - start_wait < max(2, min(timeout, 10)):
-                    tmux = shutil.which("tmux") or "tmux"
+                    tmux = self._tmux_path
                     cap = subprocess.run(  # noqa: S603
                         [tmux, "capture-pane", "-p", "-S", "-200", "-t", target],
                         capture_output=True,
@@ -989,7 +990,7 @@ class RailsConsoleClient:
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)
 
             # After script completes, capture a compact tail; outer parser will locate markers
-            tmux = shutil.which("tmux") or "tmux"
+            tmux = self._tmux_path
             cap = subprocess.run(  # noqa: S603
                 [tmux, "capture-pane", "-p", "-S", "-1000", "-t", target],
                 capture_output=True,

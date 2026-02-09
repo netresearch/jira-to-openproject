@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -12,19 +11,13 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src.config import logger
 
 
 @register_entity_types("components")
 class ComponentsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = config.mappings
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for transformation.
@@ -63,22 +56,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"by_project": {}})
 
-        issues: dict[str, Any] = {}
-        try:
-            batch_get = getattr(self.jira_client, "batch_get_issues", None)
-            if callable(batch_get):
-                result = batch_get(jira_keys)
-                # batch_get_issues returns a list of dicts from batch processor
-                # Merge all batch results into one dict
-                if isinstance(result, list):
-                    for batch_dict in result:
-                        if isinstance(batch_dict, dict):
-                            issues.update(batch_dict)
-                elif isinstance(result, dict):
-                    issues = result
-        except Exception:
-            logger.exception("Failed to batch-get Jira issues for components extraction")
-            issues = {}
+        issues: dict[str, Any] = self._merge_batch_issues(jira_keys)
 
         by_project: dict[str, set[str]] = {}
         for key, issue in issues.items():
@@ -206,13 +184,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
             jira_keys = [str(k) for k in wp_map.keys()]
-            try:
-                batch_get = getattr(self.jira_client, "batch_get_issues", None)
-                if callable(batch_get):
-                    issues = batch_get(jira_keys)
-            except Exception:
-                logger.exception("Failed to batch-get Jira issues for category assignment")
-                issues = {}
+            issues = self._merge_batch_issues(jira_keys)
 
         updates: list[dict[str, Any]] = []
         failed = 0

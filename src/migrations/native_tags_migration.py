@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -18,19 +17,13 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src.config import logger
 
 
 @register_entity_types("native_tags")
 class NativeTagsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = config.mappings
 
     @staticmethod
     def _coerce_labels(fields: Any) -> list[str]:
@@ -57,15 +50,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
             return ComponentResult(success=True, data={"by_key": {}})
-        result = self.jira_client.batch_get_issues(keys)
-        # batch_get_issues returns a list of dicts from batch processor
-        issues: dict[str, Any] = {}
-        if isinstance(result, list):
-            for batch_dict in result:
-                if isinstance(batch_dict, dict):
-                    issues.update(batch_dict)
-        elif isinstance(result, dict):
-            issues = result
+        issues = self._merge_batch_issues(keys)
         by_key: dict[str, list[str]] = {}
         for k, issue in issues.items():
             try:
@@ -141,37 +126,5 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run native tags migration using ETL pattern."""
-        logger.info("Starting native tags migration...")
-        try:
-            extracted = self._extract()
-            if not extracted.success:
-                return ComponentResult(
-                    success=False,
-                    message="Native tags extraction failed",
-                    errors=extracted.errors or ["native tags extraction failed"],
-                )
-
-            mapped = self._map(extracted)
-            if not mapped.success:
-                return ComponentResult(
-                    success=False,
-                    message="Native tags mapping failed",
-                    errors=mapped.errors or ["native tags mapping failed"],
-                )
-
-            result = self._load(mapped)
-            logger.info(
-                "Native tags migration completed: success=%s, updated=%s, failed=%s",
-                result.success,
-                result.updated,
-                result.failed,
-            )
-            return result
-        except Exception as e:
-            logger.exception("Native tags migration failed")
-            return ComponentResult(
-                success=False,
-                message=f"Native tags migration failed: {e}",
-                errors=[str(e)],
-            )
+        """Run Native tags migration."""
+        return self._run_etl_pipeline("Native tags")

@@ -21,7 +21,8 @@ class DummyMappings:
 
 @pytest.fixture
 def dummy_mapping_data():
-    return {"work_package": {"KEY-1": {"openproject_id": 42}}}
+    # run() iterates wp_map.values() looking for entries with "jira_key"
+    return {"work_package": {"KEY-1": {"openproject_id": 42, "jira_key": "KEY-1"}}}
 
 
 def configure_config(module, monkeypatch, tmp_path, mapping_data, extra_config=None):
@@ -46,24 +47,27 @@ def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapp
 
     jira_client = MagicMock()
     op_client = MagicMock()
-    op_client.execute_script_with_data.return_value = {"updated": 1, "failed": 0}
+    # _load expects {"results": [...], "errors": [...]} format
+    op_client.execute_script_with_data.return_value = {
+        "results": [{"jira_key": "KEY-1", "filename": "foo.txt", "attachment_id": 1001}],
+        "errors": [],
+    }
 
     migration = AttachmentsMigration(jira_client=jira_client, op_client=op_client)
 
-    migration._extract = MagicMock(  # type: ignore[attr-defined]
-        return_value=ComponentResult(
-            success=True,
-            data={
-                "attachments": {
-                    "KEY-1": [
-                        {
-                            "filename": "foo.txt",
-                            "url": "https://example.com/foo.txt",
-                        },
-                    ],
+    # Mock _extract_batch (called by run() via _process_batch_end_to_end)
+    # — run() does NOT call _extract()
+    migration._extract_batch = MagicMock(  # type: ignore[attr-defined]
+        return_value={
+            "KEY-1": [
+                {
+                    "id": "1",
+                    "filename": "foo.txt",
+                    "size": 10,
+                    "url": "https://example.com/foo.txt",
                 },
-            },
-        ),
+            ],
+        },
     )
 
     def fake_download(url, dest_path):
@@ -94,20 +98,17 @@ def test_attachment_provenance_updates_metadata(tmp_path, monkeypatch, dummy_map
 
     migration = AttachmentProvenanceMigration(jira_client=jira_client, op_client=op_client)
 
-    migration._extract = MagicMock(  # type: ignore[attr-defined]
-        return_value=ComponentResult(
-            success=True,
-            data={
-                "items": [
-                    {
-                        "jira_key": "KEY-1",
-                        "filename": "foo.txt",
-                        "author": {"accountId": "acc-1"},
-                        "created": "2024-01-01T00:00:00Z",
-                    },
-                ],
+    # Mock _extract_batch (called by run() in per-project loop)
+    # — run() does NOT call _extract()
+    migration._extract_batch = MagicMock(  # type: ignore[attr-defined]
+        return_value=[
+            {
+                "jira_key": "KEY-1",
+                "filename": "foo.txt",
+                "author": {"accountId": "acc-1"},
+                "created": "2024-01-01T00:00:00Z",
             },
-        ),
+        ],
     )
     migration._resolve_user_id = MagicMock(return_value=99)  # type: ignore[attr-defined]
 

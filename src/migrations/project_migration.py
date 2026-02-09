@@ -11,19 +11,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
-from src.clients.openproject_client import OpenProjectClient, QueryExecutionError
-from src.display import configure_logging
+from src.clients.openproject_client import OpenProjectClient, QueryExecutionError, escape_ruby_single_quoted
+from src.config import logger
 from src.mappings.mappings import Mappings
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
-
-try:
-    from src.config import logger  # type: ignore
-except Exception:
-    logger = configure_logging("INFO", None)
 
 # Constants for filenames
 JIRA_PROJECTS_FILE = "jira_projects.json"
@@ -1201,68 +1196,17 @@ class ProjectMigration(BaseMigration):
                 # Create the project using simplified Rails command (atomic and concise)
                 # Properly escape strings for Rails/Ruby
                 # Handle quotes, backslashes, newlines, Ruby interpolation patterns, and dangerous functions
-                def ruby_escape(s):
-                    if not s:
-                        return ""
-                    # Escape in this order to prevent double-escaping:
-                    # 1. Backslashes first (must be first)
-                    # 2. Ruby interpolation characters
-                    # 3. Dangerous function patterns
-                    # 4. Single quotes
-                    # 5. Control characters
-                    escaped = s.replace("\\", "\\\\")  # Escape backslashes first
-                    escaped = escaped.replace(
-                        "#",
-                        "\\#",
-                    )  # Escape Ruby interpolation start
-                    escaped = escaped.replace("{", "\\{")  # Escape opening brace
-                    escaped = escaped.replace("}", "\\}")  # Escape closing brace
-                    escaped = escaped.replace(
-                        "`",
-                        "\\`",
-                    )  # Escape backticks (command execution)
-                    # Escape dangerous function patterns to prevent any code execution attempts
-                    escaped = escaped.replace(
-                        "system(",
-                        "sys\\tem(",
-                    )  # Break system function calls
-                    escaped = escaped.replace(
-                        "exec(",
-                        "ex\\ec(",
-                    )  # Break exec function calls
-                    escaped = escaped.replace(
-                        "eval(",
-                        "ev\\al(",
-                    )  # Break eval function calls
-                    escaped = escaped.replace(
-                        "exit(",
-                        "ex\\it(",
-                    )  # Break exit function calls
-                    escaped = escaped.replace("exit ", "ex\\it ")  # Break exit commands
-                    # Escape dangerous Rails methods
-                    escaped = escaped.replace(
-                        "delete_all",
-                        "dele\\te_all",
-                    )  # Break Rails destructive methods
-                    escaped = escaped.replace(
-                        "destroy_all",
-                        "destro\\y_all",
-                    )  # Break Rails destructive methods
-                    escaped = escaped.replace("'", "\\'")  # Escape single quotes
-                    escaped = escaped.replace("\n", "\\n")  # Escape newlines
-                    return escaped.replace("\r", "\\r")  # Escape carriage returns
-
-                name_escaped = ruby_escape(project_data["name"])
+                name_escaped = escape_ruby_single_quoted(project_data["name"])
                 # SECURITY FIX: Escape identifier to prevent injection
-                identifier_escaped = ruby_escape(project_data["identifier"])
-                desc_escaped = ruby_escape(project_data.get("description", ""))
+                identifier_escaped = escape_ruby_single_quoted(project_data["identifier"])
+                desc_escaped = escape_ruby_single_quoted(project_data.get("description", ""))
                 # Parent ID for project hierarchy (Tempo Customer → Jira Project)
                 parent_id_value = project_data.get("parent_id")
                 parent_id_ruby = str(parent_id_value) if parent_id_value else "nil"
 
                 # Use a Rails command with proper exception handling that returns JSON in all cases
                 # SECURITY: All dynamic fields are now properly escaped to prevent command injection
-                jira_base = config.jira_config.get("url", "").replace("'", "\\'")
+                jira_base = escape_ruby_single_quoted(config.jira_config.get("url", ""))
                 cf_key_id = self.cf_jira_project_key_id or "nil"
                 cf_id_id = self.cf_jira_project_id_id or "nil"
                 cf_url_id = self.cf_jira_base_url_id or "nil"

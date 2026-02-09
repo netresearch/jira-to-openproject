@@ -5,16 +5,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.migrations.affects_versions_migration import AffectsVersionsMigration
-from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
-from src.migrations.attachments_migration import AttachmentsMigration
 from src.migrations.components_migration import ComponentsMigration
 from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
 from src.migrations.versions_migration import VersionsMigration
 from src.models import ComponentResult
 
+# Only migrations that use the standard ETL pipeline (extract→map→load via _run_etl_pipeline).
+# AttachmentsMigration and AttachmentProvenanceMigration have custom run() methods
+# that process per-project and don't follow the ETL pattern.
 LEGACY_MIGRATIONS = (
-    AttachmentsMigration,
-    AttachmentProvenanceMigration,
     ComponentsMigration,
     VersionsMigration,
     AffectsVersionsMigration,

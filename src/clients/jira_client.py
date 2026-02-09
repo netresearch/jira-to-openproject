@@ -238,7 +238,11 @@ class JiraClient:
         # Try to connect using token auth (Jira Cloud and Server PAT)
         try:
             logger.info("Attempting to connect to Jira using token authentication")
-            self.jira = jira_mod.JIRA(server=self.jira_url, token_auth=self.jira_token)
+            self.jira = jira_mod.JIRA(
+                server=self.jira_url,
+                token_auth=self.jira_token,
+                options={"verify": self.verify_ssl},
+            )
             server_info = self.jira.server_info()
             logger.success(
                 "Successfully connected to Jira server: %s (%s)",

@@ -1,6 +1,7 @@
 import pytest
 
 from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.models import ComponentResult
 
 
 class DummyAtt:
@@ -52,8 +53,8 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
         def __init__(self) -> None:
             self._m = {
                 "work_package": {
-                    "PRJ-1": {"openproject_id": 501},
-                    "PRJ-2": {"openproject_id": 502},
+                    "PRJ-1": {"openproject_id": 501, "jira_key": "PRJ-1"},
+                    "PRJ-2": {"openproject_id": 502, "jira_key": "PRJ-2"},
                 },
                 "user": {
                     "alice": {"openproject_id": 301},
@@ -68,8 +69,11 @@ def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
 
 def test_attachment_provenance_updates_author_and_timestamp():
     mig = AttachmentProvenanceMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
-    ex = mig._extract()
-    mp = mig._map(ex)
+    # Use _extract_batch (the actual extraction method) — _extract is not
+    # implemented for this custom-run() migration.
+    items = mig._extract_batch(["PRJ-1", "PRJ-2"])
+    extracted = ComponentResult(success=True, data={"items": items})
+    mp = mig._map(extracted)
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated == 2

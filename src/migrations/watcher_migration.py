@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -13,12 +12,8 @@ if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
     from src.mappings.mappings import Mappings
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src import config
+from src.config import logger
 
 
 @register_entity_types("watchers")

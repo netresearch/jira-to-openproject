@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src import mappings
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -13,12 +11,8 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src import config
+from src.config import logger
 
 
 @register_entity_types("priorities")
@@ -27,10 +21,6 @@ class PriorityMigration(BaseMigration):
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        try:
-            self.mappings = config.mappings
-        except Exception:  # noqa: BLE001
-            self.mappings = mappings.Mappings(data_dir=config.get_path("data"))
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities from Jira for a specific type.
@@ -130,22 +120,7 @@ class PriorityMigration(BaseMigration):
         if not jira_keys:
             return ComponentResult(success=True, updated=0)
 
-        # Prefer using JiraClient's batch_get_issues directly to simplify testing
-        iss_map: dict[str, Any] = {}
-        try:
-            batch_get = getattr(self.jira_client, "batch_get_issues", None)
-            if callable(batch_get):
-                result = batch_get(jira_keys)
-                # batch_get_issues returns a list of dicts from batch processor
-                if isinstance(result, list):
-                    for batch_dict in result:
-                        if isinstance(batch_dict, dict):
-                            iss_map.update(batch_dict)
-                elif isinstance(result, dict):
-                    iss_map = result
-        except Exception:
-            logger.exception("Failed to batch-get Jira issues for priority application")
-            iss_map = {}
+        iss_map: dict[str, Any] = self._merge_batch_issues(jira_keys)
 
         for key, wp_entry in wp_map.items():
             try:

@@ -22,87 +22,48 @@ import pytest
 
 
 class TestSelectiveProjectEnablementVerification:
-    """Verify all migrations use is_for_all=false for selective enablement."""
+    """Verify the shared _ensure_wp_custom_field uses is_for_all=false."""
 
-    def test_resolution_migration_uses_is_for_all_false(self):
-        """Verify resolution migration creates CF with is_for_all: false."""
-        from src.migrations.resolution_migration import ResolutionMigration
+    def test_base_ensure_wp_custom_field_uses_is_for_all_false(self):
+        """Verify shared BaseMigration._ensure_wp_custom_field uses is_for_all: false.
 
-        source = inspect.getsource(ResolutionMigration._ensure_resolution_cf)
+        All CF-creating migrations now delegate to this single base method.
+        """
+        from src.migrations.base_migration import BaseMigration
+
+        source = inspect.getsource(BaseMigration._ensure_wp_custom_field)
         assert "is_for_all: false" in source, (
-            "Resolution migration should use is_for_all: false for selective "
-            "project enablement"
+            "BaseMigration._ensure_wp_custom_field should use is_for_all: false "
+            "for selective project enablement"
         )
 
-    def test_votes_migration_uses_is_for_all_false(self):
-        """Verify votes migration creates CF with is_for_all: false."""
+    def test_all_cf_migrations_use_shared_ensure_method(self):
+        """Verify all CF migrations delegate to BaseMigration._ensure_wp_custom_field."""
+        from src.migrations.affects_versions_migration import AffectsVersionsMigration
+        from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
+        from src.migrations.labels_migration import LabelsMigration
+        from src.migrations.resolution_migration import ResolutionMigration
+        from src.migrations.security_levels_migration import SecurityLevelsMigration
+        from src.migrations.sprint_epic_migration import SprintEpicMigration
+        from src.migrations.story_points_migration import StoryPointsMigration
         from src.migrations.votes_migration import VotesMigration
 
-        source = inspect.getsource(VotesMigration._ensure_votes_cf)
-        assert "is_for_all: false" in source, (
-            "Votes migration should use is_for_all: false for selective "
-            "project enablement"
-        )
-
-    def test_story_points_migration_uses_is_for_all_false(self):
-        """Verify story points migration creates CF with is_for_all: false."""
-        from src.migrations.story_points_migration import StoryPointsMigration
-
-        source = inspect.getsource(StoryPointsMigration._ensure_story_points_cf)
-        assert "is_for_all: false" in source, (
-            "Story points migration should use is_for_all: false for selective "
-            "project enablement"
-        )
-
-    def test_labels_migration_uses_is_for_all_false(self):
-        """Verify labels migration creates CF with is_for_all: false."""
-        from src.migrations.labels_migration import LabelsMigration
-
-        source = inspect.getsource(LabelsMigration._ensure_labels_cf)
-        assert "is_for_all: false" in source, (
-            "Labels migration should use is_for_all: false for selective "
-            "project enablement"
-        )
-
-    def test_affects_versions_migration_uses_is_for_all_false(self):
-        """Verify affects versions migration creates CF with is_for_all: false."""
-        from src.migrations.affects_versions_migration import AffectsVersionsMigration
-
-        source = inspect.getsource(AffectsVersionsMigration._ensure_cf)
-        assert "is_for_all: false" in source, (
-            "Affects versions migration should use is_for_all: false for selective "
-            "project enablement"
-        )
-
-    def test_security_levels_migration_uses_is_for_all_false(self):
-        """Verify security levels migration creates CF with is_for_all: false."""
-        from src.migrations.security_levels_migration import SecurityLevelsMigration
-
-        source = inspect.getsource(SecurityLevelsMigration._ensure_security_cf)
-        assert "is_for_all: false" in source, (
-            "Security levels migration should use is_for_all: false for selective "
-            "project enablement"
-        )
-
-    def test_sprint_migration_uses_is_for_all_false(self):
-        """Verify sprint migration creates CF with is_for_all: false."""
-        from src.migrations.sprint_epic_migration import SprintEpicMigration
-
-        source = inspect.getsource(SprintEpicMigration._ensure_sprint_cf)
-        assert "is_for_all: false" in source, (
-            "Sprint migration should use is_for_all: false for selective "
-            "project enablement"
-        )
-
-    def test_generic_customfields_migration_uses_is_for_all_false(self):
-        """Verify generic custom fields migration creates CF with is_for_all: false."""
-        from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
-
-        source = inspect.getsource(CustomFieldsGenericMigration._ensure_cf)
-        assert "is_for_all: false" in source, (
-            "Generic custom fields migration should use is_for_all: false for selective "
-            "project enablement"
-        )
+        for cls in (
+            AffectsVersionsMigration,
+            CustomFieldsGenericMigration,
+            LabelsMigration,
+            ResolutionMigration,
+            SecurityLevelsMigration,
+            SprintEpicMigration,
+            StoryPointsMigration,
+            VotesMigration,
+        ):
+            assert not hasattr(cls, "_ensure_cf") or cls._ensure_cf is not cls.__mro__[0].__dict__.get("_ensure_cf"), (
+                f"{cls.__name__} should not have its own _ensure_cf; use _ensure_wp_custom_field"
+            )
+            assert hasattr(cls, "_ensure_wp_custom_field"), (
+                f"{cls.__name__} should inherit _ensure_wp_custom_field from BaseMigration"
+            )
 
 
 class TestSelectiveEnablementHelper:

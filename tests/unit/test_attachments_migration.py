@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.migrations.attachments_migration import AttachmentsMigration
+from src.models import ComponentResult
 
 
 class DummyAtt:
@@ -87,7 +88,18 @@ def _mock_mappings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_attachments_migration_end_to_end(tmp_path: Path):
     mig = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
-    ex = mig._extract()
+    # Build extracted attachment data directly — _extract() is a legacy no-op;
+    # the real run() uses _extract_batch() which returns this format.
+    att_data = {
+        "PRJ-1": [
+            {"id": "1", "filename": "a.txt", "size": 10, "url": "http://example/a"},
+            {"id": "2", "filename": "b.txt", "size": 10, "url": "http://example/b"},
+        ],
+        "PRJ-2": [
+            {"id": "3", "filename": "a.txt", "size": 10, "url": "http://example/a"},
+        ],
+    }
+    ex = ComponentResult(success=True, data={"attachments": att_data})
     mp = mig._map(ex)
     ld = mig._load(mp)
     assert mp.success is True

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -17,19 +16,14 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src import config
+from src.config import logger
 
 
 @register_entity_types("attachment_provenance")
 class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = config.mappings
 
     @staticmethod
     def _get(val: Any, key: str, default: Any = None) -> Any:
@@ -63,16 +57,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         if not jira_keys:
             return []
         try:
-            result = self.jira_client.batch_get_issues(jira_keys)
-            # batch_get_issues returns a list of dicts from batch processor
-            # Merge all batch results into one dict
-            issues: dict[str, Any] = {}
-            if isinstance(result, list):
-                for batch_dict in result:
-                    if isinstance(batch_dict, dict):
-                        issues.update(batch_dict)
-            elif isinstance(result, dict):
-                issues = result
+            issues: dict[str, Any] = self._merge_batch_issues(jira_keys)
         except Exception:
             logger.exception("Failed to batch-get issues for provenance")
             return []
@@ -97,10 +82,6 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                     }
                 )
         return items
-
-    def _extract(self) -> ComponentResult:
-        """Legacy extract - kept for backwards compatibility but not used."""
-        return ComponentResult(success=True, data={"items": []})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}

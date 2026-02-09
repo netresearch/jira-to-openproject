@@ -13,16 +13,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
+from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
-
-try:
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-
-from src import config
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -37,8 +30,6 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
 
-        self.mappings = config.mappings
-
     def _extract(self) -> ComponentResult:
         """Extract issues for which we have work package mappings."""
         wp_map = self.mappings.get_mapping("work_package") or {}
@@ -46,22 +37,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"issues": {}})
 
-        issues: dict[str, Any] = {}
-        try:
-            batch_get = getattr(self.jira_client, "batch_get_issues", None)
-            if callable(batch_get):
-                result = batch_get(jira_keys)
-                # batch_get_issues returns a list of dicts from batch processor
-                # Merge all batch results into one dict
-                if isinstance(result, list):
-                    for batch_dict in result:
-                        if isinstance(batch_dict, dict):
-                            issues.update(batch_dict)
-                elif isinstance(result, dict):
-                    issues = result
-        except Exception:
-            logger.exception("Failed to batch-get Jira issues for estimates extraction")
-            issues = {}
+        issues: dict[str, Any] = self._merge_batch_issues(jira_keys)
 
         return ComponentResult(success=True, extracted=len(issues), data={"issues": issues})
 
@@ -181,37 +157,5 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run estimates migration using ETL pattern."""
-        logger.info("Starting estimates migration...")
-        try:
-            extracted = self._extract()
-            if not extracted.success:
-                return ComponentResult(
-                    success=False,
-                    message="Estimates extraction failed",
-                    errors=extracted.errors or ["estimates extraction failed"],
-                )
-
-            mapped = self._map(extracted)
-            if not mapped.success:
-                return ComponentResult(
-                    success=False,
-                    message="Estimates mapping failed",
-                    errors=mapped.errors or ["estimates mapping failed"],
-                )
-
-            result = self._load(mapped)
-            logger.info(
-                "Estimates migration completed: success=%s, updated=%s, failed=%s",
-                result.success,
-                result.updated,
-                result.failed,
-            )
-            return result
-        except Exception as e:
-            logger.exception("Estimates migration failed")
-            return ComponentResult(
-                success=False,
-                message=f"Estimates migration failed: {e}",
-                errors=[str(e)],
-            )
+        """Run Estimates migration."""
+        return self._run_etl_pipeline("Estimates")

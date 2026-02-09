@@ -82,7 +82,7 @@ class TempoAccountMigration:
             response = requests.get(
                 accounts_endpoint,
                 headers=self.tempo_auth_headers,
-                verify=False,  # Only use in development  # noqa: S501
+                verify=config.migration_config.get("ssl_verify", True),
             )
 
             if response.status_code == 200:

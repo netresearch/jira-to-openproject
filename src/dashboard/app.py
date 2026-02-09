@@ -510,7 +510,7 @@ async def get_progress(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting progress")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/api/metrics")
@@ -551,7 +551,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting metrics")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/api/metrics/csv")
@@ -581,7 +581,7 @@ async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error generating CSV")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/api/migration/status")
@@ -602,7 +602,7 @@ async def get_migration_status() -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting migration status")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.post("/api/migration/start")
@@ -627,7 +627,7 @@ async def start_migration(
 
     except Exception as e:
         logger.exception("Error starting migration")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.post("/api/migration/stop")
@@ -644,7 +644,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error stopping migration")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.post("/api/migration/pause")
@@ -664,7 +664,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error pausing migration")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.post("/api/migration/resume")
@@ -684,7 +684,7 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error resuming migration")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.websocket("/ws/dashboard")
@@ -738,4 +738,4 @@ async def websocket_dashboard(websocket: WebSocket) -> None:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)  # noqa: S104
+    uvicorn.run(app, host=os.environ.get("J2O_DASHBOARD_HOST", "127.0.0.1"), port=8000)

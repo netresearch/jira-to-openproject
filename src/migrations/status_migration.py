@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from src import config
-from src.display import ProgressTracker, configure_logging
+from src.config import logger
+from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.models.migration_error import MigrationError
@@ -25,12 +26,6 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
     from src.mappings.mappings import Mappings
-
-# Prefer shared logger; fall back to local configuration only if needed
-try:
-    from src.config import logger  # type: ignore
-except Exception:
-    logger = configure_logging("INFO", None)
 
 # Define a type variable for ProgressTracker
 T = TypeVar("T")
@@ -783,8 +778,6 @@ class StatusMigration(BaseMigration):
         """
         logger.info("Running status migration...")
 
-        # Update instance variables
-        self.mappings = config.mappings
         self.status_mapping = {}
 
         # Check if mappings exists and has status_mapping attribute

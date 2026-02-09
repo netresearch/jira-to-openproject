@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -19,12 +18,8 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src import config
+from src.config import logger
 
 
 SPRINT_CF_NAME = "Sprint"
@@ -34,7 +29,6 @@ SPRINT_CF_NAME = "Sprint"
 class SprintEpicMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.mappings = config.mappings
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
         """Get current entities for change detection.
@@ -51,54 +45,6 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
 
         """
         return []
-
-    # ---------- Sprint CF helpers ----------
-    def _ensure_sprint_cf(self) -> int:
-        try:
-            cf = self.op_client.get_custom_field_by_name(SPRINT_CF_NAME)
-            cf_id = int(cf.get("id")) if isinstance(cf, dict) else None
-            if cf_id:
-                return cf_id
-        except Exception:  # noqa: BLE001
-            logger.info("Sprint CF not found; will create")
-
-        # Create CF with is_for_all: false (selective project enablement)
-        script = (
-            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{SPRINT_CF_NAME}'); "
-            f"if !cf; cf = CustomField.new(name: '{SPRINT_CF_NAME}', field_format: 'text', is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; {{ id: cf.id }}.to_json"
-        )
-        result = self.op_client.execute_query_to_json_file(script)
-        if isinstance(result, dict) and result.get("id"):
-            return int(result["id"])
-        if isinstance(result, int):
-            return result
-        try:
-            return int(str(result).strip())
-        except Exception:  # noqa: BLE001
-            logger.debug("Unable to parse Sprint CF ID from result %r", result)
-            return 0
-
-    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int]) -> None:
-        """Enable custom field for specific projects only."""
-        if not project_ids:
-            return
-        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
-        script = f"""
-cf = CustomField.find({cf_id})
-[{project_ids_str}].each do |pid|
-  begin
-    project = Project.find(pid)
-    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)
-  rescue ActiveRecord::RecordNotFound
-  end
-end
-true
-""".strip()
-        try:
-            self.op_client.execute_query(script)
-            logger.info("Enabled %s CF for %d projects", SPRINT_CF_NAME, len(project_ids))
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to enable CF for some projects")
 
     @staticmethod
     def _coerce_sprint_names(sprint_field_value: Any) -> list[str]:
@@ -183,15 +129,7 @@ true
         if not keys:
             return ComponentResult(success=True, data={"sprint": {}, "epic": []})
 
-        result = self.jira_client.batch_get_issues(keys)
-        # batch_get_issues returns a list of dicts from batch processor
-        issues: dict[str, Any] = {}
-        if isinstance(result, list):
-            for batch_dict in result:
-                if isinstance(batch_dict, dict):
-                    issues.update(batch_dict)
-        elif isinstance(result, dict):
-            issues = result
+        issues = self._merge_batch_issues(keys)
 
         sprint_by_key: dict[str, list[str]] = {}
         epic_links: list[tuple[str, str]] = []  # (child_key, epic_key)
@@ -322,7 +260,7 @@ true
         # Ensure Sprint CF and set values via minimal Rails per record
         cf_id = 0
         try:
-            cf_id = self._ensure_sprint_cf()
+            cf_id = self._ensure_wp_custom_field(SPRINT_CF_NAME, "text")
         except Exception:
             logger.exception("Failed to ensure Sprint custom field")
         if not cf_id:
@@ -368,7 +306,7 @@ true
 
         # Enable CF only for projects that have values
         if projects_with_values:
-            self._enable_cf_for_projects(cf_id, projects_with_values)
+            self._enable_cf_for_projects(cf_id, projects_with_values, cf_name=SPRINT_CF_NAME)
 
         message = "Sprint and epic metadata synchronised"
         return ComponentResult(

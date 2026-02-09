@@ -170,6 +170,13 @@ class SSHClient:
         # Add connect timeout
         cmd.extend(["-o", f"ConnectTimeout={self.connect_timeout}"])
 
+        # Enable SSH multiplexing for connection reuse (50-200ms saved per call)
+        cmd.extend([
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath=/tmp/ssh-j2o-%r@%h:%p",
+            "-o", "ControlPersist=300",
+        ])
+
         # Add key file if specified
         if self.key_file:
             cmd.extend(["-i", self.key_file])
@@ -193,6 +200,13 @@ class SSHClient:
 
         # Add connect timeout
         cmd.extend(["-o", f"ConnectTimeout={self.connect_timeout}"])
+
+        # Enable SSH multiplexing for connection reuse
+        cmd.extend([
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath=/tmp/ssh-j2o-%r@%h:%p",
+            "-o", "ControlPersist=300",
+        ])
 
         # Add key file if specified
         if self.key_file:

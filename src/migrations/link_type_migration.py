@@ -10,15 +10,11 @@ from typing import Any
 from src import config
 from src.clients.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.display import configure_logging, console
+from src.config import logger
+from src.display import console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.migrations.custom_field_migration import CustomFieldMigration
 from src.models import ComponentResult, MigrationError
-
-try:
-    from src.config import logger  # type: ignore
-except Exception:
-    logger = configure_logging("INFO", None)
 
 # Default OpenProject relation types
 # These are built-in and cannot be modified or extended via API

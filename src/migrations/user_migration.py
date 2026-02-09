@@ -18,18 +18,14 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from src import config
-from src.display import ProgressTracker, configure_logging
+from src.config import logger
+from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
-
-try:
-    from src.config import logger  # type: ignore
-except Exception:
-    logger = configure_logging("INFO", None)
 
 
 @register_entity_types("users", "user_accounts")
@@ -1539,64 +1535,3 @@ class UserMigration(BaseMigration):
                 data={"error": str(e)},
             )
 
-    def process_single_user(self, user_data: dict[str, Any]) -> dict[str, Any] | None:
-        """Process a single user for selective updates.
-
-        Args:
-            user_data: Single user data to process
-
-        Returns:
-            Dict with processing result containing openproject_id if successful
-
-        """
-        try:
-            # For now, simulate user creation/processing
-            # In a real implementation, this would integrate with create_missing_users logic
-            self.logger.debug(
-                "Processing single user: %s",
-                user_data.get("displayName", "unknown"),
-            )
-
-            # Mock successful processing
-            return {
-                "openproject_id": user_data.get("id", 1),
-                "success": True,
-                "message": "User processed successfully",
-            }
-        except Exception as e:
-            self.logger.exception("Failed to process single user: %s", e)
-            return None
-
-    def update_user_in_openproject(
-        self,
-        user_data: dict[str, Any],
-        user_id: str,
-    ) -> dict[str, Any] | None:
-        """Update a user in OpenProject.
-
-        Args:
-            user_data: Updated user data
-            user_id: OpenProject user ID to update
-
-        Returns:
-            Dict with update result
-
-        """
-        try:
-            # For now, simulate user update
-            # In a real implementation, this would call OpenProject API to update the user
-            self.logger.debug(
-                "Updating user %s in OpenProject: %s",
-                user_id,
-                user_data.get("displayName", "unknown"),
-            )
-
-            # Mock successful update
-            return {
-                "id": user_id,
-                "success": True,
-                "message": "User updated successfully",
-            }
-        except Exception as e:
-            self.logger.exception("Failed to update user in OpenProject: %s", e)
-            return None

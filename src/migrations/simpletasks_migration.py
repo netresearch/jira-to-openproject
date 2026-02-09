@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -16,12 +15,8 @@ if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
 
-try:
-    from src import config
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-    from src import config  # type: ignore
+from src import config
+from src.config import logger
 
 
 @register_entity_types("simpletasks")
@@ -30,7 +25,6 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
         # Import via module so tests can monkeypatch src.mappings.Mappings
 
-        self.mappings = config.mappings
         self.property_key = config.migration_config.get("simpletasks_property_key") or "com.topshelf.simple-tasklists"
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:

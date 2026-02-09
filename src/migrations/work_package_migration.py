@@ -32,7 +32,8 @@ from jira import Issue
 from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.display import ProgressTracker, configure_logging
+from src.config import logger
+from src.display import ProgressTracker
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 from src.utils import data_handler
@@ -40,11 +41,6 @@ from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
 from src.utils.enhanced_user_association_migrator import EnhancedUserAssociationMigrator
 from src.utils.markdown_converter import MarkdownConverter
-
-try:
-    from src.config import logger  # type: ignore
-except Exception:
-    logger = configure_logging("INFO", None)
 
 
 @register_entity_types("work_packages", "issues")

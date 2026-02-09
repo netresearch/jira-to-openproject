@@ -9,18 +9,11 @@ A minimal Rails script is used to, per work package:
 
 from __future__ import annotations
 
-from src.display import configure_logging
+from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
-try:
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-
 from typing import TYPE_CHECKING
-
-from src import config
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -32,8 +25,6 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
 
-        self.mappings = config.mappings
-
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         wp_ids: list[int] = []
@@ -44,9 +35,6 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
                 except Exception:  # noqa: BLE001
                     continue
         return ComponentResult(success=True, data={"work_package_ids": wp_ids})
-
-    def _map(self, extracted: ComponentResult) -> ComponentResult:
-        return ComponentResult(success=True, data=extracted.data)
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
@@ -97,37 +85,5 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run inline refs migration using ETL pattern."""
-        logger.info("Starting inline refs migration...")
-        try:
-            extracted = self._extract()
-            if not extracted.success:
-                return ComponentResult(
-                    success=False,
-                    message="Inline refs extraction failed",
-                    errors=extracted.errors or ["inline refs extraction failed"],
-                )
-
-            mapped = self._map(extracted)
-            if not mapped.success:
-                return ComponentResult(
-                    success=False,
-                    message="Inline refs mapping failed",
-                    errors=mapped.errors or ["inline refs mapping failed"],
-                )
-
-            result = self._load(mapped)
-            logger.info(
-                "Inline refs migration completed: success=%s, updated=%s, failed=%s",
-                result.success,
-                result.updated,
-                result.failed,
-            )
-            return result
-        except Exception as e:
-            logger.exception("Inline refs migration failed")
-            return ComponentResult(
-                success=False,
-                message=f"Inline refs migration failed: {e}",
-                errors=[str(e)],
-            )
+        """Run Inline refs migration."""
+        return self._run_etl_pipeline("Inline refs")

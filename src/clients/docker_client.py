@@ -243,12 +243,6 @@ class DockerClient:
             raise FileNotFoundError(msg)
 
         try:
-            # Fast existence check to avoid noisy docker cp errors while caller polls
-            if not self.check_file_exists_in_container(container_path):
-                logger.debug("Container file not yet present: %s", container_path)
-                msg = f"File not found in container: {container_path}"
-                raise FileNotFoundError(msg)  # noqa: TRY301
-
             # Use a temporary file on the remote server for intermediate storage
             temp_filename = f"docker_transfer_{uuid.uuid4().hex}.tmp"
             remote_temp_path = f"/tmp/{temp_filename}"  # noqa: S108
@@ -325,11 +319,13 @@ class DockerClient:
 
         """
         container_path_str = str(container_path)
+        # Escape for bash double-quote context (prevent command substitution)
+        safe_path = container_path_str.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
 
         try:
             # SECURITY: Quote container name; quote the entire bash script once
             safe_container_name = quote(self.container_name)
-            script = f'test -e "{container_path_str}" && echo EXISTS || echo NOT_EXISTS'
+            script = f'test -e "{safe_path}" && echo EXISTS || echo NOT_EXISTS'
             cmd = f"docker exec {safe_container_name} bash -c {quote(script)}"
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 
@@ -349,11 +345,13 @@ class DockerClient:
 
         """
         container_path_str = str(container_path)
+        # Escape for bash double-quote context (prevent command substitution)
+        safe_path = container_path_str.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
 
         try:
             # SECURITY: Quote container name; quote the entire bash script once
             safe_container_name = quote(self.container_name)
-            script = f'stat -c %s "{container_path_str}" 2>/dev/null || echo NOT_EXISTS'
+            script = f'stat -c %s "{safe_path}" 2>/dev/null || echo NOT_EXISTS'
             cmd = f"docker exec {safe_container_name} bash -c {quote(script)}"
             stdout, _, returncode = self.ssh_client.execute_command(cmd, check=False)
 

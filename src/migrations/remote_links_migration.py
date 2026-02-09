@@ -8,16 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.display import configure_logging
+from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
-
-try:
-    from src.config import logger  # type: ignore
-except Exception:  # noqa: BLE001
-    logger = configure_logging("INFO", None)
-
-from src import config
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -30,8 +23,6 @@ SECTION_TITLE = "Remote Links"
 class RemoteLinksMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:  # noqa: D107
         super().__init__(jira_client=jira_client, op_client=op_client)
-
-        self.mappings = config.mappings
 
     @staticmethod
     def _extract_links_from_fields(fields: Any) -> list[tuple[str, str]]:
@@ -73,15 +64,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
             return ComponentResult(success=True, data={"links": {}})
-        result = self.jira_client.batch_get_issues(keys)
-        # batch_get_issues returns a list of dicts from batch processor
-        issues: dict[str, Any] = {}
-        if isinstance(result, list):
-            for batch_dict in result:
-                if isinstance(batch_dict, dict):
-                    issues.update(batch_dict)
-        elif isinstance(result, dict):
-            issues = result
+        issues = self._merge_batch_issues(keys)
         links_by_key: dict[str, list[tuple[str, str]]] = {}
         for k, issue in issues.items():
             try:
@@ -142,37 +125,5 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run remote links migration using ETL pattern."""
-        logger.info("Starting remote links migration...")
-        try:
-            extracted = self._extract()
-            if not extracted.success:
-                return ComponentResult(
-                    success=False,
-                    message="Remote links extraction failed",
-                    errors=extracted.errors or ["remote links extraction failed"],
-                )
-
-            mapped = self._map(extracted)
-            if not mapped.success:
-                return ComponentResult(
-                    success=False,
-                    message="Remote links mapping failed",
-                    errors=mapped.errors or ["remote links mapping failed"],
-                )
-
-            result = self._load(mapped)
-            logger.info(
-                "Remote links migration completed: success=%s, updated=%s, failed=%s",
-                result.success,
-                result.updated,
-                result.failed,
-            )
-            return result
-        except Exception as e:
-            logger.exception("Remote links migration failed")
-            return ComponentResult(
-                success=False,
-                message=f"Remote links migration failed: {e}",
-                errors=[str(e)],
-            )
+        """Run Remote links migration."""
+        return self._run_etl_pipeline("Remote links")

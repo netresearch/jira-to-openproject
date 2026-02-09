@@ -254,20 +254,10 @@ class BaseMigration:
 
         self.logger = configure_logging("INFO", None)
 
-        # Initialize mappings using proper exception handling (compliance fix)
-        try:
-            # Optimistic execution: attempt to get mappings directly
-            self.mappings = config.get_mappings()
-        except config.MappingsInitializationError as e:
-            # Only perform diagnostics if mappings initialization fails
-            self.logger.exception(
-                "Failed to initialize mappings in %s",
-                self.__class__.__name__,
-            )
-            msg = f"Cannot initialize {self.__class__.__name__}: {e}"
-            raise ComponentInitializationError(
-                msg,
-            ) from e
+        # Use config.mappings (proxy) which supports test monkeypatching.
+        # The _MappingsProxy delegates to get_mappings() in production;
+        # tests replace it via monkeypatch.setattr(cfg, "mappings", DummyMappings()).
+        self.mappings = config.mappings
 
         # Initialize thread-safe cache infrastructure for API call optimization
         self._cache_lock = threading.RLock()
@@ -788,6 +778,170 @@ class BaseMigration:
 
         self.logger.debug("Saved data to %s", filepath)
         return filepath
+
+    # ── DRY helper methods ─────────────────────────────────────────────
+
+    def _merge_batch_issues(self, keys: list[str]) -> dict[str, Any]:
+        """Fetch issues via batch_get_issues and merge batch results into a single dict.
+
+        batch_get_issues may return list[dict] (from batch processor) or dict.
+        This helper normalizes either return type into a single merged dict.
+
+        Args:
+            keys: List of Jira issue keys to fetch
+
+        Returns:
+            Merged dict mapping issue key to issue data
+
+        """
+        result = self.jira_client.batch_get_issues(keys)
+        issues: dict[str, Any] = {}
+        if isinstance(result, list):
+            for batch_dict in result:
+                if isinstance(batch_dict, dict):
+                    issues.update(batch_dict)
+        elif isinstance(result, dict):
+            issues = result
+        return issues
+
+    @staticmethod
+    def _issue_project_key(issue_key: str) -> str:
+        """Extract the project key from a Jira issue key (e.g. 'PROJ-123' -> 'PROJ')."""
+        try:
+            return str(issue_key).split("-", 1)[0]
+        except Exception:
+            return str(issue_key)
+
+    @staticmethod
+    def _resolve_wp_id(wp_map: dict[str, Any], key: str) -> int | None:
+        """Resolve OP work package ID from a mapping entry.
+
+        Args:
+            wp_map: Work package mapping dict
+            key: Jira issue key to look up
+
+        Returns:
+            OpenProject work package ID, or None if not found
+
+        """
+        entry = wp_map.get(key)
+        if isinstance(entry, dict) and entry.get("openproject_id"):
+            return int(entry["openproject_id"])
+        if isinstance(entry, int):
+            return entry
+        return None
+
+    def _ensure_wp_custom_field(self, name: str, field_format: str = "text") -> int:
+        """Ensure a WorkPackageCustomField exists, creating it if needed.
+
+        Args:
+            name: Custom field display name
+            field_format: Rails field format (string, text, int, float, etc.)
+
+        Returns:
+            Custom field ID, or 0 if creation failed
+
+        """
+        from src.clients.openproject_client import escape_ruby_single_quoted  # noqa: PLC0415
+
+        try:
+            cf = self.op_client.get_custom_field_by_name(name)
+            cf_id = int(cf.get("id")) if isinstance(cf, dict) else None
+            if cf_id:
+                return cf_id
+        except Exception:  # noqa: BLE001
+            self.logger.info("CF '%s' not found; will create (format=%s)", name, field_format)
+
+        escaped = escape_ruby_single_quoted(name)
+        script = (
+            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escaped}'); "
+            f"if !cf; cf = CustomField.new(name: '{escaped}', field_format: '{field_format}', "
+            f"is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
+        )
+        cf_id = self.op_client.execute_query(script)
+        return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
+
+    def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int], cf_name: str | None = None) -> None:
+        """Enable a custom field for specific projects only.
+
+        Args:
+            cf_id: Custom field ID
+            project_ids: Set of project IDs to enable the field for
+            cf_name: Optional display name for logging
+
+        """
+        if not project_ids:
+            return
+        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
+        script = (
+            f"cf = CustomField.find({cf_id})\n"
+            f"[{project_ids_str}].each do |pid|\n"
+            f"  begin\n"
+            f"    project = Project.find(pid)\n"
+            f"    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)\n"
+            f"  rescue ActiveRecord::RecordNotFound\n"
+            f"  end\n"
+            f"end\n"
+            f"true"
+        )
+        try:
+            self.op_client.execute_query(script)
+            display = cf_name or str(cf_id)
+            self.logger.info("Enabled %s CF for %d projects", display, len(project_ids))
+        except Exception:  # noqa: BLE001
+            self.logger.warning("Failed to enable CF for some projects")
+
+    def _run_etl_pipeline(self, name: str) -> ComponentResult:
+        """Standard ETL run method for extract -> map -> load pattern.
+
+        Subclasses that follow the standard ETL pattern can use this in their
+        run() method instead of duplicating the boilerplate.
+
+        Args:
+            name: Human-readable name for log messages (e.g. "Labels")
+
+        Returns:
+            ComponentResult from the load phase
+
+        """
+        self.logger.info("Starting %s migration...", name)
+        try:
+            extracted = self._extract()
+            if not extracted.success:
+                return extracted
+            mapped = self._map(extracted)
+            if not mapped.success:
+                return mapped
+            result = self._load(mapped)
+            self.logger.info(
+                "%s migration completed: success=%s, updated=%s, failed=%s",
+                name,
+                result.success,
+                getattr(result, "updated", getattr(result, "success_count", "?")),
+                getattr(result, "failed", getattr(result, "failed_count", "?")),
+            )
+            return result
+        except Exception as e:
+            self.logger.exception("%s migration failed", name)
+            return ComponentResult(
+                success=False,
+                message=f"{name} migration failed: {e}",
+                errors=[str(e)],
+            )
+
+    def _extract(self) -> ComponentResult:
+        """Extract phase - override in subclass."""
+        msg = f"{self.__class__.__name__} must implement _extract()"
+        raise NotImplementedError(msg)
+
+    def _map(self, extracted: ComponentResult) -> ComponentResult:
+        """Map phase - default pass-through. Override in subclass if needed."""
+        return extracted
+
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
+        """Load phase - override in subclass."""
+        msg = f"{self.__class__.__name__} must implement _load()"
+        raise NotImplementedError(msg)
 
     def run(self) -> ComponentResult:
         """Legacy run method (deprecated).

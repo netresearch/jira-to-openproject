@@ -12,19 +12,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src import config
-from src.display import configure_logging, console
+from src.config import logger
+from src.display import console
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, MigrationError
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
-
-# Prefer shared logger; fall back if unavailable
-try:
-    from src.config import logger  # type: ignore
-except Exception:
-    logger = configure_logging("INFO", None)
 
 
 @register_entity_types("issue_types", "work_package_types")
