@@ -1065,7 +1065,7 @@ class OpenProjectClient:
                 runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                 stdout, stderr, rc = self.docker_client.execute_command(
                     runner_cmd,
-                    timeout=timeout or 120,
+                    timeout=timeout or 300,  # Increased from 120 for large projects
                 )
                 if rc != 0:
                     q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -5504,6 +5504,7 @@ result.to_json
         # that Ruby misinterprets as invalid Unicode escape sequences
         data_json = json.dumps(data, ensure_ascii=False)
         # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        # Optimized: Use bulk insert with conflict handling for speed
         script = f"""
           require 'json'
           data = JSON.parse(<<-'J2O_DATA'
@@ -5513,33 +5514,43 @@ J2O_DATA
 
           results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
 
-          data.each do |item|
-            begin
-              wp_id = item['wp_id']
-              user_id = item['user_id']
+          # Build bulk insert data
+          now = Time.current
+          records = []
+          wp_ids = data.map {{ |d| d['wp_id'] }}.uniq
+          user_ids = data.map {{ |d| d['user_id'] }}.uniq
 
-              # Check if already exists
-              if Watcher.exists?(watchable_type: 'WorkPackage', watchable_id: wp_id, user_id: user_id)
-                results[:skipped] += 1
-              else
-                wp = WorkPackage.find_by(id: wp_id)
-                u = User.find_by(id: user_id)
-                if wp && u
-                  w = Watcher.new(user: u, watchable: wp)
-                  if w.save
-                    results[:created] += 1
-                  else
-                    results[:failed] += 1
-                    results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: w.errors.full_messages.join(', ') }}
-                  end
-                else
-                  results[:failed] += 1
-                  results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: 'WorkPackage or User not found' }}
-                end
-              end
-            rescue => e
+          # Pre-fetch valid IDs for faster lookup
+          valid_wps = WorkPackage.where(id: wp_ids).pluck(:id).to_set
+          valid_users = User.where(id: user_ids).pluck(:id).to_set
+          existing = Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_ids, user_id: user_ids)
+                           .pluck(:watchable_id, :user_id).to_set
+
+          data.each do |item|
+            wp_id = item['wp_id']
+            user_id = item['user_id']
+
+            unless valid_wps.include?(wp_id) && valid_users.include?(user_id)
               results[:failed] += 1
-              results[:errors] << {{ wp_id: item['wp_id'], user_id: item['user_id'], error: e.message }}
+              results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: 'WorkPackage or User not found' }}
+              next
+            end
+
+            if existing.include?([wp_id, user_id])
+              results[:skipped] += 1
+            else
+              records << {{ watchable_type: 'WorkPackage', watchable_id: wp_id, user_id: user_id }}
+            end
+          end
+
+          # Bulk insert new watchers
+          if records.any?
+            begin
+              Watcher.insert_all(records)
+              results[:created] = records.size
+            rescue => e
+              results[:failed] = records.size
+              results[:errors] << {{ error: e.message }}
             end
           end
 
@@ -5806,15 +5817,15 @@ J2O_DATA
         # Escape single quotes for Ruby
         escaped_comment = comment_text.replace("\\", "\\\\").replace("'", "\\'")
 
+        # OpenProject 15+ requires using journal_notes/journal_user + save!
         script = f"""
         begin
           wp = WorkPackage.find({work_package_id})
           user = User.current || User.find_by(admin: true)
-          journal = wp.journals.create!(
-            user: user,
-            notes: '{escaped_comment}'
-          )
-          {{ id: journal.id, status: 'created' }}
+          wp.journal_notes = '{escaped_comment}'
+          wp.journal_user = user
+          wp.save!
+          {{ id: wp.journals.last.id, status: 'created' }}
         rescue => e
           {{ error: e.message }}
         end
@@ -5862,6 +5873,8 @@ J2O_DATA
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
         # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
+        # NOTE: OpenProject 15+ requires using journal_notes/journal_user + save!
+        # instead of direct journals.create! to properly set validity_period and data_type
         script = f"""
           require 'json'
           data = JSON.parse(<<-'J2O_DATA'
@@ -5887,10 +5900,10 @@ J2O_DATA
               comment_text = item['comment'].to_s
               next if comment_text.empty?
 
-              journal = wp.journals.create!(
-                user: user,
-                notes: comment_text
-              )
+              # OpenProject 15+ journal creation - use journal_notes/journal_user
+              wp.journal_notes = comment_text
+              wp.journal_user = user
+              wp.save!
               results[:created] += 1
             rescue => e
               results[:failed] += 1
@@ -6055,7 +6068,7 @@ J2O_DATA
           end
 
           results[:success] = (results[:failed] == 0)
-          results.to_json
+          results
         """
         try:
             result = self.execute_query_to_json_file(script)
@@ -6388,6 +6401,13 @@ J2O_DATA
             # Save the work package
             if wp.save
               created_count += 1
+
+              # Set original timestamps if provided (using update_columns to bypass callbacks)
+              timestamp_attrs = {{}}
+              timestamp_attrs[:created_at] = Time.parse(wp_data['created_at']) if wp_data['created_at']
+              timestamp_attrs[:updated_at] = Time.parse(wp_data['updated_at']) if wp_data['updated_at']
+              wp.update_columns(timestamp_attrs) if timestamp_attrs.any?
+
               results << {{ id: wp.id, status: 'created', subject: wp.subject }}
             else
               failed_count += 1
@@ -6656,6 +6676,7 @@ J2O_DATA
         # Build batch update script
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         # that Ruby misinterprets as invalid Unicode escape sequences
+        # NOTE: Ruby parses {"key": value} as symbol keys (:key), so we use :id etc.
         updates_json = json.dumps(updates, ensure_ascii=False)
         script = f"""
         updates = {updates_json}
@@ -6665,9 +6686,9 @@ J2O_DATA
 
         updates.each do |update|
           begin
-            wp = WorkPackage.find(update['id'])
+            wp = WorkPackage.find(update[:id])
             update.each do |key, value|
-              next if key == 'id'
+              next if key == :id
               wp.send("#{{key}}=", value) if wp.respond_to?("#{{key}}=")
             end
             wp.save!
@@ -6675,7 +6696,7 @@ J2O_DATA
             results << {{ id: wp.id, status: 'updated' }}
           rescue => e
             failed_count += 1
-            results << {{ id: update['id'], status: 'failed', error: e.message }}
+            results << {{ id: update[:id], status: 'failed', error: e.message }}
           end
         end
 
