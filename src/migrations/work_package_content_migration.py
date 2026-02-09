@@ -525,10 +525,12 @@ class WorkPackageContentMigration(BaseMigration):
         }
 
         # Collect description
+        # Store plain string - the batch_update_work_packages method passes directly to Ruby
+        # which expects a plain string, not the {"raw": ...} format used by the API
         description = getattr(jira_issue.fields, "description", None)
         if description:
             converted_description = self._convert_jira_links(description, jira_key=jira_issue.key)
-            collected["description_update"] = {"raw": converted_description}
+            collected["description_update"] = converted_description
 
         # Collect custom field updates
         raw_fields = getattr(jira_issue, "raw", {}).get("fields", {})
@@ -641,20 +643,23 @@ class WorkPackageContentMigration(BaseMigration):
                 self.logger.debug("Bulk comment creation failed: %s", e)
 
         # Batch 4: Watchers (using bulk_add_watchers)
-        all_watchers = []
-        for item in collected_items:
-            for user_id in item["watchers"]:
-                all_watchers.append({
-                    "work_package_id": item["wp_id"],
-                    "user_id": user_id,
-                })
+        if os.environ.get("J2O_SKIP_WATCHERS"):
+            self.logger.debug("Skipping watchers (J2O_SKIP_WATCHERS=1)")
+        else:
+            all_watchers = []
+            for item in collected_items:
+                for user_id in item["watchers"]:
+                    all_watchers.append({
+                        "work_package_id": item["wp_id"],
+                        "user_id": user_id,
+                    })
 
-        if all_watchers:
-            try:
-                result = self.op_client.bulk_add_watchers(all_watchers)
-                results["watchers_added"] = result.get("created", 0)
-            except Exception as e:  # noqa: BLE001
-                self.logger.debug("Bulk watcher addition failed: %s", e)
+            if all_watchers:
+                try:
+                    result = self.op_client.bulk_add_watchers(all_watchers)
+                    results["watchers_added"] = result.get("created", 0)
+                except Exception as e:  # noqa: BLE001
+                    self.logger.debug("Bulk watcher addition failed: %s", e)
 
         return results
 
