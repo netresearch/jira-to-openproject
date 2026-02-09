@@ -50,7 +50,15 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         try:
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
-                issues = batch_get(jira_keys)
+                result = batch_get(jira_keys)
+                # batch_get_issues returns a list of dicts from batch processor
+                # Merge all batch results into one dict
+                if isinstance(result, list):
+                    for batch_dict in result:
+                        if isinstance(batch_dict, dict):
+                            issues.update(batch_dict)
+                elif isinstance(result, dict):
+                    issues = result
         except Exception:
             logger.exception("Failed to batch-get Jira issues for estimates extraction")
             issues = {}

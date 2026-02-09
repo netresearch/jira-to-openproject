@@ -93,7 +93,15 @@ true
         """Extract Jira security level names per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map.keys()]
-        issues = self.jira_client.batch_get_issues(keys)
+        result = self.jira_client.batch_get_issues(keys)
+        # batch_get_issues returns a list of dicts from batch processor
+        issues: dict[str, Any] = {}
+        if isinstance(result, list):
+            for batch_dict in result:
+                if isinstance(batch_dict, dict):
+                    issues.update(batch_dict)
+        elif isinstance(result, dict):
+            issues = result
 
         sec_by_key: dict[str, str] = {}
         for k, issue in issues.items():

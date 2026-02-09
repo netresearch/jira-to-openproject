@@ -93,7 +93,15 @@ true
         keys = [str(k) for k in wp_map.keys()]
         if not keys:
             return ComponentResult(success=True, data={"versions": {}})
-        issues = self.jira_client.batch_get_issues(keys)
+        result = self.jira_client.batch_get_issues(keys)
+        # batch_get_issues returns a list of dicts from batch processor
+        issues: dict[str, Any] = {}
+        if isinstance(result, list):
+            for batch_dict in result:
+                if isinstance(batch_dict, dict):
+                    issues.update(batch_dict)
+        elif isinstance(result, dict):
+            issues = result
         versions_by_key: dict[str, list[str]] = {}
         for k, issue in issues.items():
             try:

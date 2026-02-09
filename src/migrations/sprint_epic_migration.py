@@ -183,7 +183,15 @@ true
         if not keys:
             return ComponentResult(success=True, data={"sprint": {}, "epic": []})
 
-        issues = self.jira_client.batch_get_issues(keys)
+        result = self.jira_client.batch_get_issues(keys)
+        # batch_get_issues returns a list of dicts from batch processor
+        issues: dict[str, Any] = {}
+        if isinstance(result, list):
+            for batch_dict in result:
+                if isinstance(batch_dict, dict):
+                    issues.update(batch_dict)
+        elif isinstance(result, dict):
+            issues = result
 
         sprint_by_key: dict[str, list[str]] = {}
         epic_links: list[tuple[str, str]] = []  # (child_key, epic_key)

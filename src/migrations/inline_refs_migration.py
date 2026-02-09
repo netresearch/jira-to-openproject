@@ -56,7 +56,7 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
 
         script = (
             "require 'json'\n"
-            "ids = ARGV.first || []\n"
+            "ids = input_data || []\n"
             "updated = 0; failed = 0\n"
             "ids.each do |id|\n"
             "  begin\n"
@@ -64,7 +64,7 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "    names = wp.attachments.pluck(:filename)\n"
             "    if names.any?\n"
             "      union = Regexp.union(names.map { |n| Regexp.escape(n) })\n"
-            "      re = /\\((?:[^()]*\\/)?(#{union})\\)/\\i\n"
+            "      re = /\\((?:[^()]*\\/)?(#{union})\\)/i\n"
             "      # Description\n"
             "      desc = (wp.description || '').to_s\n"
             '      new_desc = desc.gsub(re) { "(attachment:#{$1})" }\n'
@@ -87,7 +87,9 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "    failed += 1\n"
             "  end\n"
             "end\n"
-            "STDOUT.puts({updated: updated, failed: failed}.to_json)\n"
+            "start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'\n"
+            "end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'\n"
+            "puts start_marker + {updated: updated, failed: failed}.to_json + end_marker\n"
         )
         res = self.op_client.execute_script_with_data(script, ids)
         updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0

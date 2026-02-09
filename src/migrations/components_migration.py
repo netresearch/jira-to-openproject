@@ -67,7 +67,15 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         try:
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
-                issues = batch_get(jira_keys)
+                result = batch_get(jira_keys)
+                # batch_get_issues returns a list of dicts from batch processor
+                # Merge all batch results into one dict
+                if isinstance(result, list):
+                    for batch_dict in result:
+                        if isinstance(batch_dict, dict):
+                            issues.update(batch_dict)
+                elif isinstance(result, dict):
+                    issues = result
         except Exception:
             logger.exception("Failed to batch-get Jira issues for components extraction")
             issues = {}
@@ -92,15 +100,18 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
                 continue
 
         materialized = {k: sorted(list(v)) for k, v in by_project.items() if v}
+        # Cache issues for reuse in _load() to avoid second Jira API call
         return ComponentResult(
-            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized}
+            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized, "issues": issues}
         )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         by_project: dict[str, list[str]] = data.get("by_project", {}) if isinstance(data, dict) else {}
+        # Preserve cached issues from extract phase for reuse in load phase
+        cached_issues = data.get("issues", {}) if isinstance(data, dict) else {}
         if not by_project:
-            return ComponentResult(success=True, created=0, data={"category_map": {}})
+            return ComponentResult(success=True, created=0, data={"category_map": {}, "issues": cached_issues})
 
         proj_map = self.mappings.get_mapping("project") or {}
         op_project_ids: dict[str, int] = {}
@@ -180,7 +191,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         except Exception:
             logger.exception("Failed to persist category mapping")
 
-        return ComponentResult(success=True, created=created, data={"category_map": by_pid_name_to_id})
+        return ComponentResult(success=True, created=created, data={"category_map": by_pid_name_to_id, "issues": cached_issues})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         category_map: dict[str, dict[str, int]] = (mapped.data or {}).get("category_map", {}) if mapped.data else {}
@@ -190,15 +201,18 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         wp_map = self.mappings.get_mapping("work_package") or {}
         proj_map = self.mappings.get_mapping("project") or {}
 
-        jira_keys = [str(k) for k in wp_map.keys()]
-        issues: dict[str, Any] = {}
-        try:
-            batch_get = getattr(self.jira_client, "batch_get_issues", None)
-            if callable(batch_get):
-                issues = batch_get(jira_keys)
-        except Exception:
-            logger.exception("Failed to batch-get Jira issues for category assignment")
-            issues = {}
+        # Use cached issues from extract phase to avoid second Jira API call
+        issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
+        if not issues:
+            logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
+            jira_keys = [str(k) for k in wp_map.keys()]
+            try:
+                batch_get = getattr(self.jira_client, "batch_get_issues", None)
+                if callable(batch_get):
+                    issues = batch_get(jira_keys)
+            except Exception:
+                logger.exception("Failed to batch-get Jira issues for category assignment")
+                issues = {}
 
         updates: list[dict[str, Any]] = []
         failed = 0

@@ -135,7 +135,14 @@ class PriorityMigration(BaseMigration):
         try:
             batch_get = getattr(self.jira_client, "batch_get_issues", None)
             if callable(batch_get):
-                iss_map = batch_get(jira_keys)
+                result = batch_get(jira_keys)
+                # batch_get_issues returns a list of dicts from batch processor
+                if isinstance(result, list):
+                    for batch_dict in result:
+                        if isinstance(batch_dict, dict):
+                            iss_map.update(batch_dict)
+                elif isinstance(result, dict):
+                    iss_map = result
         except Exception:
             logger.exception("Failed to batch-get Jira issues for priority application")
             iss_map = {}
