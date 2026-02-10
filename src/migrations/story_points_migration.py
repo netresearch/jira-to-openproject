@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src.clients.openproject_client import escape_ruby_single_quoted
 from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
@@ -35,16 +36,17 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
 
         StoryPointsMigration is a transformation-only component that operates on
         already-migrated work packages. It doesn't fetch source data from Jira,
-        so this returns an empty list to indicate no changes to detect.
+        so change detection is not supported.
 
         Args:
             entity_type: Type of entities
 
-        Returns:
-            Empty list (transformation-only, no source entities)
+        Raises:
+            ValueError: Always, as this migration is transformation-only
 
         """
-        return []
+        msg = f"{type(self).__name__} is transformation-only and does not support change detection for entity type: {entity_type}"
+        raise ValueError(msg)
 
     @staticmethod
     def _coerce_number(value: Any) -> float | None:
@@ -132,7 +134,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             if project_id:
                 projects_with_values.add(int(project_id))
             try:
-                val = str(text).replace("'", "\\'")
+                val = escape_ruby_single_quoted(str(text))
                 set_script = (
                     "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
                     "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"

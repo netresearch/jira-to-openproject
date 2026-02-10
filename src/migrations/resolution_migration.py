@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src.clients.openproject_client import escape_ruby_single_quoted
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
@@ -35,16 +36,17 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
 
         ResolutionMigration is a transformation-only component that operates on
         already-migrated work packages. It doesn't fetch source data from Jira,
-        so this returns an empty list to indicate no changes to detect.
+        so change detection is not supported.
 
         Args:
             entity_type: Type of entities
 
-        Returns:
-            Empty list (transformation-only, no source entities)
+        Raises:
+            ValueError: Always, as this migration is transformation-only
 
         """
-        return []
+        msg = f"{type(self).__name__} is transformation-only and does not support change detection for entity type: {entity_type}"
+        raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
         """Extract Jira resolution per migrated issue (via work_package mapping)."""
@@ -69,7 +71,6 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=False, failed=1)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
-        self.mappings.get_mapping("project") or {}
         reso_by_key: dict[str, str] = (mapped.data or {}).get("resolution", {})  # type: ignore[assignment]
 
         updated = 0
@@ -95,7 +96,7 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
                 set_script = (
                     "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
                     "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; wp.project_id"
-                    % (wp_id, cf_id, res_name.replace("'", "\\'"), res_name.replace("'", "\\'"))
+                    % (wp_id, cf_id, escape_ruby_single_quoted(res_name), escape_ruby_single_quoted(res_name))
                 )
                 result = self.op_client.execute_query(set_script)
                 if result:

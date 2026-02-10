@@ -218,6 +218,7 @@ class BaseMigration:
         "total_evictions": 0,
         "memory_cleanups": 0,
     }
+    _global_cache_stats_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(
         self,
@@ -333,10 +334,12 @@ class BaseMigration:
                     removed_count += size
                     removed_types.append(cache_key)
                     self._cache_stats["evictions"] += 1
-                    BaseMigration._global_cache_stats["total_evictions"] += 1
+                    with BaseMigration._global_cache_stats_lock:
+                        BaseMigration._global_cache_stats["total_evictions"] += 1
 
                 self._cache_stats["memory_cleanups"] += 1
-                BaseMigration._global_cache_stats["memory_cleanups"] += 1
+                with BaseMigration._global_cache_stats_lock:
+                    BaseMigration._global_cache_stats["memory_cleanups"] += 1
 
                 self.logger.info(
                     "Cache cleanup: removed %d entities from %d types: %s",
@@ -369,7 +372,8 @@ class BaseMigration:
             # Check local cache first (fastest path)
             if entity_type in entity_cache and entity_type not in cache_invalidated:
                 self._cache_stats["hits"] += 1
-                BaseMigration._global_cache_stats["total_hits"] += 1
+                with BaseMigration._global_cache_stats_lock:
+                    BaseMigration._global_cache_stats["total_hits"] += 1
                 self.logger.debug("Cache hit (local): cached %s", entity_type)
                 return entity_cache[entity_type]
 
@@ -379,13 +383,15 @@ class BaseMigration:
                     entities = self._global_entity_cache[entity_type].copy()
                     entity_cache[entity_type] = entities
                     self._cache_stats["hits"] += 1
-                    BaseMigration._global_cache_stats["total_hits"] += 1
+                    with BaseMigration._global_cache_stats_lock:
+                        BaseMigration._global_cache_stats["total_hits"] += 1
                     self.logger.debug("Cache hit (global): cached %s", entity_type)
                     return entities
 
             # Cache miss - perform API call with error handling
             self._cache_stats["misses"] += 1
-            BaseMigration._global_cache_stats["total_misses"] += 1
+            with BaseMigration._global_cache_stats_lock:
+                BaseMigration._global_cache_stats["total_misses"] += 1
             self.logger.debug("Cache miss: fetching cached %s from API", entity_type)
 
             try:
@@ -846,7 +852,7 @@ class BaseMigration:
 
         try:
             cf = self.op_client.get_custom_field_by_name(name)
-            cf_id = int(cf.get("id")) if isinstance(cf, dict) else None
+            cf_id = int(cf.get("id", 0) or 0) if isinstance(cf, dict) else None
             if cf_id:
                 return cf_id
         except Exception:
@@ -858,8 +864,8 @@ class BaseMigration:
             f"if !cf; cf = CustomField.new(name: '{escaped}', field_format: '{field_format}', "
             f"is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
         )
-        cf_id = self.op_client.execute_query(script)
-        return int(cf_id) if isinstance(cf_id, int) else int(cf_id or 0)
+        result = self.op_client.execute_query(script)
+        return int(result) if result else 0
 
     def _enable_cf_for_projects(self, cf_id: int, project_ids: set[int], cf_name: str | None = None) -> None:
         """Enable a custom field for specific projects only.

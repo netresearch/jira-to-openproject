@@ -54,6 +54,7 @@ class WorkPackageContentMigration(BaseMigration):
 
     WORK_PACKAGE_MAPPING_FILE = "work_package_mapping.json"
     ATTACHMENT_MAPPING_FILE = "attachment_mapping.json"
+    _JIRA_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 
     def __init__(
         self,
@@ -304,7 +305,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         # Additional pattern: bare Jira keys not caught by converter
         # Pattern: PROJECT-123 where PROJECT is uppercase letters
-        jira_key_pattern = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+        jira_key_pattern = self._JIRA_KEY_PATTERN
 
         def replace_key(match: re.Match) -> str:
             jira_key = match.group(1)

@@ -29,16 +29,17 @@ class VotesMigration(BaseMigration):  # noqa: D101
 
         VotesMigration is a transformation-only component that operates on
         already-migrated work packages. It doesn't fetch source data from Jira,
-        so this returns an empty list to indicate no changes to detect.
+        so change detection is not supported.
 
         Args:
             entity_type: Type of entities
 
-        Returns:
-            Empty list (transformation-only, no source entities)
+        Raises:
+            ValueError: Always, as this migration is transformation-only
 
         """
-        return []
+        msg = f"{type(self).__name__} is transformation-only and does not support change detection for entity type: {entity_type}"
+        raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
         """Extract Jira votes count per issue mapped to a WP."""

@@ -15,9 +15,7 @@ from src.models import ComponentResult
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
-    from src.mappings.mappings import Mappings
 
-from src import config
 from src.config import logger
 
 
@@ -27,7 +25,6 @@ class RelationMigration(BaseMigration):
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client, op_client)
-        self.mappings: Mappings = config.mappings
 
         # Inverse/direction mapping table
         # tuple of (jira_link_name_lower, direction) -> (op_type, swap)

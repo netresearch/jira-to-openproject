@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src.clients.openproject_client import escape_ruby_single_quoted
 from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
@@ -29,16 +30,17 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
 
         SecurityLevelsMigration is a transformation-only component that operates on
         already-migrated work packages. It doesn't fetch source data from Jira,
-        so this returns an empty list to indicate no changes to detect.
+        so change detection is not supported.
 
         Args:
             entity_type: Type of entities
 
-        Returns:
-            Empty list (transformation-only, no source entities)
+        Raises:
+            ValueError: Always, as this migration is transformation-only
 
         """
-        return []
+        msg = f"{type(self).__name__} is transformation-only and does not support change detection for entity type: {entity_type}"
+        raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
         """Extract Jira security level names per issue mapped to a WP."""
@@ -86,7 +88,7 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
                 set_script = (
                     "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
                     "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                    % (wp_id, cf_id, sec_name.replace("'", "\\'"), sec_name.replace("'", "\\'"))
+                    % (wp_id, cf_id, escape_ruby_single_quoted(sec_name), escape_ruby_single_quoted(sec_name))
                 )
                 ok = self.op_client.execute_query(set_script)
                 if ok:

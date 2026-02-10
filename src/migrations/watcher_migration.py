@@ -10,9 +10,7 @@ from src.models import ComponentResult
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
-    from src.mappings.mappings import Mappings
 
-from src import config
 from src.config import logger
 
 
@@ -22,7 +20,6 @@ class WatcherMigration(BaseMigration):
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client, op_client)
-        self.mappings: Mappings = config.mappings
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for transformation.

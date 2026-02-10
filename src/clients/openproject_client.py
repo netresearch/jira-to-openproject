@@ -57,7 +57,7 @@ USERS_CACHE_TTL_SECONDS = 300
 _RE_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 _RE_OSC_ESCAPE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
 _RE_OTHER_ESCAPE = re.compile(r"\x1b[^[]]")
-_RE_CTRL_CHARS = re.compile(r"[\x00-\x08\x0A-\x0D\x0E-\x1F\x7f]")
+_RE_CTRL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 # Allowlist of Rails model names that may be accessed via generic record operations.
 # Prevents arbitrary model access through the Rails console.
@@ -1426,10 +1426,9 @@ class OpenProjectClient:
             # Sanitize terminal artifacts to protect JSON parsing
             try:
                 # 1) Strip ANSI escape sequences entirely
-                ansi_re = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-                text = ansi_re.sub("", text)
+                text = _RE_ANSI_ESCAPE.sub("", text)
                 # 2) Remove remaining control chars (except \t, \n, \r)
-                text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+                text = _RE_CTRL_CHARS.sub("", text)
             except Exception:
                 logger.debug("ANSI/control char sanitization failed; continuing with raw text")
 
@@ -1488,7 +1487,7 @@ class OpenProjectClient:
                     return json.loads(text[lb : rb + 1])
                 except json.JSONDecodeError as e:  # type: ignore[name-defined]
                     # As a fallback, strip remaining control characters and retry once
-                    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
+                    cleaned = _RE_CTRL_CHARS.sub("", text[lb : rb + 1])
                     try:
                         return json.loads(cleaned)
                     except Exception:
@@ -1499,7 +1498,7 @@ class OpenProjectClient:
                 try:
                     return json.loads(text[lb : rb + 1])
                 except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[lb : rb + 1])
+                    cleaned = _RE_CTRL_CHARS.sub("", text[lb : rb + 1])
                     try:
                         return json.loads(cleaned)
                     except Exception:
@@ -1603,6 +1602,7 @@ class OpenProjectClient:
             QueryExecutionError: If the count query fails
 
         """
+        self._validate_model_name(model)
         # Use unique markers to extract count reliably from tmux output
         marker_id = secrets.token_hex(8)
         start_marker = f"J2O_COUNT_START_{marker_id}"
@@ -1647,8 +1647,6 @@ class OpenProjectClient:
         # MARKER
         # 123
         # MARKER
-        import re
-
         # Pattern: start_marker alone on line, then digit(s) on next line, then end_marker alone
         pattern = rf"^{re.escape(start_marker)}$\n(\d+)\n^{re.escape(end_marker)}$"
         match = re.search(pattern, result, re.MULTILINE)
@@ -2016,10 +2014,20 @@ class OpenProjectClient:
             msg = f"Invalid entity type: {entity_type}. Must be one of {self.J2O_PROVENANCE_ENTITY_TYPES}"
             raise ValueError(msg)
 
-        # Ensure infrastructure exists
-        project_id = self.ensure_j2o_migration_project()
-        type_ids = self.ensure_j2o_provenance_types(project_id)
-        cf_ids = self.ensure_j2o_provenance_custom_fields()
+        # Ensure infrastructure exists (cached after first call)
+        if not hasattr(self, "_j2o_provenance_cache"):
+            self._j2o_provenance_cache = {
+                "project_id": self.ensure_j2o_migration_project(),
+                "type_ids": None,
+                "cf_ids": None,
+            }
+            self._j2o_provenance_cache["type_ids"] = self.ensure_j2o_provenance_types(
+                self._j2o_provenance_cache["project_id"],
+            )
+            self._j2o_provenance_cache["cf_ids"] = self.ensure_j2o_provenance_custom_fields()
+        project_id = self._j2o_provenance_cache["project_id"]
+        type_ids = self._j2o_provenance_cache["type_ids"]
+        cf_ids = self._j2o_provenance_cache["cf_ids"]
 
         type_id = type_ids.get(entity_type)
         if not type_id:
@@ -2040,7 +2048,7 @@ class OpenProjectClient:
             "begin\n"
             f"  project = Project.find({project_id})\n"
             f"  wp_type = Type.find({type_id})\n"
-            f"  subject = {subject!r}\n"
+            f"  subject = '{escape_ruby_single_quoted(subject)}'\n"
             "  status = Status.default || Status.first\n"
             "  priority = IssuePriority.default || IssuePriority.first\n"
             "  # Find existing or create new\n"
@@ -2231,7 +2239,7 @@ class OpenProjectClient:
                 if jira_name:
                     subject = f"{subject} ({jira_name})"
                 ruby_mappings.append(
-                    f"  {{ subject: {subject!r}, op_entity_id: {op_entity_id} }}",
+                    f"  {{ subject: '{escape_ruby_single_quoted(subject)}', op_entity_id: {op_entity_id} }}",
                 )
 
         if not ruby_mappings:
@@ -2870,7 +2878,7 @@ JSON_DATA
         # Escape braces in f-string; Ruby string content uses literal markers.
         marker_start = "<!-- J2O_ORIGIN_START -->"
         marker_end = "<!-- J2O_ORIGIN_END -->"
-        payload = f"system={origin_system};key={project_key};id={external_id or ''};url={external_url or ''}"
+        payload = f"system={escape_ruby_single_quoted(origin_system)};key={escape_ruby_single_quoted(project_key)};id={escape_ruby_single_quoted(external_id or '')};url={escape_ruby_single_quoted(external_url or '')}"
         # Ruby script to insert/replace the origin block in description
         script = (
             "project = Project.find(%d)\n" % project_id
@@ -2913,9 +2921,9 @@ JSON_DATA
         """
         ruby = f"""
           pid = {project_id}
-          name = '{name}'.dup
-          fmt  = '{field_format}'.dup
-          val  = '{value}'.dup
+          name = '{escape_ruby_single_quoted(name)}'.dup
+          fmt  = '{escape_ruby_single_quoted(field_format)}'.dup
+          val  = '{escape_ruby_single_quoted(value)}'.dup
 
           # Ensure attribute definition
           # Section is required for project attributes
@@ -3089,8 +3097,8 @@ J2O_DATA
         Returns True if renamed or already at new_name; False if missing or failed.
         """
         ruby = f"""
-          old_name = '{old_name}'.dup
-          new_name = '{new_name}'.dup
+          old_name = '{escape_ruby_single_quoted(old_name)}'.dup
+          new_name = '{escape_ruby_single_quoted(new_name)}'.dup
           cf = ProjectCustomField.find_by(name: old_name)
           if cf
             cf.update!(name: new_name)
@@ -3234,10 +3242,8 @@ J2O_DATA
             QueryExecutionError: On execution or retrieval failure
 
         """
-        # Basic validation of model name to avoid code injection
-        if not isinstance(model, str) or not model or not re.match(r"^[A-Za-z_:][A-Za-z0-9_:]*$", model):
-            _msg = "Invalid model name for bulk_create_records"
-            raise QueryExecutionError(_msg)
+        # Validate model name against allowlist to prevent injection
+        self._validate_model_name(model)
 
         if not isinstance(records, list):
             _msg = "records must be a list of dicts"
@@ -4220,6 +4226,7 @@ J2O_DATA
             QueryExecutionError: If query fails
 
         """
+        self._validate_model_name(model)
         # Start building the query
         query = f"{model}"
 
@@ -5057,7 +5064,7 @@ J2O_DATA
         """
         try:
             project = self.execute_json_query(
-                f"Project.find_by(identifier: '{identifier}')",
+                f"Project.find_by(identifier: '{escape_ruby_single_quoted(identifier)}')",
             )
         except Exception as e:
             msg = "Failed to get project."
@@ -5272,9 +5279,9 @@ J2O_DATA
             user_id: {user_id},
             logged_by_id: {user_id},
             activity_id: {activity_id},
-            hours: {time_entry_data.get("hours", 0)},
-            spent_on: Date.parse('{time_entry_data.get("spentOn", "")}'),
-            comments: {comment_str!r}
+            hours: {float(time_entry_data.get("hours", 0))},
+            spent_on: Date.parse('{escape_ruby_single_quoted(time_entry_data.get("spentOn", ""))}'),
+            comments: '{escape_ruby_single_quoted(comment_str)}'
           )
 
           # Ensure project is set from associated work package to satisfy validations
@@ -5290,7 +5297,7 @@ J2O_DATA
 
           # Provenance CF for time entries: J2O Origin Worklog Key
           begin
-            key = {time_entry_data.get("_meta", {}).get("jira_worklog_key")!r}
+            key = '{escape_ruby_single_quoted(str(time_entry_data.get("_meta", {}).get("jira_worklog_key") or ""))}'
             if key
               cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
               if !cf
@@ -6057,11 +6064,11 @@ J2O_DATA
           if !from_wp || !to_wp
             {{ error: 'NotFound' }}
           else
-            rel = Relation.where(from_id: {from_work_package_id}, to_id: {to_work_package_id}, relation_type: '{relation_type}').first
+            rel = Relation.where(from_id: {from_work_package_id}, to_id: {to_work_package_id}, relation_type: '{escape_ruby_single_quoted(relation_type)}').first
             if rel
               {{ id: rel.id, status: 'exists', relation_type: rel.relation_type, from_id: rel.from_id, to_id: rel.to_id }}
             else
-              rel = Relation.create(from: from_wp, to: to_wp, relation_type: '{relation_type}')
+              rel = Relation.create(from: from_wp, to: to_wp, relation_type: '{escape_ruby_single_quoted(relation_type)}')
               if rel.persisted?
                 {{ id: rel.id, status: 'created', relation_type: rel.relation_type, from_id: rel.from_id, to_id: rel.to_id }}
               else
@@ -7178,30 +7185,8 @@ J2O_DATA
             ValueError: If model name is not allowed
 
         """
-        # Whitelist of allowed OpenProject model names
-        allowed_models = {
-            "User",
-            "Project",
-            "WorkPackage",
-            "CustomField",
-            "Status",
-            "Type",
-            "Priority",
-            "Category",
-            "Version",
-            "TimeEntry",
-            "Attachment",
-            "Repository",
-            "News",
-            "Wiki",
-            "WikiPage",
-            "Forum",
-            "Message",
-            "Board",
-        }
-
-        if model not in allowed_models:
-            msg = f"Model '{model}' not in allowed list: {sorted(allowed_models)}"
+        if model not in _ALLOWED_MODELS:
+            msg = f"Model '{model}' not in allowed list: {sorted(_ALLOWED_MODELS)}"
             raise ValueError(
                 msg,
             )

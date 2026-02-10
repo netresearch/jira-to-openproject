@@ -381,17 +381,20 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         if not att_by_key:
             return 0, 0, {}
 
+        # Build reverse lookup: jira_key -> openproject_id for O(1) access
+        key_to_wp = {
+            entry.get("jira_key"): entry.get("openproject_id")
+            for entry in wp_map.values()
+            if isinstance(entry, dict) and entry.get("jira_key")
+        }
+
         # Download attachments and prepare ops
         ops: list[dict[str, Any]] = []
         seen_digests: set[str] = set()
 
         for key, items in att_by_key.items():
-            # Find work package ID from mapping (key is jira_key like "AAP-1")
-            wp_id = None
-            for entry in wp_map.values():
-                if isinstance(entry, dict) and entry.get("jira_key") == key:
-                    wp_id = entry.get("openproject_id")
-                    break
+            # Find work package ID from reverse lookup
+            wp_id = key_to_wp.get(key)
             if not wp_id:
                 continue
 

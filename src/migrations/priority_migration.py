@@ -48,15 +48,7 @@ class PriorityMigration(BaseMigration):
 
     def run(self) -> ComponentResult:
         """Execute the extract → map → load pipeline for priorities."""
-        extracted = self._extract()
-        if not extracted.success:
-            return extracted
-
-        mapped = self._map(extracted)
-        if not mapped.success:
-            return mapped
-
-        return self._load(mapped)
+        return self._run_etl_pipeline("Priorities")
 
     def _extract(self) -> ComponentResult:
         """Extract Jira priorities (names and order)."""
