@@ -14,7 +14,7 @@ readme = "README.md"
 license = "MIT"
 dependencies = [
     # Core HTTP library for API calls
-    "requests>=2.32.5",
+    "requests>=2.33.1",
 
     # Jira API
     "jira>=3.10.5",
