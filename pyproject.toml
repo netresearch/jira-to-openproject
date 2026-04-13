@@ -42,7 +42,7 @@ dependencies = [
 
     # System monitoring and validation
     "psutil>=7.2.1",
-    "jsonschema>=4.25.1",
+    "jsonschema>=4.26.0",
 
     # Web dashboard
     "fastapi>=0.128.0",
