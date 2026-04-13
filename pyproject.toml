@@ -20,7 +20,7 @@ dependencies = [
     "jira>=3.10.5",
 
     # Data validation
-    "pydantic>=2.12.5",
+    "pydantic>=2.13.0",
 
     # Configuration and environment
     "python-dotenv>=1.2.1",
