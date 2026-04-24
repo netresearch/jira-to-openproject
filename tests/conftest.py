@@ -111,15 +111,19 @@ def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> N
     - Unmarked tests (no {unit,integration,functional,end_to_end}) are skipped by
       default to keep CI stable; mark them appropriately or set J2O_RUN_ALL_TESTS=true.
     """
-    run_all = _env_flag("J2O_RUN_ALL_TESTS", False)
+    run_all = _env_flag("J2O_RUN_ALL_TESTS", True)
     # Global live/mocked mode
     live_services = _env_flag("J2O_LIVE_SERVICES", False) or config.getoption(
         "--live-services",
         default=False,
     )
-    run_integration = _env_flag("J2O_RUN_INTEGRATION", False) or run_all
-    run_functional = _env_flag("J2O_RUN_FUNCTIONAL", False) or run_all
-    run_e2e = _env_flag("J2O_RUN_E2E", False) or run_all
+    # Integration, functional, and end-to-end suites are mock-based in this
+    # project (live-only tests were removed); run them by default. Setting
+    # the corresponding env flag to `false` disables them for quick feedback
+    # loops.
+    run_integration = _env_flag("J2O_RUN_INTEGRATION", True) or run_all
+    run_functional = _env_flag("J2O_RUN_FUNCTIONAL", True) or run_all
+    run_e2e = _env_flag("J2O_RUN_E2E", True) or run_all
 
     enable_docker = (
         _env_flag("J2O_ENABLE_DOCKER", False)
@@ -167,6 +171,36 @@ def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> N
             "or set J2O_RUN_ALL_TESTS=true."
         ),
     )
+
+    # Auto-apply category markers based on directory layout: tests/unit/*,
+    # tests/integration/*, tests/functional/*, tests/end_to_end/* inherit the
+    # matching marker even if the file itself doesn't set `pytestmark`. Other
+    # top-level test directories (tests/security/, tests/migrations/) and
+    # loose test files directly under tests/ default to `unit` — they're all
+    # pure-Python mock-based tests, not live-service integrations.
+    dir_to_marker = {
+        "unit": "unit",
+        "integration": "integration",
+        "functional": "functional",
+        "end_to_end": "end_to_end",
+        "security": "unit",
+        "migrations": "unit",
+    }
+    for item in items:
+        try:
+            parts = Path(str(item.fspath)).parts
+        except Exception:
+            parts = ()
+        resolved = None
+        for part in parts:
+            if part in dir_to_marker:
+                resolved = dir_to_marker[part]
+                break
+        # Loose test files directly under tests/ (no category subdir) → unit.
+        if resolved is None and "tests" in parts and parts.index("tests") == len(parts) - 2:
+            resolved = "unit"
+        if resolved is not None and resolved not in item.keywords:
+            item.add_marker(getattr(pytest.mark, resolved))
 
     for item in items:
         kws = item.keywords
@@ -244,7 +278,7 @@ def _is_test_environment() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ
 
 
-def pytest_ignore_collect(path, config):  # type: ignore[override]
+def pytest_ignore_collect(collection_path: Path, config: object) -> bool:
     """Optionally ignore most tests to allow minimal, dependency-light runs.
 
     Set J2O_TEST_MINIMAL=1 to collect only a small allowlist of fast tests,
@@ -252,15 +286,11 @@ def pytest_ignore_collect(path, config):  # type: ignore[override]
     """
     if os.environ.get("J2O_TEST_MINIMAL", "0") != "1":
         return False
-    try:
-        p = Path(str(path))
-        allow = {
-            Path("tests/integration/test_rails_console_client.py").name,
-            Path("tests/unit/clients/test_openproject_client_enhanced.py").name,
-        }
-        return p.name not in allow
-    except Exception:
-        return False
+    allow = {
+        "test_rails_console_client.py",
+        "test_openproject_client_enhanced.py",
+    }
+    return collection_path.name not in allow
 
 
 # Cache for environment file loading to avoid repeated disk I/O
