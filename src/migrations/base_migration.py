@@ -50,15 +50,11 @@ class EntityTypeRegistry:
 
         if not entity_types:
             msg = f"Migration class {migration_class.__name__} must support at least one entity type"
-            raise TypeError(
-                msg,
-            )
+            raise ValueError(msg)
 
         if not issubclass(migration_class, BaseMigration):
             msg = f"Class {migration_class.__name__} must inherit from BaseMigration"
-            raise TypeError(
-                msg,
-            )
+            raise ValueError(msg)
 
         cls._registry[migration_class] = entity_types.copy()
 

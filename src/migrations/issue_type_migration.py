@@ -939,11 +939,14 @@ class IssueTypeMigration(BaseMigration):
                 return default
         return default
 
-    def update_mapping_file(self) -> None:
+    def update_mapping_file(self) -> bool:
         """Update the issue type mapping file with IDs from OpenProject.
 
         This method is useful when work package types were created manually via a Ruby script
         execution and the mapping file needs to be updated with the created type IDs.
+
+        Returns:
+            True if any mappings were updated, False otherwise.
 
         Raises:
             MigrationError: If mapping update fails
@@ -1058,6 +1061,8 @@ class IssueTypeMigration(BaseMigration):
             msg = f"Migration partially failed: {missing_count} types were not found in OpenProject"
             self.logger.warning(msg)
             raise MigrationError(msg)
+
+        return updated_count > 0
 
     def restore_mapping_from_openproject(self) -> dict[str, Any]:
         """Restore issue type mapping from OpenProject provenance data alone.

@@ -68,6 +68,62 @@ class JiraCaptchaError(JiraError):
     """Error when Jira requires CAPTCHA resolution."""
 
 
+def _import_real_jira_module() -> Any:
+    """Import the real ``jira`` module even if a local test stub shadows it.
+
+    Extracted as a module-level helper so tests can patch it when they need
+    to inject a fake ``JIRA`` class.
+    """
+    try:
+        import importlib
+        import importlib.util
+        import site
+        import sys
+        from pathlib import Path as _Path
+
+        # If a shadow stub is loaded from the project, purge it
+        if "jira" in sys.modules:
+            mod = sys.modules["jira"]
+            mod_file = getattr(mod, "__file__", "") or ""
+            if mod_file and "/p/j2o/jira/__init__.py" in mod_file:
+                # Remove stub and any submodules to force a clean import
+                for key in list(sys.modules.keys()):
+                    if key == "jira" or key.startswith("jira."):
+                        sys.modules.pop(key, None)
+
+        # Prefer virtualenv site-packages path
+        candidates: list[_Path] = []
+        try:
+            candidates.extend(_Path(p) for p in site.getsitepackages())
+        except Exception:
+            pass
+        try:
+            usp = site.getusersitepackages()
+            if usp:
+                candidates.append(_Path(usp))
+        except Exception:
+            pass
+
+        for base in candidates:
+            jira_init = base / "jira" / "__init__.py"
+            if jira_init.exists():
+                # Load the real package under the canonical name 'jira'
+                spec = importlib.util.spec_from_file_location("jira", str(jira_init))
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    sys.modules["jira"] = mod  # ensure relative imports resolve to this package
+                    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                    if hasattr(mod, "JIRA"):
+                        return mod
+
+        # Fallback: regular import (may still hit stub if unresolved)
+        return importlib.import_module("jira")
+    except Exception:
+        import importlib
+
+        return importlib.import_module("jira")
+
+
 class JiraClient:
     """Jira client for API interactions.
 
@@ -181,57 +237,6 @@ class JiraClient:
 
         """
         connection_errors = []
-
-        # Helper: import real jira module even if a local test stub shadows it
-        def _import_real_jira_module():
-            try:
-                import importlib
-                import importlib.util
-                import site
-                import sys
-                from pathlib import Path as _Path
-
-                # If a shadow stub is loaded from the project, purge it
-                if "jira" in sys.modules:
-                    mod = sys.modules["jira"]
-                    mod_file = getattr(mod, "__file__", "")
-                    if mod_file and "/p/j2o/jira/__init__.py" in mod_file:
-                        # Remove stub and any submodules to force a clean import
-                        for key in list(sys.modules.keys()):
-                            if key == "jira" or key.startswith("jira."):
-                                sys.modules.pop(key, None)
-
-                # Prefer virtualenv site-packages path
-                candidates: list[_Path] = []
-                try:
-                    candidates.extend(_Path(p) for p in site.getsitepackages())
-                except Exception:
-                    pass
-                try:
-                    usp = site.getusersitepackages()
-                    if usp:
-                        candidates.append(_Path(usp))
-                except Exception:
-                    pass
-
-                for base in candidates:
-                    jira_init = base / "jira" / "__init__.py"
-                    if jira_init.exists():
-                        # Load the real package under the canonical name 'jira'
-                        spec = importlib.util.spec_from_file_location("jira", str(jira_init))
-                        if spec and spec.loader:
-                            mod = importlib.util.module_from_spec(spec)
-                            sys.modules["jira"] = mod  # ensure relative imports resolve to this package
-                            spec.loader.exec_module(mod)  # type: ignore[attr-defined]
-                            if hasattr(mod, "JIRA"):
-                                return mod
-
-                # Fallback: regular import (may still hit stub if unresolved)
-                return importlib.import_module("jira")
-            except Exception:
-                import importlib
-
-                return importlib.import_module("jira")
 
         jira_mod = _import_real_jira_module()
 
@@ -2335,7 +2340,9 @@ class JiraClient:
                     status = getattr(exc.response, "status_code", None)
                 else:
                     status = getattr(exc, "status_code", None) or getattr(
-                        getattr(exc, "response", None), "status_code", None,
+                        getattr(exc, "response", None),
+                        "status_code",
+                        None,
                     )
 
                 if status in (404, 405):

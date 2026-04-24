@@ -16,6 +16,7 @@ Critical Pattern (Bug #22 lesson):
         work_package["_rails_operations"].append({...})
 """
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -67,35 +68,37 @@ class WorkPackageMigration(BaseMigration):
 
     # Fields that should NOT create journal notes (internal Jira fields handled elsewhere)
     # BUG #60: These fields create noise in journals but have no meaningful migration value
-    IGNORED_CHANGELOG_FIELDS = frozenset({
-        # Work log related (worklogs migrated separately)
-        "WorklogId",
-        "timespent",
-        "timeoriginalestimate",  # Also in field_mappings, but sometimes shows as unmapped
-        # Issue links and relations (migrated separately)
-        "RemoteIssueLink",
-        "Link",
-        "IssueParentAssociation",
-        "Parent",
-        "Epic Link",
-        "Epic Child",
-        # Attachments (migrated separately)
-        "Attachment",
-        "attachment",
-        # Sprint/agile (migrated separately)
-        "Sprint",
-        "Story Points",
-        "Rank",
-        "Global Rank",
-        # Internal Jira fields with no migration value
-        "RemoteIssueLinkGlobalId",
-        "duedate",  # Due date handled in main WP fields
-        "security",  # Jira security level - no OP equivalent
-        "environment",  # Rarely used, clutters journals
-        "watches",  # Watchers not migrated
-        "votes",  # Votes not migrated
-        "Flagged",  # Jira flag indicator
-    })
+    IGNORED_CHANGELOG_FIELDS = frozenset(
+        {
+            # Work log related (worklogs migrated separately)
+            "WorklogId",
+            "timespent",
+            "timeoriginalestimate",  # Also in field_mappings, but sometimes shows as unmapped
+            # Issue links and relations (migrated separately)
+            "RemoteIssueLink",
+            "Link",
+            "IssueParentAssociation",
+            "Parent",
+            "Epic Link",
+            "Epic Child",
+            # Attachments (migrated separately)
+            "Attachment",
+            "attachment",
+            # Sprint/agile (migrated separately)
+            "Sprint",
+            "Story Points",
+            "Rank",
+            "Global Rank",
+            # Internal Jira fields with no migration value
+            "RemoteIssueLinkGlobalId",
+            "duedate",  # Due date handled in main WP fields
+            "security",  # Jira security level - no OP equivalent
+            "environment",  # Rarely used, clutters journals
+            "watches",  # Watchers not migrated
+            "votes",  # Votes not migrated
+            "Flagged",  # Jira flag indicator
+        },
+    )
 
     # Default OpenProject role ID for mentioned users (Member role)
     _DEFAULT_MENTION_ROLE_ID = 4
@@ -674,7 +677,7 @@ class WorkPackageMigration(BaseMigration):
             return None
 
         try:
-            with sqlite3.connect(str(db_path)) as conn:
+            with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
                 conn.row_factory = sqlite3.Row
                 self._ensure_checkpoint_table(conn)
                 row = conn.execute(
@@ -765,7 +768,7 @@ class WorkPackageMigration(BaseMigration):
         }
 
         try:
-            with sqlite3.connect(str(db_path_obj)) as conn:
+            with contextlib.closing(sqlite3.connect(str(db_path_obj))) as conn:
                 self._ensure_checkpoint_table(conn)
                 conn.execute(
                     """
@@ -2289,7 +2292,10 @@ class WorkPackageMigration(BaseMigration):
             for name, fmt, searchable in cf_specs:
                 try:
                     cf = self.op_client.ensure_custom_field(
-                        name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable,
+                        name,
+                        field_format=fmt,
+                        cf_type="WorkPackageCustomField",
+                        searchable=searchable,
                     )
                     if isinstance(cf, dict) and cf.get("id"):
                         cf_ids[name] = int(cf["id"])
@@ -2765,7 +2771,10 @@ class WorkPackageMigration(BaseMigration):
                                                 from_project_mapping = info
                                                 break
                                         if from_project_mapping:
-                                            op_identifier = from_project_mapping.get("openproject_identifier", "").lower()
+                                            op_identifier = from_project_mapping.get(
+                                                "openproject_identifier",
+                                                "",
+                                            ).lower()
                                             if op_identifier:
                                                 unmapped_changes.append(
                                                     f"Moved from project [{from_val}](/projects/{op_identifier})",
@@ -2822,9 +2831,7 @@ class WorkPackageMigration(BaseMigration):
                         # BUG #60 FIX: Skip creating empty journal operations
                         # (happens when all changelog items were in IGNORED_CHANGELOG_FIELDS)
                         # This prevents "The changes were retracted" phantom entries
-                        has_meaningful_content = (
-                            field_changes or cf_field_changes or changelog_notes.strip()
-                        )
+                        has_meaningful_content = field_changes or cf_field_changes or changelog_notes.strip()
                         if not has_meaningful_content:
                             self.logger.debug(
                                 f"[BUG60] {jira_key}: Skipping empty changelog entry (all fields ignored)",
@@ -3027,7 +3034,10 @@ class WorkPackageMigration(BaseMigration):
                 for name, fmt, searchable in cf_specs:
                     try:
                         cf = self.op_client.ensure_custom_field(
-                            name, field_format=fmt, cf_type="WorkPackageCustomField", searchable=searchable,
+                            name,
+                            field_format=fmt,
+                            cf_type="WorkPackageCustomField",
+                            searchable=searchable,
                         )
                         if isinstance(cf, dict) and cf.get("id"):
                             cf_ids[name] = int(cf["id"])  # type: ignore[arg-type]
@@ -3589,7 +3599,9 @@ class WorkPackageMigration(BaseMigration):
                     for n, fmt in cf_names:
                         try:
                             cf = self.op_client.ensure_custom_field(
-                                n, field_format=fmt, cf_type="WorkPackageCustomField",
+                                n,
+                                field_format=fmt,
+                                cf_type="WorkPackageCustomField",
                             )
                             if isinstance(cf, dict) and cf.get("id"):
                                 cf_ids[n] = int(cf["id"])  # type: ignore[arg-type]
@@ -4195,7 +4207,9 @@ class WorkPackageMigration(BaseMigration):
                         except StopIteration:
                             # Early termination triggered - exit cleanly
                             self.logger.warning(
-                                "Migration stopped early for %s after %d failed attempts", project_key, total_attempted,
+                                "Migration stopped early for %s after %d failed attempts",
+                                project_key,
+                                total_attempted,
                             )
                             break
                         except Exception as e:
@@ -4260,7 +4274,9 @@ class WorkPackageMigration(BaseMigration):
                                                 sub_e,
                                             )
                                 self.logger.info(
-                                    "Fallback batching complete for %s; created so far: %s", project_key, created_count,
+                                    "Fallback batching complete for %s; created so far: %s",
+                                    project_key,
+                                    created_count,
                                 )
                             except Exception as fb_e:
                                 self.logger.warning("Fallback batching aborted for %s: %s", project_key, fb_e)
@@ -4428,7 +4444,9 @@ class WorkPackageMigration(BaseMigration):
                                             sub_e,
                                         )
                             self.logger.info(
-                                "Tail fallback batching complete for %s; created so far: %s", project_key, created_count,
+                                "Tail fallback batching complete for %s; created so far: %s",
+                                project_key,
+                                created_count,
                             )
                         except Exception as fb_e:
                             self.logger.warning("Tail fallback batching aborted for %s: %s", project_key, fb_e)
