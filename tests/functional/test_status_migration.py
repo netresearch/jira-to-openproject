@@ -179,15 +179,14 @@ class TestStatusMigration(unittest.TestCase):
             "force": True,
         }.get(key, default)
 
-        # Mock the _save_to_json method
-        with patch.object(self.status_migration, "_save_to_json") as mock_save:
-            # Call the method
+        # The current implementation persists via config.mappings.set_mapping
+        # rather than a direct ``_save_to_json`` call.
+        with patch("src.migrations.status_migration.config.mappings") as mock_mappings:
             mapping = self.status_migration.create_status_mapping()
 
-            # Verify that _save_to_json was called correctly
-            mock_save.assert_called_once()
-            args = mock_save.call_args[0]
-            assert str(args[1]) == "status_mapping.json"
+            mock_mappings.set_mapping.assert_called_once()
+            set_args = mock_mappings.set_mapping.call_args
+            assert set_args.args[0] == "status"
 
         # Verify that a mapping is created
         assert isinstance(mapping, dict)

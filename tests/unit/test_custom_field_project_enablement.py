@@ -18,8 +18,6 @@ References:
 
 import inspect
 
-import pytest
-
 
 class TestSelectiveProjectEnablementVerification:
     """Verify the shared _ensure_wp_custom_field uses is_for_all=false."""
@@ -33,8 +31,7 @@ class TestSelectiveProjectEnablementVerification:
 
         source = inspect.getsource(BaseMigration._ensure_wp_custom_field)
         assert "is_for_all: false" in source, (
-            "BaseMigration._ensure_wp_custom_field should use is_for_all: false "
-            "for selective project enablement"
+            "BaseMigration._ensure_wp_custom_field should use is_for_all: false for selective project enablement"
         )
 
     def test_all_cf_migrations_use_shared_ensure_method(self):
@@ -118,7 +115,9 @@ class TestSelectiveEnablementHelper:
                 return list(self._usage.get(field_name, {}).keys())
 
             def should_enable_for_project(
-                self, field_name: str, project_id: int,
+                self,
+                field_name: str,
+                project_id: int,
             ) -> bool:
                 """Check if field should be enabled for a specific project."""
                 return project_id in self._usage.get(field_name, {})
@@ -134,7 +133,10 @@ class TestSelectiveEnablementHelper:
 
         # Project 3: Resolution is default value
         tracker.record_usage(
-            "J2O Resolution", project_id=3, value="None", default_value="None",
+            "J2O Resolution",
+            project_id=3,
+            value="None",
+            default_value="None",
         )
 
         # Project 4: Has actual resolution
@@ -142,9 +144,7 @@ class TestSelectiveEnablementHelper:
 
         # Verify only projects with meaningful values are tracked
         projects = tracker.get_projects_using_field("J2O Resolution")
-        assert sorted(projects) == [1, 4], (
-            "Only projects 1 and 4 have non-empty, non-default resolution values"
-        )
+        assert sorted(projects) == [1, 4], "Only projects 1 and 4 have non-empty, non-default resolution values"
 
         assert tracker.should_enable_for_project("J2O Resolution", 1) is True
         assert tracker.should_enable_for_project("J2O Resolution", 2) is False
@@ -159,7 +159,10 @@ class TestSelectiveEnablementHelper:
                 self._usage: dict[str, set[int]] = {}
 
             def record_usage(
-                self, field_name: str, project_id: int, value: str | float | None,
+                self,
+                field_name: str,
+                project_id: int,
+                value: str | float | None,
             ) -> None:
                 is_meaningful = False
                 if value is not None:
@@ -355,26 +358,3 @@ class TestOpenProjectCustomFieldModel:
         that have a CustomFieldsProject entry.
         """
         # Documentation test
-
-
-# Run verification after fix
-@pytest.mark.skip(reason="Run after implementing fix to verify behavior change")
-class TestPostFixVerification:
-    """Tests to run after implementing the fix."""
-
-    def test_new_migrations_use_is_for_all_false(self):
-        """After fix: all migrations should create CF with is_for_all: false."""
-        from src.migrations.resolution_migration import ResolutionMigration
-
-        source = inspect.getsource(ResolutionMigration._ensure_resolution_cf)
-        assert "is_for_all: false" in source, (
-            "After fix: resolution migration should use is_for_all: false"
-        )
-
-    def test_migrations_track_project_usage(self):
-        """After fix: migrations should track which projects use each field."""
-        # Verify migration has usage tracking
-
-    def test_migrations_enable_per_project(self):
-        """After fix: migrations should create CustomFieldsProject entries."""
-        # Verify migration creates project-specific entries

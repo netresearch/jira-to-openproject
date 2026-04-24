@@ -111,36 +111,45 @@ class TestSSHClient(unittest.TestCase):
 
     def test_get_ssh_base_command(self) -> None:
         """Test generating the base SSH command."""
+        # Shared options injected by ``_get_common_ssh_options`` now also
+        # include SSH multiplexing settings (ControlMaster/ControlPath/
+        # ControlPersist). The test asserts on the full, current shape.
+        common_opts = [
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            f"ControlPath={SSHClient.SSH_CONTROL_PATH}",
+            "-o",
+            f"ControlPersist={SSHClient.SSH_CONTROL_PERSIST_SECONDS}",
+        ]
+
         # Test with default settings
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = ["ssh", "-o", "ConnectTimeout=10", "testuser@testhost"]
-        assert cmd == expected_cmd
+        assert cmd == ["ssh", *common_opts, "testuser@testhost"]
 
         # Test with key file
         self.ssh_client.key_file = "/path/to/key.pem"
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = [
+        assert cmd == [
             "ssh",
-            "-o",
-            "ConnectTimeout=10",
+            *common_opts,
             "-i",
             "/path/to/key.pem",
             "testuser@testhost",
         ]
-        assert cmd == expected_cmd
 
         # Test without user
         self.ssh_client.user = None
         cmd = self.ssh_client.get_ssh_base_command()
-        expected_cmd = [
+        assert cmd == [
             "ssh",
-            "-o",
-            "ConnectTimeout=10",
+            *common_opts,
             "-i",
             "/path/to/key.pem",
             "testhost",
         ]
-        assert cmd == expected_cmd
 
     def test_test_connection_success(self) -> None:
         """Test successful connection test."""

@@ -180,7 +180,12 @@ pytestmark = pytest.mark.integration
 class DummyMappings:
     def __init__(self) -> None:
         self._mapping = {
-            "work_package": {"KEY-1": {"openproject_id": 42}},
+            # ``jira_key`` is required so the attachment migration can
+            # group work packages by project and trigger the per-project
+            # processing loop that ultimately calls ``transfer_file_to_container``.
+            "work_package": {
+                "KEY-1": {"openproject_id": 42, "jira_key": "KEY-1"},
+            },
             "user": {"alice": {"openproject_id": 7}},
         }
 
@@ -221,7 +226,10 @@ def patched_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(global_config, "mappings", dummy, raising=False)
     monkeypatch.setattr(global_config, "get_mappings", lambda: dummy, raising=False)
     monkeypatch.setattr(
-        global_config, "migration_config", {"attachment_path": attachment_dir.as_posix()}, raising=False,
+        global_config,
+        "migration_config",
+        {"attachment_path": attachment_dir.as_posix()},
+        raising=False,
     )
     monkeypatch.setattr(global_config, "get_path", lambda _name: tmp_path, raising=False)
     return attachment_dir
@@ -230,6 +238,9 @@ def patched_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def test_attachment_provenance_pipeline(monkeypatch: pytest.MonkeyPatch, patched_config: Path) -> None:
     issue = _make_issue()
     jira_client = MagicMock()
+    # Current ``AttachmentsMigration._extract_batch`` drives ``jira.search_issues``
+    # directly; feed the fake issue through that entry point.
+    jira_client.jira.search_issues.return_value = [issue]
     jira_client.batch_get_issues.return_value = {"KEY-1": issue}
 
     op_client = MagicMock()

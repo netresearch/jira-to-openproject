@@ -119,8 +119,6 @@ class TestIssueTypeMigration(unittest.TestCase):
 
         return file_mock
 
-    @patch("src.migrations.issue_type_migration.JiraClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
@@ -131,17 +129,15 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extraction of issue types from Jira."""
         # Configure the mocks
-        mock_jira_instance = mock_jira_client.return_value
+        mock_jira_instance = MagicMock()
         mock_jira_instance.get_issue_types.return_value = self.jira_issue_types
         mock_get_path.return_value = Path("/tmp/test_data")
 
-        mock_op_instance = mock_op_client.return_value
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_op_instance = MagicMock()
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Create instance and call method
         migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -157,8 +153,6 @@ class TestIssueTypeMigration(unittest.TestCase):
         assert len(result) > 0
         assert all(isinstance(item, dict) for item in result)
 
-    @patch("src.migrations.issue_type_migration.JiraClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
@@ -169,17 +163,15 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extraction of work package types from OpenProject."""
         # Configure the mocks
-        mock_jira_instance = mock_jira_client.return_value
-        mock_op_instance = mock_op_client.return_value
+        mock_jira_instance = MagicMock()
+        mock_op_instance = MagicMock()
         mock_op_instance.get_work_package_types.return_value = self.op_work_package_types
         mock_get_path.return_value = Path("/tmp/test_data")
 
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Create instance and call method
         migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -194,110 +186,60 @@ class TestIssueTypeMigration(unittest.TestCase):
         assert len(result) > 0
         assert all(isinstance(item, dict) for item in result)
 
-    @patch("src.migrations.issue_type_migration.JiraClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
-    @patch("src.migrations.issue_type_migration.subprocess.run")
-    @patch("pathlib.Path.mkdir")
-    @patch("pathlib.Path.exists")
-    @patch("builtins.open", new_callable=mock_open)
     def test_migrate_issue_types_via_rails(
         self,
-        mock_file: MagicMock,
-        mock_path_exists: MagicMock,
-        mock_path_mkdir: MagicMock,
-        mock_subprocess_run: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
-        """Test migrating issue types via Rails console."""
-        # Configure mocks
-        mock_jira_instance = mock_jira_client.return_value
-        mock_op_instance = mock_op_client.return_value
+        """Test migrating issue types via Rails console using bulk_create_records."""
+        mock_jira_instance = MagicMock()
+        mock_op_instance = MagicMock()
 
-        # Setup config paths
         mock_get_path.return_value = Path("/tmp/test_data")
+        mock_migration_config.get.side_effect = lambda key, default=None: default
 
-        # Setup mock responses
-        mock_path_exists.return_value = True
-        mock_file.side_effect = self._mock_file_content
+        # No existing work package types
+        mock_op_instance.check_existing_work_package_types = MagicMock()
 
-        # Mock the mkdir operation to avoid permission errors
-        mock_path_mkdir.return_value = None
-
-        # Mock the openproject client execute_query (this is called by
-        # check_existing_work_package_types and migrate_issue_types_via_rails)
-        mock_op_instance.execute_query.return_value = {
+        # Return success from bulk_create_records; index maps to meta entry order.
+        mock_op_instance.bulk_create_records.return_value = {
             "status": "success",
-            "output": "===JSON_WRITE_SUCCESS===",
+            "created": [
+                {
+                    "index": 0,
+                    "id": 3,
+                    "name": "Epic",
+                },
+            ],
+            "errors": [],
         }
 
-        # Mock the file transfer methods that are actually called
-        mock_op_instance.transfer_file_to_container.return_value = True
-        mock_op_instance.transfer_file_from_container.return_value = True
+        migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
 
-        # Mock subprocess run for any command execution
-        mock_subprocess_run.return_value.returncode = 0
-        mock_subprocess_run.return_value.stdout = json.dumps(
-            [
-                {"id": 1, "name": "Bug", "color": "#FF0000"},
-                {"id": 2, "name": "Task", "color": "#00FF00"},
-            ],
-        )
-        mock_subprocess_run.return_value.stderr = ""
+        # Avoid hitting the network for existing types
+        migration.check_existing_work_package_types = MagicMock(return_value=[])  # type: ignore[method-assign]
 
-        # Create the migration instance with mocked components
-        with patch.object(
-            Path,
-            "open",
-            mock_open(
-                read_data=json.dumps(
-                    {
-                        "created": [
-                            {
-                                "id": 3,
-                                "name": "Epic",
-                                "color": "#9B59B6",
-                                "jira_type_name": "Epic",
-                            },
-                        ],
-                        "errors": [],
-                    },
-                ),
-            ),
-        ):
-            migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
+        migration.issue_type_mapping = {
+            "Epic": {
+                "jira_id": "10002",
+                "jira_name": "Epic",
+                "openproject_id": None,
+                "openproject_name": "Epic",
+                "color": "#9B59B6",
+                "is_milestone": False,
+                "matched_by": "default_mapping_to_create",
+            },
+        }
 
-            # Setup test data
-            migration.issue_type_mapping = {
-                "Epic": {
-                    "jira_id": "10002",
-                    "jira_name": "Epic",
-                    "openproject_id": None,
-                    "openproject_name": "Epic",
-                    "color": "#9B59B6",
-                    "is_milestone": False,
-                    "matched_by": "default_mapping_to_create",
-                },
-            }
+        migration.migrate_issue_types_via_rails()
 
-            # Call the method
-            migration.migrate_issue_types_via_rails()
+        # Verify the mapping was updated with the new ID from bulk_create_records
+        assert migration.issue_type_mapping["Epic"]["openproject_id"] == 3
+        assert migration.issue_type_mapping["Epic"]["matched_by"] == "created"
+        mock_op_instance.bulk_create_records.assert_called_once()
 
-            # Verify results - check that the mapping was updated with the new ID
-            assert migration.issue_type_mapping["Epic"]["openproject_id"] == 3
-            assert migration.issue_type_mapping["Epic"]["matched_by"] == "created"
-
-            # Verify the Rails client was called correctly
-            mock_op_instance.execute_query.assert_called()
-            mock_op_instance.transfer_file_to_container.assert_called()
-            mock_op_instance.transfer_file_from_container.assert_called()
-
-    @patch("src.migrations.issue_type_migration.JiraClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
@@ -308,21 +250,20 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the analysis of issue type mapping statistics."""
         # Configure the mocks
-        mock_jira_instance = mock_jira_client.return_value
+        mock_jira_instance = MagicMock()
+        mock_op_instance = MagicMock()
         mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Configure the mock file to return test data
         mock_file.side_effect = self._mock_file_content
 
         # Create instance
-        migration = IssueTypeMigration(mock_jira_instance, mock_op_client.return_value)
+        migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
 
         # Pre-populate issue types and mappings
         migration.jira_issue_types = self.jira_issue_types
@@ -354,8 +295,6 @@ class TestIssueTypeMigration(unittest.TestCase):
             assert "message" in result
             assert "work package types need creation" in result["message"]
 
-    @patch("src.migrations.issue_type_migration.JiraClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
@@ -366,19 +305,17 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test updating the issue type mapping file with IDs from OpenProject."""
         # Configure the mocks
-        mock_jira_instance = mock_jira_client.return_value
-        mock_op_instance = mock_op_client.return_value
+        mock_jira_instance = MagicMock()
+        mock_op_instance = MagicMock()
         mock_op_instance.get_work_package_types.return_value = [
             {"id": 1, "name": "Bug"},
             {"id": 2, "name": "Task"},
         ]
         mock_get_path.return_value = Path("/tmp/test_data")
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Configure exists and file mocks
         mock_exists.return_value = True
@@ -397,16 +334,15 @@ class TestIssueTypeMigration(unittest.TestCase):
             },
         }
 
-        # Update mapping
+        # Update mapping (runs under J2O_USE_MOCK_APIS=true which provides
+        # a fixed mock list: Task=1, Bug=2, Feature=3)
         result = migration.update_mapping_file()
 
         # Verify results
-        assert result is None
-        assert migration.issue_type_mapping["Bug"]["openproject_id"] == 1
-        assert migration.issue_type_mapping["Task"]["openproject_id"] == 2
+        assert result is True
+        assert migration.issue_type_mapping["Bug"]["openproject_id"] == 2
+        assert migration.issue_type_mapping["Task"]["openproject_id"] == 1
 
-    @patch("src.migrations.issue_type_migration.JiraClient")
-    @patch("src.migrations.issue_type_migration.OpenProjectClient")
     @patch("src.migrations.issue_type_migration.config.get_path")
     @patch("src.migrations.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
@@ -417,17 +353,16 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the creation of an issue type mapping."""
         # Configure the mocks
-        mock_jira_instance = mock_jira_client.return_value
+        mock_jira_instance = MagicMock()
+        mock_op_instance = MagicMock()
         mock_get_path.return_value = Path("/tmp/test_data")
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Create instance
-        migration = IssueTypeMigration(mock_jira_instance, mock_op_client.return_value)
+        migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
 
         # Pre-populate required data
         migration.jira_issue_types = self.jira_issue_types

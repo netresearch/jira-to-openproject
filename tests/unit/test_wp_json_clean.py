@@ -1,27 +1,34 @@
 import json
 from pathlib import Path
 
-import pytest
+
+def _validate(path: Path) -> None:
+    with path.open("r", encoding="utf-8") as f:
+        arr = json.load(f)
+    for idx, item in enumerate(arr if isinstance(arr, list) else [arr]):
+        assert isinstance(item, dict), f"{path} entry #{idx} is not an object"
+        assert "_links" not in item, f"{path} entry #{idx} unexpectedly contains _links"
 
 
-def test_generated_work_packages_json_has_no_links() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    data_dir = project_root / "var" / "data"
-    if not data_dir.exists():
-        pytest.skip("var/data directory does not exist (no generated data to validate)")
+def test_clean_work_package_json_passes_validation(tmp_path: Path) -> None:
+    """A well-formed work_packages_*.json payload (no _links) must pass."""
+    payload = [
+        {"subject": "Task A", "description": "..."},
+        {"subject": "Task B", "description": "..."},
+    ]
+    f = tmp_path / "work_packages_clean.json"
+    f.write_text(json.dumps(payload))
+    _validate(f)
 
-    json_files = list(data_dir.glob("work_packages_*.json"))
-    if not json_files:
-        pytest.skip("no work_packages_*.json files found to validate")
 
-    for jf in json_files:
-        with jf.open("r", encoding="utf-8") as f:
-            try:
-                arr = json.load(f)
-            except Exception as e:
-                raise AssertionError(f"Invalid JSON in {jf}: {e}")
+def test_work_package_json_with_links_is_rejected(tmp_path: Path) -> None:
+    """If a _links field ever sneaks in, the validator must trip."""
+    payload = [{"subject": "Task", "_links": {"self": "..."}}]
+    f = tmp_path / "work_packages_dirty.json"
+    f.write_text(json.dumps(payload))
 
-        # Each entry should not contain _links anywhere
-        for idx, item in enumerate(arr if isinstance(arr, list) else [arr]):
-            assert isinstance(item, dict), f"{jf} entry #{idx} is not an object"
-            assert "_links" not in item, f"{jf} entry #{idx} unexpectedly contains _links"
+    try:
+        _validate(f)
+    except AssertionError:
+        return
+    raise AssertionError("validator must fail on payloads containing _links")

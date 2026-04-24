@@ -19,7 +19,7 @@ def check_docker_available() -> bool:
             check=False,
         )
         return result.returncode == 0
-    except (FileNotFoundError, subprocess.SubprocessError):
+    except FileNotFoundError, subprocess.SubprocessError:
         return False
 
 
@@ -41,7 +41,7 @@ def pull_docker_image(image_name: str) -> bool:
             check=False,
         )
         return result.returncode == 0
-    except (FileNotFoundError, subprocess.SubprocessError):
+    except FileNotFoundError, subprocess.SubprocessError:
         return False
 
 

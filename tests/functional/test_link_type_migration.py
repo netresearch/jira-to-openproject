@@ -129,7 +129,7 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Create instance and call method
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -167,7 +167,7 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Create instance and set data
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -339,16 +339,18 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_custom_field_migration = mock_custom_field_migration_class.return_value
         mock_custom_field_migration.migrate_custom_fields_via_json.return_value = True
 
-        # Mock the extract_openproject_custom_fields method to return custom fields
-        mock_op_custom_fields = [
-            {
-                "id": 101,
-                "name": "Link: Custom Link",
-                "field_format": "text",
-                "type": "WorkPackageCustomField",
-            },
+        # First call returns no existing fields (so we go through the create
+        # branch); second call after creation returns the newly-created field.
+        new_cf = {
+            "id": 101,
+            "name": "Link: Custom Link",
+            "field_format": "text",
+            "type": "WorkPackageCustomField",
+        }
+        mock_custom_field_migration.extract_openproject_custom_fields.side_effect = [
+            [],  # pre-creation lookup: field does not exist yet
+            [new_cf],  # post-creation refresh: now it does
         ]
-        mock_custom_field_migration.extract_openproject_custom_fields.return_value = mock_op_custom_fields
 
         # Create a link type migration instance with our mocked dependencies
         migration = LinkTypeMigration(mock_jira_instance, mock_op_instance)
@@ -408,8 +410,9 @@ class TestLinkTypeMigration(unittest.TestCase):
         assert call_args[0]["openproject_type"] == "text"
         assert call_args[0]["is_for_all"] is True
 
-        # 3. Check that extract_openproject_custom_fields was called to refresh field list
-        mock_custom_field_migration.extract_openproject_custom_fields.assert_called_once()
+        # 3. Check that extract_openproject_custom_fields was called twice:
+        #    once to pre-check existing fields, once to refresh after creation
+        assert mock_custom_field_migration.extract_openproject_custom_fields.call_count == 2
 
         # 4. Check that the mapping was updated with the custom field ID
         assert migration.link_type_mapping["10102"]["matched_by"] == "custom_field"
@@ -560,7 +563,7 @@ class TestLinkTypeMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Create Jira link types with None values
         jira_link_types_with_none = [

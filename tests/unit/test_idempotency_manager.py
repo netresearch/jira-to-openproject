@@ -17,7 +17,6 @@ import time
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-import pytest
 from redis.exceptions import RedisError
 
 from src.utils.idempotency_manager import (
@@ -31,8 +30,22 @@ class TestIdempotencyKeyManager:
     """Test suite for IdempotencyKeyManager."""
 
     def setup_method(self) -> None:
-        """Set up test fixtures."""
+        """Set up test fixtures backed by a fakeredis server.
+
+        The Redis-aware tests below `patch.object(self.manager._redis_client, ...)`
+        per-method, so the shared client just needs to let the non-Redis tests
+        (TTL behaviour, fallback cache, singleton) exercise their paths without
+        raising. `fakeredis` provides an in-memory Redis that satisfies the
+        `redis.Redis` surface without needing a running server.
+        """
+        import fakeredis
+
         reset_idempotency_manager()
+        self._fake_redis_patcher = patch(
+            "redis.Redis.from_url",
+            return_value=fakeredis.FakeRedis(decode_responses=True),
+        )
+        self._fake_redis_patcher.start()
         self.manager = IdempotencyKeyManager(
             redis_url="redis://localhost:6379",
             fallback_cache_size=100,
@@ -43,6 +56,7 @@ class TestIdempotencyKeyManager:
         """Clean up test fixtures."""
         self.manager.clear_cache()
         reset_idempotency_manager()
+        self._fake_redis_patcher.stop()
 
     def test_parse_idempotency_key_from_headers(self) -> None:
         """Test parsing idempotency key from headers."""
@@ -147,9 +161,6 @@ class TestIdempotencyKeyManager:
 
     def test_get_cached_result_redis_hit(self) -> None:
         """Test getting cached result from Redis."""
-        if not self.manager._redis_available:
-            pytest.skip("Redis not available")
-
         test_data = {"test": "data"}
 
         with patch.object(self.manager._redis_client, "get") as mock_get:
@@ -185,9 +196,6 @@ class TestIdempotencyKeyManager:
 
     def test_cache_result_redis_success(self) -> None:
         """Test caching result to Redis."""
-        if not self.manager._redis_available:
-            pytest.skip("Redis not available")
-
         test_data = {"test": "data"}
 
         with patch.object(self.manager._redis_client, "setex") as mock_setex:
@@ -202,48 +210,47 @@ class TestIdempotencyKeyManager:
         """Test fallback cache when Redis fails."""
         test_data = {"test": "fallback_data"}
 
-        # This should use fallback cache since Redis is not available
-        result = self.manager.cache_result("test-key", test_data)
-        assert result is True
+        # Simulate Redis errors on both the write and read paths, so the manager
+        # must fall through to the in-memory cache.
+        with (
+            patch.object(self.manager._redis_client, "setex", side_effect=RedisError("boom")),
+            patch.object(self.manager._redis_client, "get", side_effect=RedisError("boom")),
+        ):
+            assert self.manager.cache_result("test-key", test_data) is True
+            cached = self.manager.get_cached_result("test-key")
 
-        # Verify it's in fallback cache
-        cached = self.manager.get_cached_result("test-key")
         assert cached.found
         assert cached.value == test_data
         assert cached.source == "memory"
 
     def test_atomic_get_or_set_redis_existing(self) -> None:
         """Test atomic get when key exists in Redis."""
-        if not self.manager._redis_available:
-            pytest.skip("Redis not available")
-
         existing_data = {"existing": "data"}
 
-        with patch.object(self.manager._redis_client, "evalsha") as mock_evalsha:
-            mock_evalsha.return_value = json.dumps(existing_data)
+        # Seed fakeredis directly so the fast-path GET in atomic_get_or_set
+        # finds the key and returns it without invoking the factory.
+        cache_key = f"{self.manager.key_prefix}existing-key"
+        self.manager._redis_client.setex(cache_key, 3600, json.dumps(existing_data))
 
-            result = self.manager.atomic_get_or_set(
-                "existing-key",
-                lambda: {"new": "data"},
-            )
+        result = self.manager.atomic_get_or_set("existing-key", lambda: {"new": "data"})
 
-            assert result.found
-            assert result.value == existing_data
+        assert result.found
+        assert result.value == existing_data
 
     def test_atomic_get_or_set_redis_new(self) -> None:
         """Test atomic set for new key in Redis."""
-        if not self.manager._redis_available:
-            pytest.skip("Redis not available")
-
         new_data = {"new": "data"}
 
-        with patch.object(self.manager._redis_client, "evalsha") as mock_evalsha:
-            mock_evalsha.return_value = None  # Key doesn't exist
+        # No seeded key -> factory runs and populates Redis.
+        result = self.manager.atomic_get_or_set("new-key", lambda: new_data)
 
-            result = self.manager.atomic_get_or_set("new-key", lambda: new_data)
+        assert not result.found  # first call, nothing cached yet
+        assert result.value == new_data
 
-            assert not result.found  # Was new
-            # Note: Implementation might vary on return value
+        # Second call should now find the value in Redis.
+        again = self.manager.atomic_get_or_set("new-key", lambda: {"other": "data"})
+        assert again.found
+        assert again.value == new_data
 
     def test_atomic_get_or_set_fallback(self) -> None:
         """Test atomic get_or_set with fallback cache."""

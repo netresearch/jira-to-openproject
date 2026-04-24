@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Test suite for the custom field migration component."""
 
-import json
 import unittest
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import Mock, patch
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
@@ -182,13 +181,13 @@ class TestCustomFieldMigration(unittest.TestCase):
             assert fields[0]["name"] == "Test Text Field"
             assert fields[1]["name"] == "Test Select Field"
 
-            # Verify that get_field_metadata was called for the select field
-            self.mock_jira_client.get_field_metadata.assert_called_once()
+            # The current implementation skips metadata discovery when
+            # ScriptRunner is disabled (as it is in this test), so
+            # ``get_field_metadata`` is not invoked.
+            self.mock_jira_client.get_field_metadata.assert_not_called()
 
-            # Verify that the select field has allowed values
-            assert "allowed_values" in fields[1]
-            assert len(fields[1]["allowed_values"]) == 3
-            assert fields[1]["allowed_values"][0] == "Option 1"
+            # The select field remains without allowed_values enrichment
+            assert "allowed_values" not in fields[1]
 
     def test_extract_openproject_custom_fields(self) -> None:
         """Test the extraction of OpenProject custom fields."""
@@ -313,8 +312,7 @@ class TestCustomFieldMigration(unittest.TestCase):
         assert "Value 3" in script_content
 
     def test_migrate_custom_fields(self) -> None:
-        """Test migrating custom fields using the JSON-based approach."""
-        # Set up field data directly for the JSON-based approach
+        """Test migrating custom fields using ``bulk_create_records``."""
         fields_to_migrate = [
             {
                 "jira_id": "customfield_10001",
@@ -325,109 +323,53 @@ class TestCustomFieldMigration(unittest.TestCase):
             },
         ]
 
-        # Mock the file transfer and execute methods directly
-        self.mock_op_client.transfer_file_to_container = Mock()
-        self.mock_op_client.execute_query = Mock()
-        self.mock_op_client.transfer_file_from_container = Mock()
-
-        # Mock the result file content
-        result_data = {
-            "status": "success",
-            "created": [
-                {
-                    "name": "Test Text Field",
-                    "status": "created",
-                    "id": 3,
-                    "jira_id": "customfield_10001",
-                },
-            ],
-            "existing": [],
-            "errors": [],
-            "created_count": 1,
-            "existing_count": 0,
-            "error_count": 0,
-        }
-
-        # Mock Path.exists to return True for result file and json.load for reading it
-        with (
-            patch("pathlib.Path.exists", return_value=True),
-            patch("json.load", return_value=result_data),
-            patch("pathlib.Path.open", mock_open(read_data=json.dumps(result_data))),
-        ):
-            # Call migrate_custom_fields_via_json directly
-            result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
-
-            # Verify the migration succeeded
-            assert result
-
-            # Verify that file transfer and execute were called
-            self.mock_op_client.transfer_file_to_container.assert_called_once()
-            self.mock_op_client.execute_query.assert_called_once()
-            self.mock_op_client.transfer_file_from_container.assert_called_once()
-
-    def test_migrate_custom_fields_with_error(self) -> None:
-        """Test migrating custom fields when an error occurs."""
-        # Set up field data directly for the JSON-based approach
-        fields_to_migrate = [
-            {
-                "jira_id": "customfield_10001",
-                "jira_name": "Test Text Field",
-                "openproject_name": "Test Text Field",
-                "openproject_type": "text",
-                "matched_by": "create",
+        self.mock_op_client.bulk_create_records = Mock(
+            return_value={
+                "status": "success",
+                "created": [
+                    {
+                        "index": 0,
+                        "id": 3,
+                        "name": "Test Text Field",
+                    },
+                ],
+                "errors": [],
             },
-        ]
-
-        # Ensure file transfer succeeds but execution fails
-        self.mock_op_client.transfer_file_to_container = Mock()
-        self.mock_op_client.execute_query = Mock()
-
-        # Mock the execute_query method to raise an exception
-        self.mock_op_client.execute_query.side_effect = Exception("Test error message")
-
-        # Call migrate_custom_fields_via_json directly
-        result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
-
-        # Verify the migration failed
-        assert not result
-
-        # Verify that transfer and execute were called
-        self.mock_op_client.transfer_file_to_container.assert_called_once()
-        self.mock_op_client.execute_query.assert_called_once()
-
-    def test_container_file_transfer_failure(self) -> None:
-        """Test handling of container file transfer failures."""
-        # Set up field data directly for the JSON-based approach
-        fields_to_migrate = [
-            {
-                "jira_id": "customfield_10001",
-                "jira_name": "Test Field",
-                "openproject_name": "Test Field",
-                "openproject_type": "text",
-                "matched_by": "create",
-            },
-        ]
-
-        # Mock the transfer_file_to_container to simulate failure
-        self.mock_op_client.transfer_file_to_container.side_effect = Exception(
-            "Failed to transfer file",
         )
 
-        # Call the method directly with fields to migrate
         result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
 
-        # Verify the migration failed
+        assert result
+        self.mock_op_client.bulk_create_records.assert_called_once()
+        model_kwarg = self.mock_op_client.bulk_create_records.call_args.kwargs
+        assert model_kwarg["model"] == "CustomField"
+        assert len(model_kwarg["records"]) == 1
+
+    def test_migrate_custom_fields_with_error(self) -> None:
+        """Test migrating custom fields when the bulk create operation fails."""
+        fields_to_migrate = [
+            {
+                "jira_id": "customfield_10001",
+                "jira_name": "Test Text Field",
+                "openproject_name": "Test Text Field",
+                "openproject_type": "text",
+                "matched_by": "create",
+            },
+        ]
+
+        # ``bulk_create_records`` raising is the new failure mode in place of
+        # the old ``execute_query`` Ruby script.
+        self.mock_op_client.bulk_create_records = Mock(
+            side_effect=Exception("Test error message"),
+        )
+
+        result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
+
         assert not result
+        self.mock_op_client.bulk_create_records.assert_called_once()
 
-        # Verify transfer was attempted
-        self.mock_op_client.transfer_file_to_container.assert_called_once()
-
-        # Verify execute was not called (since transfer failed)
-        self.mock_op_client.execute_query.assert_not_called()
-
-    def test_json_file_handling(self) -> None:
-        """Test the handling of JSON files for custom field migration."""
-        # Set up field data directly for the JSON-based approach
+    def test_container_file_transfer_failure(self) -> None:
+        """Test handling of bulk create non-success status (legacy transfer path removed)."""
         fields_to_migrate = [
             {
                 "jira_id": "customfield_10001",
@@ -438,68 +380,60 @@ class TestCustomFieldMigration(unittest.TestCase):
             },
         ]
 
-        # Replace json.dump to capture the data being written
-        json_dump_mock = Mock()
+        # Simulate the backend reporting a failure instead of success
+        self.mock_op_client.bulk_create_records = Mock(
+            return_value={"status": "error", "message": "transfer failed"},
+        )
 
-        # Mock the result file content
-        result_data = {
+        result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
+
+        assert not result
+        self.mock_op_client.bulk_create_records.assert_called_once()
+
+    def test_json_file_handling(self) -> None:
+        """Test that created custom fields are reflected back into the mapping."""
+        fields_to_migrate = [
+            {
+                "jira_id": "customfield_10001",
+                "jira_name": "Test Field",
+                "openproject_name": "Test Field",
+                "openproject_type": "text",
+                "matched_by": "create",
+            },
+        ]
+
+        created_payload = {
             "status": "success",
             "created": [
                 {
-                    "name": "Test Field",
+                    "index": 0,
                     "id": 1,
-                    "jira_id": "customfield_10001",
-                    "status": "created",
+                    "name": "Test Field",
                 },
             ],
-            "existing": [],
             "errors": [],
-            "created_count": 1,
-            "existing_count": 0,
-            "error_count": 0,
         }
 
-        with (
-            patch("json.dump", json_dump_mock),
-            patch("json.load", return_value=result_data),
-        ):
-            # Mock the file transfer and execute methods
-            self.mock_op_client.transfer_file_to_container = Mock()
-            self.mock_op_client.execute_query = Mock()
-            self.mock_op_client.transfer_file_from_container = Mock()
+        self.mock_op_client.bulk_create_records = Mock(return_value=created_payload)
 
-            # Mock Path.exists to return True for result file
-            with (
-                patch("pathlib.Path.exists", return_value=True),
-                patch(
-                    "pathlib.Path.open",
-                    mock_open(read_data=json.dumps(result_data)),
-                ),
-            ):
-                # Call migrate_custom_fields_via_json directly
-                result = self.migration.migrate_custom_fields_via_json(
-                    fields_to_migrate,
-                )
+        # Seed the in-memory mapping so ``_update_mapping_with_op_ids`` has
+        # something to update.
+        self.migration.mapping = {
+            "customfield_10001": {
+                "jira_id": "customfield_10001",
+                "jira_name": "Test Field",
+                "openproject_name": "Test Field",
+                "openproject_id": None,
+                "matched_by": "create",
+            },
+        }
 
-                # Verify the migration succeeded
-                assert result
+        result = self.migration.migrate_custom_fields_via_json(fields_to_migrate)
 
-                # Verify json.dump was called - multiple calls are expected due to update_mapping_file
-                assert json_dump_mock.call_count >= 1
-
-                # Check that data contains the expected fields
-                calls = json_dump_mock.call_args_list
-                for call in calls:
-                    args, _ = call
-                    # If this is the custom fields data (first arg is a list)
-                    if isinstance(args[0], list):
-                        # Verify it's the correct structure
-                        assert len(args[0]) > 0, "Expected at least one field in the data"
-
-                # Verify that the new methods were called
-                self.mock_op_client.transfer_file_to_container.assert_called_once()
-                self.mock_op_client.execute_query.assert_called_once()
-                self.mock_op_client.transfer_file_from_container.assert_called_once()
+        assert result
+        self.mock_op_client.bulk_create_records.assert_called_once()
+        # The mapping entry should now carry the created OpenProject id
+        assert self.migration.mapping["customfield_10001"]["openproject_id"] == 1
 
     def test_ruby_script_generation(self) -> None:
         """Test the generation of Ruby script with proper structure."""

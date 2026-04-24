@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -80,7 +81,7 @@ def test_checkpoint_round_trip(migration: WorkPackageMigration):
     assert loaded == migrated_at
 
     # Inspect underlying database payload for completeness
-    with sqlite3.connect(str(migration._checkpoint_db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(migration._checkpoint_db_path))) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """

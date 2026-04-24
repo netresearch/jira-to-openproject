@@ -1,15 +1,19 @@
-import pytest
-
-pytestmark = pytest.mark.integration
-
-
 """Tests for the main entry point (src/main.py)."""
 
 import argparse
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+# Import src.migration here (outside any @patch("os.environ.get") scope) so the
+# module-level `console = Console()` initialises against the real environment.
+# Otherwise, when the test below first imports src.migration inside the patched
+# context, Rich reads a MagicMock as TERM and crashes on unpack.
+import src.migration  # noqa: F401
 from src.main import main
+
+pytestmark = pytest.mark.integration
 
 
 class TestMainEntryPoint:

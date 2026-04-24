@@ -178,10 +178,10 @@ class TestPhantomJournalPrevention:
         if script.strip():
             # Check for validation that prevents creating empty journals
             assert (
-                "notes.empty? && changes.empty?" in script or
-                "notes.present?" in script or
-                "changes.present?" in script or
-                "skip" in script.lower()
+                "notes.empty? && changes.empty?" in script
+                or "notes.present?" in script
+                or "changes.present?" in script
+                or "skip" in script.lower()
             ), (
                 "Rails script should validate that journals have actual content "
                 "before creating them to prevent phantom 'retracted' entries"
@@ -227,10 +227,12 @@ class TestDuplicateResolutionPrevention:
                 else:
                     self.fields.resolution = None
 
-        client.batch_get_issues = Mock(return_value={
-            "TEST-1": DummyIssue("Fixed"),
-            "TEST-2": DummyIssue(None),
-        })
+        client.batch_get_issues = Mock(
+            return_value={
+                "TEST-1": DummyIssue("Fixed"),
+                "TEST-2": DummyIssue(None),
+            },
+        )
         return client
 
     @pytest.fixture(autouse=True)
@@ -253,7 +255,9 @@ class TestDuplicateResolutionPrevention:
         monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
 
     def test_resolution_migration_does_not_create_duplicate_journal(
-        self, mock_jira_client, mock_op_client,
+        self,
+        mock_jira_client,
+        mock_op_client,
     ):
         """Test that resolution migration does NOT create separate journal entries.
 
@@ -270,10 +274,7 @@ class TestDuplicateResolutionPrevention:
         result = migration._load(mapped)
 
         # Count journal creation queries
-        journal_queries = [
-            q for q in mock_op_client.queries
-            if "Journal::WorkPackageJournal.create!" in q
-        ]
+        journal_queries = [q for q in mock_op_client.queries if "Journal::WorkPackageJournal.create!" in q]
 
         # After fix: NO journal entries should be created by resolution migration
         # Resolution changes are already captured by audit trail migration
@@ -283,7 +284,9 @@ class TestDuplicateResolutionPrevention:
         )
 
     def test_resolution_migration_only_sets_cf_value(
-        self, mock_jira_client, mock_op_client,
+        self,
+        mock_jira_client,
+        mock_op_client,
     ):
         """Test that resolution migration only sets CF value, no journal creation.
 
@@ -301,16 +304,10 @@ class TestDuplicateResolutionPrevention:
         result = migration._load(mapped)
 
         # Should have CF value setting queries
-        cf_queries = [
-            q for q in mock_op_client.queries
-            if "custom_value_for" in q or "custom_field_values" in q
-        ]
+        cf_queries = [q for q in mock_op_client.queries if "custom_value_for" in q or "custom_field_values" in q]
 
         # Should NOT have journal creation queries
-        journal_queries = [
-            q for q in mock_op_client.queries
-            if "Journal::WorkPackageJournal.create!" in q
-        ]
+        journal_queries = [q for q in mock_op_client.queries if "Journal::WorkPackageJournal.create!" in q]
 
         # Verify: CF values are set but no journals created
         assert len(cf_queries) >= 1, "Resolution migration should set CF values"
@@ -366,11 +363,11 @@ class TestCustomFieldProjectEnablement:
         import inspect
 
         from src.migrations.base_migration import BaseMigration
+
         source = inspect.getsource(BaseMigration._ensure_wp_custom_field)
 
         assert "is_for_all: false" in source, (
-            "BaseMigration._ensure_wp_custom_field should use is_for_all: false "
-            "for selective project enablement"
+            "BaseMigration._ensure_wp_custom_field should use is_for_all: false for selective project enablement"
         )
 
     def test_custom_field_has_enable_method(self):
@@ -382,12 +379,12 @@ class TestCustomFieldProjectEnablement:
 
         # Verify the method exists
         assert hasattr(ResolutionMigration, "_enable_cf_for_projects"), (
-            "Resolution migration should have _enable_cf_for_projects method "
-            "for selective project enablement"
+            "Resolution migration should have _enable_cf_for_projects method for selective project enablement"
         )
 
     def test_project_enablement_tracking(self):
         """Test that we can track which projects actually use a custom field."""
+
         # Helper to track custom field usage by project
         class CustomFieldUsageTracker:
             def __init__(self):
@@ -447,43 +444,6 @@ class TestCustomFieldProjectEnablement:
         assert "is_for_all = false" in expected_pattern or "is_for_all: false" in expected_pattern
         assert "CustomFieldsProject" in expected_pattern
         assert "project_id" in expected_pattern
-
-
-class TestIntegrationDeduplication:
-    """Integration tests for the complete deduplication workflow."""
-
-    def test_resolution_changelog_and_migration_coordination(self):
-        """Test that resolution changes from changelog and migration are coordinated.
-
-        The workflow should be:
-        1. Audit trail migration processes changelog including resolution changes
-        2. Resolution migration should detect existing resolution entries
-        3. Resolution migration only creates custom field value, NOT duplicate journal
-        """
-        # This documents the coordination requirement
-        # After both migrations run for the same work package:
-        # - There should be exactly ONE journal entry for resolution change
-        # - The custom field value should be set correctly
-        # - No "The changes were retracted." phantom entries
-        pytest.skip(
-            "Integration test for resolution deduplication. "
-            "Requires coordination between audit_trail_migrator and resolution_migration.",
-        )
-
-    def test_no_phantom_journals_after_full_migration(self):
-        """Test that full migration produces no phantom journal entries.
-
-        After a complete migration run, querying OpenProject should show
-        zero journals with "The changes were retracted." message.
-        """
-        # This documents the end-to-end validation requirement
-        # After migration:
-        # - Query: Journal.where("notes LIKE '%retracted%'").count should be 0
-        # - All journals should have either notes OR details (not empty)
-        pytest.skip(
-            "End-to-end test for phantom journal prevention. "
-            "Requires full migration workflow test.",
-        )
 
 
 # Marker for tests that verify the bug exists (before fix)

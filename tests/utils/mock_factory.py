@@ -48,6 +48,10 @@ def create_mock_jira_client() -> JiraClient:
     mock_client.jira = MagicMock()
     mock_client.jira.server_info.return_value = {"serverTitle": "Test Jira"}
 
+    # Provide base_url for consumers that build hyperlinks such as
+    # ProjectMigration._attach_browse_url.
+    mock_client.base_url = "https://jira.test.local"
+
     return mock_client
 
 

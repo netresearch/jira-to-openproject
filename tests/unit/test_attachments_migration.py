@@ -30,7 +30,8 @@ class DummyJira:
     def __init__(self) -> None:
         self.issues = {
             "PRJ-1": DummyIssue(
-                "PRJ-1", [DummyAtt("1", "a.txt", "http://example/a"), DummyAtt("2", "b.txt", "http://example/b")],
+                "PRJ-1",
+                [DummyAtt("1", "a.txt", "http://example/a"), DummyAtt("2", "b.txt", "http://example/b")],
             ),
             "PRJ-2": DummyIssue("PRJ-2", [DummyAtt("3", "a.txt", "http://example/a")]),
         }
@@ -52,11 +53,13 @@ class DummyOp:
         # Return results in the expected format for attachments_migration._load
         results = []
         for i, item in enumerate(self.last_input):
-            results.append({
-                "jira_key": item.get("jira_key"),
-                "filename": item.get("filename"),
-                "attachment_id": 1000 + i,
-            })
+            results.append(
+                {
+                    "jira_key": item.get("jira_key"),
+                    "filename": item.get("filename"),
+                    "attachment_id": 1000 + i,
+                },
+            )
         return {"results": results, "errors": []}
 
 

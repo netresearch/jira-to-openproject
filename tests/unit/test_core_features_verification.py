@@ -22,88 +22,6 @@ from unittest.mock import Mock
 import pytest
 
 
-@pytest.mark.skip(reason="ValidationFramework removed during enterprise bloat cleanup")
-class TestJ2O6ValidationFramework:
-    """Verify j2o-6: Advanced Data Validation Framework is implemented and integrated.
-
-    NOTE: These tests are skipped because the ValidationFramework was removed
-    during enterprise bloat cleanup. Validation is now handled through simpler
-    mechanisms in individual migration classes.
-    """
-
-    def test_validation_framework_exists(self):
-        """Verify ValidationFramework class exists and is importable."""
-        from src.utils.advanced_validation import ValidationFramework
-
-        framework = ValidationFramework()
-        assert framework is not None
-        assert hasattr(framework, "validators")
-        assert hasattr(framework, "summary")
-
-    def test_validation_phases_defined(self):
-        """Verify all required validation phases are defined."""
-        from src.utils.advanced_validation import ValidationPhase
-
-        assert hasattr(ValidationPhase, "PRE_MIGRATION")
-        assert hasattr(ValidationPhase, "IN_FLIGHT")
-        assert hasattr(ValidationPhase, "POST_MIGRATION")
-        assert hasattr(ValidationPhase, "RECONCILIATION")
-
-    def test_validation_levels_defined(self):
-        """Verify all validation severity levels are defined."""
-        from src.utils.advanced_validation import ValidationLevel
-
-        assert hasattr(ValidationLevel, "INFO")
-        assert hasattr(ValidationLevel, "WARNING")
-        assert hasattr(ValidationLevel, "ERROR")
-        assert hasattr(ValidationLevel, "CRITICAL")
-
-    def test_validators_registered(self):
-        """Verify validators are registered for each phase."""
-        from src.utils.advanced_validation import (
-            InFlightValidator,
-            PostMigrationValidator,
-            PreMigrationValidator,
-            ValidationFramework,
-            ValidationPhase,
-        )
-
-        framework = ValidationFramework()
-
-        # Check pre-migration validators
-        pre_validators = framework.validators[ValidationPhase.PRE_MIGRATION]
-        assert len(pre_validators) > 0
-        assert any(isinstance(v, PreMigrationValidator) for v in pre_validators)
-
-        # Check in-flight validators
-        in_flight_validators = framework.validators[ValidationPhase.IN_FLIGHT]
-        assert len(in_flight_validators) > 0
-        assert any(isinstance(v, InFlightValidator) for v in in_flight_validators)
-
-        # Check post-migration validators
-        post_validators = framework.validators[ValidationPhase.POST_MIGRATION]
-        assert len(post_validators) > 0
-        assert any(isinstance(v, PostMigrationValidator) for v in post_validators)
-
-    def test_validation_framework_integrated_in_migration(self):
-        """Verify ValidationFramework is imported and used in migration.py."""
-        import src.migration as migration_module
-
-        # Check that validation functions are imported
-        assert hasattr(migration_module, "validate_pre_migration")
-
-        # Read migration.py source to verify integration
-        migration_file = Path(__file__).parent.parent.parent / "src" / "migration.py"
-        migration_source = migration_file.read_text()
-
-        # Verify ValidationFramework is imported
-        assert "ValidationFramework" in migration_source
-        assert "validate_pre_migration" in migration_source
-
-        # Verify pre-migration validation is called
-        assert "pre_migration_validation" in migration_source.lower()
-
-
 class TestJ2O2MarkdownConversion:
     """Verify j2o-2: Markdown Syntax Conversion is implemented and used."""
 
@@ -364,7 +282,7 @@ class TestIntegrationVerification:
             "users",
             "projects",
             "work_packages_skeleton",  # Phase 1: skeleton creation
-            "work_packages_content",   # Phase 3: content with resolved attachment URLs
+            "work_packages_content",  # Phase 3: content with resolved attachment URLs
             "time_entries",
         ]
 
@@ -384,20 +302,6 @@ class TestIntegrationVerification:
         # Verify key migrations have factories
         assert '"work_packages"' in migration_source or "'work_packages'" in migration_source
         assert '"time_entries"' in migration_source or "'time_entries'" in migration_source
-
-    @pytest.mark.skip(reason="ValidationFramework removed during enterprise bloat cleanup")
-    def test_validation_integrated_with_migration_flow(self):
-        """Verify validation is integrated into the migration workflow.
-
-        NOTE: Skipped because ValidationFramework was removed. Validation now happens
-        within individual migration classes through their ETL methods and error handling.
-        """
-        migration_file = Path(__file__).parent.parent.parent / "src" / "migration.py"
-        migration_source = migration_file.read_text()
-
-        # Verify validation is called during migration
-        assert "validation" in migration_source.lower()
-        assert "ValidationFramework" in migration_source or "validate_pre_migration" in migration_source
 
 
 class TestJ2O96MigrationCompleteness:

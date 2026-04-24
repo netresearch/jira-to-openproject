@@ -52,8 +52,7 @@ migration:
             assert mock_logger.warning.call_count >= 1
             # Find the file-read failure warning (not the path-validation warning)
             file_error_calls = [
-                c for c in mock_logger.warning.call_args_list
-                if "Failed to read Docker secret" in str(c)
+                c for c in mock_logger.warning.call_args_list if "Failed to read Docker secret" in str(c)
             ]
             assert len(file_error_calls) == 1
             warning_call = file_error_calls[0]

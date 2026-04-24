@@ -9,7 +9,10 @@ class _StubOPClient:
         self._admins = admins or []
 
     def execute_large_query_to_json_file(
-        self, query: str, container_file: str = "/tmp/j2o_query.json", timeout: int | None = None,
+        self,
+        query: str,
+        container_file: str = "/tmp/j2o_query.json",
+        timeout: int | None = None,
     ):
         if "Type.order(:position).pluck(:id)" in query:
             return list(self._types)
