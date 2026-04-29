@@ -34,10 +34,14 @@ jobs:
           python-version: '3.14'
       - name: Export runtime requirements from uv.lock
         # The project uses uv + pyproject.toml — no requirements.txt exists.
-        # Export the locked runtime deps so pip-audit scans our actual
-        # dependency graph, not pip-audit's own runtime environment (the
-        # previous `... || pip-audit` fallback flagged pip's own CVEs).
-        run: uv export --frozen --no-hashes --no-dev -o /tmp/runtime-requirements.txt
+        # Export the locked runtime deps (without the project itself) so
+        # pip-audit scans our actual dependency graph; the previous
+        # `... || pip-audit` fallback flagged pip's own CVEs from the
+        # runner environment, and `-e .` for the local project tripped a
+        # "not found on PyPI" lookup error.
+        run: |
+          uv export --frozen --no-hashes --no-dev --no-emit-project \
+            -o /tmp/runtime-requirements.txt
       - name: pip-audit
         run: |
           pip install pip-audit
