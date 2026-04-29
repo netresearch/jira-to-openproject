@@ -41,6 +41,17 @@ class DummyOp:
             return 801
         return True
 
+    def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
+        return 801
+
+    def enable_custom_field_for_projects(
+        self,
+        cf_id: int,
+        project_ids: set[int],
+        cf_name: str | None = None,
+    ) -> None:
+        return None
+
 
 @pytest.fixture(autouse=True)
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
