@@ -154,7 +154,7 @@ def extract_headers_from_request() -> Callable:
                 elif isinstance(request.headers, dict):
                     # Already a dict
                     headers = request.headers
-            except (TypeError, AttributeError):
+            except TypeError, AttributeError:
                 pass
 
         # If no Flask headers found, try Django-style
@@ -165,7 +165,7 @@ def extract_headers_from_request() -> Callable:
                         # Convert HTTP_X_IDEMPOTENCY_KEY -> X-Idempotency-Key
                         header_name = key[5:].replace("_", "-").title()
                         headers[header_name] = value
-            except (TypeError, AttributeError):
+            except TypeError, AttributeError:
                 pass
 
         return headers

@@ -106,13 +106,13 @@ def _import_real_jira_module() -> Any:
         candidates: list[_Path] = []
         try:
             candidates.extend(_Path(p) for p in site.getsitepackages())
-        except (AttributeError, OSError):
+        except AttributeError, OSError:
             pass
         try:
             usp = site.getusersitepackages()
             if usp:
                 candidates.append(_Path(usp))
-        except (AttributeError, OSError):
+        except AttributeError, OSError:
             pass
 
         for base in candidates:
@@ -129,7 +129,7 @@ def _import_real_jira_module() -> Any:
 
         # Fallback: regular import (may still hit stub if unresolved)
         return importlib.import_module("jira")
-    except (ImportError, ModuleNotFoundError, AttributeError, OSError):
+    except ImportError, ModuleNotFoundError, AttributeError, OSError:
         # ImportError / ModuleNotFoundError: jira package missing or corrupt.
         # AttributeError: site module missing expected accessors.
         # OSError: filesystem error walking site-packages.
@@ -785,7 +785,7 @@ class JiraClient:
                     },
                 )
             return normalized
-        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise
         except Exception as e:
             error_msg = f"Failed to get Jira groups: {e!s}"
@@ -846,7 +846,7 @@ class JiraClient:
                 group_name,
             )
             return members
-        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise
         except Exception as e:
             error_msg = f"Failed to get Jira group members for {group_name}: {e!s}"
@@ -920,7 +920,7 @@ class JiraClient:
                 project_key,
             )
             return roles
-        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise
         except Exception as e:
             error_msg = f"Failed to fetch Jira project roles for {project_key}: {e!s}"
@@ -1520,7 +1520,7 @@ class JiraClient:
             accounts = response.json()
             logger.info("Successfully retrieved %s Tempo accounts.", len(accounts))
             return accounts
-        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise  # Re-raise specific exceptions
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo accounts: {e!s}"
@@ -1549,7 +1549,7 @@ class JiraClient:
             customers = response.json()
             logger.info("Successfully retrieved %s Tempo customers.", len(customers))
             return customers
-        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise  # Re-raise specific exceptions
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo customers: {e!s}"
@@ -1596,7 +1596,7 @@ class JiraClient:
                 project_id,
             )
             return links
-        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise  # Re-raise specific exceptions
         except JiraResourceNotFoundError:
             # Convert to empty list for this specific case since it's an expected condition

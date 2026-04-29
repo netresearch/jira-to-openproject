@@ -115,7 +115,7 @@ class AccountMigration(BaseMigration):
         else:
             try:
                 self.account_custom_field_id = int(custom_field_id)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 self.logger.warning(
                     "Invalid custom field ID in analysis file: %s, will create a new one",
                     custom_field_id,
@@ -670,7 +670,7 @@ class AccountMigration(BaseMigration):
         try:
             # Ensure it's a valid integer
             cf_id = int(cf_id)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             self.logger.warning(
                 "Not saving invalid custom field ID: %s",
                 cf_id,

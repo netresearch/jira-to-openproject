@@ -2277,7 +2277,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError):
+        except OSError, json.JSONDecodeError, ValueError:
             self.logger.exception(
                 "Failed to save after skip fallback for %s",
                 username,
@@ -2350,7 +2350,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError):
+        except OSError, json.JSONDecodeError, ValueError:
             self.logger.exception(
                 "Failed to save after assign_admin fallback for %s",
                 username,
@@ -2413,7 +2413,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError):
+        except OSError, json.JSONDecodeError, ValueError:
             self.logger.exception(
                 "Failed to save after create_placeholder fallback for %s",
                 username,

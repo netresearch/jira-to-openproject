@@ -185,7 +185,7 @@ class ReportingMigration(BaseMigration):
             if isinstance(entry, dict) and entry.get("openproject_id"):
                 try:
                     return int(entry["openproject_id"])
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     return 0
             return 0
 

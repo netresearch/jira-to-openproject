@@ -487,7 +487,7 @@ class WorkPackageMigration(BaseMigration):
             if isinstance(result, str):
                 try:
                     result = json.loads(result)
-                except (json.JSONDecodeError, TypeError):
+                except json.JSONDecodeError, TypeError:
                     pass
             if isinstance(result, dict) and result.get("id"):
                 version_id = int(result["id"])
@@ -3384,7 +3384,7 @@ class WorkPackageMigration(BaseMigration):
                 try:
                     seconds = int(seconds_str)
                     return round(seconds / 3600, 2)  # Convert to hours with 2 decimal places
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     return None
 
             from_hours = seconds_to_hours(from_seconds)

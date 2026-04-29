@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - compatibility for older jira package
 
 try:
     from jira.resources import Issue  # type: ignore
-except (ImportError, AttributeError):  # pragma: no cover - fallback for newer releases
+except ImportError, AttributeError:  # pragma: no cover - fallback for newer releases
 
     class Issue:  # type: ignore[misc]
         pass

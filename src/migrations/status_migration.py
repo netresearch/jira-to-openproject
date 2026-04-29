@@ -275,7 +275,7 @@ class StatusMigration(BaseMigration):
                     # Try to convert to a dictionary if possible
                     try:
                         result_statuses.append(dict(status))
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         logger.warning("Skipping invalid status format: %s", status)
 
             self.op_statuses = result_statuses

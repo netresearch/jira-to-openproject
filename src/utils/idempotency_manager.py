@@ -253,7 +253,7 @@ class IdempotencyKeyManager:
             # Parse as UUID and verify it's version 4
             parsed_uuid = uuid.UUID(key)
             return parsed_uuid.version == UUID_V4
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             return False
 
     def _safe_json_loads(self, data: str) -> object:
