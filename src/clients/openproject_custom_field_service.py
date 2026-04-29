@@ -1,22 +1,35 @@
 """Custom-field operations against an OpenProject instance.
 
-First slice of the Phase 2 split of ``OpenProjectClient`` (ADR-002 phase 2):
-the simpler, mostly self-contained custom-field helpers move here. The
-heavier methods (``ensure_work_package_custom_field``, ``ensure_custom_field``,
-``remove_custom_field``, ``ensure_origin_custom_fields``,
-``ensure_j2o_provenance_custom_fields``, ``delete_all_custom_fields``,
-``bulk_set_wp_custom_field_values``, ``batch_get_custom_fields_by_names``)
-will follow in subsequent PRs.
+Phase 2 split of ``OpenProjectClient`` (ADR-002 phase 2): all the
+custom-field methods live here, organised by purpose:
+
+* **Creation / enablement** — ``ensure_wp_custom_field_id``,
+  ``enable_custom_field_for_projects``, ``ensure_work_package_custom_field``
+  (is_for_all=true variant), ``ensure_custom_field`` (generic per-type),
+  ``ensure_origin_custom_fields``.
+* **Lookup** — ``get_by_name``, ``get_id_by_name``, ``get_all``.
+* **Deletion** — ``remove_custom_field``, ``delete_all_custom_fields``.
+* **Bulk read / write** — ``bulk_set_wp_custom_field_values``,
+  ``batch_get_custom_fields_by_names``.
+
+The provenance custom-field helpers (``ensure_j2o_provenance_custom_fields``
+plus the rest of the J2O Migration Provenance machinery) stay on
+``OpenProjectClient`` for now — they will move into a separate
+``OpenProjectProvenanceService`` in Phase 2c since they're a coherent,
+domain-specific subsystem of their own.
 
 Design note
 -----------
 
 The service holds a back-reference to its parent ``OpenProjectClient`` so it
 can reuse the script-execution machinery (``execute_query``, ``find_record``,
-``execute_large_query_to_json_file``, ``_generate_unique_temp_filename``)
-rather than duplicating it. ``OpenProjectClient`` exposes the service via
-``self.custom_fields`` and keeps thin delegators for the same method names
-so existing call sites (migrations, tests) work unchanged.
+``execute_large_query_to_json_file``, ``_generate_unique_temp_filename``,
+``execute_json_query``, ``execute_query_to_json_file``,
+``_validate_batch_size``, ``_build_safe_batch_query``,
+``_retry_with_exponential_backoff``) rather than duplicating it.
+``OpenProjectClient`` exposes the service via ``self.custom_fields`` and
+keeps thin delegators for the same method names so existing call sites
+(migrations, tests) work unchanged.
 """
 
 from __future__ import annotations
@@ -209,3 +222,373 @@ class OpenProjectCustomFieldService:
         except Exception as e:
             msg = "Failed to get custom fields."
             raise QueryExecutionError(msg) from e
+
+    # ── creation (full-spec ensure variants) ──────────────────────────────
+
+    def ensure_work_package_custom_field(self, name: str, field_format: str = "string") -> dict[str, Any]:
+        """Ensure a WorkPackage custom field exists with ``is_for_all: true``.
+
+        Distinct from :py:meth:`ensure_wp_custom_field_id`: this returns the
+        full record dict and uses the ``is_for_all: true`` semantics (the field
+        is enabled globally rather than selectively per project).
+        """
+        # Lazy import avoids the openproject_client ↔ this-module import cycle.
+        from src.clients.openproject_client import escape_ruby_single_quoted
+
+        ruby = f"""
+          cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escape_ruby_single_quoted(name)}')
+          if !cf
+            cf = CustomField.new(name: '{escape_ruby_single_quoted(name)}', field_format: '{escape_ruby_single_quoted(field_format)}', is_required: false, is_for_all: true, type: 'WorkPackageCustomField')
+            cf.save
+          end
+          cf && cf.as_json(only: [:id, :name, :field_format])
+        """
+        try:
+            result = self._client.execute_json_query(ruby)
+            if isinstance(result, dict) and result.get("id"):
+                return result
+            msg = "Failed ensuring WorkPackage custom field"
+            raise QueryExecutionError(msg)
+        except Exception as e:
+            msg = f"Failed to ensure custom field '{name}': {e}"
+            raise QueryExecutionError(msg) from e
+
+    def ensure_custom_field(
+        self,
+        name: str,
+        *,
+        field_format: str = "string",
+        cf_type: str = "WorkPackageCustomField",
+        searchable: bool = False,
+    ) -> dict[str, Any]:
+        """Ensure a CustomField of any type exists, create if missing.
+
+        Handles the broadest set of options: per-type creation
+        (WorkPackage / Project / User / TimeEntry), searchable flag,
+        WorkPackage type-id population, UserCustomField activation. Returns
+        the resulting CF record dict.
+        """
+        from src.clients.openproject_client import escape_ruby_single_quoted
+
+        searchable_str = "true" if searchable else "false"
+
+        ruby = f"""
+          cf = CustomField.find_by(type: '{escape_ruby_single_quoted(cf_type)}', name: '{escape_ruby_single_quoted(name)}')
+          if !cf
+            cf = CustomField.new(name: '{escape_ruby_single_quoted(name)}', field_format: '{escape_ruby_single_quoted(field_format)}', is_required: false, type: '{escape_ruby_single_quoted(cf_type)}')
+            begin
+              cf.is_for_all = true
+            rescue
+            end
+            begin
+              cf.searchable = {searchable_str}
+            rescue
+            end
+            cf.save
+            # For WorkPackageCustomField, explicitly enable for all types
+            if cf.type == 'WorkPackageCustomField' && cf.type_ids.empty?
+              begin
+                cf.type_ids = Type.all.pluck(:id)
+                cf.save
+              rescue
+              end
+            end
+          else
+            # Update searchable if it doesn't match
+            begin
+              if cf.respond_to?(:searchable) && cf.searchable != {searchable_str}
+                cf.searchable = {searchable_str}
+                cf.save
+              end
+            rescue
+            end
+            # Ensure WP CFs are enabled for all types
+            if cf.type == 'WorkPackageCustomField' && cf.type_ids.empty?
+              begin
+                cf.type_ids = Type.all.pluck(:id)
+                cf.save
+              rescue
+              end
+            end
+          end
+          if cf && cf.type == 'UserCustomField'
+            begin
+              cf.activate! if cf.respond_to?(:active?) && !cf.active?
+            rescue
+            end
+          end
+          cf && cf.as_json(only: [:id, :name, :field_format, :type])
+        """
+        try:
+            result = self._client.execute_json_query(ruby)
+            if isinstance(result, dict) and result.get("id"):
+                return result
+            msg = f"Failed ensuring {cf_type} '{name}'"
+            raise QueryExecutionError(msg)
+        except Exception as e:
+            msg = f"Failed to ensure custom field '{name}' ({cf_type}): {e}"
+            raise QueryExecutionError(msg) from e
+
+    def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
+        """Remove CustomField records matching the provided name/type."""
+        import json as _json
+
+        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
+        name_literal = _json.dumps(name, ensure_ascii=False)
+        type_filter = ""
+        if cf_type:
+            type_literal = _json.dumps(cf_type, ensure_ascii=False)
+            type_filter = f"scope = scope.where(type: {type_literal})\n"
+
+        ruby = (
+            f"scope = CustomField.where(name: {name_literal})\n"
+            f"{type_filter}"
+            "removed = 0\n"
+            "scope.find_each do |cf|\n"
+            "  begin\n"
+            "    cf.destroy\n"
+            "    removed += 1\n"
+            "  rescue => e\n"
+            '    Rails.logger.warn("Failed to destroy custom field #{cf.id}: #{e.message}")\n'
+            "  end\n"
+            "end\n"
+            "{ removed: removed }.to_json\n"
+        )
+
+        try:
+            result = self._client.execute_json_query(ruby)
+            if isinstance(result, dict):
+                return {"removed": int(result.get("removed", 0) or 0)}
+            msg = "Unexpected response removing custom field"
+            raise QueryExecutionError(msg)
+        except Exception as e:
+            msg = f"Failed to remove custom field '{name}'"
+            raise QueryExecutionError(msg) from e
+
+    def ensure_origin_custom_fields(self) -> dict[str, list[dict[str, Any]]]:
+        """Ensure origin mapping CFs exist for WP, User, TimeEntry.
+
+        Project CFs are intentionally skipped (this OpenProject instance
+        doesn't expose them via this path; persistence happens via
+        ``OpenProjectClient.upsert_project_origin_attributes`` instead).
+        """
+        ensured: dict[str, list[dict[str, Any]]] = {
+            "work_package": [],
+            "project": [],
+            "user": [],
+            "time_entry": [],
+        }
+
+        for name, fmt in (
+            ("J2O Origin System", "string"),
+            ("J2O Origin ID", "string"),
+            ("J2O Origin Key", "string"),
+            ("J2O Origin URL", "string"),
+            ("J2O Project Key", "string"),
+            ("J2O Project ID", "string"),
+            ("J2O First Migration Date", "date"),
+            ("J2O Last Update Date", "date"),
+        ):
+            try:
+                ensured["work_package"].append(
+                    self.ensure_custom_field(name, field_format=fmt, cf_type="WorkPackageCustomField"),
+                )
+            except Exception as e:
+                self._logger.warning("Failed ensuring WP CF %s: %s", name, e)
+
+        # NOTE: This OpenProject instance does not support Project custom fields
+        # via this path. Persist origin for projects using project attributes.
+        ensured["project"] = []
+
+        for name, fmt in (
+            ("J2O Origin System", "string"),
+            ("J2O User ID", "string"),
+            ("J2O User Key", "string"),
+            ("J2O External URL", "string"),
+        ):
+            try:
+                ensured["user"].append(self.ensure_custom_field(name, field_format=fmt, cf_type="UserCustomField"))
+            except Exception as e:
+                self._logger.warning("Failed ensuring User CF %s: %s", name, e)
+
+        for name, fmt in (
+            ("J2O Origin Worklog Key", "string"),
+            ("J2O Origin Issue ID", "string"),
+            ("J2O Origin Issue Key", "string"),
+            ("J2O Origin System", "string"),
+            ("J2O First Migration Date", "date"),
+            ("J2O Last Update Date", "date"),
+        ):
+            try:
+                ensured["time_entry"].append(
+                    self.ensure_custom_field(name, field_format=fmt, cf_type="TimeEntryCustomField"),
+                )
+            except Exception as e:
+                self._logger.warning("Failed ensuring TE CF %s: %s", name, e)
+
+        return ensured
+
+    # ── deletion ──────────────────────────────────────────────────────────
+
+    def delete_all_custom_fields(self) -> int:
+        """Delete every CustomField record (uses destroy_all for cleanup).
+
+        Returns:
+            Number of deleted custom fields.
+
+        Raises:
+            QueryExecutionError: If bulk deletion fails.
+
+        """
+        try:
+            count = self._client.execute_query("CustomField.count")
+            self._client.execute_query("CustomField.destroy_all")
+            return count if isinstance(count, int) else 0
+        except Exception as e:
+            msg = "Failed to delete all custom fields."
+            raise QueryExecutionError(msg) from e
+
+    # ── bulk read / write ─────────────────────────────────────────────────
+
+    def bulk_set_wp_custom_field_values(
+        self,
+        cf_values: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Set custom-field values for multiple work packages in one Rails call.
+
+        Args:
+            cf_values: List of dicts with keys ``work_package_id`` (int),
+                ``custom_field_id`` (int), ``value`` (str).
+
+        Returns:
+            Dict with ``success`` (bool), ``updated`` (int), ``failed`` (int).
+
+        """
+        import json as _json
+
+        if not cf_values:
+            return {"success": True, "updated": 0, "failed": 0}
+
+        data = [
+            {
+                "wp_id": int(cv["work_package_id"]),
+                "cf_id": int(cv["custom_field_id"]),
+                "value": str(cv["value"]),
+            }
+            for cv in cf_values
+        ]
+
+        # Use ensure_ascii=False to keep UTF-8 literal; <<-'X' heredoc prevents
+        # \u escape interpretation by Ruby.
+        data_json = _json.dumps(data, ensure_ascii=False)
+        script = f"""
+          require 'json'
+          data = JSON.parse(<<-'J2O_DATA'
+{data_json}
+J2O_DATA
+)
+
+          results = {{ updated: 0, failed: 0, errors: [] }}
+
+          # Pre-fetch all referenced WPs and CFs to avoid N+1 queries
+          wp_ids = data.map {{ |d| d['wp_id'] }}.compact.uniq
+          cf_ids = data.map {{ |d| d['cf_id'] }}.compact.uniq
+          wps = WorkPackage.where(id: wp_ids).index_by(&:id)
+          cfs = CustomField.where(id: cf_ids).index_by(&:id)
+
+          data.each do |item|
+            begin
+              wp_id = item['wp_id']
+              cf_id = item['cf_id']
+              val = item['value']
+
+              wp = wps[wp_id]
+              cf = cfs[cf_id]
+              if wp && cf
+                cv = wp.custom_value_for(cf)
+                if cv
+                  cv.value = val
+                  cv.save
+                else
+                  wp.custom_field_values = {{ cf.id => val }}
+                end
+                wp.save!
+                results[:updated] += 1
+              else
+                results[:failed] += 1
+                results[:errors] << {{ wp_id: wp_id, cf_id: cf_id, error: 'WorkPackage or CustomField not found' }}
+              end
+            rescue => e
+              results[:failed] += 1
+              results[:errors] << {{ wp_id: item['wp_id'], cf_id: item['cf_id'], error: e.message }}
+            end
+          end
+
+          results[:success] = (results[:failed] == 0)
+          results.to_json
+        """
+        try:
+            result = self._client.execute_query_to_json_file(script)
+            if isinstance(result, dict):
+                return result
+            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(result)}
+        except Exception as e:
+            self._logger.warning("Bulk set WP CF values failed: %s", e)
+            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(e)}
+
+    def batch_get_custom_fields_by_names(
+        self,
+        names: list[str],
+        batch_size: int | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Look up CF records by name in batches with retry support.
+
+        Returns a dict mapping name -> CF record. Names that don't exist on the
+        server are simply omitted from the result.
+        """
+        if not names:
+            return {}
+
+        # Reuse the client's batch-size validation, query builder, and retry.
+        client = self._client
+        effective_batch_size = batch_size or getattr(client, "batch_size", 100)
+        effective_batch_size = client._validate_batch_size(effective_batch_size)
+
+        results: dict[str, dict[str, Any]] = {}
+
+        for i in range(0, len(names), effective_batch_size):
+            batch_names = names[i : i + effective_batch_size]
+
+            def batch_operation(_batch_names: list[str] = batch_names) -> list[dict[str, Any]]:
+                query = client._build_safe_batch_query("CustomField", "name", _batch_names)
+                return client.execute_json_query(query)  # type: ignore[return-value]
+
+            try:
+                batch_results = client._retry_with_exponential_backoff(
+                    batch_operation,
+                    f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",
+                )
+                if batch_results:
+                    if isinstance(batch_results, dict):
+                        batch_results = [batch_results]
+                    for record in batch_results:
+                        if isinstance(record, dict) and "name" in record:
+                            name = record["name"]
+                            if name in batch_names:
+                                results[name] = record
+
+            except Exception as e:
+                self._logger.warning(
+                    "Failed to fetch batch of custom field names %s after retries: %s",
+                    batch_names,
+                    e,
+                )
+                for name in batch_names:
+                    self._logger.debug(
+                        "Failed to fetch custom field by name %s: %s",
+                        name,
+                        e,
+                    )
+                continue
+
+        return results
