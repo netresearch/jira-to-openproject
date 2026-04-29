@@ -1205,7 +1205,6 @@ class CompanyMigration(BaseMigration):
 
         return results
 
-
     def _build_account_mapping(self) -> dict[str, Any]:
         """Build account_mapping from tempo_accounts.json.
 
@@ -1497,9 +1496,7 @@ puts results.to_json
             companies_needing_creation = [
                 entry
                 for entry in company_mapping.values()
-                if isinstance(entry, dict)
-                and entry.get("matched_by") == "none"
-                and not entry.get("openproject_id")
+                if isinstance(entry, dict) and entry.get("matched_by") == "none" and not entry.get("openproject_id")
             ]
 
             if companies_needing_creation:

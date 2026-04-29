@@ -8,14 +8,13 @@ to identify data quality issues and gaps in the migration.
 import json
 import random
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 
@@ -70,7 +69,7 @@ def sample_jira_issues(jira_client: JiraClient, sample_size: int = 100) -> list[
     # Get full issue data from Jira
     batch_size = 50
     for i in range(0, len(sample_ids), batch_size):
-        batch = sample_ids[i:i+batch_size]
+        batch = sample_ids[i : i + batch_size]
         jira_keys = [wp_mapping[jid]["jira_key"] for jid in batch if jid in wp_mapping]
 
         if jira_keys:
@@ -80,28 +79,44 @@ def sample_jira_issues(jira_client: JiraClient, sample_size: int = 100) -> list[
                     jql,
                     maxResults=len(jira_keys),
                     fields="*all",
-                    expand="changelog"
+                    expand="changelog",
                 )
                 for issue in issues:
-                    sampled_issues.append({
-                        "jira_id": issue.id,
-                        "jira_key": issue.key,
-                        "fields": {
-                            "summary": issue.fields.summary,
-                            "priority": getattr(issue.fields.priority, "name", None) if issue.fields.priority else None,
-                            "priority_id": getattr(issue.fields.priority, "id", None) if issue.fields.priority else None,
-                            "assignee": getattr(issue.fields.assignee, "name", None) if issue.fields.assignee else None,
-                            "assignee_display": getattr(issue.fields.assignee, "displayName", None) if issue.fields.assignee else None,
-                            "reporter": getattr(issue.fields.reporter, "name", None) if issue.fields.reporter else None,
-                            "reporter_display": getattr(issue.fields.reporter, "displayName", None) if issue.fields.reporter else None,
-                            "status": getattr(issue.fields.status, "name", None) if issue.fields.status else None,
-                            "issuetype": getattr(issue.fields.issuetype, "name", None) if issue.fields.issuetype else None,
-                            "created": issue.fields.created,
-                            "updated": issue.fields.updated,
-                            "project_key": issue.fields.project.key,
-                            "description": issue.fields.description[:200] if issue.fields.description else None,
-                        }
-                    })
+                    sampled_issues.append(
+                        {
+                            "jira_id": issue.id,
+                            "jira_key": issue.key,
+                            "fields": {
+                                "summary": issue.fields.summary,
+                                "priority": getattr(issue.fields.priority, "name", None)
+                                if issue.fields.priority
+                                else None,
+                                "priority_id": getattr(issue.fields.priority, "id", None)
+                                if issue.fields.priority
+                                else None,
+                                "assignee": getattr(issue.fields.assignee, "name", None)
+                                if issue.fields.assignee
+                                else None,
+                                "assignee_display": getattr(issue.fields.assignee, "displayName", None)
+                                if issue.fields.assignee
+                                else None,
+                                "reporter": getattr(issue.fields.reporter, "name", None)
+                                if issue.fields.reporter
+                                else None,
+                                "reporter_display": getattr(issue.fields.reporter, "displayName", None)
+                                if issue.fields.reporter
+                                else None,
+                                "status": getattr(issue.fields.status, "name", None) if issue.fields.status else None,
+                                "issuetype": getattr(issue.fields.issuetype, "name", None)
+                                if issue.fields.issuetype
+                                else None,
+                                "created": issue.fields.created,
+                                "updated": issue.fields.updated,
+                                "project_key": issue.fields.project.key,
+                                "description": issue.fields.description[:200] if issue.fields.description else None,
+                            },
+                        },
+                    )
             except Exception as e:
                 print(f"  Error fetching batch: {e}")
 
@@ -143,7 +158,9 @@ def get_op_work_packages(op_client: OpenProjectClient, jira_issues: list[dict], 
                         "created_at": wp.get("createdAt"),
                         "updated_at": wp.get("updatedAt"),
                         "project": wp.get("_links", {}).get("project", {}).get("title"),
-                        "description": (wp.get("description", {}) or {}).get("raw", "")[:200] if wp.get("description") else None,
+                        "description": (wp.get("description", {}) or {}).get("raw", "")[:200]
+                        if wp.get("description")
+                        else None,
                     }
             except Exception as e:
                 print(f"  Error fetching WP {op_id} for {jira_key}: {e}")
@@ -171,7 +188,7 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
             "status": {"matches": 0, "mismatches": 0, "examples": []},
             "type": {"matches": 0, "mismatches": 0, "examples": []},
         },
-        "detailed_issues": []
+        "detailed_issues": [],
     }
 
     for issue in jira_issues:
@@ -187,7 +204,7 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
 
         issue_details = {
             "jira_key": jira_key,
-            "differences": []
+            "differences": [],
         }
 
         # Priority analysis
@@ -198,17 +215,21 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
                 analysis["field_analysis"]["priority"]["matches"] += 1
             else:
                 analysis["field_analysis"]["priority"]["mismatches"] += 1
-                issue_details["differences"].append({
-                    "field": "priority",
-                    "jira": jira_priority,
-                    "op": op_priority
-                })
-                if len(analysis["field_analysis"]["priority"]["examples"]) < 5:
-                    analysis["field_analysis"]["priority"]["examples"].append({
-                        "key": jira_key,
+                issue_details["differences"].append(
+                    {
+                        "field": "priority",
                         "jira": jira_priority,
-                        "op": op_priority
-                    })
+                        "op": op_priority,
+                    },
+                )
+                if len(analysis["field_analysis"]["priority"]["examples"]) < 5:
+                    analysis["field_analysis"]["priority"]["examples"].append(
+                        {
+                            "key": jira_key,
+                            "jira": jira_priority,
+                            "op": op_priority,
+                        },
+                    )
         elif jira_priority and not op_priority:
             analysis["field_analysis"]["priority"]["missing"] += 1
 
@@ -225,20 +246,24 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
                     analysis["field_analysis"]["assignee"]["matches"] += 1
                 else:
                     analysis["field_analysis"]["assignee"]["mismatches"] += 1
-                    issue_details["differences"].append({
-                        "field": "assignee",
-                        "jira": jira_assignee,
-                        "expected_op": expected_op_login,
-                        "actual_op": op_assignee
-                    })
+                    issue_details["differences"].append(
+                        {
+                            "field": "assignee",
+                            "jira": jira_assignee,
+                            "expected_op": expected_op_login,
+                            "actual_op": op_assignee,
+                        },
+                    )
             else:
                 analysis["field_analysis"]["assignee"]["missing"] += 1
                 if len(analysis["field_analysis"]["assignee"]["examples"]) < 5:
-                    analysis["field_analysis"]["assignee"]["examples"].append({
-                        "key": jira_key,
-                        "jira": jira_assignee,
-                        "op": "NONE"
-                    })
+                    analysis["field_analysis"]["assignee"]["examples"].append(
+                        {
+                            "key": jira_key,
+                            "jira": jira_assignee,
+                            "op": "NONE",
+                        },
+                    )
 
         # Reporter/Author analysis
         jira_reporter = jira_fields.get("reporter")
@@ -252,18 +277,22 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
                     analysis["field_analysis"]["reporter"]["matches"] += 1
                 elif "system" in op_author.lower() or "admin" in op_author.lower():
                     analysis["field_analysis"]["reporter"]["mismatches"] += 1
-                    issue_details["differences"].append({
-                        "field": "reporter/author",
-                        "jira": jira_reporter,
-                        "expected_op": expected_op_login,
-                        "actual_op": op_author
-                    })
-                    if len(analysis["field_analysis"]["reporter"]["examples"]) < 5:
-                        analysis["field_analysis"]["reporter"]["examples"].append({
-                            "key": jira_key,
+                    issue_details["differences"].append(
+                        {
+                            "field": "reporter/author",
                             "jira": jira_reporter,
-                            "op": op_author
-                        })
+                            "expected_op": expected_op_login,
+                            "actual_op": op_author,
+                        },
+                    )
+                    if len(analysis["field_analysis"]["reporter"]["examples"]) < 5:
+                        analysis["field_analysis"]["reporter"]["examples"].append(
+                            {
+                                "key": jira_key,
+                                "jira": jira_reporter,
+                                "op": op_author,
+                            },
+                        )
                 else:
                     analysis["field_analysis"]["reporter"]["matches"] += 1
             else:
@@ -280,17 +309,21 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
                 analysis["field_analysis"]["timestamps"]["matches"] += 1
             else:
                 analysis["field_analysis"]["timestamps"]["mismatches"] += 1
-                issue_details["differences"].append({
-                    "field": "created_at",
-                    "jira": jira_created,
-                    "op": op_created
-                })
+                issue_details["differences"].append(
+                    {
+                        "field": "created_at",
+                        "jira": jira_created,
+                        "op": op_created,
+                    },
+                )
                 if len(analysis["field_analysis"]["timestamps"]["examples"]) < 5:
-                    analysis["field_analysis"]["timestamps"]["examples"].append({
-                        "key": jira_key,
-                        "jira_created": jira_created,
-                        "op_created": op_created
-                    })
+                    analysis["field_analysis"]["timestamps"]["examples"].append(
+                        {
+                            "key": jira_key,
+                            "jira_created": jira_created,
+                            "op_created": op_created,
+                        },
+                    )
 
         if issue_details["differences"]:
             analysis["detailed_issues"].append(issue_details)

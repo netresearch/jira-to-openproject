@@ -51,7 +51,8 @@ def demo_each_client_independently() -> None:
     print("\n--- DockerClient Demo ---")
     # Create Docker client using the SSHClient we created above (dependency injection)
     docker_client = DockerClient(
-        container_name=container_name, ssh_client=ssh_client,
+        container_name=container_name,
+        ssh_client=ssh_client,
     )  # Inject the SSHClient
 
     # Execute a command in the container
@@ -67,7 +68,8 @@ def demo_each_client_independently() -> None:
     # 3. RailsConsoleClient (uses tmux)
     print("\n--- RailsConsoleClient Demo ---")
     rails_client = RailsConsoleClient(
-        tmux_session_name=tmux_session, command_timeout=30,
+        tmux_session_name=tmux_session,
+        command_timeout=30,
     )
 
     # Execute a simple Ruby command
@@ -143,14 +145,16 @@ def demo_file_transfer() -> None:
     # 3. Transfer to remote host via SSHClient
     print("Transferring file to remote host...")
     result = ssh_client.copy_file_to_remote(
-        "/tmp/test_transfer.txt", "/tmp/test_transfer.txt",
+        "/tmp/test_transfer.txt",
+        "/tmp/test_transfer.txt",
     )
     print(f"SSH transfer result: {result.get('status')}")
 
     # 4. Transfer from remote host to container via DockerClient
     print("Transferring file to container...")
     result = docker_client.copy_file_to_container(
-        "/tmp/test_transfer.txt", "/tmp/test_transfer.txt",
+        "/tmp/test_transfer.txt",
+        "/tmp/test_transfer.txt",
     )
     print(f"Docker transfer result: {result.get('status')}")
 

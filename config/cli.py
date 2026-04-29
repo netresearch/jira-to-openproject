@@ -102,7 +102,7 @@ def test_jira_connection(settings: Settings) -> bool:
         if server_ok:
             info = si.json()
             logger.info(
-                f"✓ Jira server reachable: {info.get('baseUrl','')} ({info.get('version','')})",
+                f"✓ Jira server reachable: {info.get('baseUrl', '')} ({info.get('version', '')})",
             )
         else:
             logger.error(f"✗ Jira server not reachable - Status: {si.status_code}")
@@ -199,7 +199,9 @@ def print_settings_summary(settings: Settings, show_secrets: bool = False) -> No
 
 
 def export_config(
-    settings: Settings, output_file: Path | None = None, format: str = "json",
+    settings: Settings,
+    output_file: Path | None = None,
+    format: str = "json",
 ) -> None:
     """Export configuration to file.
 
@@ -241,7 +243,8 @@ def export_config(
 
 
 def create_envrc_template(
-    settings: Settings, output_file: Path = Path(".envrc"),
+    settings: Settings,
+    output_file: Path = Path(".envrc"),
 ) -> None:
     """Create a .envrc template for direnv.
 
@@ -345,7 +348,9 @@ Examples:
     )
 
     parser.add_argument(
-        "--output", type=Path, help="Output file path (default: stdout)",
+        "--output",
+        type=Path,
+        help="Output file path (default: stdout)",
     )
 
     args = parser.parse_args()

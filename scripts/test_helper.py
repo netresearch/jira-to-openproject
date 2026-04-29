@@ -188,16 +188,10 @@ def run_changed_tests() -> int:
 
     # Get changed files from git
     try:
-        changed_files = (
-            subprocess.check_output(["git", "diff", "--name-only", "HEAD~1"], text=True)
-            .strip()
-            .split("\n")
-        )
+        changed_files = subprocess.check_output(["git", "diff", "--name-only", "HEAD~1"], text=True).strip().split("\n")
 
         # Filter for Python files in src/
-        src_files = [
-            f for f in changed_files if f.startswith("src/") and f.endswith(".py")
-        ]
+        src_files = [f for f in changed_files if f.startswith("src/") and f.endswith(".py")]
 
         if not src_files:
             print_info("No changed source files found")
@@ -337,7 +331,9 @@ Test Types:
     )
 
     parser.add_argument(
-        "module", nargs="?", help="Module name (required for 'module' command)",
+        "module",
+        nargs="?",
+        help="Module name (required for 'module' command)",
     )
 
     args = parser.parse_args()

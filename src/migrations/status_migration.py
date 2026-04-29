@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     from src.mappings.mappings import Mappings
 
 
-
 @register_entity_types("statuses", "status_types")
 class StatusMigration(BaseMigration):
     """Handles the migration of statuses from Jira to OpenProject.

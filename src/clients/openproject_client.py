@@ -61,36 +61,38 @@ _RE_CTRL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 # Allowlist of Rails model names that may be accessed via generic record operations.
 # Prevents arbitrary model access through the Rails console.
-_ALLOWED_MODELS = frozenset({
-    "Attachment",
-    "Color",
-    "CustomField",
-    "CustomOption",
-    "CustomValue",
-    "EnabledModule",
-    "Enumeration",
-    "Group",
-    "IssuePriority",
-    "Journal",
-    "Member",
-    "MemberRole",
-    "Principal",
-    "Project",
-    "ProjectCustomField",
-    "Query",
-    "Relation",
-    "Role",
-    "Status",
-    "TimeEntry",
-    "Type",
-    "User",
-    "Version",
-    "Watcher",
-    "Wiki",
-    "WikiPage",
-    "WorkPackage",
-    "WorkPackageCustomField",
-})
+_ALLOWED_MODELS = frozenset(
+    {
+        "Attachment",
+        "Color",
+        "CustomField",
+        "CustomOption",
+        "CustomValue",
+        "EnabledModule",
+        "Enumeration",
+        "Group",
+        "IssuePriority",
+        "Journal",
+        "Member",
+        "MemberRole",
+        "Principal",
+        "Project",
+        "ProjectCustomField",
+        "Query",
+        "Relation",
+        "Role",
+        "Status",
+        "TimeEntry",
+        "Type",
+        "User",
+        "Version",
+        "Watcher",
+        "Wiki",
+        "WikiPage",
+        "WorkPackage",
+        "WorkPackageCustomField",
+    },
+)
 
 # Also validate model names match a safe pattern (PascalCase identifier)
 _RE_MODEL_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
@@ -124,8 +126,6 @@ def escape_ruby_single_quoted(s: str) -> str:
     if not s:
         return ""
     return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
-
-
 
 
 class OpenProjectError(Exception):
@@ -1884,8 +1884,14 @@ class OpenProjectClient:
     # Note: company and account also create OP Projects but from Tempo sources
     # custom_field and link_type track CF creation for Jira→OP field mapping
     J2O_PROVENANCE_ENTITY_TYPES = (
-        "project", "group", "type", "status", "company", "account",
-        "custom_field", "link_type",
+        "project",
+        "group",
+        "type",
+        "status",
+        "company",
+        "account",
+        "custom_field",
+        "link_type",
     )
 
     def ensure_j2o_migration_project(self) -> int:
@@ -2067,8 +2073,11 @@ class OpenProjectClient:
             "  end\n"
             "  # Set custom field values\n"
             "  cf_values = {}\n"
-            f"  cf_values[{cf_op_id}] = {op_entity_id} if {cf_op_id}\n" if cf_op_id else ""
-            f"  cf_values[{cf_entity_type_id}] = '{entity_type}' if {cf_entity_type_id}\n" if cf_entity_type_id else ""
+            f"  cf_values[{cf_op_id}] = {op_entity_id} if {cf_op_id}\n"
+            if cf_op_id
+            else f"  cf_values[{cf_entity_type_id}] = '{entity_type}' if {cf_entity_type_id}\n"
+            if cf_entity_type_id
+            else ""
             "  wp.custom_field_values = cf_values if cf_values.any?\n"
             "  wp.save!\n"
             "  { success: true, id: wp.id, subject: wp.subject, created: created }\n"
@@ -2082,7 +2091,13 @@ class OpenProjectClient:
             if isinstance(result, dict):
                 if result.get("success"):
                     action = "Created" if result.get("created") else "Updated"
-                    self.logger.debug("%s provenance WP for %s '%s' → OP ID %d", action, entity_type, jira_key, op_entity_id)
+                    self.logger.debug(
+                        "%s provenance WP for %s '%s' → OP ID %d",
+                        action,
+                        entity_type,
+                        jira_key,
+                        op_entity_id,
+                    )
                 return result
             return {"success": False, "error": f"Unexpected result: {result}"}
         except Exception as e:
@@ -2164,7 +2179,7 @@ class OpenProjectClient:
                 subject = wp.get("subject", "")
                 prefix = f"{entity_type.upper()}: "
                 if subject.startswith(prefix):
-                    rest = subject[len(prefix):]
+                    rest = subject[len(prefix) :]
                     # Handle "(name)" suffix
                     if " (" in rest and rest.endswith(")"):
                         jira_key = rest.split(" (")[0]
@@ -3003,12 +3018,14 @@ JSON_DATA
         # Build JSON data for Ruby
         data = []
         for attr in attributes:
-            data.append({
-                "pid": int(attr["project_id"]),
-                "name": str(attr["name"]),
-                "value": str(attr.get("value", "")),
-                "fmt": str(attr.get("field_format", "string")),
-            })
+            data.append(
+                {
+                    "pid": int(attr["project_id"]),
+                    "name": str(attr["name"]),
+                    "value": str(attr.get("value", "")),
+                    "fmt": str(attr.get("field_format", "string")),
+                },
+            )
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
@@ -4660,6 +4677,7 @@ J2O_DATA
                 # Skip console attempt entirely if forced runner mode
                 if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
                     from src.clients.rails_console_client import ConsoleNotReadyError
+
                     msg = "Forced runner mode via J2O_FORCE_RAILS_RUNNER"
                     raise ConsoleNotReadyError(msg)
                 output = self.rails_client.execute(write_query, suppress_output=True)
@@ -4780,6 +4798,7 @@ J2O_DATA
                 # Skip console attempt entirely if forced runner mode
                 if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
                     from src.clients.rails_console_client import ConsoleNotReadyError
+
                     msg = "Forced runner mode via J2O_FORCE_RAILS_RUNNER"
                     raise ConsoleNotReadyError(msg)
                 self.rails_client.execute(write_query, suppress_output=True)
@@ -5576,10 +5595,12 @@ result.to_json
         # Build JSON data for Ruby
         data = []
         for w in watchers:
-            data.append({
-                "wp_id": int(w["work_package_id"]),
-                "user_id": int(w["user_id"]),
-            })
+            data.append(
+                {
+                    "wp_id": int(w["work_package_id"]),
+                    "user_id": int(w["user_id"]),
+                },
+            )
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         # that Ruby misinterprets as invalid Unicode escape sequences
@@ -5669,11 +5690,13 @@ J2O_DATA
         # Build JSON data for Ruby
         data = []
         for cv in cf_values:
-            data.append({
-                "wp_id": int(cv["work_package_id"]),
-                "cf_id": int(cv["custom_field_id"]),
-                "value": str(cv["value"]),
-            })
+            data.append(
+                {
+                    "wp_id": int(cv["work_package_id"]),
+                    "cf_id": int(cv["custom_field_id"]),
+                    "value": str(cv["value"]),
+                },
+            )
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
@@ -5814,11 +5837,13 @@ J2O_DATA
         # Build JSON data for Ruby
         data = []
         for s in sections:
-            data.append({
-                "wp_id": int(s["work_package_id"]),
-                "marker": str(s["section_marker"]),
-                "content": str(s["content"]),
-            })
+            data.append(
+                {
+                    "wp_id": int(s["work_package_id"]),
+                    "marker": str(s["section_marker"]),
+                    "content": str(s["content"]),
+                },
+            )
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
@@ -5957,11 +5982,13 @@ J2O_DATA
             comment = act.get("comment", "")
             if isinstance(comment, dict):
                 comment = comment.get("raw", "")
-            data.append({
-                "work_package_id": int(act["work_package_id"]),
-                "comment": str(comment),
-                "user_id": act.get("user_id"),
-            })
+            data.append(
+                {
+                    "work_package_id": int(act["work_package_id"]),
+                    "comment": str(comment),
+                    "user_id": act.get("user_id"),
+                },
+            )
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
@@ -6115,11 +6142,13 @@ J2O_DATA
         # Build JSON data for Ruby
         data = []
         for rel in relations:
-            data.append({
-                "from_id": int(rel["from_id"]),
-                "to_id": int(rel["to_id"]),
-                "type": str(rel["relation_type"]),
-            })
+            data.append(
+                {
+                    "from_id": int(rel["from_id"]),
+                    "to_id": int(rel["to_id"]),
+                    "type": str(rel["relation_type"]),
+                },
+            )
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
@@ -6683,10 +6712,12 @@ J2O_DATA
         data = []
         for pm in project_modules:
             if pm.get("modules"):
-                data.append({
-                    "pid": int(pm["project_id"]),
-                    "modules": [str(m) for m in pm["modules"]],
-                })
+                data.append(
+                    {
+                        "pid": int(pm["project_id"]),
+                        "modules": [str(m) for m in pm["modules"]],
+                    },
+                )
 
         if not data:
             return {"success": True, "processed": 0, "failed": 0}

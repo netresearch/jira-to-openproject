@@ -176,38 +176,47 @@ class CachePerformanceValidator:
             # Check 1: Cache hit rate
             if metrics["run2_cache_hit_rate"] >= criteria["cache_hit_rate_threshold"]:
                 passed_checks.append("cache_hit_rate")
-                logger.info("  ✓ Cache hit rate meets threshold (%.1f%% >= %.1f%%)",
-                          metrics["run2_cache_hit_rate"] * 100,
-                          criteria["cache_hit_rate_threshold"] * 100)
+                logger.info(
+                    "  ✓ Cache hit rate meets threshold (%.1f%% >= %.1f%%)",
+                    metrics["run2_cache_hit_rate"] * 100,
+                    criteria["cache_hit_rate_threshold"] * 100,
+                )
             else:
                 failed_checks.append("cache_hit_rate")
-                logger.warning("  ✗ Cache hit rate below threshold (%.1f%% < %.1f%%)",
-                             metrics["run2_cache_hit_rate"] * 100,
-                             criteria["cache_hit_rate_threshold"] * 100)
+                logger.warning(
+                    "  ✗ Cache hit rate below threshold (%.1f%% < %.1f%%)",
+                    metrics["run2_cache_hit_rate"] * 100,
+                    criteria["cache_hit_rate_threshold"] * 100,
+                )
 
             # Check 2: API reduction
             if criteria["api_reduction_min"] <= metrics["api_reduction_percentage"] <= criteria["api_reduction_max"]:
                 passed_checks.append("api_reduction")
-                logger.info("  ✓ API reduction within target range (%.1f%%)",
-                          metrics["api_reduction_percentage"] * 100)
+                logger.info("  ✓ API reduction within target range (%.1f%%)", metrics["api_reduction_percentage"] * 100)
             else:
                 failed_checks.append("api_reduction")
-                logger.warning("  ✗ API reduction outside target range (%.1f%% not in %.1f%%-%.1f%%)",
-                             metrics["api_reduction_percentage"] * 100,
-                             criteria["api_reduction_min"] * 100,
-                             criteria["api_reduction_max"] * 100)
+                logger.warning(
+                    "  ✗ API reduction outside target range (%.1f%% not in %.1f%%-%.1f%%)",
+                    metrics["api_reduction_percentage"] * 100,
+                    criteria["api_reduction_min"] * 100,
+                    criteria["api_reduction_max"] * 100,
+                )
 
             # Check 3: Memory usage
             if metrics["memory_usage"] <= criteria["memory_limit"]:
                 passed_checks.append("memory_usage")
-                logger.info("  ✓ Memory usage within limits (%d <= %d)",
-                          metrics["memory_usage"],
-                          criteria["memory_limit"])
+                logger.info(
+                    "  ✓ Memory usage within limits (%d <= %d)",
+                    metrics["memory_usage"],
+                    criteria["memory_limit"],
+                )
             else:
                 failed_checks.append("memory_usage")
-                logger.warning("  ✗ Memory usage exceeds limits (%d > %d)",
-                             metrics["memory_usage"],
-                             criteria["memory_limit"])
+                logger.warning(
+                    "  ✗ Memory usage exceeds limits (%d > %d)",
+                    metrics["memory_usage"],
+                    criteria["memory_limit"],
+                )
 
             metrics["passed_checks"] = passed_checks
             metrics["failed_checks"] = failed_checks
@@ -263,8 +272,9 @@ class CachePerformanceValidator:
         # Calculate overall metrics
         total_requests = total_cache_hits + total_cache_misses
         overall_hit_rate = total_cache_hits / total_requests if total_requests > 0 else 0.0
-        overall_api_reduction = ((total_api_calls_run1 - total_api_calls_run2) / total_api_calls_run1
-                                if total_api_calls_run1 > 0 else 0.0)
+        overall_api_reduction = (
+            (total_api_calls_run1 - total_api_calls_run2) / total_api_calls_run1 if total_api_calls_run1 > 0 else 0.0
+        )
 
         self.results["overall_metrics"] = {
             "total_migrations_tested": len(migrations_to_test),

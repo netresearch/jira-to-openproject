@@ -2603,11 +2603,7 @@ class EnhancedUserAssociationMigrator:
                     "username": "ALL_STALE",
                     "action": "batch_refresh",
                     "reason": f"Detected {validation_results['stale_mappings']} stale mappings",
-                    "priority": (
-                        "high"
-                        if validation_results["stale_mappings"] > 10
-                        else "medium"
-                    ),
+                    "priority": ("high" if validation_results["stale_mappings"] > 10 else "medium"),
                 },
             )
 

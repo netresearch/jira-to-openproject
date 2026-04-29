@@ -528,7 +528,8 @@ class PerformanceOptimizer:
         return decorator
 
     def batch_operation(
-        self, batch_size: int | None = None,
+        self,
+        batch_size: int | None = None,
     ) -> Callable[[Callable[..., object]], Callable[..., object]]:
         """Decorate a function for batching operations."""
 

@@ -23,7 +23,6 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src import config
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 
@@ -209,10 +208,7 @@ def run_bulk_update(
     jira_key_to_op_id = lookups["jira_key_to_op_id"]
 
     # Get all Jira keys that have both metadata and OP mapping
-    all_jira_keys = [
-        k for k in jira_metadata.keys()
-        if k in jira_key_to_op_id
-    ]
+    all_jira_keys = [k for k in jira_metadata.keys() if k in jira_key_to_op_id]
     logger.info("Found %d work packages to update", len(all_jira_keys))
 
     total_updated = 0
@@ -222,7 +218,7 @@ def run_bulk_update(
 
     for i in range(0, len(all_jira_keys), batch_size):
         batch_num = i // batch_size + 1
-        batch_keys = all_jira_keys[i:i + batch_size]
+        batch_keys = all_jira_keys[i : i + batch_size]
 
         logger.info(
             "Processing batch %d/%d (%d work packages)...",
@@ -288,7 +284,7 @@ def run_bulk_update(
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Bulk update OpenProject work package metadata from Jira"
+        description="Bulk update OpenProject work package metadata from Jira",
     )
     parser.add_argument(
         "--data-dir",

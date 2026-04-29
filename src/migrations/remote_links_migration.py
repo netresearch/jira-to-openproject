@@ -106,11 +106,13 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
             if not (isinstance(entry, dict) and entry.get("openproject_id")):
                 continue
             wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
-            sections_to_upsert.append({
-                "work_package_id": wp_id,
-                "section_marker": SECTION_TITLE,
-                "content": md,
-            })
+            sections_to_upsert.append(
+                {
+                    "work_package_id": wp_id,
+                    "section_marker": SECTION_TITLE,
+                    "content": md,
+                },
+            )
 
         # Bulk upsert all sections in single Rails call
         updated = 0

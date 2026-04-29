@@ -169,10 +169,14 @@ class SSHClient:
 
         """
         opts = [
-            "-o", f"ConnectTimeout={self.connect_timeout}",
-            "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={self.SSH_CONTROL_PATH}",
-            "-o", f"ControlPersist={self.SSH_CONTROL_PERSIST_SECONDS}",
+            "-o",
+            f"ConnectTimeout={self.connect_timeout}",
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            f"ControlPath={self.SSH_CONTROL_PATH}",
+            "-o",
+            f"ControlPersist={self.SSH_CONTROL_PERSIST_SECONDS}",
         ]
 
         if self.key_file:

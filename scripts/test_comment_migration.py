@@ -31,6 +31,7 @@ migration = WorkPackageMigration(jira_client, op_client)
 # Monkey-patch to limit issues for testing
 original_iter = migration._iter_all_project_issues
 
+
 def limited_iter(project_key: str):
     """Wrapper to limit to first 10 issues."""
     count = 0
@@ -40,6 +41,7 @@ def limited_iter(project_key: str):
             break
         count += 1
         yield issue
+
 
 migration._iter_all_project_issues = limited_iter
 

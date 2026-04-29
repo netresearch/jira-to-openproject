@@ -1423,7 +1423,9 @@ def main() -> None:
         # Display migration results summary
         if migration_result:
             # Access overall dict's status key (overall is a dict, not an object)
-            overall_status = migration_result.overall.get("status", "unknown") if hasattr(migration_result, "overall") else "unknown"
+            overall_status = (
+                migration_result.overall.get("status", "unknown") if hasattr(migration_result, "overall") else "unknown"
+            )
 
             # Show summary header based on status
             if overall_status == "success":

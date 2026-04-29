@@ -379,7 +379,8 @@ class ProjectMigration(BaseMigration):
         self._persist_project_metadata(op_project_id, jira_project)
 
     def _bulk_post_project_setup(
-        self, projects: list[tuple[int, dict[str, Any]]],
+        self,
+        projects: list[tuple[int, dict[str, Any]]],
     ) -> dict[str, Any]:
         """Perform post-project setup for multiple projects in bulk.
 
@@ -408,66 +409,80 @@ class ProjectMigration(BaseMigration):
             if lead_login:
                 op_user_id = self._lookup_op_user_id(lead_login)
                 if op_user_id:
-                    attributes_data.append({
-                        "project_id": op_id,
-                        "name": PROJECT_LEAD_CF_NAME,
-                        "value": str(op_user_id),
-                        "field_format": "user",
-                    })
+                    attributes_data.append(
+                        {
+                            "project_id": op_id,
+                            "name": PROJECT_LEAD_CF_NAME,
+                            "value": str(op_user_id),
+                            "field_format": "user",
+                        },
+                    )
                 else:
                     safe_value = self._sanitize_cf_value(lead_login)
-                    attributes_data.append({
-                        "project_id": op_id,
-                        "name": PROJECT_LEAD_CF_NAME,
-                        "value": safe_value,
-                        "field_format": "string",
-                    })
+                    attributes_data.append(
+                        {
+                            "project_id": op_id,
+                            "name": PROJECT_LEAD_CF_NAME,
+                            "value": safe_value,
+                            "field_format": "string",
+                        },
+                    )
                 if lead_display:
                     safe_display = self._sanitize_cf_value(lead_display)
-                    attributes_data.append({
-                        "project_id": op_id,
-                        "name": PROJECT_LEAD_DISPLAY_CF_NAME,
-                        "value": safe_display,
-                        "field_format": "string",
-                    })
+                    attributes_data.append(
+                        {
+                            "project_id": op_id,
+                            "name": PROJECT_LEAD_DISPLAY_CF_NAME,
+                            "value": safe_display,
+                            "field_format": "string",
+                        },
+                    )
 
             # Metadata fields
             category_name = jira_project.get("project_category_name") or ""
             if category_name:
-                attributes_data.append({
-                    "project_id": op_id,
-                    "name": PROJECT_CATEGORY_CF_NAME,
-                    "value": self._sanitize_cf_value(str(category_name)),
-                    "field_format": "string",
-                })
+                attributes_data.append(
+                    {
+                        "project_id": op_id,
+                        "name": PROJECT_CATEGORY_CF_NAME,
+                        "value": self._sanitize_cf_value(str(category_name)),
+                        "field_format": "string",
+                    },
+                )
 
             project_type_key = jira_project.get("project_type_key") or ""
             if project_type_key:
                 display_type = str(project_type_key).replace("_", " ").title()
-                attributes_data.append({
-                    "project_id": op_id,
-                    "name": PROJECT_TYPE_CF_NAME,
-                    "value": self._sanitize_cf_value(display_type),
-                    "field_format": "string",
-                })
+                attributes_data.append(
+                    {
+                        "project_id": op_id,
+                        "name": PROJECT_TYPE_CF_NAME,
+                        "value": self._sanitize_cf_value(display_type),
+                        "field_format": "string",
+                    },
+                )
 
             browse_url = jira_project.get("browse_url") or jira_project.get("url")
             if browse_url:
-                attributes_data.append({
-                    "project_id": op_id,
-                    "name": PROJECT_URL_CF_NAME,
-                    "value": self._sanitize_cf_value(str(browse_url)),
-                    "field_format": "string",
-                })
+                attributes_data.append(
+                    {
+                        "project_id": op_id,
+                        "name": PROJECT_URL_CF_NAME,
+                        "value": self._sanitize_cf_value(str(browse_url)),
+                        "field_format": "string",
+                    },
+                )
 
             avatar_url = jira_project.get("avatar_url")
             if avatar_url:
-                attributes_data.append({
-                    "project_id": op_id,
-                    "name": PROJECT_AVATAR_CF_NAME,
-                    "value": self._sanitize_cf_value(str(avatar_url)),
-                    "field_format": "string",
-                })
+                attributes_data.append(
+                    {
+                        "project_id": op_id,
+                        "name": PROJECT_AVATAR_CF_NAME,
+                        "value": self._sanitize_cf_value(str(avatar_url)),
+                        "field_format": "string",
+                    },
+                )
 
         # Execute bulk operations
         modules_result = {"processed": 0, "failed": 0}

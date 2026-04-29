@@ -32,7 +32,10 @@ def run(cmd: list[str]) -> None:
 
 def session_exists(name: str) -> bool:
     result = subprocess.run(
-        ["tmux", "has-session", "-t", name], check=False, capture_output=True, text=True,
+        ["tmux", "has-session", "-t", name],
+        check=False,
+        capture_output=True,
+        text=True,
     )
     return result.returncode == 0
 
@@ -118,5 +121,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

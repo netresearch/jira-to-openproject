@@ -2,23 +2,34 @@
 """Check if the 10 test work packages exist using a simpler Rails console approach."""
 
 import sys
-sys.path.insert(0, '/home/sme/p/j2o/src')
+
+sys.path.insert(0, "/home/sme/p/j2o/src")
 
 from clients.openproject_client import OpenProjectClient
 
+
 def check_work_packages():
     """Query OpenProject to check if test work packages exist."""
-    
     op = OpenProjectClient()
-    
+
     print("=" * 70)
     print("CHECKING WORK PACKAGE EXISTENCE")
     print("=" * 70)
-    
+
     # Test issue keys from the integration test
-    test_keys = ["NRS-171", "NRS-182", "NRS-191", "NRS-198", "NRS-204",
-                 "NRS-42", "NRS-59", "NRS-66", "NRS-982", "NRS-4003"]
-    
+    test_keys = [
+        "NRS-171",
+        "NRS-182",
+        "NRS-191",
+        "NRS-198",
+        "NRS-204",
+        "NRS-42",
+        "NRS-59",
+        "NRS-66",
+        "NRS-982",
+        "NRS-4003",
+    ]
+
     # Simple Ruby script using basic string interpolation
     ruby_script = """
 test_keys = ['NRS-171', 'NRS-182', 'NRS-191', 'NRS-198', 'NRS-204', 'NRS-42', 'NRS-59', 'NRS-66', 'NRS-982', 'NRS-4003']
@@ -61,20 +72,21 @@ if not_found.any?
   puts "Missing: #{not_found.join(', ')}"
 end
 """
-    
+
     print("\nQuerying OpenProject...")
     print("-" * 70)
-    
+
     result = op.execute_large_query_to_json_file(ruby_script)
-    
+
     if result:
         print(result)
     else:
         print("ERROR: Failed to query OpenProject - no result returned")
         return None
-    
+
     print("=" * 70)
     return result
+
 
 if __name__ == "__main__":
     check_work_packages()

@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""
-Comprehensive test for 10 NRS issues including known problematic ones.
+"""Comprehensive test for 10 NRS issues including known problematic ones.
 Tests Bug #10, #15, and #16 fixes with enhanced logging.
 """
 
-import sys
-import time
-import subprocess
-import tempfile
 import os
+import subprocess
+import sys
+import tempfile
+import time
 from datetime import datetime
 
 sys.path.insert(0, "/home/sme/p/j2o")
 
-from src.migrations.work_package_migration import WorkPackageMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.config import logger
+from src.migrations.work_package_migration import WorkPackageMigration
 
 # Test issues - including known problematic ones from Bug #10
 TEST_ISSUES = [
@@ -25,11 +24,11 @@ TEST_ISSUES = [
     "NRS-191",  # From previous successful tests
     "NRS-198",  # From previous successful tests
     "NRS-204",  # From previous successful tests
-    "NRS-42",   # Known Bug #10 issue (due_date 3 days before start_date)
-    "NRS-59",   # Known Bug #10 issue (due_date 1 day before start_date)
-    "NRS-66",   # Known Bug #10 issue (due_date 9 days before start_date)
+    "NRS-42",  # Known Bug #10 issue (due_date 3 days before start_date)
+    "NRS-59",  # Known Bug #10 issue (due_date 1 day before start_date)
+    "NRS-66",  # Known Bug #10 issue (due_date 9 days before start_date)
     "NRS-982",  # Known Bug #10 issue (due_date 10 days before start_date)
-    "NRS-4003", # Known Bug #10 issue (due_date 2 YEARS before start_date - extreme case)
+    "NRS-4003",  # Known Bug #10 issue (due_date 2 YEARS before start_date - extreme case)
 ]
 
 print("=" * 80)
@@ -66,8 +65,8 @@ print("-" * 80)
 for issue in issues:
     key = issue.key
     summary = issue.fields.summary
-    start_date = getattr(issue.fields, 'customfield_11490', None)  # Start date field
-    due_date = getattr(issue.fields, 'duedate', None)
+    start_date = getattr(issue.fields, "customfield_11490", None)  # Start date field
+    due_date = getattr(issue.fields, "duedate", None)
 
     # Check for Bug #10 date constraint violation
     date_status = "✓ OK"
@@ -75,8 +74,8 @@ for issue in issues:
         date_status = f"⚠ INVALID (due={due_date} < start={start_date})"
 
     # Count comments and changelog
-    comment_count = issue.fields.comment.total if hasattr(issue.fields, 'comment') else 0
-    changelog_count = len(getattr(issue, 'changelog', {}).get('histories', []))
+    comment_count = issue.fields.comment.total if hasattr(issue.fields, "comment") else 0
+    changelog_count = len(getattr(issue, "changelog", {}).get("histories", []))
 
     print(f"{key:10s} | {date_status:40s} | Comments: {comment_count:2d} | Changelog: {changelog_count:3d}")
     print(f"           | {summary[:60]}")
@@ -86,7 +85,7 @@ print("-" * 80)
 # Check existing work packages in OpenProject before migration
 print("\nChecking OpenProject before migration...")
 snapshot = op.get_project_wp_cf_snapshot(303319)  # NRS project ID
-existing_wp_keys = [wp.get('jira_issue_key') for wp in snapshot if wp.get('jira_issue_key')]
+existing_wp_keys = [wp.get("jira_issue_key") for wp in snapshot if wp.get("jira_issue_key")]
 print(f"✓ Existing work packages with J2O keys: {len(existing_wp_keys)}")
 
 # Check which test issues already exist
@@ -111,7 +110,7 @@ try:
         project_keys=["NRS"],
         components=["work_packages"],
         dry_run=False,
-        max_issues=10  # Limit to 10 issues
+        max_issues=10,  # Limit to 10 issues
     )
 
     duration = time.time() - start_time
@@ -160,16 +159,17 @@ end
 puts "-" * 80
 """
 
-with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
     f.write(ruby_check_wps)
     ruby_file = f.name
 
 result = subprocess.run(
     f"cat {ruby_file} | ssh sobol.nr 'docker exec -i openproject-web-1 bundle exec rails runner -'",
+    check=False,
     shell=True,
     capture_output=True,
     text=True,
-    timeout=60
+    timeout=60,
 )
 
 print(result.stdout)
@@ -223,16 +223,17 @@ puts "  Success Rate: #{(total_comments > 0 ? 'PASS' : 'FAIL')}"
 puts "-" * 80
 """
 
-with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
     f.write(ruby_check_journals)
     ruby_file = f.name
 
 result = subprocess.run(
     f"cat {ruby_file} | ssh sobol.nr 'docker exec -i openproject-web-1 bundle exec rails runner -'",
+    check=False,
     shell=True,
     capture_output=True,
     text=True,
-    timeout=60
+    timeout=60,
 )
 
 print(result.stdout)
@@ -252,9 +253,10 @@ if log_files:
     # Check for ERROR and PG:: lines
     result = subprocess.run(
         f"tail -200 {latest_log} | grep -E 'ERROR|PG::|Exception|Traceback' | head -20",
+        check=False,
         shell=True,
         capture_output=True,
-        text=True
+        text=True,
     )
 
     if result.stdout:

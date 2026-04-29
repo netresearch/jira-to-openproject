@@ -10,8 +10,7 @@ class Issue:  # minimal stub for tests
 class JIRAError(Exception):
     pass
 
+
 # Provide jira.resources.Issue import path compatibility
 class resources:  # type: ignore
     Issue = Issue
-
-

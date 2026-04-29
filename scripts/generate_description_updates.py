@@ -1,17 +1,18 @@
 #!/usr/bin/env python
-"""
-Generate description updates JSON for NRS work packages.
+"""Generate description updates JSON for NRS work packages.
 Uses existing J2O infrastructure to fetch Jira descriptions and map to OpenProject WP IDs.
 """
+
 import json
-import sys
 import os
+import sys
 
 # Add project root to path
-sys.path.insert(0, '/home/sme/p/j2o')
+sys.path.insert(0, "/home/sme/p/j2o")
 
 from src.clients.jira_client import JiraClient
 from src.utils.markdown_converter import MarkdownConverter
+
 
 def main():
     print("=" * 60)
@@ -19,22 +20,22 @@ def main():
     print("=" * 60)
 
     # Load existing work package mapping
-    wp_mapping_file = '/home/sme/p/j2o/var/data/work_package_mapping.json'
+    wp_mapping_file = "/home/sme/p/j2o/var/data/work_package_mapping.json"
 
     print(f"\nLoading work package mapping from {wp_mapping_file}...")
     if not os.path.exists(wp_mapping_file):
         print(f"ERROR: Work package mapping file not found: {wp_mapping_file}")
         return 1
 
-    with open(wp_mapping_file, 'r') as f:
+    with open(wp_mapping_file) as f:
         wp_mapping = json.load(f)
 
     # Filter for NRS issues only - key is jira_id, but we need to filter by project_key
     # and create a lookup by jira_key for matching with fetched Jira issues
     nrs_mappings = {}
     for jira_id, data in wp_mapping.items():
-        if data.get('project_key') == 'NRS':
-            jira_key = data.get('jira_key')
+        if data.get("project_key") == "NRS":
+            jira_key = data.get("jira_key")
             if jira_key:
                 nrs_mappings[jira_key] = data
     print(f"Found {len(nrs_mappings)} NRS work packages in mapping")
@@ -52,7 +53,7 @@ def main():
 
     # Fetch all NRS issues with descriptions from Jira
     print("\nFetching NRS issues from Jira...")
-    jql = 'project = NRS ORDER BY key ASC'
+    jql = "project = NRS ORDER BY key ASC"
 
     # Fetch in batches
     all_issues = []
@@ -65,7 +66,7 @@ def main():
                 jql,
                 startAt=start_at,
                 maxResults=batch_size,
-                fields='description,key,summary'
+                fields="description,key,summary",
             )
             if not issues:
                 break
@@ -88,7 +89,7 @@ def main():
 
     for issue in all_issues:
         jira_key = issue.key
-        description = getattr(issue.fields, 'description', '') or ''
+        description = getattr(issue.fields, "description", "") or ""
 
         if not description:
             issues_without_desc += 1
@@ -108,34 +109,37 @@ def main():
             converted_desc = description
 
         if converted_desc:
-            op_wp_id = nrs_mappings[jira_key].get('openproject_id')
+            op_wp_id = nrs_mappings[jira_key].get("openproject_id")
             if op_wp_id:
-                updates.append({
-                    'jira_key': jira_key,
-                    'wp_id': op_wp_id,
-                    'description': converted_desc,
-                    'description_length': len(converted_desc)
-                })
+                updates.append(
+                    {
+                        "jira_key": jira_key,
+                        "wp_id": op_wp_id,
+                        "description": converted_desc,
+                        "description_length": len(converted_desc),
+                    },
+                )
 
-    print(f"\nStatistics:")
+    print("\nStatistics:")
     print(f"  Issues with description: {issues_with_desc}")
     print(f"  Issues without description: {issues_without_desc}")
     print(f"  Issues not in mapping: {issues_not_in_mapping}")
     print(f"  Updates to apply: {len(updates)}")
 
     # Save to JSON file
-    output_file = '/home/sme/p/j2o/var/data/nrs_description_updates.json'
-    with open(output_file, 'w') as f:
+    output_file = "/home/sme/p/j2o/var/data/nrs_description_updates.json"
+    with open(output_file, "w") as f:
         json.dump(updates, f, indent=2)
     print(f"\nSaved updates to {output_file}")
 
     # Also save to /tmp for the Ruby script
-    tmp_file = '/tmp/nrs_description_updates.json'
-    with open(tmp_file, 'w') as f:
+    tmp_file = "/tmp/nrs_description_updates.json"
+    with open(tmp_file, "w") as f:
         json.dump(updates, f, indent=2)
     print(f"Copied to {tmp_file}")
 
     return 0
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     sys.exit(main())

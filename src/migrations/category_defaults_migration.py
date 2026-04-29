@@ -51,7 +51,7 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
         # Expect jira_client.get_project_components(project_key) to yield components with 'name' and 'lead' (name/mail)
         proj_map = self.mappings.get_mapping("project") or {}
         components_by_project: dict[str, list[dict[str, Any]]] = {}
-        for jira_key in (proj_map or {}):
+        for jira_key in proj_map or {}:
             try:
                 comps = self.jira_client.get_project_components(jira_key)  # type: ignore[attr-defined]
                 if isinstance(comps, list) and comps:

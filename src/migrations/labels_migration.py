@@ -93,11 +93,13 @@ class LabelsMigration(BaseMigration):  # noqa: D101
             project_id = entry.get("openproject_project_id")
             if project_id:
                 projects_with_values.add(int(project_id))
-            cf_values_to_set.append({
-                "work_package_id": wp_id,
-                "custom_field_id": cf_id,
-                "value": text,
-            })
+            cf_values_to_set.append(
+                {
+                    "work_package_id": wp_id,
+                    "custom_field_id": cf_id,
+                    "value": text,
+                },
+            )
 
         # Bulk set all CF values in single Rails call
         updated = 0

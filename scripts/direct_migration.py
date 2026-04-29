@@ -26,5 +26,5 @@ migration = WorkPackageMigration(jira_client, op_client)
 print("Starting direct migration (bypassing change detection)...")
 result = migration._migrate_work_packages()
 
-print(f"\nMigration complete!")
+print("\nMigration complete!")
 print(f"Results: {result}")

@@ -491,10 +491,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         # Extract jira info before sending to batch (we remove _ prefixed keys)
         jira_info = [(p["_jira_id"], p["_jira_key"]) for p in payloads]
-        clean_payloads = [
-            {k: v for k, v in p.items() if not k.startswith("_")}
-            for p in payloads
-        ]
+        clean_payloads = [{k: v for k, v in p.items() if not k.startswith("_")} for p in payloads]
 
         try:
             # Call _create_work_packages_batch directly (returns dict, not list)
@@ -626,7 +623,8 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 # Process batch when full
                 if len(batch_payloads) >= self.batch_size:
                     created, failed, mappings = self._create_skeletons_batch(
-                        batch_payloads, project_key,
+                        batch_payloads,
+                        project_key,
                     )
                     project_results["created"] += created
                     project_results["failed"] += failed
@@ -654,7 +652,8 @@ class WorkPackageSkeletonMigration(BaseMigration):
             # Process remaining items in last batch
             if batch_payloads:
                 created, failed, mappings = self._create_skeletons_batch(
-                    batch_payloads, project_key,
+                    batch_payloads,
+                    project_key,
                 )
                 project_results["created"] += created
                 project_results["failed"] += failed
