@@ -52,7 +52,10 @@ RUN uv pip install --system . && \
 
 USER appuser
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import src; import pytest; import sys; sys.exit(0)" || exit 1
+# Test image is also long-running (`sleep infinity`) — the healthcheck
+# verifies pytest can collect from the test suite. A 0-test result still
+# counts as healthy; a collection error or missing pytest does not.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=20s --retries=3 \
+    CMD pytest --collect-only -q tests/unit > /dev/null 2>&1 || exit 1
 
 CMD ["sleep", "infinity"]

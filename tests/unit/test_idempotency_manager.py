@@ -14,9 +14,11 @@ Tests cover:
 import json
 import threading
 import time
+from collections.abc import Generator
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+import pytest
 from redis.exceptions import RedisError
 
 from src.utils.idempotency_manager import (
@@ -29,34 +31,37 @@ from src.utils.idempotency_manager import (
 class TestIdempotencyKeyManager:
     """Test suite for IdempotencyKeyManager."""
 
-    def setup_method(self) -> None:
-        """Set up test fixtures backed by a fakeredis server.
+    @pytest.fixture(autouse=True)
+    def _fake_redis(self) -> Generator[None]:
+        """Back IdempotencyKeyManager with fakeredis for the duration of one test.
 
         The Redis-aware tests below `patch.object(self.manager._redis_client, ...)`
         per-method, so the shared client just needs to let the non-Redis tests
         (TTL behaviour, fallback cache, singleton) exercise their paths without
         raising. `fakeredis` provides an in-memory Redis that satisfies the
         `redis.Redis` surface without needing a running server.
+
+        Using an autouse fixture (instead of setUp/tearDown) lets pytest
+        guarantee `patch().stop()` runs even if the manager constructor
+        raises, avoiding leaked patches across tests.
         """
         import fakeredis
 
         reset_idempotency_manager()
-        self._fake_redis_patcher = patch(
+        with patch(
             "redis.Redis.from_url",
             return_value=fakeredis.FakeRedis(decode_responses=True),
-        )
-        self._fake_redis_patcher.start()
-        self.manager = IdempotencyKeyManager(
-            redis_url="redis://localhost:6379",
-            fallback_cache_size=100,
-            default_ttl=3600,
-        )
-
-    def teardown_method(self) -> None:
-        """Clean up test fixtures."""
-        self.manager.clear_cache()
-        reset_idempotency_manager()
-        self._fake_redis_patcher.stop()
+        ):
+            self.manager = IdempotencyKeyManager(
+                redis_url="redis://localhost:6379",
+                fallback_cache_size=100,
+                default_ttl=3600,
+            )
+            try:
+                yield
+            finally:
+                self.manager.clear_cache()
+                reset_idempotency_manager()
 
     def test_parse_idempotency_key_from_headers(self) -> None:
         """Test parsing idempotency key from headers."""

@@ -91,17 +91,19 @@ def _import_real_jira_module() -> Any:
                     if key == "jira" or key.startswith("jira."):
                         sys.modules.pop(key, None)
 
-        # Prefer virtualenv site-packages path
+        # Prefer virtualenv site-packages path. site.getsitepackages() can
+        # raise AttributeError on bare/embedded interpreters; OSError covers
+        # the rare case where the path lookup itself fails.
         candidates: list[_Path] = []
         try:
             candidates.extend(_Path(p) for p in site.getsitepackages())
-        except Exception:
+        except (AttributeError, OSError):
             pass
         try:
             usp = site.getusersitepackages()
             if usp:
                 candidates.append(_Path(usp))
-        except Exception:
+        except (AttributeError, OSError):
             pass
 
         for base in candidates:
@@ -118,7 +120,12 @@ def _import_real_jira_module() -> Any:
 
         # Fallback: regular import (may still hit stub if unresolved)
         return importlib.import_module("jira")
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError, OSError):
+        # ImportError / ModuleNotFoundError: jira package missing or corrupt.
+        # AttributeError: site module missing expected accessors.
+        # OSError: filesystem error walking site-packages.
+        # In every case, fall back to the standard import path; that either
+        # succeeds or raises ImportError, which the caller already expects.
         import importlib
 
         return importlib.import_module("jira")

@@ -94,8 +94,11 @@ jobs:
           path: coverage.xml
           if-no-files-found: ignore
 
+  # Job name intentionally left implicit so the reported check is
+  # `container-tests` (the job ID), matching the existing branch-protection
+  # required-status-check rule. The previous workflow used the same name;
+  # renaming it here would orphan the protection rule.
   container-tests:
-    name: Container tests
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -68,7 +68,11 @@ COPY --from=build --chown=appuser:appuser /app /app
 
 USER appuser
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import src; import sys; sys.exit(0)" || exit 1
+# The container's CMD is `sleep infinity` — operators exec `j2o ...`
+# against it. The healthcheck exercises the actual CLI entry point so a
+# broken package install, missing dependency, or import-time crash flips
+# the container to unhealthy.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD j2o --help > /dev/null 2>&1 || exit 1
 
 CMD ["sleep", "infinity"]
