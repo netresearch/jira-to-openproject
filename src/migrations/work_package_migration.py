@@ -862,9 +862,16 @@ class WorkPackageMigration(BaseMigration):
             except Exception:
                 statuses = []
 
+        # Defensive: a misconfigured client (or a Mock-returning fixture in
+        # tests) can deliver something that isn't list-shaped here. Treat
+        # anything that isn't a list as "no data" rather than raising on
+        # iteration.
+        if not isinstance(statuses, list):
+            statuses = []
+
         id_lookup: dict[str, dict[str, Any]] = {}
         name_lookup: dict[str, dict[str, Any]] = {}
-        for status in statuses or []:
+        for status in statuses:
             if not isinstance(status, dict):
                 continue
             status_id = str(status.get("id") or "").strip()
