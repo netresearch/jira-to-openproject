@@ -351,6 +351,25 @@ class BaseMigration:
         """
         return ChangeAwareRunner(self).run(entity_type)
 
+    def _auto_detect_entity_type(self) -> str | None:
+        """Resolve the migration class's primary entity type via the registry.
+
+        Direct call to ``EntityTypeRegistry.resolve`` — does not go via
+        ``ChangeAwareRunner`` because tests instantiate migrations with a
+        minimal ``__init__`` that doesn't set ``change_detector`` or
+        ``entity_cache``, and this method only needs the registry.
+        """
+        try:
+            return EntityTypeRegistry.resolve(type(self))
+        except ValueError as e:
+            self.logger.warning(
+                "Migration class %s is not registered with EntityTypeRegistry. "
+                "Add @register_entity_types decorator to the class. Error: %s",
+                self.__class__.__name__,
+                e,
+            )
+            return None
+
     def _json_store(self) -> JsonStore:
         """Return the bound JsonStore, building one on demand if ``__init__`` was bypassed.
 
