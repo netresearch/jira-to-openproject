@@ -211,6 +211,10 @@ class TestDuplicateResolutionPrevention:
             return True
 
         client.execute_query = track_query
+        # CF helpers moved from BaseMigration to OpenProjectClient in
+        # ADR-002 phase 1.3. The base helper now delegates to these.
+        client.ensure_wp_custom_field_id = Mock(return_value=99)
+        client.enable_custom_field_for_projects = Mock(return_value=None)
         return client
 
     @pytest.fixture
@@ -357,17 +361,26 @@ class TestCustomFieldProjectEnablement:
     def test_custom_field_uses_is_for_all_false(self):
         """Verify custom fields now use is_for_all: false.
 
-        FIX VERIFIED: Custom fields are created with selective enablement
-        via the shared BaseMigration._ensure_wp_custom_field method.
+        FIX VERIFIED: Custom fields are created with selective enablement.
+        After Phase 1.3 of ADR-002 the Ruby script lives on
+        ``OpenProjectClient.ensure_wp_custom_field_id``; ``BaseMigration``'s
+        ``_ensure_wp_custom_field`` is a thin delegator over it.
+
+        Reads the source file directly because conftest.py monkeypatches
+        ``OpenProjectClient`` on the module.
         """
-        import inspect
+        from pathlib import Path
 
-        from src.migrations.base_migration import BaseMigration
+        src_path = Path(__file__).resolve().parents[2] / "src" / "clients" / "openproject_client.py"
+        text = src_path.read_text(encoding="utf-8")
 
-        source = inspect.getsource(BaseMigration._ensure_wp_custom_field)
+        method_start = text.find("def ensure_wp_custom_field_id(")
+        assert method_start != -1, "OpenProjectClient.ensure_wp_custom_field_id not found"
+        method_end = text.find("\n    def ", method_start + 1)
+        method_source = text[method_start:method_end]
 
-        assert "is_for_all: false" in source, (
-            "BaseMigration._ensure_wp_custom_field should use is_for_all: false for selective project enablement"
+        assert "is_for_all: false" in method_source, (
+            "OpenProjectClient.ensure_wp_custom_field_id should use is_for_all: false for selective project enablement"
         )
 
     def test_custom_field_has_enable_method(self):

@@ -16,22 +16,34 @@ References:
 
 """
 
-import inspect
-
 
 class TestSelectiveProjectEnablementVerification:
     """Verify the shared _ensure_wp_custom_field uses is_for_all=false."""
 
     def test_base_ensure_wp_custom_field_uses_is_for_all_false(self):
-        """Verify shared BaseMigration._ensure_wp_custom_field uses is_for_all: false.
+        """Verify the shared CF-creation helper uses is_for_all: false.
 
-        All CF-creating migrations now delegate to this single base method.
+        ``BaseMigration._ensure_wp_custom_field`` is now a thin delegator over
+        ``OpenProjectClient.ensure_wp_custom_field_id`` (Phase 1.3 of ADR-002),
+        so the Ruby script — and the ``is_for_all: false`` invariant — lives
+        on the client. CF-creating migrations still call
+        ``self._ensure_wp_custom_field(...)``; the delegator routes through.
+
+        Reads the source file directly because conftest.py monkeypatches
+        ``OpenProjectClient`` on the module, replacing the class with a
+        mock-factory lambda for the lifetime of the test session.
         """
-        from src.migrations.base_migration import BaseMigration
+        from pathlib import Path
 
-        source = inspect.getsource(BaseMigration._ensure_wp_custom_field)
-        assert "is_for_all: false" in source, (
-            "BaseMigration._ensure_wp_custom_field should use is_for_all: false for selective project enablement"
+        src_path = Path(__file__).resolve().parents[2] / "src" / "clients" / "openproject_client.py"
+        text = src_path.read_text(encoding="utf-8")
+
+        method_start = text.find("def ensure_wp_custom_field_id(")
+        assert method_start != -1, "OpenProjectClient.ensure_wp_custom_field_id not found"
+        method_end = text.find("\n    def ", method_start + 1)
+        method_source = text[method_start:method_end]
+        assert "is_for_all: false" in method_source, (
+            "OpenProjectClient.ensure_wp_custom_field_id should use is_for_all: false for selective project enablement"
         )
 
     def test_all_cf_migrations_use_shared_ensure_method(self):

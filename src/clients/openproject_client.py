@@ -1781,6 +1781,82 @@ class OpenProjectClient:
             msg = f"Failed to ensure custom field '{name}' ({cf_type}): {e}"
             raise QueryExecutionError(msg) from e
 
+    def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
+        """Ensure a WorkPackageCustomField exists, returning its ID.
+
+        Unlike :py:meth:`ensure_work_package_custom_field` (which uses
+        ``is_for_all: true`` and returns the full CF dict), this variant
+        creates the CF with ``is_for_all: false`` so the caller can then
+        selectively enable it on specific projects via
+        :py:meth:`enable_custom_field_for_projects`. Returns just the ID.
+
+        Migration components that need per-project CF enablement
+        (Labels, AffectsVersions, StoryPoints, Sprint/Epic, etc.) call this.
+
+        Args:
+            name: Custom field display name
+            field_format: Rails field format (string, text, int, float, etc.)
+
+        Returns:
+            Custom field ID, or 0 if creation failed.
+
+        """
+        try:
+            cf = self.get_custom_field_by_name(name)
+            cf_id = int(cf.get("id", 0) or 0) if isinstance(cf, dict) else None
+            if cf_id:
+                return cf_id
+        except Exception:
+            self.logger.info("CF '%s' not found; will create (format=%s)", name, field_format)
+
+        escaped = escape_ruby_single_quoted(name)
+        script = (
+            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escaped}'); "
+            f"if !cf; cf = CustomField.new(name: '{escaped}', field_format: '{field_format}', "
+            f"is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
+        )
+        result = self.execute_query(script)
+        return int(result) if result else 0
+
+    def enable_custom_field_for_projects(
+        self,
+        cf_id: int,
+        project_ids: set[int],
+        cf_name: str | None = None,
+    ) -> None:
+        """Enable a custom field for specific projects only.
+
+        Pairs with :py:meth:`ensure_wp_custom_field_id` (which creates the
+        CF with ``is_for_all: false``). Idempotent: uses ``find_or_create_by!``
+        on the join table.
+
+        Args:
+            cf_id: Custom field ID
+            project_ids: Set of project IDs to enable the field for
+            cf_name: Optional display name for logging
+
+        """
+        if not project_ids:
+            return
+        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
+        script = (
+            f"cf = CustomField.find({cf_id})\n"
+            f"[{project_ids_str}].each do |pid|\n"
+            f"  begin\n"
+            f"    project = Project.find(pid)\n"
+            f"    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)\n"
+            f"  rescue ActiveRecord::RecordNotFound\n"
+            f"  end\n"
+            f"end\n"
+            f"true"
+        )
+        try:
+            self.execute_query(script)
+            display = cf_name or str(cf_id)
+            self.logger.info("Enabled %s CF for %d projects", display, len(project_ids))
+        except Exception:
+            self.logger.warning("Failed to enable CF for some projects")
+
     def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
         """Remove CustomField records matching the provided name/type."""
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
