@@ -1120,6 +1120,19 @@ class TestCompleteMigrationWorkflow:
 
             start_time = time.time()
 
+            # Seed the mappings the work_packages preflight requires so the
+            # test runs the same way regardless of whatever happens to live
+            # in var/data on the developer host. (CI starts with an empty
+            # var/data, so the preflight aborts the run unless these are
+            # populated up-front.)
+            from src import config as _cfg
+
+            _cfg.mappings.set_mapping("project", {"TEST": {"openproject_id": 1}})
+            _cfg.mappings.set_mapping("user", {"alice": {"openproject_id": 1}})
+            _cfg.mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
+            _cfg.mappings.set_mapping("issue_type_id", {"1": 1})
+            _cfg.mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
+
             with (
                 patch(
                     "src.config.migration_config",
@@ -1251,6 +1264,16 @@ class TestCompleteMigrationWorkflow:
             mock_op.create_user.side_effect = track_users_call
             mock_op.create_project.side_effect = track_projects_call
             mock_op.create_work_package.side_effect = track_work_packages_call
+
+            # See note in test_large_dataset_migration: seed the preflight
+            # mappings so this test runs identically locally and in CI.
+            from src import config as _cfg
+
+            _cfg.mappings.set_mapping("project", {"TEST": {"openproject_id": 1}})
+            _cfg.mappings.set_mapping("user", {"alice": {"openproject_id": 1}})
+            _cfg.mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
+            _cfg.mappings.set_mapping("issue_type_id", {"1": 1})
+            _cfg.mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
 
             with (
                 patch(
