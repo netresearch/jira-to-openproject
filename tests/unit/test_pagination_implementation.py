@@ -10,7 +10,7 @@ import pytest
 
 try:
     from jira.resources import Issue  # type: ignore
-except (ImportError, AttributeError):  # pragma: no cover - fallback when jira package layout changes
+except ImportError, AttributeError:  # pragma: no cover - fallback when jira package layout changes
 
     class Issue:  # type: ignore[misc]
         pass

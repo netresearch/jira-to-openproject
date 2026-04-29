@@ -814,7 +814,7 @@ async def run_migration(
                         from src.migrations.base_migration import EntityTypeRegistry
 
                         entity_type = EntityTypeRegistry.resolve(component.__class__)
-                    except (ValueError, AttributeError):
+                    except ValueError, AttributeError:
                         # If entity type can't be resolved, run_with_change_detection will fall back to run()
                         pass
 
@@ -1255,7 +1255,7 @@ def setup_tmux_session() -> bool:
         )
 
         return True
-    except (subprocess.SubprocessError, FileNotFoundError):
+    except subprocess.SubprocessError, FileNotFoundError:
         config.logger.error("tmux is not installed or not available in PATH")
         config.logger.info("Please install tmux first:")
         config.logger.info("  On Ubuntu/Debian: sudo apt-get install tmux")

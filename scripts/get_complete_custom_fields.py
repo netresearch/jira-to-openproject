@@ -154,7 +154,7 @@ def get_complete_custom_fields(
             try:
                 field_count = int(line.split(":")[1].strip())
                 print(f"Found {field_count} custom fields")
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 print("Could not parse field count")
 
         elif line.startswith("FIELD #"):

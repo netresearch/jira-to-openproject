@@ -308,6 +308,7 @@ class BaseMigration:
             MigrationError: If API call fails and no cached data available
 
         """
+
         def _fetch(name: str) -> list[dict[str, Any]]:
             try:
                 return self._get_current_entities_for_type(name)

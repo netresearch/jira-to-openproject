@@ -69,7 +69,7 @@ def parse_custom_fields(output: str) -> list[dict[str, Any]]:
                 }
 
                 fields.append(field)
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 # Skip lines that don't match the expected format
                 pass
 

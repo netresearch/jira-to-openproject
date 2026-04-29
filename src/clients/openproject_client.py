@@ -560,7 +560,7 @@ class OpenProjectClient:
         # Try to parse as JSON if possible, otherwise return as dict with result key
         try:
             return json.loads(result)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             return {"result": result}
 
     def execute_script_with_data(
