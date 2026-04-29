@@ -10,9 +10,10 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
-from src.models import ComponentResult, MigrationError
+from src.models import ComponentResult
 
 # Import dependencies
+from src.utils.change_aware_runner import ChangeAwareRunner
 from src.utils.change_detector import ChangeDetector, ChangeReport
 from src.utils.entity_cache import EntityCache
 from src.utils.json_store import JsonStore
@@ -285,45 +286,6 @@ class BaseMigration:
         """Check if batch operations are available."""
         return self.has_enhanced_jira or self.has_enhanced_openproject
 
-    def _get_cached_entities_threadsafe(
-        self,
-        entity_type: str,
-        cache_invalidated: set[str],
-        entity_cache: dict[str, list[dict[str, Any]]],
-    ) -> list[dict[str, Any]]:
-        """Thread-safe cached entity retrieval with size limits and error handling.
-
-        Delegates the cache mechanics to ``self.entity_cache`` while wrapping the
-        fetcher to translate any underlying exception into a ``MigrationError``.
-
-        Args:
-            entity_type: Type of entities to retrieve
-            cache_invalidated: Set of invalidated cache types
-            entity_cache: Local cache for this migration run
-
-        Returns:
-            List of entities from cache or fresh API call
-
-        Raises:
-            MigrationError: If API call fails and no cached data available
-
-        """
-
-        def _fetch(name: str) -> list[dict[str, Any]]:
-            try:
-                return self._get_current_entities_for_type(name)
-            except Exception as e:
-                self.logger.exception("Failed to fetch entities for %s", name)
-                msg = f"API call failed for {name}: {e}"
-                raise MigrationError(msg) from e
-
-        return self.entity_cache.get_or_fetch(
-            entity_type,
-            _fetch,
-            local=entity_cache,
-            invalidated=cache_invalidated,
-        )
-
     def detect_changes(
         self,
         current_entities: list[dict[str, Any]],
@@ -331,13 +293,7 @@ class BaseMigration:
     ) -> ChangeReport:
         """Detect changes in entities since the last migration run.
 
-        Args:
-            current_entities: Current entities from Jira
-            entity_type: Type of entities being compared
-
-        Returns:
-            Change detection report
-
+        Thin delegator over ``self.change_detector``.
         """
         return self.change_detector.detect_changes(current_entities, entity_type)
 
@@ -348,19 +304,13 @@ class BaseMigration:
     ) -> Path:
         """Create a snapshot of entities after successful migration.
 
-        Args:
-            entities: List of entities to snapshot
-            entity_type: Type of entities
-
-        Returns:
-            Path to the created snapshot file
-
+        Thin delegator over ``self.change_detector`` that fills in this
+        migration's class name as the component label.
         """
-        migration_component = self.__class__.__name__
         return self.change_detector.create_snapshot(
             entities,
             entity_type,
-            migration_component,
+            self.__class__.__name__,
         )
 
     def should_skip_migration(
@@ -370,98 +320,25 @@ class BaseMigration:
     ) -> tuple[bool, ChangeReport | None]:
         """Check if migration should be skipped based on change detection.
 
-        This method allows migration components to check if there are any changes
-        before performing expensive migration operations.
-
-        Args:
-            entity_type: Type of entities to check for changes
-            cache_func: Optional function to use for cached entity retrieval
-
-        Returns:
-            Tuple of (should_skip, change_report). should_skip is True if no changes
-            are detected and migration can be skipped.
-
+        Delegates to ``ChangeAwareRunner`` so the implementation lives in one
+        place. Subclasses (notably ``CompanyMigration``) override this to add
+        component-specific skip logic and call ``super().should_skip_migration``
+        — that override-and-super pattern still works because this method
+        keeps the same signature and contract.
         """
-        try:
-            # Get current entities from Jira for the specific entity type
-            self.logger.info(
-                f"Starting change detection for {entity_type} - fetching current entities from Jira",
-            )
-            if cache_func:
-                current_entities = cache_func(entity_type)
-            else:
-                current_entities = self._get_current_entities_for_type(entity_type)
-
-            self.logger.info(
-                f"Fetched {len(current_entities)} current entities for {entity_type}",
-            )
-
-            # Detect changes
-            self.logger.info(f"Running change detection for {entity_type}")
-            change_report = self.detect_changes(current_entities, entity_type)
-
-            # Log detailed change detection results
-            summary = change_report.get("summary", {})
-            self.logger.info(
-                f"Change detection results for {entity_type}: "
-                f"baseline={summary.get('baseline_entity_count', 0)}, "
-                f"current={summary.get('current_entity_count', 0)}, "
-                f"created={summary.get('entities_created', 0)}, "
-                f"updated={summary.get('entities_updated', 0)}, "
-                f"deleted={summary.get('entities_deleted', 0)}, "
-                f"total_changes={change_report.get('total_changes', 0)}",
-            )
-
-            # If no changes detected, migration can be skipped
-            should_skip = change_report["total_changes"] == 0
-
-            if should_skip:
-                self.logger.info(
-                    "✓ No changes detected for %s, skipping migration (efficient!)",
-                    entity_type,
-                )
-            else:
-                self.logger.info(
-                    "⚠ Detected %d changes for %s: %s - proceeding with migration",
-                    change_report["total_changes"],
-                    entity_type,
-                    change_report["changes_by_type"],
-                )
-
-            return should_skip, change_report
-
-        except Exception as e:
-            # If change detection fails, proceed with migration to be safe
-            self.logger.warning(
-                "Change detection failed for %s: %s. Proceeding with migration.",
-                entity_type,
-                e,
-            )
-            return False, None
+        return ChangeAwareRunner(self).should_skip(entity_type, cache_func)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities from Jira for a specific type.
 
         This method should be overridden by subclasses to provide entity-specific
         retrieval logic.
-
-        Args:
-            entity_type: Type of entities to retrieve
-
-        Returns:
-            List of current entities from Jira
-
-        Raises:
-            NotImplementedError: If subclass doesn't implement this method
-
         """
         msg = (
             f"Subclass {self.__class__.__name__} must implement _get_current_entities_for_type() "
             f"to support change detection for entity type: {entity_type}"
         )
-        raise NotImplementedError(
-            msg,
-        )
+        raise NotImplementedError(msg)
 
     def run_with_change_detection(
         self,
@@ -469,155 +346,10 @@ class BaseMigration:
     ) -> ComponentResult:
         """Run migration with change detection support and enhanced caching.
 
-        This method wraps the standard run() method with change detection hooks:
-        1. Check for changes before migration (using cached entities)
-        2. Run the actual migration if changes are detected
-        3. Create a snapshot after successful migration (using cached entities)
-
-        Args:
-            entity_type: Type of entities being migrated (required for change detection)
-
-        Returns:
-            ComponentResult with migration results
-
+        Delegates to ``ChangeAwareRunner`` which owns the workflow body
+        (cache isolation, skip-on-no-changes, run, snapshot).
         """
-        # If no entity type specified, run standard migration without change detection
-        if not entity_type:
-            self.logger.debug(
-                "No entity type specified, running migration without change detection",
-            )
-            return self.run()
-
-        # Initialize entity cache for this migration run
-        entity_cache: dict[str, list[dict[str, Any]]] = {}
-        cache_invalidated: set[str] = set()
-        total_cache_invalidations = 0
-
-        # Clear global cache to ensure isolation between migration runs
-        self.entity_cache.clear_global()
-
-        def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
-            """Get entities with enhanced thread-safe caching."""
-            return self._get_cached_entities_threadsafe(
-                type_name,
-                cache_invalidated,
-                entity_cache,
-            )
-
-        def invalidate_cache(type_name: str) -> None:
-            """Invalidate cache for a specific entity type."""
-            nonlocal total_cache_invalidations
-            cache_invalidated.add(type_name)
-            total_cache_invalidations += 1
-            self.entity_cache.invalidate(type_name)
-            self.logger.debug("Invalidated cache for entity type %s", type_name)
-
-        try:
-            # Check if migration should be skipped (using cached entities)
-            should_skip, change_report = self.should_skip_migration(
-                entity_type,
-                get_cached_entities,
-            )
-
-            if should_skip:
-                return ComponentResult(
-                    success=True,
-                    message=f"No changes detected for {entity_type}, migration skipped",
-                    details={
-                        "change_report": change_report,
-                        "cache_stats": {
-                            "types_cached": len(entity_cache),
-                            "cache_invalidations": total_cache_invalidations,
-                            "cache_hits": self.entity_cache.stats["hits"],
-                            "cache_misses": self.entity_cache.stats["misses"],
-                            "cache_evictions": self.entity_cache.stats["evictions"],
-                            "memory_cleanups": self.entity_cache.stats["memory_cleanups"],
-                            "total_cache_size": self.entity_cache.stats["total_size"],
-                            "global_cache_types": self.entity_cache.global_size(),
-                        },
-                    },
-                    success_count=0,
-                    failed_count=0,
-                    total_count=0,
-                )
-
-            # Run the actual migration
-            result = self.run()
-
-            # Invalidate cache after migration since entities may have been modified
-            if result.success and entity_type:
-                invalidate_cache(entity_type)
-
-            # If migration was successful, create a snapshot for future change detection
-            if result.success:
-                try:
-                    current_entities = get_cached_entities(entity_type)
-                    snapshot_path = self.create_snapshot(current_entities, entity_type)
-                    self.logger.info(
-                        "Created snapshot for %s: %s",
-                        entity_type,
-                        snapshot_path,
-                    )
-
-                    # Add snapshot info to result details
-                    if not result.details:
-                        result.details = {}
-                    result.details.update(
-                        {
-                            "snapshot_created": str(snapshot_path),
-                            "change_report": change_report,
-                            "cache_stats": {
-                                "types_cached": len(entity_cache),
-                                "cache_invalidations": total_cache_invalidations,
-                                "cache_hits": self.entity_cache.stats["hits"],
-                                "cache_misses": self.entity_cache.stats["misses"],
-                                "cache_evictions": self.entity_cache.stats["evictions"],
-                                "memory_cleanups": self.entity_cache.stats["memory_cleanups"],
-                                "total_cache_size": self.entity_cache.stats["total_size"],
-                                "global_cache_types": self.entity_cache.global_size(),
-                            },
-                        },
-                    )
-
-                except Exception as e:
-                    # Don't fail the migration if snapshot creation fails
-                    self.logger.warning(
-                        "Failed to create snapshot after successful migration: %s",
-                        e,
-                    )
-
-            return result
-
-        except Exception as e:
-            self.logger.exception("Error in change detection workflow: %s", e)
-            # Fall back to standard migration if change detection fails
-            return self.run()
-
-    def _auto_detect_entity_type(self) -> str | None:
-        """Auto-detect entity type using EntityTypeRegistry.
-
-        This method uses the EntityTypeRegistry to resolve the primary entity type
-        for this migration class, providing fail-fast behavior if the class is not
-        properly registered.
-
-        Returns:
-            Entity type string from the registry
-
-        Raises:
-            ValueError: If the migration class is not registered with EntityTypeRegistry
-
-        """
-        try:
-            return EntityTypeRegistry.resolve(self.__class__)
-        except ValueError as e:
-            # Log warning and provide helpful guidance
-            self.logger.warning(
-                "Migration class %s is not registered with EntityTypeRegistry. "
-                "Add @register_entity_types decorator to the class. Error: %s",
-                self.__class__.__name__,
-                e,
-            )
-            return None
+        return ChangeAwareRunner(self).run(entity_type)
 
     def _json_store(self) -> JsonStore:
         """Return the bound JsonStore, building one on demand if ``__init__`` was bypassed.
