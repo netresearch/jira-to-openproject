@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
@@ -16,6 +14,8 @@ from src.models import ComponentResult, MigrationError
 
 # Import dependencies
 from src.utils.change_detector import ChangeDetector, ChangeReport
+from src.utils.entity_cache import EntityCache
+from src.utils.json_store import JsonStore
 
 
 class EntityTypeRegistry:
@@ -195,32 +195,19 @@ class BaseMigration:
 
     Provides common functionality and initialization for all migration types.
 
-    Includes API call caching with thread safety and memory management.
+    Caching is delegated to ``EntityCache`` (see ``src.utils.entity_cache``).
 
     Follows the layered client architecture:
     1. OpenProjectClient - Manages all lower-level clients and operations
     2. BaseMigration - Uses OpenProjectClient for migrations
     """
 
-    # Cache configuration - production-ready limits
-    MAX_CACHE_SIZE_PER_TYPE = 1000  # Maximum entities per cache type
-    MAX_TOTAL_CACHE_SIZE = 5000  # Maximum total cached entities across all types
-    CACHE_CLEANUP_THRESHOLD = 0.8  # Cleanup when 80% full
-
-    # Cache statistics tracking
-    _global_cache_stats: ClassVar[dict[str, int]] = {
-        "total_hits": 0,
-        "total_misses": 0,
-        "total_evictions": 0,
-        "memory_cleanups": 0,
-    }
-    _global_cache_stats_lock: ClassVar[threading.Lock] = threading.Lock()
-
     def __init__(
         self,
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
         change_detector: ChangeDetector | None = None,
+        entity_cache: EntityCache | None = None,
     ) -> None:
         """Initialize the base migration with common attributes.
 
@@ -228,6 +215,8 @@ class BaseMigration:
             jira_client: Initialized Jira client
             op_client: Initialized OpenProject client
             change_detector: Initialized change detector for idempotent operations
+            entity_cache: Optional pre-built entity cache; otherwise a fresh one
+                is created.
 
         """
         # Initialize clients using dependency injection
@@ -256,16 +245,8 @@ class BaseMigration:
         # tests replace it via monkeypatch.setattr(cfg, "mappings", DummyMappings()).
         self.mappings = config.mappings
 
-        # Initialize thread-safe cache infrastructure for API call optimization
-        self._cache_lock = threading.RLock()
-        self._global_entity_cache: dict[str, list[dict[str, Any]]] = {}
-        self._cache_stats = {
-            "hits": 0,
-            "misses": 0,
-            "evictions": 0,
-            "memory_cleanups": 0,
-            "total_size": 0,
-        }
+        self.entity_cache = entity_cache or EntityCache(self.logger)
+        self.json_store = JsonStore(self.data_dir, self.logger)
 
         # Setup performance features for enhanced clients
         self._setup_performance_features()
@@ -304,46 +285,6 @@ class BaseMigration:
         """Check if batch operations are available."""
         return self.has_enhanced_jira or self.has_enhanced_openproject
 
-    def _cleanup_cache_if_needed(self) -> None:
-        """Clean up global cache if memory usage exceeds thresholds.
-
-        Implements LRU-like eviction strategy to prevent memory exhaustion.
-        Thread-safe implementation with comprehensive logging.
-        """
-        with self._cache_lock:
-            current_size = sum(len(entities) for entities in self._global_entity_cache.values())
-            self._cache_stats["total_size"] = current_size
-
-            if current_size > self.MAX_TOTAL_CACHE_SIZE * self.CACHE_CLEANUP_THRESHOLD:
-                # Sort cache types by size (largest first) for efficient cleanup
-                cache_sizes = [(k, len(v)) for k, v in self._global_entity_cache.items()]
-                cache_sizes.sort(key=lambda x: x[1], reverse=True)
-
-                target_size = self.MAX_TOTAL_CACHE_SIZE // 2
-                removed_count = 0
-                removed_types = []
-
-                for cache_key, size in cache_sizes:
-                    if current_size - removed_count <= target_size:
-                        break
-                    del self._global_entity_cache[cache_key]
-                    removed_count += size
-                    removed_types.append(cache_key)
-                    self._cache_stats["evictions"] += 1
-                    with BaseMigration._global_cache_stats_lock:
-                        BaseMigration._global_cache_stats["total_evictions"] += 1
-
-                self._cache_stats["memory_cleanups"] += 1
-                with BaseMigration._global_cache_stats_lock:
-                    BaseMigration._global_cache_stats["memory_cleanups"] += 1
-
-                self.logger.info(
-                    "Cache cleanup: removed %d entities from %d types: %s",
-                    removed_count,
-                    len(removed_types),
-                    removed_types,
-                )
-
     def _get_cached_entities_threadsafe(
         self,
         entity_type: str,
@@ -351,6 +292,9 @@ class BaseMigration:
         entity_cache: dict[str, list[dict[str, Any]]],
     ) -> list[dict[str, Any]]:
         """Thread-safe cached entity retrieval with size limits and error handling.
+
+        Delegates the cache mechanics to ``self.entity_cache`` while wrapping the
+        fetcher to translate any underlying exception into a ``MigrationError``.
 
         Args:
             entity_type: Type of entities to retrieve
@@ -364,64 +308,20 @@ class BaseMigration:
             MigrationError: If API call fails and no cached data available
 
         """
-        try:
-            # Check local cache first (fastest path)
-            if entity_type in entity_cache and entity_type not in cache_invalidated:
-                self._cache_stats["hits"] += 1
-                with BaseMigration._global_cache_stats_lock:
-                    BaseMigration._global_cache_stats["total_hits"] += 1
-                self.logger.debug("Cache hit (local): cached %s", entity_type)
-                return entity_cache[entity_type]
-
-            # Check global cache with thread safety
-            with self._cache_lock:
-                if entity_type in self._global_entity_cache and entity_type not in cache_invalidated:
-                    entities = self._global_entity_cache[entity_type].copy()
-                    entity_cache[entity_type] = entities
-                    self._cache_stats["hits"] += 1
-                    with BaseMigration._global_cache_stats_lock:
-                        BaseMigration._global_cache_stats["total_hits"] += 1
-                    self.logger.debug("Cache hit (global): cached %s", entity_type)
-                    return entities
-
-            # Cache miss - perform API call with error handling
-            self._cache_stats["misses"] += 1
-            with BaseMigration._global_cache_stats_lock:
-                BaseMigration._global_cache_stats["total_misses"] += 1
-            self.logger.debug("Cache miss: fetching cached %s from API", entity_type)
-
+        def _fetch(name: str) -> list[dict[str, Any]]:
             try:
-                entities = self._get_current_entities_for_type(entity_type)
+                return self._get_current_entities_for_type(name)
             except Exception as e:
-                self.logger.exception("Failed to fetch entities for %s", entity_type)
-                msg = f"API call failed for {entity_type}: {e}"
+                self.logger.exception("Failed to fetch entities for %s", name)
+                msg = f"API call failed for {name}: {e}"
                 raise MigrationError(msg) from e
 
-            # Store in caches with size validation
-            if len(entities) <= self.MAX_CACHE_SIZE_PER_TYPE:
-                entity_cache[entity_type] = entities
-
-                with self._cache_lock:
-                    # Check if cleanup needed before adding to global cache
-                    self._cleanup_cache_if_needed()
-                    self._global_entity_cache[entity_type] = entities.copy()
-                    cache_invalidated.discard(entity_type)
-            else:
-                self.logger.warning(
-                    "Entity list too large to cache: %s has %d entities (limit: %d)",
-                    entity_type,
-                    len(entities),
-                    self.MAX_CACHE_SIZE_PER_TYPE,
-                )
-                # Still store in local cache for this run, but not global
-                entity_cache[entity_type] = entities
-                cache_invalidated.discard(entity_type)
-
-            return entities
-
-        except Exception:
-            self.logger.exception("Critical error in cache retrieval for %s", entity_type)
-            raise
+        return self.entity_cache.get_or_fetch(
+            entity_type,
+            _fetch,
+            local=entity_cache,
+            invalidated=cache_invalidated,
+        )
 
     def detect_changes(
         self,
@@ -593,9 +493,7 @@ class BaseMigration:
         total_cache_invalidations = 0
 
         # Clear global cache to ensure isolation between migration runs
-        with self._cache_lock:
-            self._global_entity_cache.clear()
-            self.logger.debug("Cleared global cache for new migration run")
+        self.entity_cache.clear_global()
 
         def get_cached_entities(type_name: str) -> list[dict[str, Any]]:
             """Get entities with enhanced thread-safe caching."""
@@ -610,16 +508,7 @@ class BaseMigration:
             nonlocal total_cache_invalidations
             cache_invalidated.add(type_name)
             total_cache_invalidations += 1
-
-            # Also invalidate from global cache for thread safety
-            with self._cache_lock:
-                if type_name in self._global_entity_cache:
-                    del self._global_entity_cache[type_name]
-                    self.logger.debug(
-                        "Invalidated global cache for entity type %s",
-                        type_name,
-                    )
-
+            self.entity_cache.invalidate(type_name)
             self.logger.debug("Invalidated cache for entity type %s", type_name)
 
         try:
@@ -638,12 +527,12 @@ class BaseMigration:
                         "cache_stats": {
                             "types_cached": len(entity_cache),
                             "cache_invalidations": total_cache_invalidations,
-                            "cache_hits": self._cache_stats["hits"],
-                            "cache_misses": self._cache_stats["misses"],
-                            "cache_evictions": self._cache_stats["evictions"],
-                            "memory_cleanups": self._cache_stats["memory_cleanups"],
-                            "total_cache_size": self._cache_stats["total_size"],
-                            "global_cache_types": len(self._global_entity_cache),
+                            "cache_hits": self.entity_cache.stats["hits"],
+                            "cache_misses": self.entity_cache.stats["misses"],
+                            "cache_evictions": self.entity_cache.stats["evictions"],
+                            "memory_cleanups": self.entity_cache.stats["memory_cleanups"],
+                            "total_cache_size": self.entity_cache.stats["total_size"],
+                            "global_cache_types": self.entity_cache.global_size(),
                         },
                     },
                     success_count=0,
@@ -679,12 +568,12 @@ class BaseMigration:
                             "cache_stats": {
                                 "types_cached": len(entity_cache),
                                 "cache_invalidations": total_cache_invalidations,
-                                "cache_hits": self._cache_stats["hits"],
-                                "cache_misses": self._cache_stats["misses"],
-                                "cache_evictions": self._cache_stats["evictions"],
-                                "memory_cleanups": self._cache_stats["memory_cleanups"],
-                                "total_cache_size": self._cache_stats["total_size"],
-                                "global_cache_types": len(self._global_entity_cache),
+                                "cache_hits": self.entity_cache.stats["hits"],
+                                "cache_misses": self.entity_cache.stats["misses"],
+                                "cache_evictions": self.entity_cache.stats["evictions"],
+                                "memory_cleanups": self.entity_cache.stats["memory_cleanups"],
+                                "total_cache_size": self.entity_cache.stats["total_size"],
+                                "global_cache_types": self.entity_cache.global_size(),
                             },
                         },
                     )
@@ -729,57 +618,34 @@ class BaseMigration:
             )
             return None
 
+    def _json_store(self) -> JsonStore:
+        """Return the bound JsonStore, building one on demand if ``__init__`` was bypassed.
+
+        Several tests instantiate migrations via ``cls.__new__(cls)`` and set
+        ``data_dir`` manually, so ``self.json_store`` is not populated. Falling
+        back to a fresh JsonStore preserves that pattern without forcing
+        every fixture to be updated.
+        """
+        store: JsonStore | None = getattr(self, "json_store", None)
+        if store is None:
+            store = JsonStore(self.data_dir, getattr(self, "logger", None))
+        return store
+
     def _load_from_json(self, filename: Path, default: Any = None) -> Any:
         """Load data from a JSON file in the data directory.
 
-        Args:
-            filename: Name of the JSON file
-            default: Default value to return if file doesn't exist
-
-        Returns:
-            Loaded JSON data or default value
-
+        Thin delegator over ``self.json_store`` so subclasses keep the existing
+        ``self._load_from_json(...)`` call shape.
         """
-        filepath = self.data_dir / filename
-        try:
-            # Optimistic execution: attempt to load directly
-            with filepath.open("r") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            # File doesn't exist - this is expected, return default
-            self.logger.debug("File does not exist: %s", filepath)
-            return default
-        except json.JSONDecodeError as e:
-            # Only perform diagnostics after JSON parsing fails
-            if filepath.stat().st_size == 0:
-                self.logger.debug("File is empty: %s", filepath)
-            else:
-                self.logger.exception("JSON decode error in %s: %s", filepath, e)
-            return default
-        except Exception as e:
-            # Unexpected error - log it
-            self.logger.exception("Unexpected error loading %s: %s", filepath, e)
-            return default
+        return self._json_store().load(filename, default)
 
     def _save_to_json(self, data: Any, filename: Path | str) -> Path:
         """Save data to a JSON file in the data directory.
 
-        Args:
-            data: Data to save
-            filename: Name of the JSON file
-
-        Returns:
-            Path to the saved file
-
+        Thin delegator over ``self.json_store`` so subclasses keep the existing
+        ``self._save_to_json(...)`` call shape.
         """
-        filepath = self.data_dir / Path(filename)
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-
-        with filepath.open("w") as f:
-            json.dump(data, f, indent=2)
-
-        self.logger.debug("Saved data to %s", filepath)
-        return filepath
+        return self._json_store().save(data, filename)
 
     # ── DRY helper methods ─────────────────────────────────────────────
 
