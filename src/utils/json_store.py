@@ -33,7 +33,7 @@ class JsonStore:
         """
         filepath = self.base_dir / Path(filename)
         try:
-            with filepath.open("r") as f:
+            with filepath.open("r", encoding="utf-8") as f:
                 return json.load(f)
         except FileNotFoundError:
             self._logger.debug("File does not exist: %s", filepath)
@@ -55,7 +55,7 @@ class JsonStore:
         """
         filepath = self.base_dir / Path(filename)
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        with filepath.open("w") as f:
+        with filepath.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         self._logger.debug("Saved data to %s", filepath)
         return filepath

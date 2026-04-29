@@ -192,11 +192,13 @@ class EntityCache:
         )
 
     def _record_hit(self) -> None:
-        self.stats["hits"] += 1
+        with self._lock:
+            self.stats["hits"] += 1
         with EntityCache._process_stats_lock:
             EntityCache._process_stats["total_hits"] += 1
 
     def _record_miss(self) -> None:
-        self.stats["misses"] += 1
+        with self._lock:
+            self.stats["misses"] += 1
         with EntityCache._process_stats_lock:
             EntityCache._process_stats["total_misses"] += 1
