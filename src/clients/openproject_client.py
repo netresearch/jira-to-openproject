@@ -190,8 +190,9 @@ class OpenProjectClient:
         self._users_cache: list[dict[str, Any]] | None = None
         self._users_cache_time: float | None = None
         self._users_by_email_cache: dict[str, dict[str, Any]] = {}
-        self._custom_fields_cache: list[dict[str, Any]] | None = None
-        self._custom_fields_cache_time: float = 0.0
+        # ``_custom_fields_cache`` and ``_custom_fields_cache_time`` moved into
+        # ``OpenProjectCustomFieldService`` (see ``self.custom_fields`` below,
+        # initialised after the dependent clients are wired up).
 
         # Get config values
         op_config = config.openproject_config
@@ -315,6 +316,13 @@ class OpenProjectClient:
 
         self.batch_size = batch_size
         self.parallel_workers = max_workers
+
+        # Composed services (Phase 2 of ADR-002 — splitting the god-class along
+        # functional seams). Backward-compat: same-named methods on
+        # OpenProjectClient delegate to the corresponding service.
+        from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
+
+        self.custom_fields = OpenProjectCustomFieldService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -1784,39 +1792,11 @@ class OpenProjectClient:
     def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
         """Ensure a WorkPackageCustomField exists, returning its ID.
 
-        Unlike :py:meth:`ensure_work_package_custom_field` (which uses
-        ``is_for_all: true`` and returns the full CF dict), this variant
-        creates the CF with ``is_for_all: false`` so the caller can then
-        selectively enable it on specific projects via
-        :py:meth:`enable_custom_field_for_projects`. Returns just the ID.
-
-        Migration components that need per-project CF enablement
-        (Labels, AffectsVersions, StoryPoints, Sprint/Epic, etc.) call this.
-
-        Args:
-            name: Custom field display name
-            field_format: Rails field format (string, text, int, float, etc.)
-
-        Returns:
-            Custom field ID, or 0 if creation failed.
-
+        Thin delegator over ``self.custom_fields.ensure_wp_custom_field_id``;
+        see :py:class:`~src.clients.openproject_custom_field_service.OpenProjectCustomFieldService`
+        for the full docstring.
         """
-        try:
-            cf = self.get_custom_field_by_name(name)
-            cf_id = int(cf.get("id", 0) or 0) if isinstance(cf, dict) else None
-            if cf_id:
-                return cf_id
-        except Exception:
-            self.logger.info("CF '%s' not found; will create (format=%s)", name, field_format)
-
-        escaped = escape_ruby_single_quoted(name)
-        script = (
-            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escaped}'); "
-            f"if !cf; cf = CustomField.new(name: '{escaped}', field_format: '{field_format}', "
-            f"is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-        )
-        result = self.execute_query(script)
-        return int(result) if result else 0
+        return self.custom_fields.ensure_wp_custom_field_id(name, field_format)
 
     def enable_custom_field_for_projects(
         self,
@@ -1826,36 +1806,9 @@ class OpenProjectClient:
     ) -> None:
         """Enable a custom field for specific projects only.
 
-        Pairs with :py:meth:`ensure_wp_custom_field_id` (which creates the
-        CF with ``is_for_all: false``). Idempotent: uses ``find_or_create_by!``
-        on the join table.
-
-        Args:
-            cf_id: Custom field ID
-            project_ids: Set of project IDs to enable the field for
-            cf_name: Optional display name for logging
-
+        Thin delegator over ``self.custom_fields.enable_custom_field_for_projects``.
         """
-        if not project_ids:
-            return
-        project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
-        script = (
-            f"cf = CustomField.find({cf_id})\n"
-            f"[{project_ids_str}].each do |pid|\n"
-            f"  begin\n"
-            f"    project = Project.find(pid)\n"
-            f"    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)\n"
-            f"  rescue ActiveRecord::RecordNotFound\n"
-            f"  end\n"
-            f"end\n"
-            f"true"
-        )
-        try:
-            self.execute_query(script)
-            display = cf_name or str(cf_id)
-            self.logger.info("Enabled %s CF for %d projects", display, len(project_ids))
-        except Exception:
-            self.logger.warning("Failed to enable CF for some projects")
+        self.custom_fields.enable_custom_field_for_projects(cf_id, project_ids, cf_name=cf_name)
 
     def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
         """Remove CustomField records matching the provided name/type."""
@@ -4627,107 +4580,23 @@ J2O_DATA
     def get_custom_field_by_name(self, name: str) -> dict[str, Any]:
         """Find a custom field by name.
 
-        Args:
-            name: The name of the custom field to find
-
-        Returns:
-            The custom field
-
-        Raises:
-            RecordNotFoundError: If custom field with given name is not found
-
+        Thin delegator over ``self.custom_fields.get_by_name``.
         """
-        return self.find_record("CustomField", {"name": name})
+        return self.custom_fields.get_by_name(name)
 
     def get_custom_field_id_by_name(self, name: str) -> int:
         """Find a custom field ID by name.
 
-        Args:
-            name: The name of the custom field to find
-
-        Returns:
-            The custom field ID
-
-        Raises:
-            RecordNotFoundError: If custom field with given name is not found
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.custom_fields.get_id_by_name``.
         """
-        try:
-            result = self.execute_query(f"CustomField.where(name: '{escape_ruby_single_quoted(name)}').first&.id")
-
-            # Handle nil value from Ruby
-            if result is None:
-                msg = f"Custom field '{name}' not found"
-                raise RecordNotFoundError(msg)
-
-            # Handle integer result
-            if isinstance(result, int):
-                return result
-
-            # Try to convert string to int
-            if isinstance(result, str):
-                try:
-                    return int(result)
-                except ValueError:
-                    msg = f"Invalid ID format: {result}"
-                    raise QueryExecutionError(msg) from None
-
-            msg = f"Unexpected result type: {type(result)}"
-            raise QueryExecutionError(msg)
-
-        except RecordNotFoundError:
-            raise  # Re-raise RecordNotFoundError
-        except Exception as e:
-            msg = "Error getting custom field ID."
-            raise QueryExecutionError(msg) from e
+        return self.custom_fields.get_id_by_name(name)
 
     def get_custom_fields(self, *, force_refresh: bool = False) -> list[dict[str, Any]]:
-        """Get all custom fields from OpenProject.
+        """Get all custom fields from OpenProject (cached for 5 minutes).
 
-        Args:
-            force_refresh: If True, force refresh from server, ignoring cache
-
-        Returns:
-            List of custom field dictionaries
-
-        Raises:
-            QueryExecutionError: If query execution fails
-
+        Thin delegator over ``self.custom_fields.get_all``.
         """
-        current_time = time.time()
-        cache_timeout = 300  # 5 minutes
-
-        # Check cache first (unless force refresh)
-        if (
-            not force_refresh
-            and self._custom_fields_cache
-            and (current_time - self._custom_fields_cache_time) < cache_timeout
-        ):
-            logger.debug(
-                "Using cached custom fields (age: %.1fs)",
-                current_time - self._custom_fields_cache_time,
-            )
-            return self._custom_fields_cache
-
-        try:
-            # Centralized execution path
-            file_path = self._generate_unique_temp_filename("custom_fields")
-            custom_fields = self.execute_large_query_to_json_file(
-                "CustomField.all",
-                container_file=file_path,
-                timeout=90,
-            )
-
-            # Update cache
-            self._custom_fields_cache = custom_fields or []
-            self._custom_fields_cache_time = current_time
-
-            return custom_fields if isinstance(custom_fields, list) else []
-
-        except Exception as e:
-            msg = "Failed to get custom fields."
-            raise QueryExecutionError(msg) from e
+        return self.custom_fields.get_all(force_refresh=force_refresh)
 
     def get_statuses(self) -> list[dict[str, Any]]:
         """Get all statuses from OpenProject.
