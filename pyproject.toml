@@ -243,6 +243,10 @@ ignore = [
     "D203",    # incorrect-blank-line-before-class (conflicts with D211)
     "D213",    # multi-line-summary-second-line (conflicts with D212)
     "COM812",  # missing-trailing-comma (conflicts with ruff formatter)
+    # Filesystem-mode dependent: WSL2 reports all files as executable, Linux
+    # CI does not, so this rule fires inconsistently on shebanged source we
+    # never run as scripts (examples/, check_*.py, demo modules).
+    "EXE001",
 ]
 
 # Exclude specific rules in test files

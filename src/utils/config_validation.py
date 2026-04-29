@@ -61,16 +61,19 @@ class ConfigurationValidationError(Exception):
 class SecurityValidator:
     """Centralized validation utilities with security-focused bounds checking and sanitization."""
 
-    # Security-focused parameter bounds
+    # Security-focused parameter bounds.
+    #
+    # Prior versions tied max_workers/max_concurrent_batches to os.cpu_count()
+    # so a small host couldn't accidentally spawn far more workers than cores.
+    # That coupling produced environment-dependent behaviour: developer
+    # machines with 12+ cores ran fine while 4-core CI runners rejected the
+    # same configuration. Use absolute constants instead — capping at the
+    # host CPU count is operator hygiene, not a security concern.
     NUMERIC_BOUNDS = {
         # Core processing parameters
         "batch_size": {"min": 1, "max": 500, "type": int},
-        "max_workers": {"min": 1, "max": min(os.cpu_count() or 4, 32), "type": int},
-        "max_concurrent_batches": {
-            "min": 1,
-            "max": min(os.cpu_count() or 4, 16),
-            "type": int,
-        },
+        "max_workers": {"min": 1, "max": 32, "type": int},
+        "max_concurrent_batches": {"min": 1, "max": 16, "type": int},
         "retry_attempts": {"min": 0, "max": 10, "type": int},
         "max_retries": {"min": 0, "max": 10, "type": int},
         # Rate limiting parameters
