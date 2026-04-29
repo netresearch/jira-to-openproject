@@ -23,9 +23,9 @@ from zoneinfo import ZoneInfo
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.clients.jira_client import JiraClient  # noqa: E402
-from src.clients.openproject_client import OpenProjectClient  # noqa: E402
-from src.utils.enhanced_timestamp_migrator import (  # noqa: E402
+from src.clients.jira_client import JiraClient
+from src.clients.openproject_client import OpenProjectClient
+from src.utils.enhanced_timestamp_migrator import (
     EnhancedTimestampMigrator,
 )
 
@@ -33,6 +33,7 @@ from src.utils.enhanced_timestamp_migrator import (  # noqa: E402
 # Add config attribute for tests (logger as a simple namespace to allow patching)
 class _Cfg:
     pass
+
 
 config = _Cfg()
 config.logger = configure_logging("INFO", None)
@@ -70,7 +71,8 @@ class TimestampCorrectionScript:
 
         # Initialize enhanced timestamp migrator to get correct timezone detection
         self.timestamp_migrator = EnhancedTimestampMigrator(
-            jira_client=self.jira_client, op_client=self.op_client,
+            jira_client=self.jira_client,
+            op_client=self.op_client,
         )
 
         # Detect correct Jira timezone
@@ -185,7 +187,9 @@ class TimestampCorrectionScript:
 
             except Exception as e:
                 self.logger.error(
-                    "Failed to fetch work packages at offset %d: %s", offset, e,
+                    "Failed to fetch work packages at offset %d: %s",
+                    offset,
+                    e,
                 )
                 break
 
@@ -201,7 +205,9 @@ class TimestampCorrectionScript:
                 self._process_work_package(wp)
             except Exception as e:
                 self.logger.error(
-                    "Failed to process work package %s: %s", wp.get("id", "unknown"), e,
+                    "Failed to process work package %s: %s",
+                    wp.get("id", "unknown"),
+                    e,
                 )
                 self.stats["errors"] += 1
 
@@ -426,7 +432,8 @@ class TimestampCorrectionScript:
 
             # Apply the update
             response = self.op_client.patch(
-                f"/api/v3/work_packages/{wp_id}", data=update_data,
+                f"/api/v3/work_packages/{wp_id}",
+                data=update_data,
             )
 
             if response:
@@ -441,7 +448,9 @@ class TimestampCorrectionScript:
 
         except Exception as e:
             self.logger.error(
-                "Failed to apply corrections to work package %s: %s", wp_id, e,
+                "Failed to apply corrections to work package %s: %s",
+                wp_id,
+                e,
             )
             self.stats["errors"] += 1
 
@@ -450,10 +459,12 @@ class TimestampCorrectionScript:
         self.logger.info("=== Timestamp Timezone Correction Report ===")
         self.logger.info("Mode: %s", "DRY RUN" if self.dry_run else "CHANGES APPLIED")
         self.logger.info(
-            "Total work packages processed: %d", self.stats["total_packages"],
+            "Total work packages processed: %d",
+            self.stats["total_packages"],
         )
         self.logger.info(
-            "Work packages with timestamps: %d", self.stats["packages_with_timestamps"],
+            "Work packages with timestamps: %d",
+            self.stats["packages_with_timestamps"],
         )
         self.logger.info("Timestamps corrected: %d", self.stats["timestamps_corrected"])
         self.logger.info("Errors encountered: %d", self.stats["errors"])
@@ -478,7 +489,9 @@ def main() -> None:
         help="Show what would be changed without applying changes (default)",
     )
     action_group.add_argument(
-        "--apply", action="store_true", help="Apply the corrections",
+        "--apply",
+        action="store_true",
+        help="Apply the corrections",
     )
 
     parser.add_argument(

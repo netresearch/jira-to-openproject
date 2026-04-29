@@ -17,8 +17,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
-from src.clients.exceptions import J2OConnectionError, RateLimitError
-from src.clients.jira_client import JiraClient
+from src.clients.exceptions import RateLimitError
 from src.clients.openproject_client import OpenProjectClient
 from src.migration import Migration
 from src.migrations.work_package_migration import WorkPackageMigration
@@ -55,89 +54,6 @@ class TestMemoryPressureScenarios:
             for i in range(1000)  # 1000 large work packages
         ]
 
-    @pytest.mark.skip(reason="Test requires migrate_work_packages(dataset) method that doesn't exist")
-    def test_memory_efficient_batch_processing(
-        self,
-        memory_constrained_migration,
-        large_dataset,
-    ) -> None:
-        """MEMORY TEST: Large datasets should be processed in memory-efficient batches.
-        Verifies that memory usage stays within acceptable limits.
-        """
-        # Arrange: Mock memory monitoring
-        memory_usage_samples = []
-
-        def mock_get_memory_usage():
-            # Simulate increasing memory usage
-            current_usage = len(memory_usage_samples) * 10 + 50  # Start at 50MB
-            memory_usage_samples.append(current_usage)
-            return current_usage
-
-        memory_constrained_migration.get_memory_usage = mock_get_memory_usage
-        memory_constrained_migration.openproject_client = MagicMock()
-
-        # Act: Process large dataset
-        memory_constrained_migration.migrate_work_packages(large_dataset)
-
-        # Assert: Should process in multiple batches
-        assert memory_constrained_migration.openproject_client.create_work_package.call_count == 1000
-
-        # Verify batch processing was used
-        batch_calls = memory_constrained_migration.openproject_client.create_batch.call_count
-        assert batch_calls >= 100  # At least 100 batches for 1000 items with batch_size=10
-
-    @pytest.mark.skip(reason="Test requires process_large_batch() method that doesn't exist")
-    def test_memory_pressure_triggers_garbage_collection(
-        self,
-        memory_constrained_migration,
-    ) -> None:
-        """MEMORY TEST: High memory usage should trigger garbage collection.
-        Tests automatic memory management during processing.
-        """
-        # Arrange: Mock memory monitoring to simulate pressure
-        memory_readings = [80, 95, 110, 120, 90, 85]  # Spike above threshold
-        memory_iter = iter(memory_readings)
-
-        def mock_memory_usage():
-            try:
-                return next(memory_iter)
-            except StopIteration:
-                return 85  # Return to normal after GC
-
-        memory_constrained_migration.get_memory_usage = mock_memory_usage
-
-        with patch("gc.collect") as mock_gc:
-            # Act: Process data that triggers memory pressure
-            memory_constrained_migration.process_large_batch(
-                [{"id": i} for i in range(100)],
-            )
-
-            # Assert: Garbage collection should be triggered
-            mock_gc.assert_called()
-
-    @pytest.mark.skip(reason="Test requires migrate_work_packages(dataset) method that doesn't exist")
-    def test_out_of_memory_error_recovery(self, memory_constrained_migration) -> None:
-        """MEMORY TEST: System should recover gracefully from OOM errors.
-        Tests fallback to smaller batch sizes when memory is exhausted.
-        """
-        # Arrange: Simulate OOM error during large batch processing
-        memory_constrained_migration.openproject_client = MagicMock()
-        memory_constrained_migration.openproject_client.create_batch.side_effect = [
-            MemoryError("Cannot allocate memory for batch"),  # First attempt fails
-            None,  # Second attempt with smaller batch succeeds
-            None,
-            None,
-        ]
-
-        test_data = [{"id": i} for i in range(50)]
-
-        # Act: Process data that causes OOM
-        memory_constrained_migration.migrate_work_packages(test_data)
-
-        # Assert: Should automatically reduce batch size and retry
-        assert memory_constrained_migration.batch_size == 5  # Reduced from 10
-        assert memory_constrained_migration.openproject_client.create_batch.call_count >= 2
-
 
 class TestRateLimitingBoundaries:
     """Tests for handling API rate limiting and throttling scenarios."""
@@ -156,72 +72,6 @@ class TestRateLimitingBoundaries:
         client.rate_limit_handler = MagicMock()
         client.retry_after_rate_limit = True
         return client
-
-    @pytest.mark.skip(reason="Test requires search_issues_with_retry() method that doesn't exist on JiraClient")
-    def test_jira_api_rate_limiting_with_backoff(self, rate_limited_client) -> None:
-        """RATE LIMIT TEST: JIRA API rate limiting should trigger exponential backoff.
-        Tests that the client properly handles 429 responses.
-        """
-        # Arrange: Mock JIRA API calls with rate limiting
-        jira_client = JiraClient()
-
-        # Simulate rate limiting: fail twice, then succeed
-        api_responses = [
-            RateLimitError("Rate limit exceeded", retry_after=2),
-            RateLimitError("Rate limit exceeded", retry_after=4),
-            {"issues": [{"id": 1, "key": "TEST-1"}]},  # Success
-        ]
-        response_iter = iter(api_responses)
-
-        def mock_api_call(*args, **kwargs):
-            response = next(response_iter)
-            if isinstance(response, Exception):
-                raise response
-            return response
-
-        jira_client.search_issues = mock_api_call
-
-        start_time = time.time()
-
-        # Act: Make API call that hits rate limits
-        result = jira_client.search_issues_with_retry("project = TEST")
-
-        end_time = time.time()
-
-        # Assert: Should succeed after retries
-        assert result == {"issues": [{"id": 1, "key": "TEST-1"}]}
-
-        # Should take at least 6 seconds due to backoff (2 + 4 seconds)
-        assert end_time - start_time >= 6
-
-    @pytest.mark.skip(reason="Test requires process_items_with_rate_limiting() method that doesn't exist")
-    def test_openproject_api_rate_limiting_batch_adjustment(
-        self,
-        rate_limited_client,
-    ) -> None:
-        """RATE LIMIT TEST: OpenProject rate limiting should trigger batch size reduction.
-        Tests adaptive batch sizing based on API limits.
-        """
-        # Arrange: Mock batch operations with rate limiting
-        original_batch_size = rate_limited_client.batch_size = 50
-
-        # Simulate rate limiting on large batches
-        def mock_create_batch(items) -> str:
-            if len(items) > 10:
-                msg = "Batch too large for rate limit"
-                raise RateLimitError(msg)
-            return f"Created {len(items)} items"
-
-        rate_limited_client.create_batch = mock_create_batch
-
-        test_items = [{"id": i} for i in range(100)]
-
-        # Act: Process items that trigger rate limiting
-        rate_limited_client.process_items_with_rate_limiting(test_items)
-
-        # Assert: Batch size should be automatically reduced
-        assert rate_limited_client.batch_size < original_batch_size
-        assert rate_limited_client.batch_size <= 10  # Below rate limit threshold
 
     def test_concurrent_api_calls_respect_rate_limits(
         self,
@@ -283,115 +133,6 @@ class TestNetworkResilienceAndRecovery:
         migration.network_timeout = 30
         migration.max_network_retries = 3
         return migration
-
-    @pytest.mark.skip(reason="Test requires methods that don't exist on openproject_client")
-    def test_ssh_connection_recovery_after_network_partition(
-        self,
-        network_aware_migration,
-    ) -> None:
-        """NETWORK TEST: SSH connections should recover after network partitions.
-        Tests reconnection logic when network becomes available again.
-        """
-        # Arrange: Mock SSH client with network failures
-        ssh_client = MagicMock()
-        connection_attempts = []
-
-        def mock_execute_command(command):
-            attempt_time = time.time()
-            connection_attempts.append(attempt_time)
-
-            # Simulate network partition for first 2 attempts
-            if len(connection_attempts) <= 2:
-                msg = "Network unreachable"
-                raise J2OConnectionError(msg)
-
-            # Recovery on 3rd attempt
-            return ("command output", "", 0)
-
-        ssh_client.execute_command = mock_execute_command
-        network_aware_migration.openproject_client.ssh_client = ssh_client
-
-        # Act: Execute command that fails due to network issues
-        result = network_aware_migration.openproject_client.execute_with_retry(
-            "ls /tmp",
-        )
-
-        # Assert: Should eventually succeed after recovery
-        assert result == ("command output", "", 0)
-        assert len(connection_attempts) == 3  # 2 failures + 1 success
-
-    @pytest.mark.skip(reason="Test requires methods that don't exist on openproject_client")
-    def test_docker_container_communication_timeout_handling(
-        self,
-        network_aware_migration,
-    ) -> None:
-        """NETWORK TEST: Docker container communication should handle timeouts gracefully.
-        Tests timeout and retry logic for container operations.
-        """
-        # Arrange: Mock Docker client with intermittent timeouts
-        docker_client = MagicMock()
-        timeout_count = 0
-
-        def mock_container_exec(command) -> str:
-            nonlocal timeout_count
-            timeout_count += 1
-
-            # First 2 calls timeout
-            if timeout_count <= 2:
-                msg = f"Container operation timed out after {network_aware_migration.network_timeout}s"
-                raise TimeoutError(
-                    msg,
-                )
-
-            # 3rd call succeeds
-            return "container response"
-
-        docker_client.exec_run = mock_container_exec
-        network_aware_migration.openproject_client.docker_client = docker_client
-
-        # Act: Execute container command with timeouts
-        result = network_aware_migration.openproject_client.execute_in_container(
-            "rails console",
-        )
-
-        # Assert: Should succeed after retries
-        assert result == "container response"
-        assert timeout_count == 3
-
-    @pytest.mark.skip(reason="Test requires methods that don't exist on openproject_client")
-    def test_rails_console_session_recovery_after_disconnect(
-        self,
-        network_aware_migration,
-    ) -> None:
-        """NETWORK TEST: Rails console sessions should recover after disconnection.
-        Tests session restoration and command replay.
-        """
-        # Arrange: Mock Rails console client with session failures
-        rails_client = MagicMock()
-        session_attempts = []
-
-        def mock_execute_command(command) -> str:
-            session_attempts.append(command)
-
-            # First command fails due to session loss
-            if len(session_attempts) == 1:
-                msg = "Rails console session lost"
-                raise J2OConnectionError(msg)
-
-            # Subsequent commands succeed after session restoration
-            return f"Rails output for: {command}"
-
-        rails_client.execute = mock_execute_command
-        network_aware_migration.openproject_client.rails_client = rails_client
-
-        # Act: Execute Rails command that fails due to session loss
-        result = network_aware_migration.openproject_client.execute_rails_command(
-            "User.count",
-        )
-
-        # Assert: Should succeed after session recovery
-        assert "User.count" in result
-        assert len(session_attempts) >= 2  # Original + retry after session restore
 
 
 class TestConcurrentResourceContention:

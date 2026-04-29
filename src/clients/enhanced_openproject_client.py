@@ -283,7 +283,6 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         return resp.json()
 
 
-
 class _NoopSSHClient:
     """Test-time stub that satisfies the SSHClient interface without real I/O."""
 

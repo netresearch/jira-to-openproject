@@ -21,7 +21,8 @@ console = Console()
 
 
 def test_rails_connection(
-    session_name: str = "rails_console", debug: bool = False,
+    session_name: str = "rails_console",
+    debug: bool = False,
 ) -> bool:
     """Test connection to the Rails console.
 
@@ -77,7 +78,8 @@ def test_rails_connection(
 
 
 def get_custom_fields(
-    session_name: str = "rails_console", debug: bool = False,
+    session_name: str = "rails_console",
+    debug: bool = False,
 ) -> list[dict[str, Any]]:
     """Retrieve all custom fields from OpenProject via Rails console.
 
@@ -187,10 +189,14 @@ Example:
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument(
-        "--get-fields", action="store_true", help="Retrieve and display custom fields",
+        "--get-fields",
+        action="store_true",
+        help="Retrieve and display custom fields",
     )
     parser.add_argument(
-        "--output", help="Output file for custom fields (JSON format)", default=None,
+        "--output",
+        help="Output file for custom fields (JSON format)",
+        default=None,
     )
 
     return parser.parse_args()

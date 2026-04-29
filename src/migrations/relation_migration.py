@@ -120,7 +120,12 @@ class RelationMigration(BaseMigration):
             self._resolve_failures = 0
         self._resolve_failures += 1
         if self._resolve_failures <= 5:
-            logger.warning("_resolve_wp_id failed for %s: wp_map_entry=%s, _wp_key_map_has=%s", jira_key, entry, jira_key in (getattr(self, "_wp_key_map", {}) or {}))
+            logger.warning(
+                "_resolve_wp_id failed for %s: wp_map_entry=%s, _wp_key_map_has=%s",
+                jira_key,
+                entry,
+                jira_key in (getattr(self, "_wp_key_map", {}) or {}),
+            )
         return None
 
     def _map_type_and_direction(
@@ -201,7 +206,11 @@ class RelationMigration(BaseMigration):
             try:
                 import json
 
-                logger.info("Loading cached issues from %s (size=%d MB)...", cache_file, cache_file.stat().st_size // 1024 // 1024)
+                logger.info(
+                    "Loading cached issues from %s (size=%d MB)...",
+                    cache_file,
+                    cache_file.stat().st_size // 1024 // 1024,
+                )
                 with open(cache_file) as f:
                     cached = json.load(f)
                 if isinstance(cached, dict) and len(cached) > 0:
@@ -219,7 +228,11 @@ class RelationMigration(BaseMigration):
         relations_to_create: list[dict[str, Any]] = []
         skipped = 0
 
-        logger.info("Processing %d issues for relations, _wp_key_map has %d entries", len(issues), len(self._wp_key_map))
+        logger.info(
+            "Processing %d issues for relations, _wp_key_map has %d entries",
+            len(issues),
+            len(self._wp_key_map),
+        )
 
         for key, issue in issues.items():
             if not issue:
@@ -261,10 +274,22 @@ class RelationMigration(BaseMigration):
 
                     if outward is not None:
                         direction = "outward"
-                        target_key = getattr(outward, "key", None) if hasattr(outward, "key") else outward.get("key") if isinstance(outward, dict) else None
+                        target_key = (
+                            getattr(outward, "key", None)
+                            if hasattr(outward, "key")
+                            else outward.get("key")
+                            if isinstance(outward, dict)
+                            else None
+                        )
                     elif inward is not None:
                         direction = "inward"
-                        target_key = getattr(inward, "key", None) if hasattr(inward, "key") else inward.get("key") if isinstance(inward, dict) else None
+                        target_key = (
+                            getattr(inward, "key", None)
+                            if hasattr(inward, "key")
+                            else inward.get("key")
+                            if isinstance(inward, dict)
+                            else None
+                        )
                     else:
                         skipped += 1
                         continue
@@ -293,11 +318,13 @@ class RelationMigration(BaseMigration):
                     a, b = (from_id, to_id) if not swap else (to_id, from_id)
 
                     # Collect for bulk creation
-                    relations_to_create.append({
-                        "from_id": a,
-                        "to_id": b,
-                        "relation_type": relation_type,
-                    })
+                    relations_to_create.append(
+                        {
+                            "from_id": a,
+                            "to_id": b,
+                            "relation_type": relation_type,
+                        },
+                    )
                 except Exception:
                     skipped += 1
                     continue
@@ -314,7 +341,9 @@ class RelationMigration(BaseMigration):
             errors = bulk_result.get("failed", 0)
             logger.info(
                 "Bulk relations: created=%d, skipped=%d, failed=%d",
-                created, bulk_skipped, errors,
+                created,
+                bulk_skipped,
+                errors,
             )
 
         result.details.update(

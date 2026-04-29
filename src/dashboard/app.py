@@ -2,7 +2,10 @@
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -12,13 +15,11 @@ from fastapi import (
     BackgroundTasks,
     FastAPI,
     HTTPException,
-    Request,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from src.display import configure_logging
@@ -28,16 +29,78 @@ from src.display import configure_logging
 # Configure logger for dashboard
 logger = configure_logging("INFO", None)
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Initialize shared resources on startup and clean them up on shutdown."""
+    global redis_client  # noqa: PLW0603
+
+    try:
+        redis_client = redis.Redis(
+            host="localhost",
+            port=6379,
+            db=0,
+            decode_responses=True,
+        )
+        await redis_client.ping()
+        logger.info("Connected to Redis")
+    except Exception:
+        logger.warning("Could not connect to Redis")
+        redis_client = None
+
+    t_metrics: asyncio.Task[object] = asyncio.create_task(collect_system_metrics())
+    BACKGROUND_TASKS.add(t_metrics)
+    t_metrics.add_done_callback(BACKGROUND_TASKS.discard)
+
+    t_progress: asyncio.Task[object] = asyncio.create_task(update_migration_progress())
+    BACKGROUND_TASKS.add(t_progress)
+    t_progress.add_done_callback(BACKGROUND_TASKS.discard)
+
+    logger.info("Dashboard started successfully")
+
+    try:
+        yield
+    finally:
+        if redis_client:
+            await redis_client.close()
+        logger.info("Dashboard shutdown complete")
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Jira to OpenProject Migration Dashboard",
     description="Real-time dashboard for monitoring migration progress",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
-# Setup templates and static files
-templates = Jinja2Templates(directory="src/dashboard/templates")
-app.mount("/static", StaticFiles(directory="src/dashboard/static"), name="static")
+# Dashboard is a Vue.js SPA; the HTML shell is served verbatim (no Jinja
+# templating) to avoid Jinja ↔ Vue `{{ ... }}` delimiter conflicts. The
+# template file is loaded lazily on the first request and cached, so an
+# install layout that doesn't ship the templates directory still imports
+# cleanly — the `/` handler is the only thing that fails, with a clear
+# 503 message.
+_DASHBOARD_DIR = Path(__file__).resolve().parent
+_DASHBOARD_TEMPLATE_PATH = _DASHBOARD_DIR / "templates" / "dashboard.html"
+_dashboard_html_cache: str | None = None
+
+
+def _load_dashboard_html() -> str:
+    """Read and cache the dashboard SPA shell on first use."""
+    global _dashboard_html_cache  # noqa: PLW0603 — module-level cache by design
+    if _dashboard_html_cache is None:
+        _dashboard_html_cache = _DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
+    return _dashboard_html_cache
+
+
+# Static assets directory may be absent in minimal runtime layouts; only
+# mount the route when the directory actually exists.
+if (_DASHBOARD_DIR / "static").is_dir():
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(_DASHBOARD_DIR / "static")),
+        name="static",
+    )
 
 # Redis connection
 redis_client: redis.Redis | None = None
@@ -290,49 +353,22 @@ async def update_migration_progress() -> None:
             await asyncio.sleep(5)
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
-    """Initialize dashboard on startup."""
-    global redis_client  # noqa: PLW0603
-
-    try:
-        # Initialize Redis connection
-        redis_client = redis.Redis(
-            host="localhost",
-            port=6379,
-            db=0,
-            decode_responses=True,
-        )
-        await redis_client.ping()
-        logger.info("Connected to Redis")
-    except Exception:
-        logger.warning("Could not connect to Redis")
-        redis_client = None
-
-    # Start background tasks
-    t_metrics: asyncio.Task[object] = asyncio.create_task(collect_system_metrics())
-    BACKGROUND_TASKS.add(t_metrics)
-    t_metrics.add_done_callback(BACKGROUND_TASKS.discard)
-
-    t_progress: asyncio.Task[object] = asyncio.create_task(update_migration_progress())
-    BACKGROUND_TASKS.add(t_progress)
-    t_progress.add_done_callback(BACKGROUND_TASKS.discard)
-
-    logger.info("Dashboard started successfully")
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    """Cleanup on shutdown."""
-    if redis_client:
-        await redis_client.close()
-    logger.info("Dashboard shutdown complete")
-
-
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request) -> HTMLResponse:
-    """Serve the main dashboard page."""
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+async def dashboard() -> HTMLResponse:
+    """Serve the main dashboard page.
+
+    The template is a Vue.js SPA shell; `{{ ... }}` expressions inside it are
+    Vue-side interpolations, not Jinja, so we return the file verbatim to
+    avoid a Jinja ↔ Vue delimiter clash.
+    """
+    try:
+        return HTMLResponse(_load_dashboard_html())
+    except FileNotFoundError as exc:
+        logger.error("Dashboard template missing at %s", _DASHBOARD_TEMPLATE_PATH)
+        raise HTTPException(
+            status_code=503,
+            detail=(f"Dashboard template not available in this install layout (expected {_DASHBOARD_TEMPLATE_PATH})."),
+        ) from exc
 
 
 @app.websocket("/ws/progress")
@@ -538,7 +574,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
                     entities_per_second = progress_data.get("processed_entities", 0) / elapsed_time
 
         metrics = MigrationMetrics(
-            migration_id=migration_id or migration_state.get("migration_id", "none"),
+            migration_id=migration_id or migration_state.get("migration_id") or "none",
             entities_per_second=entities_per_second,
             average_processing_time=average_processing_time,
             memory_usage_mb=memory.used / 1024 / 1024,

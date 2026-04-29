@@ -26,7 +26,23 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@7edac99f961f18b581bbd960d59d049f04c0002f # v6.9.0
+        with:
+          enable-cache: true
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.x'
-      - run: pip install pip-audit && pip-audit -r requirements.txt || pip-audit
+          python-version: '3.14'
+      - name: Export runtime requirements from uv.lock
+        # The project uses uv + pyproject.toml — no requirements.txt exists.
+        # Export the locked runtime deps (without the project itself) so
+        # pip-audit scans our actual dependency graph; the previous
+        # `... || pip-audit` fallback flagged pip's own CVEs from the
+        # runner environment, and `-e .` for the local project tripped a
+        # "not found on PyPI" lookup error.
+        run: |
+          uv export --frozen --no-hashes --no-dev --no-emit-project \
+            -o /tmp/runtime-requirements.txt
+      - name: pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit --strict -r /tmp/runtime-requirements.txt

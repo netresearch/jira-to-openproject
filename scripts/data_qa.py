@@ -228,7 +228,12 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Summarise migrated data counts from cached artefacts")
-    parser.add_argument("--data-dir", type=Path, default=global_config.get_path("data"), help="Path to migration data cache")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=global_config.get_path("data"),
+        help="Path to migration data cache",
+    )
     parser.add_argument("--projects", nargs="*", help="Specific Jira project keys to report on")
     args = parser.parse_args()
 

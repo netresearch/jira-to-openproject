@@ -66,7 +66,7 @@ def main() -> int:
         # Ensure ownership/permissions are sane for app user
         docker.execute_command("chmod 644 /app/.irbrc", user="root")
         logger.info("Installed .irbrc to %s:%s", server, container_path)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("Failed to install .irbrc: %s", e)
         return 1
 
@@ -75,5 +75,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

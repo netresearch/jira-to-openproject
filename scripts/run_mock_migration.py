@@ -114,7 +114,12 @@ async def run_mock_migration(components: Iterable[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run mock migration components with in-memory mappings")
-    parser.add_argument("--components", nargs="*", default=["work_packages", "attachments", "attachment_provenance"], help="Components to execute")
+    parser.add_argument(
+        "--components",
+        nargs="*",
+        default=["work_packages", "attachments", "attachment_provenance"],
+        help="Components to execute",
+    )
     args = parser.parse_args()
 
     asyncio.run(run_mock_migration(args.components))

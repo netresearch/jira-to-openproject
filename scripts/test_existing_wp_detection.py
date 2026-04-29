@@ -2,6 +2,7 @@
 """Test script to debug why existing work package detection returns 0."""
 
 import sys
+
 sys.path.insert(0, "/home/sme/p/j2o")
 
 from src.clients.openproject_client import OpenProjectClient
@@ -21,13 +22,13 @@ print("-" * 80)
 
 try:
     snapshot = op_client.get_project_wp_cf_snapshot(project_id)
-    print(f"\n✓ Snapshot query succeeded")
+    print("\n✓ Snapshot query succeeded")
     print(f"  Returned {len(snapshot)} work packages")
 
     if len(snapshot) > 0:
-        print(f"\n  First 3 results:")
+        print("\n  First 3 results:")
         for i, wp in enumerate(snapshot[:3]):
-            print(f"    [{i+1}] ID={wp.get('id')}, Jira Key={wp.get('jira_issue_key')}")
+            print(f"    [{i + 1}] ID={wp.get('id')}, Jira Key={wp.get('jira_issue_key')}")
     else:
         print("\n  ⚠️  Empty result - investigating why...")
 
@@ -60,9 +61,9 @@ try:
         print(f"    Sample IDs: {wp_result.get('sample_ids')}")
 
         # Test 3: Check custom values for sample work packages
-        if wp_result.get('wp_count', 0) > 0 and wp_result.get('sample_ids'):
+        if wp_result.get("wp_count", 0) > 0 and wp_result.get("sample_ids"):
             print("\n  Test 3: Checking custom field values on sample work packages...")
-            sample_id = wp_result['sample_ids'][0]
+            sample_id = wp_result["sample_ids"][0]
             ruby_check_cv = f"""
               wp = WorkPackage.find_by(id: {sample_id})
               cf_key = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Issue Key')
@@ -82,6 +83,7 @@ try:
 except Exception as e:
     print(f"\n✗ Snapshot query failed: {e}")
     import traceback
+
     traceback.print_exc()
 
 print("\n" + "=" * 80)

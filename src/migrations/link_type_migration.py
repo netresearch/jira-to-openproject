@@ -811,16 +811,19 @@ class LinkTypeMigration(BaseMigration):
             # Only record link types that have custom fields (unmapped ones)
             cf_id = entry.get("custom_field_id")
             if cf_id:
-                provenance_mappings.append({
-                    "jira_key": jira_id,
-                    "jira_name": entry.get("jira_name"),
-                    "op_entity_id": cf_id,
-                })
+                provenance_mappings.append(
+                    {
+                        "jira_key": jira_id,
+                        "jira_name": entry.get("jira_name"),
+                        "op_entity_id": cf_id,
+                    },
+                )
 
         if provenance_mappings:
             try:
                 result = self.op_client.bulk_record_entity_provenance(
-                    "link_type", provenance_mappings,
+                    "link_type",
+                    provenance_mappings,
                 )
                 self.logger.info(
                     "Recorded link type provenance: %d success, %d failed",

@@ -264,15 +264,6 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
             assert len(results) == 5
             assert all(result == sample_jira_user_data for result in results)
 
-    @pytest.mark.skip("Skipped in YOLO mode for speed and simplicity")
-    def test_concurrent_calls_exceeding_limit_blocks_yolo(
-        self,
-        migrator_instance,
-        sample_jira_user_data,
-    ) -> None:
-        """Test 6+ concurrent calls properly block at new limit of 5."""
-        # Skipped for YOLO mode performance
-
     def test_max_concurrent_refreshes_constant_verification(
         self,
         migrator_instance,

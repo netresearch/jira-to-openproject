@@ -20,7 +20,6 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src import config
 from src.clients.jira_client import JiraClient
 from src.display import configure_logging
 
@@ -113,8 +112,11 @@ def cache_all_jira_metadata(
     # Filter out keys we already have
     if resume and existing_metadata:
         keys_to_fetch = [k for k in all_jira_keys if k not in existing_metadata]
-        logger.info("Skipping %d already cached, fetching %d remaining",
-                    len(all_jira_keys) - len(keys_to_fetch), len(keys_to_fetch))
+        logger.info(
+            "Skipping %d already cached, fetching %d remaining",
+            len(all_jira_keys) - len(keys_to_fetch),
+            len(keys_to_fetch),
+        )
     else:
         keys_to_fetch = all_jira_keys
 
@@ -132,7 +134,7 @@ def cache_all_jira_metadata(
 
     for i in range(0, len(keys_to_fetch), batch_size):
         batch_num = i // batch_size + 1
-        batch_keys = keys_to_fetch[i:i + batch_size]
+        batch_keys = keys_to_fetch[i : i + batch_size]
 
         logger.info(
             "Fetching batch %d/%d (%d keys)...",
@@ -168,12 +170,21 @@ def cache_all_jira_metadata(
     with_assignee = sum(1 for m in all_metadata.values() if m.get("assignee"))
     with_reporter = sum(1 for m in all_metadata.values() if m.get("reporter"))
 
-    logger.info("Issues with priority: %d (%.1f%%)",
-                with_priority, 100 * with_priority / len(all_metadata) if all_metadata else 0)
-    logger.info("Issues with assignee: %d (%.1f%%)",
-                with_assignee, 100 * with_assignee / len(all_metadata) if all_metadata else 0)
-    logger.info("Issues with reporter: %d (%.1f%%)",
-                with_reporter, 100 * with_reporter / len(all_metadata) if all_metadata else 0)
+    logger.info(
+        "Issues with priority: %d (%.1f%%)",
+        with_priority,
+        100 * with_priority / len(all_metadata) if all_metadata else 0,
+    )
+    logger.info(
+        "Issues with assignee: %d (%.1f%%)",
+        with_assignee,
+        100 * with_assignee / len(all_metadata) if all_metadata else 0,
+    )
+    logger.info(
+        "Issues with reporter: %d (%.1f%%)",
+        with_reporter,
+        100 * with_reporter / len(all_metadata) if all_metadata else 0,
+    )
 
     return all_metadata
 
@@ -181,7 +192,7 @@ def cache_all_jira_metadata(
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Cache Jira issue metadata for bulk OpenProject update"
+        description="Cache Jira issue metadata for bulk OpenProject update",
     )
     parser.add_argument(
         "--data-dir",

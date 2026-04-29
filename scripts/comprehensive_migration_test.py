@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Comprehensive NRS Migration Test Script
+"""Comprehensive NRS Migration Test Script
 Tests 10 specific issues with all known bug fixes applied.
 
 Fixes:
@@ -12,10 +11,9 @@ Approach: Single-phase migration with chronologically ordered journals
 """
 
 import json
-import logging
 import sys
 import time
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Add project root to path
@@ -23,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.config import logger, config
+from src.config import config, logger
 
 # Test issues - including known problematic ones
 TEST_ISSUES = [
@@ -32,17 +30,16 @@ TEST_ISSUES = [
     "NRS-191",  # From previous test
     "NRS-198",  # From previous test
     "NRS-204",  # From previous test
-    "NRS-42",   # Known Bug #10 issue (dates)
-    "NRS-59",   # Known Bug #10 issue (dates)
-    "NRS-66",   # Known Bug #10 issue (dates)
+    "NRS-42",  # Known Bug #10 issue (dates)
+    "NRS-59",  # Known Bug #10 issue (dates)
+    "NRS-66",  # Known Bug #10 issue (dates)
     "NRS-982",  # Known Bug #10 issue (dates)
-    "NRS-4003", # Known Bug #10 issue (extreme case)
+    "NRS-4003",  # Known Bug #10 issue (extreme case)
 ]
 
 
 def validate_and_fix_dates(wp_data: dict) -> dict:
-    """
-    Bug #10 fix: Validate and fix date constraints.
+    """Bug #10 fix: Validate and fix date constraints.
     Ensures due_date >= start_date or clears due_date.
 
     Returns modified wp_data with validation logging.
@@ -53,18 +50,18 @@ def validate_and_fix_dates(wp_data: dict) -> dict:
 
     if start_date and due_date:
         try:
-            from datetime import datetime, date
+            from datetime import date, datetime
 
             # Parse dates
             if isinstance(start_date, str):
-                start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
             elif isinstance(start_date, date):
                 start_dt = start_date
             else:
                 start_dt = None
 
             if isinstance(due_date, str):
-                due_dt = datetime.strptime(due_date, '%Y-%m-%d').date()
+                due_dt = datetime.strptime(due_date, "%Y-%m-%d").date()
             elif isinstance(due_date, date):
                 due_dt = due_date
             else:
@@ -76,18 +73,16 @@ def validate_and_fix_dates(wp_data: dict) -> dict:
                 logger.warning(
                     f"[Bug #10 FIX] {jira_key}: Invalid dates - "
                     f"due_date ({due_date}) is {days_diff} days BEFORE start_date ({start_date}). "
-                    f"Setting due_date to None."
+                    f"Setting due_date to None.",
                 )
                 wp_data["due_date"] = None
             else:
                 logger.info(
-                    f"[Bug #10 OK] {jira_key}: Date validation passed - "
-                    f"start={start_date}, due={due_date}"
+                    f"[Bug #10 OK] {jira_key}: Date validation passed - start={start_date}, due={due_date}",
                 )
         except Exception as e:
             logger.warning(
-                f"[Bug #10 FIX] {jira_key}: Date parsing failed ({e}), "
-                f"clearing due_date for safety"
+                f"[Bug #10 FIX] {jira_key}: Date parsing failed ({e}), clearing due_date for safety",
             )
             wp_data["due_date"] = None
 
@@ -95,8 +90,7 @@ def validate_and_fix_dates(wp_data: dict) -> dict:
 
 
 def collect_all_journal_entries(jira_issue: dict, jira_client: JiraClient) -> list:
-    """
-    Collect ALL journal entries (comments + changelog) for an issue.
+    """Collect ALL journal entries (comments + changelog) for an issue.
     Returns chronologically sorted list of journal entries.
     """
     journal_entries = []
@@ -107,22 +101,26 @@ def collect_all_journal_entries(jira_issue: dict, jira_client: JiraClient) -> li
     for comment in comments:
         created = comment.get("created", "")
         if created:
-            journal_entries.append({
-                "type": "comment",
-                "timestamp": created,
-                "data": comment,
-            })
+            journal_entries.append(
+                {
+                    "type": "comment",
+                    "timestamp": created,
+                    "data": comment,
+                },
+            )
 
     # Collect changelog entries
     changelog = jira_issue.get("changelog", {}).get("histories", [])
     for history in changelog:
         created = history.get("created", "")
         if created and history.get("items"):
-            journal_entries.append({
-                "type": "changelog",
-                "timestamp": created,
-                "data": history,
-            })
+            journal_entries.append(
+                {
+                    "type": "changelog",
+                    "timestamp": created,
+                    "data": history,
+                },
+            )
 
     # Sort ALL entries chronologically
     journal_entries.sort(key=lambda x: x.get("timestamp", ""))
@@ -130,7 +128,7 @@ def collect_all_journal_entries(jira_issue: dict, jira_client: JiraClient) -> li
     logger.info(
         f"[JOURNAL COLLECTION] {issue_key}: Found {len(journal_entries)} total journal entries "
         f"({sum(1 for e in journal_entries if e['type'] == 'comment')} comments, "
-        f"{sum(1 for e in journal_entries if e['type'] == 'changelog')} changelog)"
+        f"{sum(1 for e in journal_entries if e['type'] == 'changelog')} changelog)",
     )
 
     return journal_entries
@@ -142,8 +140,7 @@ def create_work_package_with_journals_single_phase(
     op_client: OpenProjectClient,
     user_mapping: dict,
 ) -> dict:
-    """
-    Bug #15 & #16 fix: Single-phase creation with proper journal ordering.
+    """Bug #15 & #16 fix: Single-phase creation with proper journal ordering.
 
     Creates work package with ALL journals in one operation, ensuring:
     1. All timestamps are chronologically ordered
@@ -175,7 +172,7 @@ def create_work_package_with_journals_single_phase(
 
     logger.info(
         f"[SINGLE-PHASE] {jira_key}: Creating WP at earliest timestamp {earliest_timestamp} "
-        f"with {len(journal_entries)} subsequent journal entries"
+        f"with {len(journal_entries)} subsequent journal entries",
     )
 
     # Step 3: Build Ruby script for single-phase creation
@@ -185,7 +182,7 @@ def create_work_package_with_journals_single_phase(
     # Prepare journal data for Ruby
     journals_data = []
     for i, entry in enumerate(journal_entries):
-        is_last = (i == len(journal_entries) - 1)
+        is_last = i == len(journal_entries) - 1
 
         # Determine validity_period
         entry_timestamp = entry.get("timestamp", "")
@@ -215,12 +212,14 @@ def create_work_package_with_journals_single_phase(
         user_dict = user_mapping.get(author_name) if author_name else None
         author_id = user_dict.get("openproject_id") if user_dict else 1
 
-        journals_data.append({
-            "notes": notes,
-            "author_id": author_id,
-            "created_at": entry_timestamp,
-            "validity_period": validity_period,
-        })
+        journals_data.append(
+            {
+                "notes": notes,
+                "author_id": author_id,
+                "created_at": entry_timestamp,
+                "validity_period": validity_period,
+            },
+        )
 
     # Step 4: Create WP with journals via Ruby
     ruby_script = f"""
@@ -259,18 +258,18 @@ def create_work_package_with_journals_single_phase(
           journal.validity_period = eval(j_data['validity_period'])  # Parse Ruby range
 
           if journal.save(validate: false)
-            puts "Journal created: version=\#{journal.version}"
+            puts "Journal created: version=\\#{journal.version}"
           else
-            puts "Journal error: \#{journal.errors.full_messages.join(', ')}"
+            puts "Journal error: \\#{journal.errors.full_messages.join(", ")}"
           end
         end
 
-        puts "SUCCESS wp_id=\#{wp_id}"
+        puts "SUCCESS wp_id=\\#{wp_id}"
       else
-        puts "ERROR: \#{wp.errors.full_messages.join(', ')}"
+        puts "ERROR: \\#{wp.errors.full_messages.join(", ")}"
       end
     rescue => e
-      puts "EXCEPTION: \#{e.message}"
+      puts "EXCEPTION: \\#{e.message}"
       puts e.backtrace.join("\\n")
     end
     """
@@ -283,22 +282,19 @@ def create_work_package_with_journals_single_phase(
             wp_id = int(result.split("wp_id=")[1].split()[0])
             logger.info(f"[SUCCESS] {jira_key}: Created WP {wp_id} with {len(journals_data)} journals")
             return {"success": True, "wp_id": wp_id, "error": None}
-        else:
-            logger.error(f"[FAILED] {jira_key}: {result}")
-            return {"success": False, "wp_id": None, "error": result}
+        logger.error(f"[FAILED] {jira_key}: {result}")
+        return {"success": False, "wp_id": None, "error": result}
     except Exception as e:
         logger.error(f"[EXCEPTION] {jira_key}: {e}")
         return {"success": False, "wp_id": None, "error": str(e)}
 
 
 def run_comprehensive_test():
-    """
-    Run comprehensive migration test with all bug fixes.
-    """
-    logger.info("="*80)
+    """Run comprehensive migration test with all bug fixes."""
+    logger.info("=" * 80)
     logger.info("COMPREHENSIVE NRS MIGRATION TEST")
     logger.info(f"Testing {len(TEST_ISSUES)} issues with all bug fixes")
-    logger.info("="*80)
+    logger.info("=" * 80)
 
     # Initialize clients
     jira_client = JiraClient(config=config.jira_config)
@@ -319,9 +315,9 @@ def run_comprehensive_test():
     }
 
     for issue_key in TEST_ISSUES:
-        logger.info(f"\n{'='*80}")
+        logger.info(f"\n{'=' * 80}")
         logger.info(f"Processing: {issue_key}")
-        logger.info(f"{'='*80}")
+        logger.info(f"{'=' * 80}")
 
         try:
             # Fetch Jira issue
@@ -361,30 +357,34 @@ def run_comprehensive_test():
                 logger.info(f"✅ {issue_key}: SUCCESS (WP ID: {result['wp_id']})")
             else:
                 results["failed"] += 1
-                results["errors"].append({
-                    "issue_key": issue_key,
-                    "error": result["error"],
-                })
+                results["errors"].append(
+                    {
+                        "issue_key": issue_key,
+                        "error": result["error"],
+                    },
+                )
                 logger.error(f"❌ {issue_key}: FAILED - {result['error']}")
 
         except Exception as e:
             results["failed"] += 1
-            results["errors"].append({
-                "issue_key": issue_key,
-                "error": str(e),
-            })
+            results["errors"].append(
+                {
+                    "issue_key": issue_key,
+                    "error": str(e),
+                },
+            )
             logger.error(f"❌ {issue_key}: EXCEPTION - {e}", exc_info=True)
 
         time.sleep(1)  # Rate limiting
 
     # Summary
-    logger.info("\n" + "="*80)
+    logger.info("\n" + "=" * 80)
     logger.info("TEST SUMMARY")
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info(f"Total:   {results['total']}")
     logger.info(f"Success: {results['success']}")
     logger.info(f"Failed:  {results['failed']}")
-    logger.info(f"Success Rate: {results['success']/results['total']*100:.1f}%")
+    logger.info(f"Success Rate: {results['success'] / results['total'] * 100:.1f}%")
 
     if results["errors"]:
         logger.info("\nERRORS:")

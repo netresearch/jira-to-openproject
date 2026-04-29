@@ -923,11 +923,16 @@ class UserMigration(BaseMigration):
                             first_name = "User"
                         if not last_name or not last_name.strip():
                             # Use jira_name as fallback, or "Unknown" if that's also empty
-                            last_name = user["jira_name"].strip() if user["jira_name"] and user["jira_name"].strip() else "Unknown"
+                            last_name = (
+                                user["jira_name"].strip()
+                                if user["jira_name"] and user["jira_name"].strip()
+                                else "Unknown"
+                            )
 
                         # Remove organization suffixes in brackets (e.g., "[DMK]", "[Tiracon]")
                         # These are common in Jira display names but OpenProject rejects square brackets
                         import re as _re
+
                         last_name = _re.sub(r"\s*\[.*?\]\s*$", "", last_name).strip()
                         last_name = _re.sub(r"\s*\(.*?\)\s*$", "", last_name).strip()  # Also parentheses
 
@@ -1098,13 +1103,18 @@ class UserMigration(BaseMigration):
                                 op_id = int(existing_op_user["id"])  # type: ignore[arg-type]
                                 target_mapping["openproject_id"] = op_id
                                 target_mapping["openproject_login"] = existing_op_user.get("login")
-                                target_mapping["openproject_email"] = existing_op_user.get("mail") or existing_op_user.get(
+                                target_mapping["openproject_email"] = existing_op_user.get(
+                                    "mail",
+                                ) or existing_op_user.get(
                                     "email",
                                 )
                                 target_mapping["matched_by"] = "username_existing"
 
                                 # Merge provenance data into cached OpenProject users
-                                def _apply_provenance(op_user: dict[str, Any], meta: dict[str, Any] = origin_meta) -> None:
+                                def _apply_provenance(
+                                    op_user: dict[str, Any],
+                                    meta: dict[str, Any] = origin_meta,
+                                ) -> None:
                                     if meta.get("origin_system"):
                                         op_user["j2o_origin_system"] = meta.get("origin_system")
                                     if meta.get("user_id"):
@@ -1510,7 +1520,9 @@ class UserMigration(BaseMigration):
                     success_rate,
                 )
 
-            message = f"User migration completed: {created}/{total} users created ({success_rate:.1f}%), {failed} failed"
+            message = (
+                f"User migration completed: {created}/{total} users created ({success_rate:.1f}%), {failed} failed"
+            )
 
             return ComponentResult(
                 success=is_success,
@@ -1528,4 +1540,3 @@ class UserMigration(BaseMigration):
                 message=f"User migration failed: {e}",
                 data={"error": str(e)},
             )
-

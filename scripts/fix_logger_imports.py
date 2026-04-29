@@ -15,10 +15,7 @@ def fix_logger_imports():
     python_files = []
     for root, dirs, files in os.walk(project_root):
         # Skip certain directories
-        if any(
-            skip in root
-            for skip in [".git", "__pycache__", ".venv", "venv", ".pytest_cache"]
-        ):
+        if any(skip in root for skip in [".git", "__pycache__", ".venv", "venv", ".pytest_cache"]):
             continue
 
         for file in files:
@@ -62,9 +59,13 @@ def fix_logger_imports():
                     # Find the last import statement and add after it
                     lines = new_content.split("\n")
                     for i, line in enumerate(lines):
-                        if line.strip().startswith(
-                            "import ",
-                        ) or line.strip().startswith("from ") or line.strip() == "":
+                        if (
+                            line.strip().startswith(
+                                "import ",
+                            )
+                            or line.strip().startswith("from ")
+                            or line.strip() == ""
+                        ):
                             continue
                         # Insert the import before this line
                         lines.insert(i, "from src.display import configure_logging")

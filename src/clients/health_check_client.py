@@ -49,25 +49,17 @@ class HealthSnapshot:
     @property
     def healthy(self) -> bool:
         """Return True if all checks are healthy or only warnings."""
-        return all(
-            check.healthy or check.severity != "ERROR" for check in self.checks.values()
-        )
+        return all(check.healthy or check.severity != "ERROR" for check in self.checks.values())
 
     @property
     def has_warnings(self) -> bool:
         """Return True if any checks have warnings."""
-        return any(
-            not check.healthy and check.severity == "WARNING"
-            for check in self.checks.values()
-        )
+        return any(not check.healthy and check.severity == "WARNING" for check in self.checks.values())
 
     @property
     def has_errors(self) -> bool:
         """Return True if any checks have errors."""
-        return any(
-            not check.healthy and check.severity == "ERROR"
-            for check in self.checks.values()
-        )
+        return any(not check.healthy and check.severity == "ERROR" for check in self.checks.values())
 
 
 @dataclass
@@ -227,15 +219,21 @@ class HealthCheckClient:
             free_mb = usage.free // (1024 * 1024)
 
             warning_threshold = self._get_threshold(
-                "local_disk_warning_mb", self.DEFAULT_LOCAL_DISK_WARNING_MB,
+                "local_disk_warning_mb",
+                self.DEFAULT_LOCAL_DISK_WARNING_MB,
             )
             error_threshold = self._get_threshold(
-                "local_disk_error_mb", self.DEFAULT_LOCAL_DISK_ERROR_MB,
+                "local_disk_error_mb",
+                self.DEFAULT_LOCAL_DISK_ERROR_MB,
             )
 
             return self._evaluate_threshold(
-                "local_disk_space", free_mb, warning_threshold, error_threshold,
-                units="MB", higher_is_worse=False,
+                "local_disk_space",
+                free_mb,
+                warning_threshold,
+                error_threshold,
+                units="MB",
+                higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -270,15 +268,21 @@ class HealthCheckClient:
             free_mb = free_kb // 1024
 
             warning_threshold = self._get_threshold(
-                "remote_disk_warning_mb", self.DEFAULT_REMOTE_DISK_WARNING_MB,
+                "remote_disk_warning_mb",
+                self.DEFAULT_REMOTE_DISK_WARNING_MB,
             )
             error_threshold = self._get_threshold(
-                "remote_disk_error_mb", self.DEFAULT_REMOTE_DISK_ERROR_MB,
+                "remote_disk_error_mb",
+                self.DEFAULT_REMOTE_DISK_ERROR_MB,
             )
 
             return self._evaluate_threshold(
-                "remote_disk_space", free_mb, warning_threshold, error_threshold,
-                units="MB", higher_is_worse=False,
+                "remote_disk_space",
+                free_mb,
+                warning_threshold,
+                error_threshold,
+                units="MB",
+                higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -312,15 +316,21 @@ class HealthCheckClient:
             free_mb = free_kb // 1024
 
             warning_threshold = self._get_threshold(
-                "container_disk_warning_mb", self.DEFAULT_CONTAINER_DISK_WARNING_MB,
+                "container_disk_warning_mb",
+                self.DEFAULT_CONTAINER_DISK_WARNING_MB,
             )
             error_threshold = self._get_threshold(
-                "container_disk_error_mb", self.DEFAULT_CONTAINER_DISK_ERROR_MB,
+                "container_disk_error_mb",
+                self.DEFAULT_CONTAINER_DISK_ERROR_MB,
             )
 
             return self._evaluate_threshold(
-                "container_disk_space", free_mb, warning_threshold, error_threshold,
-                units="MB", higher_is_worse=False,
+                "container_disk_space",
+                free_mb,
+                warning_threshold,
+                error_threshold,
+                units="MB",
+                higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -353,15 +363,21 @@ class HealthCheckClient:
             free_inodes = int(stdout.strip())
 
             warning_threshold = self._get_threshold(
-                "inodes_warning", self.DEFAULT_INODES_WARNING,
+                "inodes_warning",
+                self.DEFAULT_INODES_WARNING,
             )
             error_threshold = self._get_threshold(
-                "inodes_error", self.DEFAULT_INODES_ERROR,
+                "inodes_error",
+                self.DEFAULT_INODES_ERROR,
             )
 
             return self._evaluate_threshold(
-                "container_inodes", free_inodes, warning_threshold, error_threshold,
-                units="inodes", higher_is_worse=False,
+                "container_inodes",
+                free_inodes,
+                warning_threshold,
+                error_threshold,
+                units="inodes",
+                higher_is_worse=False,
             )
         except Exception as e:
             return HealthStatus(
@@ -394,15 +410,21 @@ class HealthCheckClient:
             file_count = int(stdout.strip())
 
             warning_threshold = self._get_threshold(
-                "file_count_warning", self.DEFAULT_FILE_COUNT_WARNING,
+                "file_count_warning",
+                self.DEFAULT_FILE_COUNT_WARNING,
             )
             error_threshold = self._get_threshold(
-                "file_count_error", self.DEFAULT_FILE_COUNT_ERROR,
+                "file_count_error",
+                self.DEFAULT_FILE_COUNT_ERROR,
             )
 
             return self._evaluate_threshold(
-                "temp_file_count", file_count, warning_threshold, error_threshold,
-                units="files", higher_is_worse=True,
+                "temp_file_count",
+                file_count,
+                warning_threshold,
+                error_threshold,
+                units="files",
+                higher_is_worse=True,
             )
         except Exception as e:
             return HealthStatus(
@@ -500,9 +522,7 @@ class HealthCheckClient:
 
         # Extract metrics for snapshot
         local_disk_free = (
-            int(checks["local_disk_space"].metric)
-            if isinstance(checks["local_disk_space"].metric, (int, float))
-            else 0
+            int(checks["local_disk_space"].metric) if isinstance(checks["local_disk_space"].metric, (int, float)) else 0
         )
         remote_disk_free = (
             int(checks["remote_disk_space"].metric)
@@ -515,14 +535,10 @@ class HealthCheckClient:
             else 0
         )
         container_inodes_free = (
-            int(checks["container_inodes"].metric)
-            if isinstance(checks["container_inodes"].metric, (int, float))
-            else 0
+            int(checks["container_inodes"].metric) if isinstance(checks["container_inodes"].metric, (int, float)) else 0
         )
         temp_file_count = (
-            int(checks["temp_file_count"].metric)
-            if isinstance(checks["temp_file_count"].metric, (int, float))
-            else 0
+            int(checks["temp_file_count"].metric) if isinstance(checks["temp_file_count"].metric, (int, float)) else 0
         )
 
         return HealthSnapshot(
@@ -536,7 +552,9 @@ class HealthCheckClient:
         )
 
     def cleanup_temp_files(
-        self, pattern: str = "j2o_*", max_age_minutes: int = 60,
+        self,
+        pattern: str = "j2o_*",
+        max_age_minutes: int = 60,
     ) -> CleanupResult:
         """Clean up old temp files matching pattern.
 
@@ -631,7 +649,8 @@ class HealthCheckClient:
         return True, issues
 
     def run_during_migration_check(
-        self, previous_snapshot: HealthSnapshot | None = None,
+        self,
+        previous_snapshot: HealthSnapshot | None = None,
     ) -> dict[str, Any]:
         """Run health checks during migration and check for degradation.
 

@@ -41,10 +41,11 @@ def main() -> None:
         logger.info("Jira connection successful!")
         # Explicit auth check against /myself
         import requests
+
         base = jira_client.base_url.rstrip("/")
         resp = requests.get(
             f"{base}/rest/api/2/myself",
-            headers={"Authorization": f"Bearer {jira_config.get('api_token','')}"},
+            headers={"Authorization": f"Bearer {jira_config.get('api_token', '')}"},
             timeout=15,
             verify=jira_client.verify_ssl,
         )

@@ -134,6 +134,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             session = getattr(self.jira_client.jira, "_session", None)
             if session is None:
                 import requests
+
                 # Fallback to unauthenticated request (unlikely to work)
                 logger.warning("Jira session not available, attempting unauthenticated download")
                 with requests.get(url, stream=True, timeout=60) as r:
@@ -362,7 +363,9 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             self.logger.exception("Failed to save attachment mapping")
 
     def _process_batch_end_to_end(
-        self, jira_keys: list[str], wp_map: dict[str, Any],
+        self,
+        jira_keys: list[str],
+        wp_map: dict[str, Any],
     ) -> tuple[int, int, dict[str, dict[str, int]]]:
         """Process a batch of issues: extract, download, upload, attach.
 
@@ -412,13 +415,15 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         continue
                     digest = self._sha256_of(local_path)
                     seen_digests.add(digest)
-                    ops.append({
-                        "jira_key": key,
-                        "work_package_id": int(wp_id),
-                        "local_path": local_path.as_posix(),
-                        "filename": filename,
-                        "digest": digest,
-                    })
+                    ops.append(
+                        {
+                            "jira_key": key,
+                            "work_package_id": int(wp_id),
+                            "local_path": local_path.as_posix(),
+                            "filename": filename,
+                            "digest": digest,
+                        },
+                    )
                 except Exception:
                     continue
 
@@ -491,7 +496,8 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 batch_keys = jira_keys[i : i + batch_size]
                 try:
                     updated, failed, mapping = self._process_batch_end_to_end(
-                        batch_keys, wp_map,
+                        batch_keys,
+                        wp_map,
                     )
                     total_updated += updated
                     total_failed += failed

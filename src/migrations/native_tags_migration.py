@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
 
 
-
 @register_entity_types("native_tags")
 class NativeTagsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:

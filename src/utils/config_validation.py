@@ -5,7 +5,6 @@ and string sanitization to prevent resource exhaustion and security vulnerabilit
 """
 
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -61,16 +60,19 @@ class ConfigurationValidationError(Exception):
 class SecurityValidator:
     """Centralized validation utilities with security-focused bounds checking and sanitization."""
 
-    # Security-focused parameter bounds
+    # Security-focused parameter bounds.
+    #
+    # Prior versions tied max_workers/max_concurrent_batches to os.cpu_count()
+    # so a small host couldn't accidentally spawn far more workers than cores.
+    # That coupling produced environment-dependent behaviour: developer
+    # machines with 12+ cores ran fine while 4-core CI runners rejected the
+    # same configuration. Use absolute constants instead — capping at the
+    # host CPU count is operator hygiene, not a security concern.
     NUMERIC_BOUNDS = {
         # Core processing parameters
         "batch_size": {"min": 1, "max": 500, "type": int},
-        "max_workers": {"min": 1, "max": min(os.cpu_count() or 4, 32), "type": int},
-        "max_concurrent_batches": {
-            "min": 1,
-            "max": min(os.cpu_count() or 4, 16),
-            "type": int,
-        },
+        "max_workers": {"min": 1, "max": 32, "type": int},
+        "max_concurrent_batches": {"min": 1, "max": 16, "type": int},
         "retry_attempts": {"min": 0, "max": 10, "type": int},
         "max_retries": {"min": 0, "max": 10, "type": int},
         # Rate limiting parameters
@@ -397,16 +399,22 @@ class SecurityValidator:
                 f"Estimated usage {total_estimated_memory:.1f}MB exceeds limit",
             )
 
-        # CPU oversubscription check - more conservative for I/O bound tasks
-        cpu_count = os.cpu_count() or 4
-        # Allow 1.5x CPU count for I/O bound tasks (migration is mostly I/O)
-        max_recommended_workers = int(cpu_count * 1.5)
+        # Worker oversubscription check.
+        #
+        # The earlier 1.5×cpu_count() heuristic was reasonable for CPU-bound
+        # work, but our migrations are predominantly I/O-bound (Jira and
+        # OpenProject API calls plus Rails console roundtrips), so a worker
+        # count well above the local core count is normal and beneficial.
+        # More importantly, tying this to os.cpu_count() made tests fail on
+        # 4-core CI runners while passing on 12-core developer hosts. Use a
+        # static recommended-cap that matches the static NUMERIC_BOUNDS cap.
+        max_recommended_workers = 32
         if max_workers > max_recommended_workers:
             msg = "max_workers"
             raise ConfigurationValidationError(
                 msg,
                 max_workers,
-                f"<= {max_recommended_workers} (1.5x CPU cores for I/O bound tasks)",
+                f"<= {max_recommended_workers} (recommended cap for migration workloads)",
                 "Excessive worker count may cause system instability",
             )
 

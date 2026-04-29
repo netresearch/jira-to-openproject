@@ -130,10 +130,12 @@ class WatcherMigration(BaseMigration):
                     if not user_id:
                         skipped += 1
                         continue
-                    watchers_to_create.append({
-                        "work_package_id": wp_id,
-                        "user_id": user_id,
-                    })
+                    watchers_to_create.append(
+                        {
+                            "work_package_id": wp_id,
+                            "user_id": user_id,
+                        },
+                    )
                 except Exception:
                     skipped += 1
                     continue
@@ -150,7 +152,9 @@ class WatcherMigration(BaseMigration):
             errors = bulk_result.get("failed", 0)
             logger.info(
                 "Bulk watchers: created=%d, skipped=%d, failed=%d",
-                created, bulk_skipped, errors,
+                created,
+                bulk_skipped,
+                errors,
             )
 
         result.details.update({"created": created, "skipped": skipped + bulk_skipped, "errors": errors})

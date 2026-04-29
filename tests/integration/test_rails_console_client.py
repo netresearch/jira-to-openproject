@@ -200,35 +200,6 @@ irb(main):002:0>
                 # Verify error message
                 assert "NameError: undefined local variable" in str(context.value)
 
-    @pytest.mark.skip(reason="Test requires complex subprocess/tmux recapture mocking that conflicts with execute() fallback logic")
-    def test_start_marker_not_found(self) -> None:
-        """Test handling when start marker is not found in output."""
-        output = """
-irb(main):001:0> load '/tmp/test_script.rb'
-Some unexpected output
-irb(main):002:0>
-"""
-        # Mock both _send_command_to_tmux and _get_console_state
-        with (
-            patch.object(
-                self.rails_client,
-                "_send_command_to_tmux",
-                return_value=output,
-            ),
-            patch.object(
-                self.rails_client,
-                "_get_console_state",
-            ) as mock_get_state,
-        ):
-            # Configure mock to return that console is NOT ready
-            mock_get_state.return_value = {"ready": False, "state": "unknown"}
-
-            # Now we should get an error about missing start marker
-            with pytest.raises(CommandExecutionError) as context:
-                self.rails_client.execute("load '/tmp/test_script.rb'")
-
-            assert "Start marker" in str(context.value)
-
     def test_end_marker_not_found(self) -> None:
         """Test handling when end marker is not found in output."""
         marker_id = "abcd1234"
@@ -289,35 +260,6 @@ open-project(prod)>
             with pytest.raises(RubyError) as ctx:
                 self.rails_client.execute("some failing command")
             assert "SystemStackError" in str(ctx.value) or "stack level too deep" in str(ctx.value)
-
-    @pytest.mark.skip(reason="Test output format doesn't match actual marker parsing logic - needs redesign")
-    def test_trailing_tmux_cmd_end_is_ignored(self) -> None:
-        """Trailing TMUX_CMD_END echoes after end marker must not be treated as errors."""
-        marker_id = "abcd1234"
-        output = f"""
-open-project(prod)>         # Execute the actual command
---EXEC_START--{marker_id}
-open-project(prod)*         begin
-open-project(prod)*           result = 1
-open-project(prod)*           puts "--EXEC_END--{marker_id}"
-open-project(prod)*         rescue => e
-open-project(prod)*           puts "--EXEC_ERROR--{marker_id}"
-open-project(prod)*           puts "Ruby error: "
-open-project(prod)>         end # --SCRIPT_END--{marker_id}
-open-project(prod)>
-=> nil
-open-project(prod)> puts 'TMUX_CMD_END_123'
-TMUX_CMD_END_123
-=> nil
-"""
-        with patch.object(
-            self.rails_client,
-            "_send_command_to_tmux",
-            return_value=output,
-        ):
-            # Should not raise; returns output between markers ("1")
-            res = self.rails_client.execute("no-op")
-            assert res is not None
 
     def test_ruby_error_pattern_detection(self) -> None:
         """Test detection of Ruby error patterns in output."""

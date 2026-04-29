@@ -120,8 +120,16 @@ def main() -> None:
     parser.add_argument("--skip-compose", action="store_true", help="Assume compose services are already running")
     parser.add_argument("--stop", action="store_true", help="Stop compose services after completion")
     parser.add_argument("--collect", action="store_true", help="Collect artefacts under var/rehearsal/<timestamp>")
-    parser.add_argument("--reset-wp-checkpoints", action="store_true", help="Reset work-package checkpoints before running")
-    parser.add_argument("--use-container", action="store_true", help="Run migration components inside the Docker test container")
+    parser.add_argument(
+        "--reset-wp-checkpoints",
+        action="store_true",
+        help="Reset work-package checkpoints before running",
+    )
+    parser.add_argument(
+        "--use-container",
+        action="store_true",
+        help="Run migration components inside the Docker test container",
+    )
     args = parser.parse_args()
 
     if args.use_container and not args.skip_compose:

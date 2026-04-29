@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,7 +40,7 @@ def test_update_project_checkpoint_persists_entry(migration: WorkPackageMigratio
 
     db_path = migration._checkpoint_db_path
     assert db_path.exists()
-    with sqlite3.connect(db_path) as conn:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
         row = conn.execute(
             """
             SELECT data FROM migration_checkpoints

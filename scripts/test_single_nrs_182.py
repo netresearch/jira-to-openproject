@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Simplest possible test: migrate ONLY NRS-182"""
-import sys
-sys.path.insert(0, '/home/sme/p/j2o')
 
-from src.migrations.work_package_migration import WorkPackageMigration
+import sys
+
+sys.path.insert(0, "/home/sme/p/j2o")
+
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.migrations.work_package_migration import WorkPackageMigration
 
 print("=" * 80)
 print("SIMPLE TEST: NRS-182 Only")
@@ -27,11 +29,12 @@ wpm._migrate_issues_batch(issues, batch_size=1)
 
 # Check result
 import json
-with open("/home/sme/p/j2o/var/data/work_package_mapping.json", 'r') as f:
+
+with open("/home/sme/p/j2o/var/data/work_package_mapping.json") as f:
     mapping = json.load(f)
 
-if 'NRS-182' in mapping:
-    wp_id = mapping['NRS-182']
+if "NRS-182" in mapping:
+    wp_id = mapping["NRS-182"]
     journals = op.get_work_package_journals(wp_id)
     count = len(journals)
 

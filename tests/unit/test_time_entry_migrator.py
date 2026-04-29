@@ -17,7 +17,10 @@ def mock_migration_config():
     """Mock migration_config to disable batch mode in tests."""
     with patch("src.utils.time_entry_migrator.config") as mock_config:
         mock_config.migration_config = MagicMock()
-        mock_config.migration_config.get.side_effect = lambda key, default=None: _test_migration_config.get(key, default)
+        mock_config.migration_config.get.side_effect = lambda key, default=None: _test_migration_config.get(
+            key,
+            default,
+        )
         yield mock_config
 
 

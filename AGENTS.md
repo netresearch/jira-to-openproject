@@ -1,6 +1,10 @@
-<!-- Managed by agent: keep sections & order; edit content, not structure. Last updated: 2026-02-09 -->
+<!-- Managed by agent: keep sections & order; edit content, not structure. Last verified: 2026-04-23 -->
 
 # AGENTS.md (root)
+
+## Overview
+
+**j2o** is a Python 3.14 migration toolset that moves project management data from Jira Server 9.x to OpenProject 15+/16.x — users, projects, work packages, custom fields, statuses, workflows, attachments, Tempo time logs, agile boards, and reporting artefacts. It is a 41-module ETL pipeline with a FastAPI dashboard.
 
 **Precedence:** The **closest AGENTS.md** to changed files wins. Root holds global defaults only.
 
@@ -25,7 +29,45 @@
 | `make migrate-start-ff` | Start migration with fast-forward | ~5s |
 | `make migrate-status` | Show migration status | ~2s |
 
-## File map
+## Setup
+```bash
+cp .env.example .env        # Configure credentials
+uv sync --frozen            # Install dependencies into .venv
+.venv/bin/pytest -x         # Verify setup
+```
+Prerequisites: Python 3.14+, [uv](https://docs.astral.sh/uv/), Docker (for container tests), SSH access to the OpenProject host.
+
+## Development
+
+- Create a feature branch: `git switch -c feat/<scope>`.
+- Iterate locally with `make dev-test` (fast path) before running `make container-test`.
+- Lint via `make lint`; format via `make format`.
+- Commit with Conventional Commits (`feat(scope):`, `fix:`, `docs:`, etc.).
+
+## Architecture
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full layer breakdown. Short form:
+
+```
+Jira API ─▶ src/clients/jira_client.py ─┐
+                                        ├─▶ src/migrations/*.py (ETL) ─▶ src/clients/openproject_client.py ─▶ OpenProject API / Rails console
+Tempo API ─▶ src/clients/tempo_client.py ┘
+```
+
+Every migration inherits `BaseMigration` and implements `_extract → _map → _load` (see the Golden samples section). Cross-cutting concerns — retries, checkpointing, mappings, provenance — live in `src/utils/` and `src/mappings/`.
+
+## Testing
+
+| Command | Runs | ~Time |
+|---------|------|-------|
+| `make dev-test` | All unit tests locally | ~2 s |
+| `make dev-test-fast` | Unit tests only | ~2 s |
+| `make container-test` | Unit tests inside Docker | ~30 s |
+| `make container-test-integration` | Integration tests (mocked) | ~30 s |
+
+Golden sample: `tests/unit/test_config_loader_security_enhanced.py`. New migration modules land with matching unit tests in `tests/unit/` and, when applicable, functional tests in `tests/functional/`.
+
+## File Map
 ```
 src/               → Core Python package (clients, migrations, mappings, models, utils)
 src/clients/       → Jira/OpenProject/SSH/Docker/RailsConsole adapters
@@ -58,6 +100,13 @@ var/               → Runtime data, logs, caches, checkpoints (gitignored)
 | Touching work-package flows | Run `make container-test TEST_OPTS="-k work_package"` |
 | Adding custom field | Update `src/mappings/mappings.py` and verify provenance |
 | Performance issue in Rails | Use `insert_all`/`pluck(:id).to_set` patterns, batch operations |
+
+## Critical constraints
+
+- **Python 3.14 PEP 649** — NEVER enable ruff's `TC001`/`TC002`/`TC003`; annotations are evaluated eagerly and `TYPE_CHECKING`-only imports break at runtime.
+- **Mappings proxy** — `BaseMigration.__init__` must use `self.mappings = config.mappings` (proxy), not `config.get_mappings()`; tests monkeypatch the proxy.
+- **Never commit secrets** — credentials belong in `.env.local`; verify via `git diff` before staging.
+- **Never work on main** — always land changes through feature branches and PRs.
 
 ## Boundaries
 **Always:** Check `git status` first · Use feature branches · Run `make dev-test` before commit

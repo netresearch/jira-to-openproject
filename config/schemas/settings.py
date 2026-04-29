@@ -30,23 +30,30 @@ class Settings(BaseSettings):
 
     # Jira Connection Settings
     jira_url: str = Field(
-        default="https://your-company.atlassian.net", description="Jira instance URL",
+        default="https://your-company.atlassian.net",
+        description="Jira instance URL",
     )
     jira_username: str = Field(
-        default="your-email@company.com", description="Jira username/email",
+        default="your-email@company.com",
+        description="Jira username/email",
     )
     jira_api_token: str = Field(
-        default="your_jira_api_token_here", description="Jira API token",
+        default="your_jira_api_token_here",
+        description="Jira API token",
     )
 
     # Jira Projects (from YAML config)
     jira_projects: list[str] | None = Field(
-        default=None, description="Projects to migrate (leave empty to migrate all)",
+        default=None,
+        description="Projects to migrate (leave empty to migrate all)",
     )
 
     # Jira API Settings
     jira_batch_size: int = Field(
-        default=100, ge=1, le=1000, description="Jira API batch size",
+        default=100,
+        ge=1,
+        le=1000,
+        description="Jira API batch size",
     )
     jira_fields: str = Field(
         default=(
@@ -59,7 +66,8 @@ class Settings(BaseSettings):
 
     # Jira ScriptRunner Plugin Configuration
     jira_scriptrunner_enabled: bool = Field(
-        default=False, description="Enable ScriptRunner integration",
+        default=False,
+        description="Enable ScriptRunner integration",
     )
     jira_scriptrunner_endpoint: str | None = Field(
         default="https://your-company.atlassian.net/rest/scriptrunner/latest",
@@ -76,7 +84,8 @@ class Settings(BaseSettings):
         description="OpenProject instance URL",
     )
     openproject_api_token: str = Field(
-        default="your_openproject_api_token_here", description="OpenProject API token",
+        default="your_openproject_api_token_here",
+        description="OpenProject API token",
     )
     openproject_api_key: str | None = Field(
         default="your_openproject_api_key_here",
@@ -85,21 +94,28 @@ class Settings(BaseSettings):
 
     # OpenProject SSH/Docker Remote Access Settings
     openproject_server: str | None = Field(
-        default="sobol.nr", description="SSH server hostname",
+        default="sobol.nr",
+        description="SSH server hostname",
     )
     openproject_user: str | None = Field(
-        default="sebastian.mendel", description="SSH username",
+        default="sebastian.mendel",
+        description="SSH username",
     )
     openproject_container: str | None = Field(
-        default="openproject-web-1", description="Docker container name",
+        default="openproject-web-1",
+        description="Docker container name",
     )
     openproject_tmux_session_name: str = Field(
-        default="rails_console", description="tmux session name",
+        default="rails_console",
+        description="tmux session name",
     )
 
     # OpenProject API Settings
     openproject_batch_size: int = Field(
-        default=50, ge=1, le=1000, description="OpenProject API batch size",
+        default=50,
+        ge=1,
+        le=1000,
+        description="OpenProject API batch size",
     )
 
     # ========================================================================
@@ -108,10 +124,14 @@ class Settings(BaseSettings):
 
     # Migration Behavior Configuration
     batch_size: int = Field(
-        default=100, ge=1, le=1000, description="Migration batch size",
+        default=100,
+        ge=1,
+        le=1000,
+        description="Migration batch size",
     )
     ssl_verify: bool = Field(
-        default=True, description="Enable SSL certificate verification",
+        default=True,
+        description="Enable SSL certificate verification",
     )
     log_level: str = Field(default="INFO", description="Logging level")
 
@@ -119,7 +139,8 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("./data"), description="Data directory")
     backup_dir: Path = Field(default=Path("./backups"), description="Backup directory")
     results_dir: Path = Field(
-        default=Path("./results"), description="Results directory",
+        default=Path("./results"),
+        description="Results directory",
     )
 
     # Migration Component Order (from YAML config)
@@ -145,10 +166,12 @@ class Settings(BaseSettings):
 
     # Migration Data Files
     mapping_file: Path = Field(
-        default=Path("data/id_mapping.json"), description="ID mapping file",
+        default=Path("data/id_mapping.json"),
+        description="ID mapping file",
     )
     attachment_path: Path = Field(
-        default=Path("data/attachments"), description="Attachment storage path",
+        default=Path("data/attachments"),
+        description="Attachment storage path",
     )
 
     # Migration Behavior Settings
@@ -168,10 +191,12 @@ class Settings(BaseSettings):
 
     # Database settings (from environment variables)
     postgres_password: str = Field(
-        default="testpass123", description="PostgreSQL password",
+        default="testpass123",
+        description="PostgreSQL password",
     )
     postgres_db: str = Field(
-        default="jira_migration", description="PostgreSQL database name",
+        default="jira_migration",
+        description="PostgreSQL database name",
     )
     postgres_user: str = Field(default="postgres", description="PostgreSQL username")
 
@@ -243,7 +268,7 @@ class Settings(BaseSettings):
         """Validate log level."""
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         if v.upper() not in valid_levels:
-            raise ValueError(f'Log level must be one of: {", ".join(valid_levels)}')
+            raise ValueError(f"Log level must be one of: {', '.join(valid_levels)}")
         return v.upper()
 
     @field_validator("component_order")
@@ -270,13 +295,13 @@ class Settings(BaseSettings):
         for component in v:
             if component not in valid_components:
                 raise ValueError(
-                    f'Invalid component: {component}. Valid components: {", ".join(valid_components)}',
+                    f"Invalid component: {component}. Valid components: {', '.join(valid_components)}",
                 )
 
         return v
 
     @model_validator(mode="after")
-    def validate_authentication(self) -> "Settings":
+    def validate_authentication(self) -> Settings:
         """Ensure proper authentication is configured."""
         # Placeholders are allowed because migrations run in a trusted admin context;
         # real credentials must be supplied via environment variables prior to production use.
@@ -298,7 +323,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def validate_test_mode(self) -> "Settings":
+    def validate_test_mode(self) -> Settings:
         """Validate test mode settings."""
         if self.test_mode and not (self.test_mock_mode or self.use_mock_apis):
             # In test mode, we should use mocks by default

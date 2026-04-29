@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""
-Comprehensive test for 10 NRS issues including known problematic ones.
+"""Comprehensive test for 10 NRS issues including known problematic ones.
 Uses existing migration infrastructure with enhanced validation and logging.
 """
 
 import json
 import logging
-import sys
 import subprocess
+import sys
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -26,22 +25,21 @@ TEST_ISSUES = [
     "NRS-191",  # From previous successful tests
     "NRS-198",  # From previous successful tests
     "NRS-204",  # From previous successful tests
-    "NRS-42",   # Known Bug #10 issue (due_date 3 days before start_date)
-    "NRS-59",   # Known Bug #10 issue (due_date 1 day before start_date)
-    "NRS-66",   # Known Bug #10 issue (due_date 9 days before start_date)
+    "NRS-42",  # Known Bug #10 issue (due_date 3 days before start_date)
+    "NRS-59",  # Known Bug #10 issue (due_date 1 day before start_date)
+    "NRS-66",  # Known Bug #10 issue (due_date 9 days before start_date)
     "NRS-982",  # Known Bug #10 issue (due_date 10 days before start_date)
-    "NRS-4003", # Known Bug #10 issue (due_date 2 YEARS before start_date - extreme case)
+    "NRS-4003",  # Known Bug #10 issue (due_date 2 YEARS before start_date - extreme case)
 ]
 
+
 def run_migration():
-    """
-    Run migration for test issues using existing infrastructure.
-    """
-    logger.info("="*80)
+    """Run migration for test issues using existing infrastructure."""
+    logger.info("=" * 80)
     logger.info("COMPREHENSIVE 10-ISSUE MIGRATION TEST")
     logger.info(f"Test issues: {', '.join(TEST_ISSUES)}")
     logger.info(f"Start time: {datetime.now().isoformat()}")
-    logger.info("="*80)
+    logger.info("=" * 80)
 
     # Update config to filter for test issues
     config_path = Path(__file__).parent.parent / "config" / "config.yaml"
@@ -50,8 +48,10 @@ def run_migration():
     # Run migration with specific issue filter
     cmd = [
         "python",
-        "-m", "src.main",
-        "--components", "work_packages",
+        "-m",
+        "src.main",
+        "--components",
+        "work_packages",
         "--no-backup",
         "--force",
     ]
@@ -62,6 +62,7 @@ def run_migration():
 
     # Set environment variable for JQL filter
     import os
+
     os.environ["J2O_TEST_JQL_FILTER"] = jql
 
     logger.info(f"Executing: {' '.join(cmd)}")
@@ -82,7 +83,7 @@ def run_migration():
 
         # Stream output in real-time
         for line in process.stdout:
-            print(line, end='')
+            print(line, end="")
             sys.stdout.flush()
 
         # Wait for completion
@@ -99,12 +100,10 @@ def run_migration():
 
 
 def analyze_results():
-    """
-    Analyze migration results and provide detailed report.
-    """
-    logger.info("\n" + "="*80)
+    """Analyze migration results and provide detailed report."""
+    logger.info("\n" + "=" * 80)
     logger.info("ANALYZING RESULTS")
-    logger.info("="*80)
+    logger.info("=" * 80)
 
     results_dir = Path(__file__).parent.parent / "var" / "results"
     data_dir = Path(__file__).parent.parent / "var" / "data"
@@ -123,7 +122,7 @@ def analyze_results():
 
     # Extract work package results
     wp_results = results.get("components", {}).get("work_packages", {})
-    logger.info(f"\nWork Packages Component:")
+    logger.info("\nWork Packages Component:")
     logger.info(f"  Success: {wp_results.get('success')}")
     logger.info(f"  Total Created: {wp_results.get('data', {}).get('total_created', 0)}")
     logger.info(f"  Total Issues: {wp_results.get('data', {}).get('total_issues', 0)}")
@@ -146,7 +145,7 @@ def analyze_results():
             # Show error details
             errors = result.get("errors", [])
             if errors:
-                logger.info(f"    Error Details:")
+                logger.info("    Error Details:")
                 for err in errors[:5]:  # Show first 5 errors
                     logger.info(f"      - Index {err.get('index')}: {err.get('errors')}")
 
@@ -177,9 +176,7 @@ def analyze_results():
 
 
 def main():
-    """
-    Main execution flow.
-    """
+    """Main execution flow."""
     logger.info("Starting comprehensive migration test...")
 
     # Run migration
@@ -191,9 +188,8 @@ def main():
     if success:
         logger.info("\n✅ Test completed successfully")
         return 0
-    else:
-        logger.error("\n❌ Test failed")
-        return 1
+    logger.error("\n❌ Test failed")
+    return 1
 
 
 if __name__ == "__main__":

@@ -28,10 +28,10 @@ print(f"Testing specific issues: {test_issues}")
 print("Starting direct migration (bypassing change detection)...")
 result = migration.migrate_work_packages(
     specific_issues=test_issues,
-    bypass_change_detection=True
+    bypass_change_detection=True,
 )
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("Migration complete!")
 print(f"Results: {result}")
-print("="*80)
+print("=" * 80)

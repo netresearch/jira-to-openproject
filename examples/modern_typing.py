@@ -40,7 +40,9 @@ class DataProcessor:
         self.handlers: dict[str, Callable[[dict[str, Any]], Any]] = {}
 
     def register_handler(
-        self, name: str, handler: Callable[[dict[str, Any]], Any],
+        self,
+        name: str,
+        handler: Callable[[dict[str, Any]], Any],
     ) -> None:
         """Register a data handler function.
 

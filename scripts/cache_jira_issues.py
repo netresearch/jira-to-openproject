@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Cache all Jira issues for relation migration to avoid session timeout."""
+
 from __future__ import annotations
 
 import json
@@ -9,9 +10,8 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import config  # noqa: E402
-from src.clients.jira_client import JiraClient  # noqa: E402
-from src.config import logger  # noqa: E402
+from src.clients.jira_client import JiraClient
+from src.config import logger
 
 
 def main() -> int:
@@ -39,7 +39,12 @@ def main() -> int:
     batch_size = 100
     for i in range(0, len(jira_keys), batch_size):
         batch_keys = jira_keys[i : i + batch_size]
-        logger.info("Fetching batch %d/%d (%d keys)...", i // batch_size + 1, (len(jira_keys) + batch_size - 1) // batch_size, len(batch_keys))
+        logger.info(
+            "Fetching batch %d/%d (%d keys)...",
+            i // batch_size + 1,
+            (len(jira_keys) + batch_size - 1) // batch_size,
+            len(batch_keys),
+        )
 
         try:
             batch_get = getattr(jira_client, "batch_get_issues", None)

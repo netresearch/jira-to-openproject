@@ -237,15 +237,12 @@ def main() -> int:
     """Main entry point."""
     # Parse command line arguments
     output_file: str | None = None
-    output_file = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else "var/data/openproject_custom_fields_complete.json"
-    )
+    output_file = sys.argv[1] if len(sys.argv) > 1 else "var/data/openproject_custom_fields_complete.json"
 
     # Get the custom fields
     fields: list[dict[str, Any]] = get_complete_custom_fields(
-        session_name="rails_console", output_file=output_file,
+        session_name="rails_console",
+        output_file=output_file,
     )
 
     return 0 if fields else 1

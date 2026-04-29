@@ -1,17 +1,9 @@
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.migrations.relation_migration import RelationMigration
-
-# Tests that run() and import EnhancedJiraClient are skipped on Python 3.14
-# due to a known issue with class definition during pytest imports
-_py314_skip = pytest.mark.skipif(
-    sys.version_info >= (3, 14),
-    reason="Python 3.14 has known issues with class definition during pytest imports",
-)
 
 
 class DummyOpClient:
@@ -32,7 +24,7 @@ class DummyOpClient:
         for r in relations:
             from_id = r["from_id"]
             to_id = r["to_id"]
-            rel_type = r["type"]
+            rel_type = r.get("relation_type") or r.get("type")
             if (from_id, to_id) not in self.relations:
                 self.created.append((from_id, to_id, rel_type))
                 self.relations.add((from_id, to_id))
@@ -104,7 +96,6 @@ def _make_issue(key: str, link_type_name: str, direction: str, target_key: str):
     return key, SimpleNamespace(fields=SimpleNamespace(issuelinks=[link]))
 
 
-@_py314_skip
 def test_run_skips_when_already_exists(monkeypatch: pytest.MonkeyPatch, _map_store):
     op = DummyOpClient()
     # Existing relation 10->20
@@ -124,7 +115,6 @@ def test_run_skips_when_already_exists(monkeypatch: pytest.MonkeyPatch, _map_sto
     assert res.success
 
 
-@_py314_skip
 def test_run_creates_with_swap(monkeypatch: pytest.MonkeyPatch, _map_store):
     op = DummyOpClient()
 

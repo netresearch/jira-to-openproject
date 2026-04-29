@@ -437,6 +437,7 @@ class EnhancedAuditTrailMigrator:
             True if this represents no change and should be skipped
 
         """
+
         # Normalize None and empty strings for comparison
         def normalize(val: Any) -> Any:
             if val is None:

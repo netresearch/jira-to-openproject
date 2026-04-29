@@ -768,16 +768,19 @@ class CustomFieldMigration(BaseMigration):
         for jira_id, entry in self.mapping.items():
             op_id = entry.get("openproject_id")
             if op_id:
-                provenance_mappings.append({
-                    "jira_key": jira_id,
-                    "jira_name": entry.get("jira_name"),
-                    "op_entity_id": op_id,
-                })
+                provenance_mappings.append(
+                    {
+                        "jira_key": jira_id,
+                        "jira_name": entry.get("jira_name"),
+                        "op_entity_id": op_id,
+                    },
+                )
 
         if provenance_mappings:
             try:
                 result = self.op_client.bulk_record_entity_provenance(
-                    "custom_field", provenance_mappings,
+                    "custom_field",
+                    provenance_mappings,
                 )
                 self.logger.info(
                     "Recorded custom field provenance: %d success, %d failed",

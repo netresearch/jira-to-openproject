@@ -108,19 +108,16 @@ class ConfigLoader:
         if "jira" in self.yaml_config and "projects" in self.yaml_config["jira"]:
             self.settings.jira_projects = self.yaml_config["jira"]["projects"]
             logger.debug(
-                "Applied Jira projects from YAML: %s", self.settings.jira_projects,
+                "Applied Jira projects from YAML: %s",
+                self.settings.jira_projects,
             )
 
         # Override component order from YAML
-        if (
-            "migration" in self.yaml_config
-            and "component_order" in self.yaml_config["migration"]
-        ):
-            self.settings.component_order = self.yaml_config["migration"][
-                "component_order"
-            ]
+        if "migration" in self.yaml_config and "component_order" in self.yaml_config["migration"]:
+            self.settings.component_order = self.yaml_config["migration"]["component_order"]
             logger.debug(
-                "Applied component order from YAML: %s", self.settings.component_order,
+                "Applied component order from YAML: %s",
+                self.settings.component_order,
             )
 
         # Override other YAML settings as needed
@@ -151,7 +148,8 @@ class ConfigLoader:
                     )
                 except (OSError, PermissionError) as e:
                     logger.warning(
-                        "Failed to read Docker secret: %s", e.__class__.__name__,
+                        "Failed to read Docker secret: %s",
+                        e.__class__.__name__,
                     )
             else:
                 logger.debug("Docker secret file not found: %s", secret_path)

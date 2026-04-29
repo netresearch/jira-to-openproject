@@ -1,15 +1,6 @@
-import sys
-
 import pytest
 
 from src.migrations.watcher_migration import WatcherMigration
-
-# Skip these tests on Python 3.14 due to a known issue with class definition
-# during pytest import mocking
-pytestmark = pytest.mark.skipif(
-    sys.version_info >= (3, 14),
-    reason="Python 3.14 has known issues with class definition during pytest imports",
-)
 
 
 class DummyOpClient:
@@ -23,9 +14,10 @@ class DummyOpClient:
 
     def bulk_add_watchers(self, watchers: list[dict]):
         self.bulk_watchers.extend(watchers)
-        # Track what was added for assertions
+        # Track what was added for assertions. Production calls this with
+        # {"work_package_id": ..., "user_id": ...} dicts.
         for w in watchers:
-            self.added.append((w["wp_id"], w["user_id"]))
+            self.added.append((w["work_package_id"], w["user_id"]))
         return {"created": len(watchers), "skipped": 0, "failed": 0}
 
 
@@ -51,18 +43,26 @@ def _map_store(monkeypatch: pytest.MonkeyPatch):
     return dummy
 
 
-def test_watcher_migration_adds_watchers(monkeypatch: pytest.MonkeyPatch, _map_store):
+def test_watcher_migration_adds_watchers(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
     op = DummyOpClient()
 
     class DummyJira:
         def get_issue_watchers(self, key: str):
             return [{"name": "alice"}]
 
-        def batch_get_issues(self, keys):
-            return {"J1": object()}
-
     jira = DummyJira()
     wm = WatcherMigration(jira_client=jira, op_client=op)  # type: ignore[arg-type]
+
+    # Production iterates a Jira issues cache on disk; seed a minimal one so
+    # the loop actually visits J1 instead of skipping on an empty dict.
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    (cache_dir / "jira_issues_cache.json").write_text('{"J1": {"key": "J1"}}')
+    wm.data_dir = cache_dir
 
     res = wm.run()
     assert res.success

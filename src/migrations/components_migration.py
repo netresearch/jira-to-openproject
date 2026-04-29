@@ -73,7 +73,9 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         materialized = {k: sorted(v) for k, v in by_project.items() if v}
         # Cache issues for reuse in _load() to avoid second Jira API call
         return ComponentResult(
-            success=True, extracted=sum(len(v) for v in materialized.values()), data={"by_project": materialized, "issues": issues},
+            success=True,
+            extracted=sum(len(v) for v in materialized.values()),
+            data={"by_project": materialized, "issues": issues},
         )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
@@ -162,7 +164,11 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         except Exception:
             logger.exception("Failed to persist category mapping")
 
-        return ComponentResult(success=True, created=created, data={"category_map": by_pid_name_to_id, "issues": cached_issues})
+        return ComponentResult(
+            success=True,
+            created=created,
+            data={"category_map": by_pid_name_to_id, "issues": cached_issues},
+        )
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         category_map: dict[str, dict[str, int]] = (mapped.data or {}).get("category_map", {}) if mapped.data else {}

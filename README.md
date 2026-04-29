@@ -1,6 +1,11 @@
 # Jira to OpenProject Migration Tool
 
-A robust, modular migration toolset for transferring project management data from Jira Server 9.11 to OpenProject 15. Built with Python 3.13, this tool handles users, projects, work packages, custom fields, statuses, workflows, and attachments.
+[![CI](https://github.com/netresearch/jira-to-openproject/actions/workflows/ci.yml/badge.svg)](https://github.com/netresearch/jira-to-openproject/actions/workflows/ci.yml)
+[![Security](https://github.com/netresearch/jira-to-openproject/actions/workflows/security.yml/badge.svg)](https://github.com/netresearch/jira-to-openproject/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+
+A robust, modular migration toolset for transferring project management data from Jira Server 9.x to OpenProject 15+/16.x. Built with Python 3.14, this tool handles users, projects, work packages, custom fields, statuses, workflows, and attachments.
 
 ## Features
 

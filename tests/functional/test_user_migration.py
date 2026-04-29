@@ -79,8 +79,6 @@ class TestUserMigration(unittest.TestCase):
             },
         }
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.user_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -89,21 +87,21 @@ class TestUserMigration(unittest.TestCase):
         mock_file: MagicMock,
         mock_exists: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extract_jira_users method."""
         # Setup mocks
-        mock_jira_instance = mock_jira_client.return_value
+        mock_jira_instance = MagicMock()
         mock_jira_instance.get_users.return_value = self.jira_users
 
-        mock_op_instance = mock_op_client.return_value
+        mock_op_instance = MagicMock()
 
         mock_get_path.return_value = Path("/tmp/test_data")
         mock_exists.return_value = True
 
         # Initialize migration
         migration = UserMigration(mock_jira_instance, mock_op_instance)
+        # Reset cached data populated by __init__ so extract_jira_users re-fetches
+        migration.jira_users = []
 
         # Call extract_jira_users
         result = migration.extract_jira_users()
@@ -115,8 +113,6 @@ class TestUserMigration(unittest.TestCase):
         assert len(result) == 2
         assert migration.jira_users == self.jira_users
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.user_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -125,14 +121,12 @@ class TestUserMigration(unittest.TestCase):
         mock_file: MagicMock,
         mock_exists: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extract_openproject_users method."""
         # Setup mocks
-        mock_jira_instance = mock_jira_client.return_value
+        mock_jira_instance = MagicMock()
 
-        mock_op_instance = mock_op_client.return_value
+        mock_op_instance = MagicMock()
         mock_op_instance.get_users.return_value = self.op_users
 
         mock_get_path.return_value = Path("/tmp/test_data")
@@ -140,6 +134,8 @@ class TestUserMigration(unittest.TestCase):
 
         # Initialize migration
         migration = UserMigration(mock_jira_instance, mock_op_instance)
+        # Reset cached data populated by __init__ so extract_openproject_users re-fetches
+        migration.op_users = []
 
         # Call extract_openproject_users
         result = migration.extract_openproject_users()
@@ -199,27 +195,21 @@ class TestUserMigration(unittest.TestCase):
         assert result["user2"]["openproject_email"] is None
         assert result["user2"]["matched_by"] == "none"
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.user_migration.config.get_path")
     @patch("src.migrations.user_migration.ProgressTracker")
-    @patch("src.migrations.user_migration.logger")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_missing_users(
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
-        mock_logger: MagicMock,
         mock_tracker: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the create_missing_users method."""
         # Set up mock OpenProject and Jira clients
-        mock_op_instance = mock_op_client.return_value
-        mock_jira_instance = mock_jira_client.return_value
+        mock_op_instance = MagicMock()
+        mock_jira_instance = MagicMock()
 
         # Configure jira_client to return test users
         jira_users = [
@@ -286,32 +276,31 @@ class TestUserMigration(unittest.TestCase):
             ):
                 migration.user_mapping = user_mapping
 
-                # Configure op_client to succeed when creating users
-                mock_op_instance.create_users_in_bulk.return_value = json.dumps(
-                    {
-                        "created_count": 2,
-                        "failed_count": 0,
-                        "created_users": [
-                            {
-                                "id": 101,
-                                "login": "test_user1",
-                                "email": "test1@example.com",
-                            },
-                            {
-                                "id": 102,
-                                "login": "test_user2",
-                                "email": "test2@example.com",
-                            },
-                        ],
-                        "failed_users": [],
-                    },
-                )
+                # Configure op_client to succeed when creating users via bulk_create_records
+                mock_op_instance.bulk_create_records.return_value = {
+                    "status": "success",
+                    "created": [
+                        {
+                            "index": 0,
+                            "id": 101,
+                            "login": "test_user1",
+                            "mail": "test1@example.com",
+                        },
+                        {
+                            "index": 1,
+                            "id": 102,
+                            "login": "test_user2",
+                            "mail": "test2@example.com",
+                        },
+                    ],
+                    "errors": [],
+                }
 
                 # Test create_missing_users method
                 result = migration.create_missing_users()
 
                 # Verify clients were called correctly
-                assert mock_op_instance.create_users_in_bulk.call_count == 1
+                assert mock_op_instance.bulk_create_records.call_count == 1
 
                 # Verify result
                 assert result["created_count"] == 2
@@ -319,14 +308,19 @@ class TestUserMigration(unittest.TestCase):
         # Clean up
         shutil.rmtree(data_dir)
 
+    def _make_migration(self, data_dir: Path) -> UserMigration:
+        """Construct ``UserMigration`` with mocked clients and a writable data_dir."""
+        migration = UserMigration(
+            jira_client=MagicMock(),
+            op_client=MagicMock(),
+        )
+        migration.data_dir = data_dir
+        return migration
+
     def test_build_fallback_email_basic(self) -> None:
         """Test basic fallback email generation."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            data_dir = Path(temp_dir)
-
-            # Create migration instance
-            migration = UserMigration()
-            migration.data_dir = data_dir
+            migration = self._make_migration(Path(temp_dir))
 
             # Test basic email generation
             email = migration._build_fallback_email("testuser")
@@ -335,11 +329,7 @@ class TestUserMigration(unittest.TestCase):
     def test_build_fallback_email_sanitization(self) -> None:
         """Test email sanitization for invalid characters."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            data_dir = Path(temp_dir)
-
-            # Create migration instance
-            migration = UserMigration()
-            migration.data_dir = data_dir
+            migration = self._make_migration(Path(temp_dir))
 
             # Test with invalid characters
             email = migration._build_fallback_email("test@user#$%")
@@ -352,11 +342,7 @@ class TestUserMigration(unittest.TestCase):
     def test_build_fallback_email_collision_handling(self) -> None:
         """Test email collision handling."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            data_dir = Path(temp_dir)
-
-            # Create migration instance
-            migration = UserMigration()
-            migration.data_dir = data_dir
+            migration = self._make_migration(Path(temp_dir))
 
             existing_emails = {"testuser@noreply.migration.local"}
 
@@ -372,11 +358,7 @@ class TestUserMigration(unittest.TestCase):
     def test_build_fallback_email_empty_login(self) -> None:
         """Test fallback email generation for empty login."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            data_dir = Path(temp_dir)
-
-            # Create migration instance
-            migration = UserMigration()
-            migration.data_dir = data_dir
+            migration = self._make_migration(Path(temp_dir))
 
             # Test with empty string (should use UUID)
             email = migration._build_fallback_email("")

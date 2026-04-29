@@ -108,8 +108,6 @@ class TestProjectMigration(unittest.TestCase):
             },
         }
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.project_migration.config.get_path")
     @patch("src.migrations.project_migration.config.migration_config")
     @patch("os.path.exists")
@@ -118,22 +116,28 @@ class TestProjectMigration(unittest.TestCase):
         mock_exists: MagicMock,
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test extracting projects from Jira."""
         # Create instance with mocked clients
-        jira_client = mock_jira_client.return_value
+        jira_client = MagicMock()
+        mock_op_client = MagicMock()
 
         # Setup the mock return value
         jira_client.get_projects = MagicMock(return_value=self.jira_projects)
 
-        # Mock migration config to force extraction
-        mock_migration_config.get.return_value = True  # Force extraction
+        # Mock migration config: only ``force`` must be truthy; other keys
+        # (notably ``jira_project_filter`` which must stay iterable) fall back
+        # to the caller-supplied default.
+        def _cfg_get(key: str, default=None):
+            if key == "force":
+                return True
+            return default
+
+        mock_migration_config.get.side_effect = _cfg_get
         mock_exists.return_value = False  # No cached file exists
 
         # Create the migration instance
-        migration = ProjectMigration(jira_client, mock_op_client.return_value)
+        migration = ProjectMigration(jira_client, mock_op_client)
 
         # We'll directly patch the _save_to_json method to avoid serialization issues
         with patch.object(migration, "_save_to_json"):
@@ -173,7 +177,7 @@ class TestProjectMigration(unittest.TestCase):
         mock_exists.return_value = False
 
         # Mock the config to return force=True
-        mock_migration_config.get.side_effect = lambda key, default=None: (True if key == "force" else default)
+        mock_migration_config.get.side_effect = lambda key, default=None: True if key == "force" else default
 
         # Create instance and patch the _save_to_json method to avoid serialization issues
         migration = ProjectMigration(mock_jira_instance, mock_op_instance)
@@ -618,38 +622,31 @@ def test_bulk_migrate_projects_security_injection_prevention(
     # Verify result is successful
     assert result.success is True
 
-    # Verify that all executed scripts are safe and properly escaped
+    # Verify that all executed scripts are safe and properly escaped.
+    # ``escape_ruby_single_quoted`` only escapes the two characters with
+    # special meaning inside Ruby single-quoted literals (``'`` and ``\\``)
+    # plus line terminators; ``#{...}`` is *not* an interpolation trigger in
+    # single-quoted strings, so it is intentionally left literal.
     assert len(executed_scripts) == 3, "Should have created 3 projects"
 
     for script in executed_scripts:
-        # Check that no dangerous Ruby patterns are present in the final script
-        assert "#{" not in script, "Ruby interpolation should be escaped"
-        assert "system(" not in script, "System calls should be escaped"
-        assert "exec(" not in script, "Exec calls should be escaped"
-        assert "exit " not in script, "Exit commands should be escaped"
-        assert "DROP TABLE" not in script, "SQL injection should be escaped"
-        assert "delete_all" not in script, "Rails destructive methods should be escaped"
-        assert "'; " not in script or script.count("'; ") <= 1, "SQL-style injections should be escaped"
+        # Every bare single quote from the payloads must be escaped.
+        # Count occurrences of ``\\'`` (escape sequence written by
+        # ``escape_ruby_single_quoted``) vs ``'`` on its own. Any ``'`` in
+        # the payload body should appear as ``\\'``.
+        assert "\\'" in script, "Single quotes from the payload must be escaped"
 
-        # Verify proper escaping is applied - single quotes should be escaped with backslashes
-        assert "\\'" in script or "'" not in script, "Single quotes should be escaped"
+        # Backslashes must be doubled so the Ruby parser keeps them literal.
+        assert "\\\\" in script or "\\" not in "".join(
+            str(p.get("description", "")) + str(p.get("name", "")) for p in malicious_projects
+        ), "Backslashes should be doubled"
 
-        # Verify dangerous patterns are properly neutralized by escaping
-        # We should see backslashes used as escape characters, not literal backslashes being double-escaped
-        malicious_content = "\n".join([str(p) for p in malicious_projects])
-
-        if "#{" in malicious_content:
-            assert "\\#" in script, "Ruby interpolation start should be escaped"
-        if "{" in malicious_content:
-            assert "\\{" in script, "Opening braces should be escaped"
-        if "}" in malicious_content:
-            assert "\\}" in script, "Closing braces should be escaped"
-
-    # Verify the scripts contain expected structure
+    # Verify the scripts still contain the expected Rails structure.
     for script in executed_scripts:
-        assert "Project.create!" in script, "Should create projects"
-        assert "p.enabled_module_names" in script, "Should enable modules"
-        assert "p.save!" in script, "Should save projects"
+        # The current implementation uses ``Project.new`` followed by
+        # ``p.save!`` rather than the single-shot ``Project.create!``.
+        assert "Project.new" in script, "Should construct a project"
+        assert "p.save!" in script, "Should save the project"
 
 
 def test_bulk_migrate_projects_ruby_escape_function(project_migration) -> None:
@@ -798,14 +795,22 @@ def test_persist_project_metadata_sanitizes_values(project_migration) -> None:
             avatar_val = call.kwargs.get("value")
 
     assert category_val is not None
-    assert "R'D" in category_val
+    # The category value contains the original ampersand and an escaped
+    # apostrophe (``\'``) produced by ``escape_ruby_single_quoted``.
+    assert "R&D" in category_val
+    assert "\\'s" in category_val
     assert avatar_val is not None
     assert "avatar" in avatar_val
 
 
 @patch("src.migrations.project_migration.logger")
 def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
-    """Assign project lead should grant role membership and persist provenance."""
+    """Assign project lead should grant role membership and persist provenance.
+
+    The current implementation persists two project attributes: the user
+    reference (``Jira Project Lead``) and the display name
+    (``Jira Project Lead Display``).
+    """
     migration = ProjectMigration.__new__(ProjectMigration)
     migration.op_client = MagicMock()
     migration._extract_jira_lead = Mock(return_value=("sebastian", "Sebastian Mendel"))
@@ -819,18 +824,27 @@ def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
         user_id=42,
         role_ids=[7],
     )
-    migration.op_client.upsert_project_attribute.assert_called_once_with(
-        project_id=303202,
-        name=PROJECT_LEAD_CF_NAME,
-        value="42",
-        field_format="user",
-    )
+    assert migration.op_client.upsert_project_attribute.call_count == 2
+    calls = migration.op_client.upsert_project_attribute.call_args_list
+    assert calls[0].kwargs == {
+        "project_id": 303202,
+        "name": PROJECT_LEAD_CF_NAME,
+        "value": "42",
+        "field_format": "user",
+    }
+    assert calls[1].kwargs["name"].endswith("Display")
+    assert calls[1].kwargs["value"] == "Sebastian Mendel"
+    assert calls[1].kwargs["field_format"] == "string"
     mock_logger.debug.assert_not_called()
 
 
 @patch("src.migrations.project_migration.logger")
 def test_assign_project_lead_missing_user_mapping(mock_logger: MagicMock) -> None:
-    """Skip assignment when the Jira lead cannot be mapped to OpenProject."""
+    """Skip role assignment when the Jira lead cannot be mapped to OpenProject.
+
+    Two textual attributes (login + display name) are still persisted for
+    downstream provenance.
+    """
     migration = ProjectMigration.__new__(ProjectMigration)
     migration.op_client = MagicMock()
     migration._extract_jira_lead = Mock(return_value=("ghost.user", "Ghost"))
@@ -840,10 +854,14 @@ def test_assign_project_lead_missing_user_mapping(mock_logger: MagicMock) -> Non
     migration._assign_project_lead(1, {"key": "SRVAC"})
 
     migration.op_client.assign_user_roles.assert_not_called()
-    migration.op_client.upsert_project_attribute.assert_called_once()
-    call = migration.op_client.upsert_project_attribute.call_args
-    assert call.kwargs["field_format"] == "string"
-    assert "ghost.user" in call.kwargs["value"]
+    assert migration.op_client.upsert_project_attribute.call_count == 2
+    calls = migration.op_client.upsert_project_attribute.call_args_list
+    # Primary attribute records the login as a string fallback (no mapping)
+    assert calls[0].kwargs["field_format"] == "string"
+    assert "ghost.user" in calls[0].kwargs["value"]
+    # Display attribute captures the human-readable name
+    assert calls[1].kwargs["field_format"] == "string"
+    assert calls[1].kwargs["value"] == "Ghost"
     mock_logger.debug.assert_called_once()
 
 

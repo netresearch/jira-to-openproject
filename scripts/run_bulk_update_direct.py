@@ -17,7 +17,7 @@ BATCH_SIZE = 500
 SSH_HOST = "sobol.nr"
 CONTAINER = "openproject-web-1"
 
-RUBY_SCRIPT = '''
+RUBY_SCRIPT = """
 require 'json'
 require 'time'
 
@@ -50,7 +50,7 @@ ActiveRecord::Base.transaction do
 end
 
 puts results.to_json
-'''
+"""
 
 
 def run_batch_update(updates: list[dict], batch_num: int, total_batches: int) -> dict:
@@ -63,9 +63,11 @@ def run_batch_update(updates: list[dict], batch_num: int, total_batches: int) ->
     try:
         result = subprocess.run(
             [
-                "ssh", SSH_HOST,
-                f"docker exec -i {CONTAINER} bundle exec rails runner '{RUBY_SCRIPT}'"
+                "ssh",
+                SSH_HOST,
+                f"docker exec -i {CONTAINER} bundle exec rails runner '{RUBY_SCRIPT}'",
             ],
+            check=False,
             input=json_data,
             capture_output=True,
             text=True,
@@ -74,7 +76,7 @@ def run_batch_update(updates: list[dict], batch_num: int, total_batches: int) ->
 
         if result.returncode == 0:
             try:
-                return json.loads(result.stdout.strip().split('\n')[-1])
+                return json.loads(result.stdout.strip().split("\n")[-1])
             except json.JSONDecodeError:
                 return {"updated": 0, "skipped": 0, "errors": [{"error": f"Parse error: {result.stdout[-200:]}"}]}
         else:
@@ -103,7 +105,7 @@ def main():
 
     for i in range(0, len(all_keys), BATCH_SIZE):
         batch_num = i // BATCH_SIZE + 1
-        batch_keys = all_keys[i:i + BATCH_SIZE]
+        batch_keys = all_keys[i : i + BATCH_SIZE]
 
         print(f"Processing batch {batch_num}/{total_batches} ({len(batch_keys)} WPs)...", end=" ", flush=True)
 
@@ -115,7 +117,9 @@ def main():
         if result.get("errors"):
             total_errors.extend(result["errors"])
 
-        print(f"updated={result.get('updated', 0)}, skipped={result.get('skipped', 0)}, errors={len(result.get('errors', []))}")
+        print(
+            f"updated={result.get('updated', 0)}, skipped={result.get('skipped', 0)}, errors={len(result.get('errors', []))}",
+        )
 
         # Save progress
         progress = {
@@ -137,11 +141,15 @@ def main():
 
     # Save final results
     with open("var/data/bulk_update_results.json", "w") as f:
-        json.dump({
-            "updated": total_updated,
-            "skipped": total_skipped,
-            "errors": total_errors[:100],  # First 100 errors only
-        }, f, indent=2)
+        json.dump(
+            {
+                "updated": total_updated,
+                "skipped": total_skipped,
+                "errors": total_errors[:100],  # First 100 errors only
+            },
+            f,
+            indent=2,
+        )
 
 
 if __name__ == "__main__":

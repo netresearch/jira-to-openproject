@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
-"""
-Simple test for NRS migration with 10 specific issues.
+"""Simple test for NRS migration with 10 specific issues.
 Tests all bug fixes with comprehensive validation.
 """
 
-import sys
-import time
-import subprocess
-import tempfile
 import os
+import subprocess
+import sys
+import tempfile
+import time
 from datetime import datetime
 
 sys.path.insert(0, "/home/sme/p/j2o")
 
-from src.migrations.work_package_migration import WorkPackageMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.config import logger
+from src.migrations.work_package_migration import WorkPackageMigration
 
 # Test issues - including known problematic ones from Bug #10
 TEST_ISSUES = [
-    "NRS-171", "NRS-182", "NRS-191", "NRS-198", "NRS-204",
-    "NRS-42", "NRS-59", "NRS-66", "NRS-982", "NRS-4003"
+    "NRS-171",
+    "NRS-182",
+    "NRS-191",
+    "NRS-198",
+    "NRS-204",
+    "NRS-42",
+    "NRS-59",
+    "NRS-66",
+    "NRS-982",
+    "NRS-4003",
 ]
 
 print("=" * 80)
@@ -41,7 +48,7 @@ wpm = WorkPackageMigration(jira_client=jira, op_client=op)
 
 # Step 1: DELETE existing test work packages for clean test
 print("\nStep 1: Cleaning up existing test work packages...")
-test_keys_str = ' '.join(TEST_ISSUES)
+test_keys_str = " ".join(TEST_ISSUES)
 ruby_cleanup = f"""
 cf = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Origin Key')
 test_keys = %w[{test_keys_str}]
@@ -62,16 +69,17 @@ end
 puts "Total deleted: #{{deleted_count}}"
 """
 
-with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
     f.write(ruby_cleanup)
     ruby_file = f.name
 
 result = subprocess.run(
     f"cat {ruby_file} | ssh sobol.nr 'docker exec -i openproject-web-1 bundle exec rails runner -'",
+    check=False,
     shell=True,
     capture_output=True,
     text=True,
-    timeout=60
+    timeout=60,
 )
 
 print(result.stdout)
@@ -87,12 +95,12 @@ print("\nIssue Details:")
 print("-" * 80)
 for key, issue in issues_dict.items():
     summary = issue.fields.summary[:50]
-    start_date = getattr(issue.fields, 'customfield_11490', None)
-    due_date = getattr(issue.fields, 'duedate', None)
+    start_date = getattr(issue.fields, "customfield_11490", None)
+    due_date = getattr(issue.fields, "duedate", None)
 
     date_status = "OK"
     if start_date and due_date and due_date < start_date:
-        date_status = f"⚠ INVALID (due < start)"
+        date_status = "⚠ INVALID (due < start)"
 
     print(f"{key:10s} | {date_status:20s} | {summary}")
 
@@ -113,7 +121,7 @@ try:
         project_keys=["NRS"],
         components=["work_packages"],
         dry_run=False,
-        max_issues=10  # First 10 issues from NRS project
+        max_issues=10,  # First 10 issues from NRS project
     )
 
     duration = time.time() - start_time
@@ -165,16 +173,17 @@ puts "SUMMARY: #{{success_count}}/#{{test_keys.length}} successful"
 puts "SUCCESS RATE: #{{(success_count.to_f / test_keys.length * 100).round(1)}}%"
 """
 
-with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
     f.write(ruby_verify)
     ruby_file = f.name
 
 result = subprocess.run(
     f"cat {ruby_file} | ssh sobol.nr 'docker exec -i openproject-web-1 bundle exec rails runner -'",
+    check=False,
     shell=True,
     capture_output=True,
     text=True,
-    timeout=60
+    timeout=60,
 )
 
 print(result.stdout)

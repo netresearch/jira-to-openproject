@@ -151,27 +151,23 @@ class TestAccountMigration(unittest.TestCase):
             assert len(result) == 2
             assert migration.tempo_accounts == self.tempo_accounts
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
     @patch("src.migrations.account_migration.config.get_path")
     @patch("os.path.exists")
-    @patch("pathlib.Path.open", new_callable=mock_open)
+    @patch("pathlib.Path.open", new_callable=mock_open, read_data="[]")
     def test_extract_openproject_projects(
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
         mock_get_path: MagicMock,
-        mock_op_client: MagicMock,
-        mock_jira_client: MagicMock,
     ) -> None:
         """Test the extract_openproject_projects method."""
-        # Setup mocks
-        mock_jira_instance = mock_jira_client.return_value
-        mock_op_instance = mock_op_client.return_value
+        mock_jira_instance = MagicMock()
+        mock_op_instance = MagicMock()
         mock_op_instance.get_projects.return_value = self.op_projects
 
         mock_get_path.return_value = Path("/tmp/test_data")
-        mock_exists.return_value = True
+        # ``False`` so ``_load_from_json`` does not try to parse mock payloads
+        mock_exists.return_value = False
 
         # Initialize migration
         migration = AccountMigration(mock_jira_instance, mock_op_instance)

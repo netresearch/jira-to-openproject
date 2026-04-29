@@ -44,7 +44,6 @@ from src.clients.openproject_client import (
     JsonParseError,
     OpenProjectClient,
     QueryExecutionError,
-    RecordNotFoundError,
 )
 from src.clients.rails_console_client import RubyError
 
@@ -232,23 +231,6 @@ class TestParseRailsOutput:
 class TestQueryExecution:
     """Tests for query execution and modification logic."""
 
-    @pytest.mark.skip(
-        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored",
-    )
-    def test_execute_query_to_json_file_uses_pagination_for_collection_query(
-        self,
-        op_client,
-    ) -> None:
-        """Ensure collection queries use proper pagination instead of hardcoded limits."""
-        # Arrange
-        op_client._execute_batched_query = MagicMock(return_value=[])
-
-        # Act
-        op_client.execute_query_to_json_file("Project.all")
-
-        # Assert: pagination helper invoked for model
-        op_client._execute_batched_query.assert_called_once_with("Project", timeout=None)
-
     def test_console_error_detection_strict_patterns(self, op_client) -> None:
         """Ensure only EXEC_ERROR lines or severe patterns trigger QueryExecutionError."""
         # Arrange: benign output with TMUX_CMD_END echo
@@ -281,41 +263,6 @@ open-project(prod)>
 
         with _pytest.raises(QueryExecutionError):
             op_client._check_console_output_for_errors(severe_output, context="execute_large_query_to_json_file")
-
-    @pytest.mark.skip(reason="execute_query_to_json_file no longer calls execute_query directly - method refactored")
-    @pytest.mark.parametrize(
-        ("original_query", "expected_modified_query"),
-        [
-            ("User.count", "(User.count).to_json"),
-            ("User.find_by(id: 1)", "(User.find_by(id: 1)).to_json"),
-            ("User.all.map(&:name)", "(User.all.map(&:name)).to_json"),
-            (
-                "Project.all.to_json",
-                "(Project.all.to_json).to_json",
-            ),  # a bit weird but shows it doesn't double-add limit
-        ],
-    )
-    def test_execute_query_to_json_file_modifies_queries_correctly(
-        self,
-        op_client,
-        original_query,
-        expected_modified_query,
-    ) -> None:
-        """Verify the query modification logic for various query types.
-        This tests the brittle string-based heuristics for query modification.
-        """
-        # Arrange
-        op_client.execute_query = MagicMock(return_value='""')
-        op_client._parse_rails_output = MagicMock(return_value="")
-
-        # Act
-        op_client.execute_query_to_json_file(original_query)
-
-        # Assert
-        op_client.execute_query.assert_called_once_with(
-            expected_modified_query,
-            timeout=None,
-        )
 
     def test_get_users_file_based_retrieval_success(
         self,
@@ -387,20 +334,6 @@ class TestErrorPropagation:
     wrapped and propagated as specific, high-signal exceptions.
     """
 
-    @pytest.mark.skip(reason="update_record error handling changed - no longer uses _send_command_to_tmux directly")
-    def test_update_record_not_found(self, op_client, mock_clients) -> None:
-        """Verify that a 'Record not found' RubyError during an update
-        is correctly translated to a RecordNotFoundError.
-        """
-        # Arrange
-        mock_clients["rails_client"]._send_command_to_tmux.side_effect = RubyError(
-            "Record not found",
-        )
-
-        # Act & Assert
-        with pytest.raises(RecordNotFoundError, match="User with ID 999 not found"):
-            op_client.update_record("User", 999, {"name": "new name"})
-
     def test_update_record_generic_ruby_error(self, op_client, mock_clients) -> None:
         """Verify a generic RubyError is wrapped in QueryExecutionError."""
         # Arrange
@@ -434,38 +367,6 @@ class TestQueryModificationEdgeCases:
     """Additional tests for the brittle query modification logic that can cause data loss.
     These tests expose the dangerous hardcoded .limit(5) behavior.
     """
-
-    @pytest.mark.skip(
-        reason="execute_query_to_json_file no longer routes to _execute_batched_query - method refactored",
-    )
-    def test_collection_queries_use_pagination_not_hardcoded_limit(self, op_client) -> None:
-        """Regression: ensure no silent truncation via hardcoded limit; use batching."""
-        # Arrange
-        op_client._execute_batched_query = MagicMock(return_value=[])
-
-        # Act
-        op_client.execute_query_to_json_file("WorkPackage.all")
-
-        # Assert
-        op_client._execute_batched_query.assert_called_once_with("WorkPackage", timeout=None)
-
-    @pytest.mark.skip(reason="execute_query_to_json_file no longer calls execute_query directly - method refactored")
-    def test_query_modification_keyword_detection_brittleness(self, op_client) -> None:
-        """Test the brittle keyword-based detection for query modification.
-        Shows how the string-matching logic can be easily fooled.
-        """
-        # Arrange
-        op_client.execute_query = MagicMock(return_value="[]")
-        op_client._parse_rails_output = MagicMock(return_value=[])
-
-        # Act: Query that contains keywords but isn't a collection query
-        op_client.execute_query_to_json_file("User.count # all users")
-
-        # Assert: Should not add limit to count queries, only .to_json
-        op_client.execute_query.assert_called_once_with(
-            "(User.count # all users).to_json",
-            timeout=None,
-        )
 
     def test_static_filename_race_condition(self, op_client, mock_clients) -> None:
         """Test the race condition caused by static temp filenames.

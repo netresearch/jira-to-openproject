@@ -167,7 +167,8 @@ class TimeEntryMigration(BaseMigration):
             total_migrated = result.get("total_time_entries", {}).get("migrated", 0)
             total_failed = result.get("total_time_entries", {}).get("failed", 0)
             total_discovered = result.get("jira_work_logs", {}).get("discovered", 0) + result.get(
-                "tempo_time_entries", {},
+                "tempo_time_entries",
+                {},
             ).get("discovered", 0)
 
             # Zero-created gating: discovered > 0 but migrated == 0 should fail

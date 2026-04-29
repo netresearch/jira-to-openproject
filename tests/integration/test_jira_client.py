@@ -22,7 +22,28 @@ from src.clients.jira_client import (
 )
 
 
-@pytest.mark.skip(reason="Tests require actual Jira instance connection")
+def _live_jira_enabled() -> bool:
+    """Live Jira smoke tests must be explicitly opted into.
+
+    Requires:
+      - J2O_LIVE_JIRA=true (explicit opt-in)
+      - J2O_JIRA_URL / J2O_JIRA_API_TOKEN set to real values (not the
+        placeholders shipped in .env.example).
+    """
+    if os.getenv("J2O_LIVE_JIRA", "").lower() not in {"1", "true", "yes"}:
+        return False
+    url = os.getenv("J2O_JIRA_URL", "")
+    token = os.getenv("J2O_JIRA_API_TOKEN", "")
+    if not url or not token:
+        return False
+    placeholder_markers = ("your-company", "your_jira", "jira.local", "example.com")
+    return not any(m in url.lower() or m in token.lower() for m in placeholder_markers)
+
+
+@pytest.mark.skipif(
+    not _live_jira_enabled(),
+    reason="Live Jira smoke tests require J2O_LIVE_JIRA=true plus real J2O_JIRA_URL/J2O_JIRA_API_TOKEN",
+)
 class TestJiraClientIntegration(unittest.TestCase):
     """Integration tests for JiraClient with real Jira instance."""
 

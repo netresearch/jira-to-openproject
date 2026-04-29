@@ -1,56 +1,61 @@
-FROM python:3.14-slim
+# syntax=docker/dockerfile:1.7
+FROM python:3.14-slim AS test
 
-# Set environment variables
+LABEL maintainer="Netresearch DTT GmbH <sebastian.mendel@netresearch.de>" \
+      org.opencontainers.image.title="jira-to-openproject-test" \
+      org.opencontainers.image.description="Test image for jira-to-openproject" \
+      org.opencontainers.image.source="https://github.com/netresearch/jira-to-openproject" \
+      org.opencontainers.image.licenses="MIT"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies (minimal attack surface)
+# System deps (build tools kept here since tests may compile extensions)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
-    python3-dev \
-    openssh-client \
-    tmux \
+        build-essential \
+        curl \
+        git \
+        libffi-dev \
+        libssl-dev \
+        openssh-client \
+        python3-dev \
+        tmux \
     && rm -rf /var/lib/apt/lists/*
-# SECURITY: docker.io package removed - uses SSH-based remote Docker client
-# See src/clients/docker_client.py for remote Docker operations via SSH
+# docker.io intentionally omitted - uses SSH-based remote Docker client
 
-# Install uv (modern Python package manager) globally
+# Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 
-# Create a non-root user early (before copying files)
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
-# Copy project metadata and lock file first (for optimal caching)
+# Dependency layer (cached)
 COPY pyproject.toml uv.lock ./
-
-# Install runtime + dev/test dependencies system-wide from lock
 RUN uv sync --frozen --no-install-project
 
-# Copy project files (this layer changes most frequently, so it's last)
+# Source layer
 COPY --chown=appuser:appuser . .
 
-# Create var directories with proper ownership for logs/data
+# Runtime directories
 RUN mkdir -p /app/var/logs /app/var/data /app/var/run && \
     chown -R appuser:appuser /app/var
 
-# Install the project and test extras
+# Install project with dev+test extras
 RUN uv pip install --system . && \
     uv pip install --system '.[dev,test]'
 
-# Switch to non-root user after installation
 USER appuser
 
-# Set default command for testing
-CMD ["sleep", "infinity"]
+# Test image is also long-running (`sleep infinity`) — the healthcheck
+# verifies pytest can collect from the test suite. A 0-test result still
+# counts as healthy; a collection error or missing pytest does not.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=20s --retries=3 \
+    CMD pytest --collect-only -q tests/unit > /dev/null 2>&1 || exit 1
 
+CMD ["sleep", "infinity"]

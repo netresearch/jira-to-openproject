@@ -600,10 +600,12 @@ class WorkPackageContentMigration(BaseMigration):
         description_updates = []
         for item in collected_items:
             if item["description_update"]:
-                description_updates.append({
-                    "id": item["wp_id"],
-                    "description": item["description_update"],
-                })
+                description_updates.append(
+                    {
+                        "id": item["wp_id"],
+                        "description": item["description_update"],
+                    },
+                )
 
         if description_updates:
             try:
@@ -616,10 +618,12 @@ class WorkPackageContentMigration(BaseMigration):
         cf_updates = []
         for item in collected_items:
             if item["custom_field_updates"]:
-                cf_updates.append({
-                    "id": item["wp_id"],
-                    **item["custom_field_updates"],
-                })
+                cf_updates.append(
+                    {
+                        "id": item["wp_id"],
+                        **item["custom_field_updates"],
+                    },
+                )
 
         if cf_updates:
             try:
@@ -632,10 +636,12 @@ class WorkPackageContentMigration(BaseMigration):
         all_comments = []
         for item in collected_items:
             for comment_text in item["comments"]:
-                all_comments.append({
-                    "work_package_id": item["wp_id"],
-                    "comment": comment_text,
-                })
+                all_comments.append(
+                    {
+                        "work_package_id": item["wp_id"],
+                        "comment": comment_text,
+                    },
+                )
 
         if all_comments:
             try:
@@ -651,10 +657,12 @@ class WorkPackageContentMigration(BaseMigration):
             all_watchers = []
             for item in collected_items:
                 for user_id in item["watchers"]:
-                    all_watchers.append({
-                        "work_package_id": item["wp_id"],
-                        "user_id": user_id,
-                    })
+                    all_watchers.append(
+                        {
+                            "work_package_id": item["wp_id"],
+                            "user_id": user_id,
+                        },
+                    )
 
             if all_watchers:
                 try:

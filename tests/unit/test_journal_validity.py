@@ -102,7 +102,8 @@ class TestValidityPeriodCalculation:
     """Test validity period calculation logic."""
 
     def test_validity_period_non_overlapping(
-        self, sample_journal_operations: list[dict[str, Any]],
+        self,
+        sample_journal_operations: list[dict[str, Any]],
     ) -> None:
         """Verify validity periods are non-overlapping."""
         periods = self._calculate_validity_periods(sample_journal_operations)
@@ -116,7 +117,8 @@ class TestValidityPeriodCalculation:
             )
 
     def test_final_journal_has_open_ended_validity(
-        self, sample_journal_operations: list[dict[str, Any]],
+        self,
+        sample_journal_operations: list[dict[str, Any]],
     ) -> None:
         """Verify the last journal has an open-ended validity period."""
         periods = self._calculate_validity_periods(sample_journal_operations)
@@ -125,7 +127,8 @@ class TestValidityPeriodCalculation:
         assert last_period["end"] is None, "Final journal should have NULL end (open-ended)"
 
     def test_duplicate_timestamps_get_synthetic_offsets(
-        self, duplicate_timestamp_operations: list[dict[str, Any]],
+        self,
+        duplicate_timestamp_operations: list[dict[str, Any]],
     ) -> None:
         """Verify duplicate timestamps are offset to prevent overlaps."""
         periods = self._calculate_validity_periods(duplicate_timestamp_operations)
@@ -136,9 +139,7 @@ class TestValidityPeriodCalculation:
 
         # Each subsequent start should be after the previous
         for i in range(1, len(starts)):
-            assert starts[i] > starts[i - 1], (
-                f"Start {i} ({starts[i]}) should be after start {i - 1} ({starts[i - 1]})"
-            )
+            assert starts[i] > starts[i - 1], f"Start {i} ({starts[i]}) should be after start {i - 1} ({starts[i - 1]})"
 
     def test_synthetic_timestamp_increment_is_one_second(self) -> None:
         """Verify synthetic timestamp increment matches Ruby constant."""
@@ -155,12 +156,11 @@ class TestValidityPeriodCalculation:
         periods = self._calculate_validity_periods(same_time_ops)
 
         time_diff = (periods[1]["start"] - periods[0]["start"]).total_seconds()
-        assert time_diff >= EXPECTED_INCREMENT, (
-            f"Time difference ({time_diff}s) should be >= {EXPECTED_INCREMENT}s"
-        )
+        assert time_diff >= EXPECTED_INCREMENT, f"Time difference ({time_diff}s) should be >= {EXPECTED_INCREMENT}s"
 
     def _calculate_validity_periods(
-        self, operations: list[dict[str, Any]],
+        self,
+        operations: list[dict[str, Any]],
     ) -> list[dict[str, datetime | None]]:
         """Calculate validity periods using the same logic as Ruby script.
 
@@ -282,9 +282,7 @@ class TestJournalCleanup:
 
         assert customizable_delete_pos > 0, "CustomizableJournal cleanup should exist"
         assert journal_delete_pos > 0, "Journal cleanup should exist"
-        assert customizable_delete_pos < journal_delete_pos, (
-            "Associated data should be deleted before journals"
-        )
+        assert customizable_delete_pos < journal_delete_pos, "Associated data should be deleted before journals"
 
 
 # ============================================================================
@@ -439,9 +437,7 @@ class TestRubyScriptIntegrity:
             ruby_content = f.read()
 
         assert "rescue =>" in ruby_content, "Should have rescue block for errors"
-        assert "errors <<" in ruby_content or "errors.<<" in ruby_content, (
-            "Should propagate errors to Python"
-        )
+        assert "errors <<" in ruby_content or "errors.<<" in ruby_content, "Should propagate errors to Python"
 
     def test_ruby_script_has_bulk_insert_optimization(self) -> None:
         """Verify the Ruby script uses bulk INSERT for performance."""
@@ -451,9 +447,7 @@ class TestRubyScriptIntegrity:
         assert "bulk INSERT" in ruby_content.lower() or "bulk_journals" in ruby_content, (
             "Should use bulk insert optimization"
         )
-        assert "INSERT INTO journals" in ruby_content, (
-            "Should have bulk INSERT for journals table"
-        )
+        assert "INSERT INTO journals" in ruby_content, "Should have bulk INSERT for journals table"
         assert "INSERT INTO work_package_journals" in ruby_content, (
             "Should have bulk INSERT for work_package_journals table"
         )

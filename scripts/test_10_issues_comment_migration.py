@@ -2,11 +2,12 @@
 """Test comment migration with 10 NRS issues."""
 
 import sys
+
 sys.path.insert(0, "/home/sme/p/j2o")
 
-from src.migrations.work_package_migration import WorkPackageMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
+from src.migrations.work_package_migration import WorkPackageMigration
 
 print("=" * 80)
 print("COMMENT MIGRATION TEST - 10 NRS Issues")
@@ -29,19 +30,20 @@ print(f"✓ Found {len(issues)} issues")
 first_issue = jira.get_issue(issues[0].key, expand="changelog,renderedFields")
 print(f"\nSample Issue: {first_issue.key}")
 print(f"  Summary: {first_issue.fields.summary}")
-if hasattr(first_issue.fields, 'comment') and first_issue.fields.comment:
+if hasattr(first_issue.fields, "comment") and first_issue.fields.comment:
     print(f"  Jira Comments: {first_issue.fields.comment.total}")
 else:
-    print(f"  Jira Comments: 0")
+    print("  Jira Comments: 0")
 
 # Check existing work packages in OpenProject before migration
 print("\nChecking OpenProject before migration...")
 from src.clients.openproject_client import OpenProjectClient
+
 op = OpenProjectClient()
 
 # Use the fixed snapshot query
 snapshot = op.get_project_wp_cf_snapshot(303319)
-existing_count = len([wp for wp in snapshot if wp.get('jira_issue_key')])
+existing_count = len([wp for wp in snapshot if wp.get("jira_issue_key")])
 print(f"✓ Existing work packages with J2O keys: {existing_count}")
 
 # Run migration on these 10 issues only
@@ -53,7 +55,7 @@ result = wpm.migrate(
     project_keys=["NRS"],
     components=["work_packages"],
     dry_run=False,
-    max_issues=10  # Limit to 10 issues
+    max_issues=10,  # Limit to 10 issues
 )
 
 print("\n" + "=" * 80)
@@ -83,16 +85,19 @@ end
 """
 
 import tempfile
-with tempfile.NamedTemporaryFile(mode='w', suffix='.rb', delete=False) as f:
+
+with tempfile.NamedTemporaryFile(mode="w", suffix=".rb", delete=False) as f:
     f.write(ruby_check)
     ruby_file = f.name
 
 import subprocess
+
 result = subprocess.run(
     f"cat {ruby_file} | ssh sobol.nr 'docker exec -i openproject-web-1 bundle exec rails runner -'",
+    check=False,
     shell=True,
     capture_output=True,
-    text=True
+    text=True,
 )
 
 print(result.stdout)
@@ -101,6 +106,7 @@ if result.stderr:
 
 # Cleanup
 import os
+
 os.unlink(ruby_file)
 
 print("\n" + "=" * 80)

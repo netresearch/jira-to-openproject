@@ -6,6 +6,7 @@ error handling approach, focusing on proper dependency injection, error propagat
 and resource handling.
 """
 
+import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -40,21 +41,31 @@ class TestJiraClient(unittest.TestCase):
         }
         self.mock_config.logger = MagicMock()
 
-        # Patch the JIRA class
-        self.jira_patcher = patch("src.clients.jira_client.JIRA")
-        self.mock_jira_class = self.jira_patcher.start()
+        # Patch the dynamic jira-module importer so _connect() picks up a fake
+        # module that exposes a patchable ``JIRA`` attribute. The real
+        # implementation reloads the ``jira`` package from site-packages, which
+        # makes module-level ``patch("...jira_client.JIRA")`` ineffective.
         self.mock_jira = MagicMock()
-        self.mock_jira_class.return_value = self.mock_jira
-
-        # Mock the server_info method
         self.mock_jira.server_info.return_value = {
             "baseUrl": "https://jira.local",
             "version": "8.5.0",
         }
-
         # Set up the session for request patching
         self.mock_jira._session = MagicMock()
         self.mock_jira._session.request = MagicMock()
+        # /myself auth verification response
+        self.mock_jira._session.get.return_value = MagicMock(
+            status_code=200,
+            headers={},
+        )
+
+        self.mock_jira_class = MagicMock(return_value=self.mock_jira)
+        fake_jira_module = types.SimpleNamespace(JIRA=self.mock_jira_class)
+        self.jira_patcher = patch(
+            "src.clients.jira_client._import_real_jira_module",
+            return_value=fake_jira_module,
+        )
+        self.jira_patcher.start()
 
         # Initialize the client
         self.jira_client = JiraClient()
@@ -106,11 +117,6 @@ class TestJiraClient(unittest.TestCase):
 
     def test_connection_failure(self) -> None:
         """Test connection failure during initialization."""
-        # Reset mocks
-        self.jira_patcher.stop()
-        self.jira_patcher = patch("src.clients.jira_client.JIRA")
-        self.mock_jira_class = self.jira_patcher.start()
-
         # Mock JIRA to raise exceptions for both auth methods
         self.mock_jira_class.side_effect = [
             Exception("Token auth failed"),  # First call fails with token auth

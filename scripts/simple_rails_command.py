@@ -140,7 +140,8 @@ def main() -> None:
 
         # Capture the output
         json_output = capture_tmux_output(
-            session_name, lines=5000,
+            session_name,
+            lines=5000,
         )  # Capture more lines for large datasets
 
         # Save the raw output for debugging if needed

@@ -53,11 +53,7 @@ def summarize_custom_fields(json_file: Path) -> dict[str, Any]:
     # Collect the most common field names for examples
     common_field_examples = {}
     for format_type in field_formats:
-        examples = [
-            field["name"]
-            for field in custom_fields
-            if field["field_format"] == format_type
-        ][:3]
+        examples = [field["name"] for field in custom_fields if field["field_format"] == format_type][:3]
         common_field_examples[format_type] = examples
 
     # Create the summary
