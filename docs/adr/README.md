@@ -7,6 +7,8 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-001](ADR-001-two-phase-work-package-migration.md) | Two-Phase Work Package Migration | Accepted | 2024-12-11 |
+| [ADR-002](ADR-002-target-architecture.md) | Target architecture for j2o | Accepted | 2026-04-29 |
+| [ADR-003](ADR-003-rejected-architecture-patterns.md) | Rejected architecture patterns | Accepted | 2026-04-29 |
 
 ## What is an ADR?
 
