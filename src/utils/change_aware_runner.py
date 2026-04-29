@@ -91,6 +91,11 @@ class ChangeAwareRunner:
             self.entity_cache.invalidate(type_name)
             self.logger.debug("Invalidated cache for entity type %s", type_name)
 
+        # Change detection is an optimisation; if it fails, fall back to a
+        # plain migration run. Scope this `try` narrowly so that exceptions
+        # raised by `migration.run()` itself propagate to the caller — running
+        # the migration twice on a transient error is dangerous (the migration
+        # may not be idempotent) and the original error would be hidden.
         try:
             # Call back through the migration's method so subclass overrides
             # (e.g. CompanyMigration) and test monkeypatches take effect.
@@ -98,67 +103,69 @@ class ChangeAwareRunner:
                 entity_type,
                 get_cached_entities,
             )
+        except Exception:
+            self.logger.exception(
+                "Change detection failed for %s; running migration without it",
+                entity_type,
+            )
+            return self.migration.run()
 
-            if should_skip:
-                return ComponentResult(
-                    success=True,
-                    message=f"No changes detected for {entity_type}, migration skipped",
-                    details={
+        if should_skip:
+            return ComponentResult(
+                success=True,
+                message=f"No changes detected for {entity_type}, migration skipped",
+                details={
+                    "change_report": change_report,
+                    "cache_stats": self._cache_stats_snapshot(
+                        len(local_cache),
+                        total_cache_invalidations,
+                    ),
+                },
+                success_count=0,
+                failed_count=0,
+                total_count=0,
+            )
+
+        # Run the actual migration. Errors here propagate — change detection
+        # already gave us a green light, so a failure here is a real failure.
+        result = self.migration.run()
+
+        # Invalidate cached source data after the migration touched the world
+        if result.success and entity_type:
+            invalidate(entity_type)
+
+        # Snapshot for next-run change detection (best-effort; failure does
+        # not fail the migration itself).
+        if result.success:
+            try:
+                current_entities = get_cached_entities(entity_type)
+                # Call back through the migration so subclass overrides of
+                # create_snapshot take effect.
+                snapshot_path = self.migration.create_snapshot(current_entities, entity_type)
+                self.logger.info(
+                    "Created snapshot for %s: %s",
+                    entity_type,
+                    snapshot_path,
+                )
+                if not result.details:
+                    result.details = {}
+                result.details.update(
+                    {
+                        "snapshot_created": str(snapshot_path),
                         "change_report": change_report,
                         "cache_stats": self._cache_stats_snapshot(
                             len(local_cache),
                             total_cache_invalidations,
                         ),
                     },
-                    success_count=0,
-                    failed_count=0,
-                    total_count=0,
+                )
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to create snapshot after successful migration: %s",
+                    e,
                 )
 
-            # Run the actual migration
-            result = self.migration.run()
-
-            # Invalidate cached source data after the migration touched the world
-            if result.success and entity_type:
-                invalidate(entity_type)
-
-            # Snapshot for next-run change detection
-            if result.success:
-                try:
-                    current_entities = get_cached_entities(entity_type)
-                    # Call back through the migration so subclass overrides
-                    # of create_snapshot take effect.
-                    snapshot_path = self.migration.create_snapshot(current_entities, entity_type)
-                    self.logger.info(
-                        "Created snapshot for %s: %s",
-                        entity_type,
-                        snapshot_path,
-                    )
-                    if not result.details:
-                        result.details = {}
-                    result.details.update(
-                        {
-                            "snapshot_created": str(snapshot_path),
-                            "change_report": change_report,
-                            "cache_stats": self._cache_stats_snapshot(
-                                len(local_cache),
-                                total_cache_invalidations,
-                            ),
-                        },
-                    )
-                except Exception as e:
-                    # Snapshot failure must not fail the migration itself
-                    self.logger.warning(
-                        "Failed to create snapshot after successful migration: %s",
-                        e,
-                    )
-
-            return result
-
-        except Exception as e:
-            self.logger.exception("Error in change detection workflow: %s", e)
-            # Fall back to a plain migration run on any change-detection error
-            return self.migration.run()
+        return result
 
     def should_skip(
         self,
