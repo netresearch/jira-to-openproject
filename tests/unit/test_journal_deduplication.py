@@ -362,25 +362,27 @@ class TestCustomFieldProjectEnablement:
         """Verify custom fields now use is_for_all: false.
 
         FIX VERIFIED: Custom fields are created with selective enablement.
-        After Phase 1.3 of ADR-002 the Ruby script lives on
-        ``OpenProjectClient.ensure_wp_custom_field_id``; ``BaseMigration``'s
-        ``_ensure_wp_custom_field`` is a thin delegator over it.
+        After Phase 2a of ADR-002 the Ruby script lives in
+        ``OpenProjectCustomFieldService.ensure_wp_custom_field_id`` (own
+        module). ``OpenProjectClient.ensure_wp_custom_field_id`` and
+        ``BaseMigration._ensure_wp_custom_field`` are thin delegators over it.
 
         Reads the source file directly because conftest.py monkeypatches
         ``OpenProjectClient`` on the module.
         """
         from pathlib import Path
 
-        src_path = Path(__file__).resolve().parents[2] / "src" / "clients" / "openproject_client.py"
+        src_path = Path(__file__).resolve().parents[2] / "src" / "clients" / "openproject_custom_field_service.py"
         text = src_path.read_text(encoding="utf-8")
 
         method_start = text.find("def ensure_wp_custom_field_id(")
-        assert method_start != -1, "OpenProjectClient.ensure_wp_custom_field_id not found"
+        assert method_start != -1, "OpenProjectCustomFieldService.ensure_wp_custom_field_id not found"
         method_end = text.find("\n    def ", method_start + 1)
         method_source = text[method_start:method_end]
 
         assert "is_for_all: false" in method_source, (
-            "OpenProjectClient.ensure_wp_custom_field_id should use is_for_all: false for selective project enablement"
+            "OpenProjectCustomFieldService.ensure_wp_custom_field_id should use "
+            "is_for_all: false for selective project enablement"
         )
 
     def test_custom_field_has_enable_method(self):
