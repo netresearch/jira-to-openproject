@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.23
 
 # ===== Stage 1: build =====
 FROM python:3.14-slim AS build
