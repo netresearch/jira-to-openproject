@@ -367,10 +367,7 @@ async def dashboard() -> HTMLResponse:
         logger.error("Dashboard template missing at %s", _DASHBOARD_TEMPLATE_PATH)
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Dashboard template not available in this install layout "
-                f"(expected {_DASHBOARD_TEMPLATE_PATH})."
-            ),
+            detail=(f"Dashboard template not available in this install layout (expected {_DASHBOARD_TEMPLATE_PATH})."),
         ) from exc
 
 
