@@ -56,6 +56,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # tests/conftest.py auto-loads .env.test, but that file is not
+      # tracked in git. Provide the same surface here so client
+      # constructors that demand env-supplied values work in CI.
+      J2O_TEST_MODE: "true"
+      J2O_USE_MOCK_APIS: "true"
+      J2O_OPENPROJECT_SERVER: openproject.local
+      J2O_OPENPROJECT_CONTAINER: openproject-web-1
+      J2O_OPENPROJECT_USER: root
+      J2O_OPENPROJECT_URL: https://openproject.local
+      J2O_OPENPROJECT_API_KEY: test_api_key
+      J2O_OPENPROJECT_TMUX_SESSION_NAME: rails_console
+      J2O_JIRA_URL: https://jira.local
+      J2O_JIRA_USERNAME: testuser
+      J2O_JIRA_API_TOKEN: test_token
+      J2O_SSH_HOST: localhost
+      J2O_SSH_USER: root
+      J2O_SSL_VERIFY: "false"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: astral-sh/setup-uv@7edac99f961f18b581bbd960d59d049f04c0002f # v6.9.0
