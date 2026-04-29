@@ -75,16 +75,32 @@ app = FastAPI(
 )
 
 # Dashboard is a Vue.js SPA; the HTML shell is served verbatim (no Jinja
-# templating) to avoid Jinja ↔ Vue `{{ ... }}` delimiter conflicts.
+# templating) to avoid Jinja ↔ Vue `{{ ... }}` delimiter conflicts. The
+# template file is loaded lazily on the first request and cached, so an
+# install layout that doesn't ship the templates directory still imports
+# cleanly — the `/` handler is the only thing that fails, with a clear
+# 503 message.
 _DASHBOARD_DIR = Path(__file__).resolve().parent
-DASHBOARD_HTML = (_DASHBOARD_DIR / "templates" / "dashboard.html").read_text(
-    encoding="utf-8",
-)
-app.mount(
-    "/static",
-    StaticFiles(directory=str(_DASHBOARD_DIR / "static")),
-    name="static",
-)
+_DASHBOARD_TEMPLATE_PATH = _DASHBOARD_DIR / "templates" / "dashboard.html"
+_dashboard_html_cache: str | None = None
+
+
+def _load_dashboard_html() -> str:
+    """Read and cache the dashboard SPA shell on first use."""
+    global _dashboard_html_cache  # noqa: PLW0603 — module-level cache by design
+    if _dashboard_html_cache is None:
+        _dashboard_html_cache = _DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
+    return _dashboard_html_cache
+
+
+# Static assets directory may be absent in minimal runtime layouts; only
+# mount the route when the directory actually exists.
+if (_DASHBOARD_DIR / "static").is_dir():
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(_DASHBOARD_DIR / "static")),
+        name="static",
+    )
 
 # Redis connection
 redis_client: redis.Redis | None = None
@@ -345,7 +361,17 @@ async def dashboard() -> HTMLResponse:
     Vue-side interpolations, not Jinja, so we return the file verbatim to
     avoid a Jinja ↔ Vue delimiter clash.
     """
-    return HTMLResponse(DASHBOARD_HTML)
+    try:
+        return HTMLResponse(_load_dashboard_html())
+    except FileNotFoundError as exc:
+        logger.error("Dashboard template missing at %s", _DASHBOARD_TEMPLATE_PATH)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Dashboard template not available in this install layout "
+                f"(expected {_DASHBOARD_TEMPLATE_PATH})."
+            ),
+        ) from exc
 
 
 @app.websocket("/ws/progress")

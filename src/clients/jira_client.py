@@ -81,15 +81,24 @@ def _import_real_jira_module() -> Any:
         import sys
         from pathlib import Path as _Path
 
-        # If a shadow stub is loaded from the project, purge it
+        # If a shadow stub is loaded from this repo, purge it. The stub lives
+        # at <repo-root>/jira/__init__.py — locate that path relative to this
+        # source file rather than hard-coding an absolute developer path.
+        repo_root = _Path(__file__).resolve().parents[2]
+        local_stub_init = repo_root / "jira" / "__init__.py"
         if "jira" in sys.modules:
             mod = sys.modules["jira"]
             mod_file = getattr(mod, "__file__", "") or ""
-            if mod_file and "/p/j2o/jira/__init__.py" in mod_file:
-                # Remove stub and any submodules to force a clean import
-                for key in list(sys.modules.keys()):
-                    if key == "jira" or key.startswith("jira."):
-                        sys.modules.pop(key, None)
+            if mod_file:
+                try:
+                    is_local_stub = _Path(mod_file).resolve() == local_stub_init.resolve()
+                except OSError:
+                    is_local_stub = False
+                if is_local_stub:
+                    # Remove stub and any submodules to force a clean import
+                    for key in list(sys.modules.keys()):
+                        if key == "jira" or key.startswith("jira."):
+                            sys.modules.pop(key, None)
 
         # Prefer virtualenv site-packages path. site.getsitepackages() can
         # raise AttributeError on bare/embedded interpreters; OSError covers

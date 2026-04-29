@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _validate(path: Path) -> None:
     with path.open("r", encoding="utf-8") as f:
@@ -17,7 +19,7 @@ def test_clean_work_package_json_passes_validation(tmp_path: Path) -> None:
         {"subject": "Task B", "description": "..."},
     ]
     f = tmp_path / "work_packages_clean.json"
-    f.write_text(json.dumps(payload))
+    f.write_text(json.dumps(payload), encoding="utf-8")
     _validate(f)
 
 
@@ -25,10 +27,7 @@ def test_work_package_json_with_links_is_rejected(tmp_path: Path) -> None:
     """If a _links field ever sneaks in, the validator must trip."""
     payload = [{"subject": "Task", "_links": {"self": "..."}}]
     f = tmp_path / "work_packages_dirty.json"
-    f.write_text(json.dumps(payload))
+    f.write_text(json.dumps(payload), encoding="utf-8")
 
-    try:
+    with pytest.raises(AssertionError, match="_links"):
         _validate(f)
-    except AssertionError:
-        return
-    raise AssertionError("validator must fail on payloads containing _links")

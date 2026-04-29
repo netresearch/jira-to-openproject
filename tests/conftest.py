@@ -111,7 +111,11 @@ def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> N
     - Unmarked tests (no {unit,integration,functional,end_to_end}) are skipped by
       default to keep CI stable; mark them appropriately or set J2O_RUN_ALL_TESTS=true.
     """
-    run_all = _env_flag("J2O_RUN_ALL_TESTS", True)
+    # `J2O_RUN_ALL_TESTS` is the explicit "run absolutely everything" override,
+    # including live-resource markers. It must default to False so that setting
+    # the per-suite or per-resource flag to "false" can actually disable a
+    # suite without being overridden by `or run_all` below.
+    run_all = _env_flag("J2O_RUN_ALL_TESTS", False)
     # Global live/mocked mode
     live_services = _env_flag("J2O_LIVE_SERVICES", False) or config.getoption(
         "--live-services",
