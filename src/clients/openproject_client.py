@@ -313,6 +313,7 @@ class OpenProjectClient:
         # Composed services (Phase 2 of ADR-002 — splitting the god-class along
         # functional seams). Backward-compat: same-named methods on
         # OpenProjectClient delegate to the corresponding service.
+        from src.clients.openproject_associations_service import OpenProjectAssociationsService
         from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
         from src.clients.openproject_membership_service import OpenProjectMembershipService
@@ -332,6 +333,7 @@ class OpenProjectClient:
         self.memberships = OpenProjectMembershipService(self)
         self.records = OpenProjectRecordsService(self)
         self.work_packages = OpenProjectWorkPackageService(self)
+        self.associations = OpenProjectAssociationsService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2882,45 +2884,18 @@ J2O_DATA
 
     # ----- Watchers helpers -----
     def find_watcher(self, work_package_id: int, user_id: int) -> dict[str, Any] | None:
-        """Find a watcher for a work package and user if it exists."""
-        query = (
-            "Watcher.where(watchable_type: 'WorkPackage', watchable_id: %d, user_id: %d).limit(1).map do |w| "
-            "{ id: w.id, user_id: w.user_id, watchable_id: w.watchable_id } end.first"
-        ) % (work_package_id, user_id)
-        try:
-            res = self.execute_query(query)
-            if isinstance(res, dict) and res:
-                return res
-            return None
-        except Exception as e:
-            msg = "Failed to query watcher."
-            raise QueryExecutionError(msg) from e
+        """Find a watcher for a work package and user if it exists.
+
+        Thin delegator over ``self.associations.find_watcher``.
+        """
+        return self.associations.find_watcher(work_package_id, user_id)
 
     def add_watcher(self, work_package_id: int, user_id: int) -> bool:
         """Idempotently add a watcher to the work package.
 
-        Returns True if the watcher exists or was created successfully.
+        Thin delegator over ``self.associations.add_watcher``.
         """
-        try:
-            if self.find_watcher(work_package_id, user_id):
-                return True
-        except Exception:
-            # Proceed to attempt create even if find failed
-            pass
-
-        script = (
-            "wp = WorkPackage.find(%d); u = User.find(%d); "
-            "if !Watcher.exists?(watchable_type: 'WorkPackage', watchable_id: wp.id, user_id: u.id); "
-            "w = Watcher.new(user: u, watchable: wp); w.save!; {created: true}.to_json; else; {created: false}.to_json; end"
-        ) % (work_package_id, user_id)
-        try:
-            created = self.execute_query(script)
-            if isinstance(created, dict):
-                return True
-            return bool(created)
-        except Exception as e:
-            msg = "Failed to add watcher."
-            raise QueryExecutionError(msg) from e
+        return self.associations.add_watcher(work_package_id, user_id)
 
     def bulk_add_watchers(
         self,
@@ -2928,93 +2903,9 @@ J2O_DATA
     ) -> dict[str, Any]:
         """Add multiple watchers in a single Rails call.
 
-        Args:
-            watchers: List of dicts with keys:
-                - work_package_id: int
-                - user_id: int
-
-        Returns:
-            Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
-
+        Thin delegator over ``self.associations.bulk_add_watchers``.
         """
-        if not watchers:
-            return {"success": True, "created": 0, "skipped": 0, "failed": 0}
-
-        # Build JSON data for Ruby
-        data = []
-        for w in watchers:
-            data.append(
-                {
-                    "wp_id": int(w["work_package_id"]),
-                    "user_id": int(w["user_id"]),
-                },
-            )
-
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        # that Ruby misinterprets as invalid Unicode escape sequences
-        data_json = json.dumps(data, ensure_ascii=False)
-        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
-        # Optimized: Use bulk insert with conflict handling for speed
-        script = f"""
-          require 'json'
-          data = JSON.parse(<<-'J2O_DATA'
-{data_json}
-J2O_DATA
-)
-
-          results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
-
-          # Build bulk insert data
-          now = Time.current
-          records = []
-          wp_ids = data.map {{ |d| d['wp_id'] }}.uniq
-          user_ids = data.map {{ |d| d['user_id'] }}.uniq
-
-          # Pre-fetch valid IDs for faster lookup
-          valid_wps = WorkPackage.where(id: wp_ids).pluck(:id).to_set
-          valid_users = User.where(id: user_ids).pluck(:id).to_set
-          existing = Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_ids, user_id: user_ids)
-                           .pluck(:watchable_id, :user_id).to_set
-
-          data.each do |item|
-            wp_id = item['wp_id']
-            user_id = item['user_id']
-
-            unless valid_wps.include?(wp_id) && valid_users.include?(user_id)
-              results[:failed] += 1
-              results[:errors] << {{ wp_id: wp_id, user_id: user_id, error: 'WorkPackage or User not found' }}
-              next
-            end
-
-            if existing.include?([wp_id, user_id])
-              results[:skipped] += 1
-            else
-              records << {{ watchable_type: 'WorkPackage', watchable_id: wp_id, user_id: user_id }}
-            end
-          end
-
-          # Bulk insert new watchers
-          if records.any?
-            begin
-              Watcher.insert_all(records)
-              results[:created] = records.size
-            rescue => e
-              results[:failed] = records.size
-              results[:errors] << {{ error: e.message }}
-            end
-          end
-
-          results[:success] = (results[:failed] == 0)
-          results.to_json
-        """
-        try:
-            result = self.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                return result
-            return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(result)}
-        except Exception as e:
-            logger.warning("Bulk add watchers failed: %s", e)
-            return {"success": False, "created": 0, "skipped": 0, "failed": len(watchers), "error": str(e)}
+        return self.associations.bulk_add_watchers(watchers)
 
     def bulk_set_wp_custom_field_values(
         self,
@@ -3326,23 +3217,9 @@ J2O_DATA
     ) -> dict[str, Any] | None:
         """Find a relation between two work packages if it exists.
 
-        Returns minimal relation info or None.
+        Thin delegator over ``self.associations.find_relation``.
         """
-        query = (
-            "Relation.where(from_id: %d, to_id: %d).limit(1).map do |r| "
-            "{ id: r.id, relation_type: r.relation_type, from_id: r.from_id, to_id: r.to_id } end.first"
-            % (from_work_package_id, to_work_package_id)
-        )
-        try:
-            result = self.execute_large_query_to_json_file(
-                query,
-                container_file="/tmp/j2o_find_relation.json",
-                timeout=30,
-            )
-            return result if isinstance(result, dict) else None
-        except Exception as e:
-            logger.warning("Failed to find relation: %s", e)
-            return None
+        return self.associations.find_relation(from_work_package_id, to_work_package_id)
 
     def create_relation(
         self,
@@ -3352,43 +3229,13 @@ J2O_DATA
     ) -> dict[str, Any] | None:
         """Create a relation idempotently between two work packages.
 
-        On success returns dict with id and status ('created' or 'exists'); otherwise None.
+        Thin delegator over ``self.associations.create_relation``.
         """
-        script = f"""
-        begin
-          from_wp = WorkPackage.find_by(id: {from_work_package_id})
-          to_wp = WorkPackage.find_by(id: {to_work_package_id})
-          if !from_wp || !to_wp
-            {{ error: 'NotFound' }}
-          else
-            rel = Relation.where(from_id: {from_work_package_id}, to_id: {to_work_package_id}, relation_type: '{escape_ruby_single_quoted(relation_type)}').first
-            if rel
-              {{ id: rel.id, status: 'exists', relation_type: rel.relation_type, from_id: rel.from_id, to_id: rel.to_id }}
-            else
-              rel = Relation.create(from: from_wp, to: to_wp, relation_type: '{escape_ruby_single_quoted(relation_type)}')
-              if rel.persisted?
-                {{ id: rel.id, status: 'created', relation_type: rel.relation_type, from_id: rel.from_id, to_id: rel.to_id }}
-              else
-                {{ error: 'Validation failed', errors: rel.errors.full_messages }}
-              end
-            end
-          end
-        rescue => e
-          {{ error: 'Creation failed', message: e.message }}
-        end
-        """
-        try:
-            result = self.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                if result.get("error"):
-                    logger.warning("Relation creation failed: %s", result)
-                    return None
-                return result
-            logger.warning("Unexpected relation creation result: %s", result)
-            return None
-        except Exception as e:
-            msg = f"Failed to create relation: {e}"
-            raise QueryExecutionError(msg) from e
+        return self.associations.create_relation(
+            from_work_package_id,
+            to_work_package_id,
+            relation_type,
+        )
 
     def bulk_create_relations(
         self,
@@ -3396,87 +3243,9 @@ J2O_DATA
     ) -> dict[str, Any]:
         """Create multiple relations in a single Rails call.
 
-        Args:
-            relations: List of dicts with keys:
-                - from_id: int (from work package ID)
-                - to_id: int (to work package ID)
-                - relation_type: str (relates, duplicates, blocks, precedes, follows)
-
-        Returns:
-            Dict with 'success': bool, 'created': int, 'skipped': int, 'failed': int
-
+        Thin delegator over ``self.associations.bulk_create_relations``.
         """
-        if not relations:
-            return {"success": True, "created": 0, "skipped": 0, "failed": 0}
-
-        # Build JSON data for Ruby
-        data = []
-        for rel in relations:
-            data.append(
-                {
-                    "from_id": int(rel["from_id"]),
-                    "to_id": int(rel["to_id"]),
-                    "type": str(rel["relation_type"]),
-                },
-            )
-
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        data_json = json.dumps(data, ensure_ascii=False)
-        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
-        script = f"""
-          require 'json'
-          data = JSON.parse(<<-'J2O_DATA'
-{data_json}
-J2O_DATA
-)
-
-          results = {{ created: 0, skipped: 0, failed: 0, errors: [] }}
-
-          data.each do |item|
-            begin
-              from_id = item['from_id']
-              to_id = item['to_id']
-              rel_type = item['type']
-
-              # Check if relation already exists (either direction for symmetric types)
-              existing = Relation.where(from_id: from_id, to_id: to_id).first
-              existing ||= Relation.where(from_id: to_id, to_id: from_id).first if ['relates'].include?(rel_type)
-
-              if existing
-                results[:skipped] += 1
-              else
-                from_wp = WorkPackage.find_by(id: from_id)
-                to_wp = WorkPackage.find_by(id: to_id)
-                if from_wp && to_wp
-                  rel = Relation.new(from: from_wp, to: to_wp, relation_type: rel_type)
-                  if rel.save
-                    results[:created] += 1
-                  else
-                    results[:failed] += 1
-                    results[:errors] << {{ from: from_id, to: to_id, error: rel.errors.full_messages.join(', ') }}
-                  end
-                else
-                  results[:failed] += 1
-                  results[:errors] << {{ from: from_id, to: to_id, error: 'WorkPackage not found' }}
-                end
-              end
-            rescue => e
-              results[:failed] += 1
-              results[:errors] << {{ from: item['from_id'], to: item['to_id'], error: e.message }}
-            end
-          end
-
-          results[:success] = (results[:failed] == 0)
-          results
-        """
-        try:
-            result = self.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                return result
-            return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(result)}
-        except Exception as e:
-            logger.warning("Bulk create relations failed: %s", e)
-            return {"success": False, "created": 0, "skipped": 0, "failed": len(relations), "error": str(e)}
+        return self.associations.bulk_create_relations(relations)
 
     def batch_create_time_entries(
         self,
