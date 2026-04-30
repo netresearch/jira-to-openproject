@@ -68,6 +68,13 @@ class OpenProjectProjectService:
 
         """
         client = self._client
+        # Track temp paths so the ``finally`` block can clean them up even
+        # when an early exception bypasses normal flow. Container paths
+        # land in ``/tmp`` inside the OpenProject container; the local
+        # ``runner_script_local_tmp`` is written under the data dir.
+        runner_script_container: str | None = None
+        runner_script_local_tmp: Path | None = None
+        file_path: str | None = None
         try:
             # Use pure file-based approach - write to file and read directly from filesystem
             file_path = client._generate_unique_temp_filename("projects")
@@ -114,7 +121,9 @@ class OpenProjectProjectService:
                         type(e).__name__,
                     )
                     runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                    runner_script_container = runner_script_path
                     local_tmp = Path(client.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+                    runner_script_local_tmp = local_tmp
                     local_tmp.parent.mkdir(parents=True, exist_ok=True)
                     top_selector_line = (
                         "projects = Project.where(parent_id: nil).select("
@@ -230,6 +239,44 @@ class OpenProjectProjectService:
             self._logger.exception("Failed to get projects using file-based method")
             msg = f"Failed to retrieve projects: {e}"
             raise QueryExecutionError(msg) from e
+        finally:
+            # Best-effort cleanup of temp files left behind in the
+            # container (and on the host for the runner-fallback script).
+            # Failures here are logged and swallowed because cleanup is
+            # advisory — the real work has already succeeded or raised
+            # by this point.
+            if file_path:
+                try:
+                    rm_cmd = f"docker exec {shlex.quote(client.container_name)} rm -f {shlex.quote(file_path)}"
+                    client.ssh_client.execute_command(rm_cmd, check=False)
+                except Exception as cleanup_err:
+                    self._logger.debug(
+                        "Non-critical: failed to remove container projects file %s: %s",
+                        file_path,
+                        cleanup_err,
+                    )
+            if runner_script_container:
+                try:
+                    rm_cmd = (
+                        f"docker exec {shlex.quote(client.container_name)} rm -f {shlex.quote(runner_script_container)}"
+                    )
+                    client.ssh_client.execute_command(rm_cmd, check=False)
+                except Exception as cleanup_err:
+                    self._logger.debug(
+                        "Non-critical: failed to remove container runner script %s: %s",
+                        runner_script_container,
+                        cleanup_err,
+                    )
+            if runner_script_local_tmp is not None:
+                try:
+                    if runner_script_local_tmp.exists():
+                        runner_script_local_tmp.unlink()
+                except Exception as cleanup_err:
+                    self._logger.debug(
+                        "Non-critical: failed to remove local runner script %s: %s",
+                        runner_script_local_tmp,
+                        cleanup_err,
+                    )
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any]:
         """Get a project by identifier.
@@ -303,6 +350,7 @@ class OpenProjectProjectService:
         self,
         identifiers: list[str],
         batch_size: int | None = None,
+        *,
         headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple projects by identifiers in batches with idempotency support.
@@ -315,13 +363,21 @@ class OpenProjectProjectService:
                 result under that key for the configured TTL. Without a
                 header the decorator's per-call UUID makes the cache a
                 no-op (so callers that need real idempotency MUST pass
-                a stable key).
+                a stable key). Keyword-only so it cannot be passed
+                positionally — the decorator's ``extract_headers_from_kwargs``
+                only sees real kwargs, so positional arguments would
+                silently disable caching.
 
         Returns:
-            Dictionary mapping identifier to project data (missing identifiers are omitted)
+            Dictionary mapping identifier to project data for successfully
+            fetched projects. Missing identifiers are omitted. If one or
+            more batches fail, those failures are logged and the method
+            continues processing remaining batches, so partial results may
+            be returned rather than raising.
 
         Raises:
-            QueryExecutionError: If query fails
+            QueryExecutionError: If a non-batch error occurs (e.g. the
+                ``_validate_batch_size`` call rejects the input).
 
         """
         # ``headers`` is consumed by the ``@batch_idempotent`` decorator's
@@ -334,8 +390,12 @@ class OpenProjectProjectService:
         if not identifiers:
             return {}
 
-        # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(client, "batch_size", 100)
+        # Validate and clamp batch size to prevent memory exhaustion. Use
+        # ``is not None`` so a caller-supplied ``batch_size=0`` is
+        # respected literally (rather than silently swapped for the
+        # default) — ``_validate_batch_size`` will then reject it
+        # explicitly if 0 is invalid.
+        effective_batch_size = batch_size if batch_size is not None else getattr(client, "batch_size", 100)
         effective_batch_size = client._validate_batch_size(effective_batch_size)
 
         results: dict[str, dict[str, Any]] = {}

@@ -4694,6 +4694,7 @@ J2O_DATA
         self,
         emails: list[str],
         batch_size: int | None = None,
+        *,
         headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple users by email addresses in batches with idempotency support.
@@ -4703,23 +4704,38 @@ J2O_DATA
         cache key comes from ``headers["X-Idempotency-Key"]`` when
         supplied, or a fresh UUID per call otherwise (so callers that
         actually want cached results must pass a stable header).
+        ``headers`` is keyword-only and is forwarded as a kwarg so the
+        decorator's ``extract_headers_from_kwargs`` helper can see it
+        (positional headers would silently disable caching).
         """
-        return self.users.batch_get_users_by_emails(emails, batch_size, headers)
+        return self.users.batch_get_users_by_emails(
+            emails,
+            batch_size,
+            headers=headers,
+        )
 
     def batch_get_projects_by_identifiers(
         self,
         identifiers: list[str],
         batch_size: int | None = None,
+        *,
         headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple projects by identifiers in batches with idempotency support.
 
         Thin delegator over ``self.projects.batch_get_projects_by_identifiers``.
-        The ``@batch_idempotent`` decorator lives on the service method; its
-        cache key comes from ``headers["X-Idempotency-Key"]`` when supplied,
-        or a fresh UUID per call otherwise.
+        The ``@batch_idempotent`` decorator lives on the service method;
+        its cache key comes from ``headers["X-Idempotency-Key"]`` when
+        supplied, or a fresh UUID per call otherwise. ``headers`` is
+        keyword-only and is forwarded as a kwarg so the decorator's
+        ``extract_headers_from_kwargs`` helper can see it (positional
+        headers would silently disable caching).
         """
-        return self.projects.batch_get_projects_by_identifiers(identifiers, batch_size, headers)
+        return self.projects.batch_get_projects_by_identifiers(
+            identifiers,
+            batch_size,
+            headers=headers,
+        )
 
     @batch_idempotent(
         ttl=7200,
