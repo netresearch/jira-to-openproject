@@ -444,22 +444,9 @@ class OpenProjectClient:
     def execute(self, script_content: str) -> dict[str, Any]:
         """Execute a Ruby script directly.
 
-        Args:
-            script_content: Ruby script content to execute
-
-        Returns:
-            Script execution result
-
-        Raises:
-            QueryExecutionError: If script execution fails
-
+        Thin delegator over ``self.rails_runner.execute``.
         """
-        result = self.execute_query(script_content)
-        # Try to parse as JSON if possible, otherwise return as dict with result key
-        try:
-            return json.loads(result)
-        except json.JSONDecodeError, TypeError:
-            return {"result": result}
+        return self.rails_runner.execute(script_content)
 
     def execute_script_with_data(
         self,
@@ -808,59 +795,16 @@ class OpenProjectClient:
     def execute_query(self, query: str, timeout: int | None = None) -> str:
         """Execute a Rails query.
 
-        Args:
-            query: Rails query to execute
-            timeout: Timeout in seconds
-
-        Returns:
-            Query results
-
-        Raises:
-            QueryExecutionError: If execution fails
-            JsonParseError: If result parsing fails
-
+        Thin delegator over ``self.rails_runner.execute_query``.
         """
-        self._last_query = query
-
-        # Use provided timeout or default to 30 seconds for complex operations
-        effective_timeout = timeout if timeout is not None else 30
-        return self.rails_client._send_command_to_tmux(
-            f"puts ({query})",
-            effective_timeout,
-        )
+        return self.rails_runner.execute_query(query, timeout)
 
     def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> dict[str, Any]:
         """Execute a Rails query and return parsed JSON result.
 
-        Default path: write JSON to a container file and read it back.
-        This avoids tmux/console noise and parsing fragility.
-
-        Args:
-            query: Rails query to execute
-            timeout: Timeout in seconds
-
-        Returns:
-            Parsed JSON data
-
-        Raises:
-            QueryExecutionError: If execution fails
-
+        Thin delegator over ``self.rails_runner.execute_query_to_json_file``.
         """
-        try:
-            # Always prefer file-based execution for reliability
-            _ts = int(__import__("time").time())
-            container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"
-            return self.execute_large_query_to_json_file(
-                query,
-                container_file=container_file,
-                timeout=timeout,
-            )
-        except RubyError:
-            logger.exception("Ruby error during execute_query_to_json_file")
-            raise
-        except Exception as e:
-            logger.exception("Error in execute_query_to_json_file")
-            raise QueryExecutionError(str(e)) from e
+        return self.rails_runner.execute_query_to_json_file(query, timeout)
 
     def execute_large_query_to_json_file(
         self,
@@ -1246,30 +1190,9 @@ class OpenProjectClient:
     def execute_json_query(self, query: str, timeout: int | None = None) -> object:
         """Execute a Rails query and return parsed JSON result.
 
-        This method is optimized for retrieving data from Rails as JSON,
-        automatically handling the conversion and parsing.
-
-        Args:
-            query: Rails query to execute (should produce JSON output)
-            timeout: Timeout in seconds
-
-        Returns:
-            Parsed JSON result (list, dict, scalar, or None)
-
-        Raises:
-            QueryExecutionError: If execution fails
-            JsonParseError: If result cannot be parsed as JSON
-
+        Thin delegator over ``self.rails_runner.execute_json_query``.
         """
-        # Modify query to ensure it produces JSON output
-        if not (".to_json" in query or ".as_json" in query):
-            # Add as_json if the query doesn't already have JSON conversion
-            json_query = f"{query}.as_json" if query.strip().endswith(")") else f"({query}).as_json"
-        else:
-            json_query = query
-
-        # Execute the query and get result from JSON file
-        return self.execute_query_to_json_file(json_query, timeout)
+        return self.rails_runner.execute_json_query(query, timeout)
 
     def count_records(self, model: str) -> int:
         """Count records for a given Rails model.
@@ -3470,29 +3393,9 @@ J2O_DATA
     def execute_transaction(self, commands: list[str]) -> object:
         """Execute multiple commands in a transaction.
 
-        Args:
-            commands: List of Ruby/Rails commands
-
-        Returns:
-            Result of the transaction
-
-        Raises:
-            QueryExecutionError: If transaction fails
-
+        Thin delegator over ``self.rails_runner.execute_transaction``.
         """
-        # Build transaction block
-        transaction_commands = "\n".join(commands)
-        transaction_block = f"""
-        ActiveRecord::Base.transaction do
-          {transaction_commands}
-        end
-        """
-
-        try:
-            return self.execute_query(transaction_block)
-        except Exception as e:
-            msg = "Transaction failed."
-            raise QueryExecutionError(msg) from e
+        return self.rails_runner.execute_transaction(commands)
 
     def transfer_file_from_container(
         self,

@@ -1,24 +1,26 @@
-"""Rails console parsing helpers + connection check for OpenProject.
+"""Rails console runner — parsing, connectivity, and the small/medium ``execute*`` family.
 
-Phase 2e of ADR-002: continues the Phase 2 god-class split. This first
-slice of the Rails-runner extraction moves the small/medium parsing
-and connectivity methods into a focused service:
+Phases 2e + 2f of ADR-002 collected the Rails-console helpers off
+``OpenProjectClient`` into this focused service. After Phase 2f the
+service owns:
 
-* ``is_connected()`` — round-trip test against the persistent tmux Rails console.
-* ``check_console_output_for_errors(...)`` — flag Ruby-error markers and severe
-  patterns (SystemStackError, "stack level too deep", etc.).
-* ``assert_expected_console_notice(...)`` — strict output checks for file-write
-  flows that expect a specific success notice.
-* ``parse_rails_output(...)`` — the central output parser. Handles JSON,
-  ``=> <value>`` Rails console responses, scalar values, and various
-  TMUX/console formatting artefacts.
+* **Connectivity** — ``is_connected()`` round-trips a unique echo against
+  the persistent tmux Rails console.
+* **Console-output validation** — ``check_console_output_for_errors``,
+  ``assert_expected_console_notice`` flag Ruby errors and missing notices.
+* **Output parsing** — ``parse_rails_output`` handles JSON, ``=> <value>``
+  Rails console responses, scalar values, and TMUX line-wrap artefacts.
+* **Small ``execute*`` family** — ``execute`` (raw script with JSON-or-dict
+  return), ``execute_query`` (low-level tmux send + capture),
+  ``execute_query_to_json_file`` (file-based JSON path),
+  ``execute_json_query`` (auto-as_json wrapper), ``execute_transaction``
+  (multi-command transaction wrapper).
 
-The bigger ``execute*`` family (``execute``, ``execute_query``,
-``execute_query_to_json_file``, ``execute_large_query_to_json_file``,
-``execute_script_with_data``, ``_execute_batched_query``,
-``execute_json_query``, ``count_records``, ``execute_transaction``) stays
-on ``OpenProjectClient`` for now; those will move into this service —
-or split into a dedicated runner — in Phase 2f.
+The remaining heavyweights (``execute_script_with_data`` ~325 LOC,
+``execute_large_query_to_json_file`` ~240 LOC, ``_execute_batched_query``
+~115 LOC, ``count_records`` ~80 LOC) stay on ``OpenProjectClient`` for
+Phase 2g — they have heavier internal coupling (tmux subprocess, file
+transfers, retry logic) and want their own focused PR.
 
 ``OpenProjectClient`` exposes the service via ``self.rails_runner`` and
 keeps thin delegators for the same method names so existing call sites
@@ -28,10 +30,12 @@ work unchanged.
 from __future__ import annotations
 
 import json
+import os
 import secrets
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.clients.exceptions import JsonParseError, QueryExecutionError
+from src.clients.rails_console_client import RubyError
 
 if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
@@ -263,4 +267,94 @@ class OpenProjectRailsRunnerService:
             self._logger.exception("Failed to process query result: %s", repr(e))
             self._logger.exception("Raw output: %s", result_output[:200])
             msg = f"Failed to parse Rails console output: {e}"
+            raise QueryExecutionError(msg) from e
+
+    # ── execute family (small/medium) ─────────────────────────────────────
+
+    def execute(self, script_content: str) -> dict[str, Any]:
+        """Execute a Ruby script directly.
+
+        Returns the parsed JSON if the result is valid JSON, otherwise wraps
+        the raw text in a ``{"result": ...}`` dict.
+        """
+        result = self.execute_query(script_content)
+        try:
+            return json.loads(result)
+        except json.JSONDecodeError, TypeError:
+            return {"result": result}
+
+    def execute_query(self, query: str, timeout: int | None = None) -> str:
+        """Execute a Rails query via the persistent tmux console.
+
+        Args:
+            query: Rails query to execute.
+            timeout: Timeout in seconds; defaults to 30.
+
+        Returns:
+            Raw text output from the Rails console.
+
+        """
+        client = self._client
+        client._last_query = query
+        effective_timeout = timeout if timeout is not None else 30
+        return client.rails_client._send_command_to_tmux(
+            f"puts ({query})",
+            effective_timeout,
+        )
+
+    def execute_query_to_json_file(self, query: str, timeout: int | None = None) -> dict[str, Any]:
+        """Execute a Rails query and return parsed JSON via the file path.
+
+        File-based execution avoids tmux/console noise; the Ruby payload writes
+        to a tempfile inside the container which we read back.
+
+        Routed through the client's ``execute_large_query_to_json_file`` for
+        now (that method stays on ``OpenProjectClient`` until Phase 2g).
+        """
+        try:
+            _ts = int(__import__("time").time())
+            container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"
+            return self._client.execute_large_query_to_json_file(
+                query,
+                container_file=container_file,
+                timeout=timeout,
+            )
+        except RubyError:
+            self._logger.exception("Ruby error during execute_query_to_json_file")
+            raise
+        except Exception as e:
+            self._logger.exception("Error in execute_query_to_json_file")
+            raise QueryExecutionError(str(e)) from e
+
+    def execute_json_query(self, query: str, timeout: int | None = None) -> object:
+        """Execute a Rails query and return parsed JSON.
+
+        Auto-wraps the query with ``.as_json`` if the caller didn't already
+        request a JSON conversion. Then routes through
+        :py:meth:`execute_query_to_json_file`.
+        """
+        if not (".to_json" in query or ".as_json" in query):
+            json_query = f"{query}.as_json" if query.strip().endswith(")") else f"({query}).as_json"
+        else:
+            json_query = query
+
+        return self.execute_query_to_json_file(json_query, timeout)
+
+    def execute_transaction(self, commands: list[str]) -> object:
+        """Execute multiple Ruby/Rails commands inside a single transaction.
+
+        Wraps the commands in ``ActiveRecord::Base.transaction do ... end``
+        and runs the block via :py:meth:`execute_query`.
+        """
+        transaction_commands = "\n".join(commands)
+        transaction_block = f"""
+        ActiveRecord::Base.transaction do
+          {transaction_commands}
+        end
+        """
+
+        try:
+            return self.execute_query(transaction_block)
+        except Exception as e:
+            msg = "Transaction failed."
             raise QueryExecutionError(msg) from e
