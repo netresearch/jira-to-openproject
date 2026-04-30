@@ -34,6 +34,7 @@ keeps thin delegators for the same method names so existing call sites
 
 from __future__ import annotations
 
+import json
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 class OpenProjectCustomFieldService:
     """Read/write helpers for OpenProject CustomField records."""
 
-    # Cache duration for ``get_custom_fields`` (seconds).
+    # Cache duration for ``get_all`` (seconds).
     CACHE_TTL_SECONDS: int = 300
 
     def __init__(self, client: OpenProjectClient) -> None:
@@ -86,13 +87,14 @@ class OpenProjectCustomFieldService:
             cf_id = int(cf.get("id", 0) or 0) if isinstance(cf, dict) else None
             if cf_id:
                 return cf_id
-        except Exception:
+        except RecordNotFoundError:
             self._logger.info("CF '%s' not found; will create (format=%s)", name, field_format)
 
         escaped = escape_ruby_single_quoted(name)
+        escaped_format = escape_ruby_single_quoted(field_format)
         script = (
             f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escaped}'); "
-            f"if !cf; cf = CustomField.new(name: '{escaped}', field_format: '{field_format}', "
+            f"if !cf; cf = CustomField.new(name: '{escaped}', field_format: '{escaped_format}', "
             f"is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
         )
         result = self._client.execute_query(script)
@@ -119,13 +121,18 @@ class OpenProjectCustomFieldService:
         if not project_ids:
             return
         project_ids_str = ", ".join(str(pid) for pid in sorted(project_ids))
+        # ``find_by(id:)`` returns nil instead of raising when the CF was
+        # already removed, so the rest of the script can no-op gracefully
+        # rather than failing the whole call.
         script = (
-            f"cf = CustomField.find({cf_id})\n"
-            f"[{project_ids_str}].each do |pid|\n"
-            f"  begin\n"
-            f"    project = Project.find(pid)\n"
-            f"    CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)\n"
-            f"  rescue ActiveRecord::RecordNotFound\n"
+            f"cf = CustomField.find_by(id: {cf_id})\n"
+            f"if cf\n"
+            f"  [{project_ids_str}].each do |pid|\n"
+            f"    begin\n"
+            f"      project = Project.find(pid)\n"
+            f"      CustomFieldsProject.find_or_create_by!(custom_field: cf, project: project)\n"
+            f"    rescue ActiveRecord::RecordNotFound\n"
+            f"    end\n"
             f"  end\n"
             f"end\n"
             f"true"
@@ -134,8 +141,8 @@ class OpenProjectCustomFieldService:
             self._client.execute_query(script)
             display = cf_name or str(cf_id)
             self._logger.info("Enabled %s CF for %d projects", display, len(project_ids))
-        except Exception:
-            self._logger.warning("Failed to enable CF for some projects")
+        except Exception as e:
+            self._logger.warning("Failed to enable CF for some projects: %s", e)
 
     # ── lookup ────────────────────────────────────────────────────────────
 
@@ -199,7 +206,10 @@ class OpenProjectCustomFieldService:
         """
         current_time = time.time()
 
-        if not force_refresh and self._cache and (current_time - self._cache_time) < self.CACHE_TTL_SECONDS:
+        # ``self._cache is not None`` (rather than ``self._cache``) so that an
+        # empty list — i.e. a server with zero custom fields — is still served
+        # from cache within the TTL instead of re-running the Rails query.
+        if not force_refresh and self._cache is not None and (current_time - self._cache_time) < self.CACHE_TTL_SECONDS:
             self._logger.debug(
                 "Using cached custom fields (age: %.1fs)",
                 current_time - self._cache_time,
@@ -247,7 +257,7 @@ class OpenProjectCustomFieldService:
             result = self._client.execute_json_query(ruby)
             if isinstance(result, dict) and result.get("id"):
                 return result
-            msg = "Failed ensuring WorkPackage custom field"
+            msg = f"Failed ensuring WorkPackage custom field '{name}' (format={field_format})"
             raise QueryExecutionError(msg)
         except Exception as e:
             msg = f"Failed to ensure custom field '{name}': {e}"
@@ -331,13 +341,11 @@ class OpenProjectCustomFieldService:
 
     def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
         """Remove CustomField records matching the provided name/type."""
-        import json as _json
-
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        name_literal = _json.dumps(name, ensure_ascii=False)
+        name_literal = json.dumps(name, ensure_ascii=False)
         type_filter = ""
         if cf_type:
-            type_literal = _json.dumps(cf_type, ensure_ascii=False)
+            type_literal = json.dumps(cf_type, ensure_ascii=False)
             type_filter = f"scope = scope.where(type: {type_literal})\n"
 
         ruby = (
@@ -464,8 +472,6 @@ class OpenProjectCustomFieldService:
             Dict with ``success`` (bool), ``updated`` (int), ``failed`` (int).
 
         """
-        import json as _json
-
         if not cf_values:
             return {"success": True, "updated": 0, "failed": 0}
 
@@ -480,7 +486,7 @@ class OpenProjectCustomFieldService:
 
         # Use ensure_ascii=False to keep UTF-8 literal; <<-'X' heredoc prevents
         # \u escape interpretation by Ruby.
-        data_json = _json.dumps(data, ensure_ascii=False)
+        data_json = json.dumps(data, ensure_ascii=False)
         script = f"""
           require 'json'
           data = JSON.parse(<<-'J2O_DATA'

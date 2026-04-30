@@ -51,7 +51,8 @@ class JsonStore:
     def save(self, data: Any, filename: Path | str) -> Path:
         """Write ``data`` as pretty-printed JSON to ``base_dir / filename``.
 
-        Creates parent directories as needed. Returns the resolved path.
+        Creates parent directories as needed. Returns the path the data was
+        written to (``base_dir / filename``, not ``Path.resolve()``-resolved).
         """
         filepath = self.base_dir / Path(filename)
         filepath.parent.mkdir(parents=True, exist_ok=True)
