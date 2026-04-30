@@ -35,7 +35,6 @@ import shlex
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
@@ -165,9 +164,12 @@ class OpenProjectFileTransferService:
     def transfer_file_from_container(self, container_path: Path, local_path: Path) -> Path:
         """Copy a file from the container to the local system.
 
+        All underlying transport failures (including a missing container
+        file) are wrapped in :py:class:`FileTransferError` — callers do not
+        see :py:class:`FileNotFoundError` directly.
+
         Raises:
-            FileTransferError: If transfer fails.
-            FileNotFoundError: If the container file doesn't exist.
+            FileTransferError: If the transfer fails for any reason.
 
         """
         from src.clients.openproject_client import FileTransferError
@@ -225,8 +227,17 @@ class OpenProjectFileTransferService:
 
         try:
             if isinstance(remote_path, Path):
-                command = ["rm", "-f", quote(remote_path.as_posix())]
-                self._client.ssh_client.execute_command(" ".join(command))
+                # ``remote_path`` is a *container* path (callers like
+                # ``execute_script_with_data`` write ``/tmp/...`` inside the
+                # container). The previous bare ``ssh exec rm -f /path``
+                # ran on the *host*, so container temp files would never
+                # be cleaned up. Mirror mode 1 above and route through
+                # ``docker exec``.
+                cmd = (
+                    f"docker exec {shlex.quote(self._client.container_name)} "
+                    f"rm -f {shlex.quote(remote_path.as_posix())}"
+                )
+                self._client.ssh_client.execute_command(cmd)
                 self._logger.debug("Cleaned up remote script file: %s", remote_path)
         except Exception as e:
             self._logger.warning("Non-critical error cleaning up remote file: %s", e)

@@ -70,10 +70,27 @@ class OpenProjectProvenanceService:
             name=self.PROJECT_NAME,
         )
 
+    @staticmethod
+    def _entity_type_label(entity_type: str) -> str:
+        """Capitalised label used in CF/type names.
+
+        ``str.title()`` over-capitalises underscore-separated entity types
+        (``"custom_field"`` → ``"Custom_Field"``), while
+        ``ensure_provenance_custom_fields()`` already named the CFs with
+        ``"Custom_field"`` / ``"Link_type"`` (lowercase second word). So all
+        record/restore/bulk paths must use ``.capitalize()`` to produce
+        labels that match what was created. Centralising the transformation
+        here so the four call sites can't drift out of sync again.
+        """
+        return entity_type.capitalize()
+
     def ensure_provenance_types(self, project_id: int) -> dict[str, int]:
         """Ensure WorkPackage types exist for each provenance entity type.
 
-        Creates types like ``J2O Project Mapping``, ``J2O Group Mapping``, etc.
+        Creates types like ``J2O Project Mapping``, ``J2O Group Mapping``,
+        ``J2O Custom_field Mapping``. Uses ``.capitalize()`` (not
+        ``.title()``) so underscore-separated entity types produce labels
+        that match the CF names created in ``ensure_provenance_custom_fields``.
 
         Args:
             project_id: The J2O Migration project ID
@@ -85,7 +102,7 @@ class OpenProjectProvenanceService:
         type_ids: dict[str, int] = {}
 
         for entity_type in self.ENTITY_TYPES:
-            type_name = f"J2O {entity_type.title()} Mapping"
+            type_name = f"J2O {self._entity_type_label(entity_type)} Mapping"
 
             script = (
                 "begin\n"
@@ -200,10 +217,28 @@ class OpenProjectProvenanceService:
         if jira_name:
             subject = f"{subject} ({jira_name})"
 
-        # Get CF IDs for the mapping fields
-        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+        # Get CF IDs for the mapping fields. ``capitalize`` (not ``title``)
+        # so ``custom_field`` -> ``Custom_field`` matches the CF name created
+        # in ensure_provenance_custom_fields.
+        cf_op_id_field = f"J2O OP {self._entity_type_label(entity_type)} ID"
         cf_op_id = cf_ids.get(cf_op_id_field)
         cf_entity_type_id = cf_ids.get("J2O Entity Type")
+
+        # Build cf_values assignments as independent optional lines. The
+        # previous chained-conditional form silently truncated the script
+        # (Python parsed the whole tail of the script string concatenation
+        # as the else-branch of an outer ``if`` expression), dropping the
+        # ``wp.save!`` and ``rescue/end`` lines whenever cf_op_id was set —
+        # so provenance writes were never persisting. Each line is now
+        # emitted independently, with Ruby-side ``if cf_id`` guards.
+        cf_value_lines = ""
+        if cf_op_id:
+            cf_value_lines += f"  cf_values[{cf_op_id}] = {op_entity_id} if {cf_op_id}\n"
+        if cf_entity_type_id:
+            cf_value_lines += (
+                f"  cf_values[{cf_entity_type_id}] = "
+                f"'{escape_ruby_single_quoted(entity_type)}' if {cf_entity_type_id}\n"
+            )
 
         script = (
             "begin\n"
@@ -228,11 +263,7 @@ class OpenProjectProvenanceService:
             "  end\n"
             "  # Set custom field values\n"
             "  cf_values = {}\n"
-            f"  cf_values[{cf_op_id}] = {op_entity_id} if {cf_op_id}\n"
-            if cf_op_id
-            else f"  cf_values[{cf_entity_type_id}] = '{entity_type}' if {cf_entity_type_id}\n"
-            if cf_entity_type_id
-            else ""
+            f"{cf_value_lines}"
             "  wp.custom_field_values = cf_values if cf_values.any?\n"
             "  wp.save!\n"
             "  { success: true, id: wp.id, subject: wp.subject, created: created }\n"
@@ -284,14 +315,15 @@ class OpenProjectProvenanceService:
             self._logger.debug("J2O Migration project not found")
             return {}
 
-        type_name = f"J2O {entity_type.title()} Mapping"
-        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+        # Use ``capitalize()`` (not ``title()``) — see _entity_type_label.
+        type_name = f"J2O {self._entity_type_label(entity_type)} Mapping"
+        cf_op_id_field = f"J2O OP {self._entity_type_label(entity_type)} ID"
 
         script = (
             "begin\n"
             f"  project = Project.find({project_id})\n"
             f"  wp_type = Type.find_by(name: '{type_name}')\n"
-            "  return [].to_json unless wp_type\n"
+            "  return [] unless wp_type\n"
             f"  cf_op_id = CustomField.find_by(name: '{cf_op_id_field}', type: 'WorkPackageCustomField')\n"
             "  cf_entity_type = CustomField.find_by(name: 'J2O Entity Type', type: 'WorkPackageCustomField')\n"
             "  # Also get J2O Origin fields for full provenance\n"
@@ -394,7 +426,7 @@ class OpenProjectProvenanceService:
         if not type_id:
             return {"success": 0, "failed": len(mappings), "errors": [f"No type ID for {entity_type}"]}
 
-        cf_op_id_field = f"J2O OP {entity_type.title()} ID"
+        cf_op_id_field = f"J2O OP {self._entity_type_label(entity_type)} ID"
         cf_op_id = cf_ids.get(cf_op_id_field)
         cf_entity_type_id = cf_ids.get("J2O Entity Type")
 
