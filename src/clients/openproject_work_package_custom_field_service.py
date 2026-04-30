@@ -14,8 +14,9 @@ that don't fit the generic ``OpenProjectCustomFieldService``
 The previous home for ``bulk_set_wp_custom_field_values`` was
 ``OpenProjectCustomFieldService`` but that service is about the CF
 schema (creation, enablement, lookup, deletion). Per-work-package
-value writes belong with the work-package writes. ``set_wp_last
-update_date_by_keys`` previously sat directly on the client.
+value writes belong with the work-package writes.
+``set_wp_last_update_date_by_keys`` previously sat directly on the
+client.
 
 ``OpenProjectClient`` exposes the service via ``self.wp_cf`` and
 keeps thin delegators for the same method names so existing call
@@ -52,6 +53,11 @@ class OpenProjectWorkPackageCustomFieldService:
 
         Returns:
             Dict with ``success`` (bool), ``updated`` (int), ``failed`` (int).
+            Failure responses may also include ``error`` (str) on the
+            Python validation/coercion path, or ``errors`` (list|dict)
+            on the Rails-side result payload — callers should treat
+            both keys as optional metadata rather than load-bearing
+            structure.
 
         """
         if not cf_values:
@@ -114,7 +120,11 @@ J2O_DATA
                 cv = wp.custom_value_for(cf)
                 if cv
                   cv.value = val
-                  cv.save
+                  # ``save!`` raises into the outer rescue on
+                  # validation failure so the row is counted under
+                  # ``failed`` instead of silently flagged as
+                  # ``updated`` despite the persist not happening.
+                  cv.save!
                 else
                   wp.custom_field_values = {{ cf.id => val }}
                 end
