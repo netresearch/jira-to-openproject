@@ -321,6 +321,7 @@ class OpenProjectClient:
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
         from src.clients.openproject_records_service import OpenProjectRecordsService
         from src.clients.openproject_user_service import OpenProjectUserService
+        from src.clients.openproject_work_package_service import OpenProjectWorkPackageService
 
         self.custom_fields = OpenProjectCustomFieldService(self)
         self.provenance = OpenProjectProvenanceService(self)
@@ -330,6 +331,7 @@ class OpenProjectClient:
         self.projects = OpenProjectProjectService(self)
         self.memberships = OpenProjectMembershipService(self)
         self.records = OpenProjectRecordsService(self)
+        self.work_packages = OpenProjectWorkPackageService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2499,19 +2501,9 @@ J2O_DATA
     def delete_all_work_packages(self) -> int:
         """Delete all work packages in bulk.
 
-        Returns:
-            Number of deleted work packages
-
-        Raises:
-            QueryExecutionError: If bulk deletion fails
-
+        Thin delegator over ``self.work_packages.delete_all_work_packages``.
         """
-        try:
-            count = self.execute_query("WorkPackage.delete_all")
-            return count if isinstance(count, int) else 0
-        except Exception as e:
-            msg = "Failed to delete all work packages."
-            raise QueryExecutionError(msg) from e
+        return self.work_packages.delete_all_work_packages()
 
     def delete_all_projects(self) -> int:
         """Delete all projects in bulk.
@@ -4034,145 +4026,28 @@ J2O_DATA
         project_id: int,
         batch_size: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Stream work packages for a project with memory-efficient pagination."""
-        effective_batch_size = batch_size or self.batch_size
+        """Stream work packages for a project.
 
-        script = f"""
-        project = Project.find({project_id})
-        work_packages = project.work_packages.limit({effective_batch_size})
-
-        work_packages.map do |wp|
-          {{
-            id: wp.id,
-            subject: wp.subject,
-            description: wp.description,
-            status: wp.status.name,
-            priority: wp.priority.name,
-            type: wp.type.name,
-            author: wp.author.name,
-            assignee: wp.assigned_to&.name,
-            created_at: wp.created_at,
-            updated_at: wp.updated_at,
-            # Back-compat keys (map *_on to *_at)
-            created_on: wp.created_at,
-            updated_on: wp.updated_at
-          }}
-        end
+        Thin delegator over ``self.work_packages.stream_work_packages_for_project``.
         """
-
-        try:
-            results = self.execute_json_query(script)
-            if isinstance(results, list):
-                yield from results
-        except Exception:
-            logger.exception("Failed to stream work packages for project %s", project_id)
+        yield from self.work_packages.stream_work_packages_for_project(project_id, batch_size)
 
     def batch_update_work_packages(
         self,
         updates: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Update multiple work packages in batches."""
-        if not updates:
-            return {"updated": 0, "failed": 0, "results": []}
+        """Update multiple work packages in batches.
 
-        # Build batch update script
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        # that Ruby misinterprets as invalid Unicode escape sequences
-        # NOTE: Ruby parses {"key": value} as symbol keys (:key), so we use :id etc.
-        updates_json = json.dumps(updates, ensure_ascii=False)
-        script = f"""
-        updates = {updates_json}
-        updated_count = 0
-        failed_count = 0
-        results = []
-
-        updates.each do |update|
-          begin
-            wp = WorkPackage.find(update[:id])
-            update.each do |key, value|
-              next if key == :id
-              wp.send("#{{key}}=", value) if wp.respond_to?("#{{key}}=")
-            end
-            wp.save!
-            updated_count += 1
-            results << {{ id: wp.id, status: 'updated' }}
-          rescue => e
-            failed_count += 1
-            results << {{ id: update[:id], status: 'failed', error: e.message }}
-          end
-        end
-
-        {{
-          updated: updated_count,
-          failed: failed_count,
-          results: results
-        }}
+        Thin delegator over ``self.work_packages.batch_update_work_packages``.
         """
-
-        try:
-            return self.execute_json_query(script)
-        except Exception as e:
-            msg = f"Failed to batch update work packages: {e}"
-            raise QueryExecutionError(msg) from e
+        return self.work_packages.batch_update_work_packages(updates)
 
     def create_work_package(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """Create a single work package.
 
-        Args:
-            payload: Work package data. Can be in API format (with _links)
-                     or direct format (with project_id, type_id, etc.)
-
-        Returns:
-            Created work package data or None on failure
-
+        Thin delegator over ``self.work_packages.create_work_package``.
         """
-        # Convert API-style payload to batch format if needed
-        wp_data: dict[str, Any] = {}
-
-        # Handle API-style _links format
-        if "_links" in payload:
-            links = payload["_links"]
-
-            # Extract project ID from href
-            if "project" in links and "href" in links["project"]:
-                href = links["project"]["href"]
-                if match := re.search(r"/projects/(\d+)", href):
-                    wp_data["project_id"] = int(match.group(1))
-
-            # Extract type ID from href
-            if "type" in links and "href" in links["type"]:
-                href = links["type"]["href"]
-                if match := re.search(r"/types/(\d+)", href):
-                    wp_data["type_id"] = int(match.group(1))
-
-            # Extract status ID from href
-            if "status" in links and "href" in links["status"]:
-                href = links["status"]["href"]
-                if match := re.search(r"/statuses/(\d+)", href):
-                    wp_data["status_id"] = int(match.group(1))
-        else:
-            # Direct format - copy relevant fields
-            for key in ["project_id", "type_id", "status_id", "priority_id", "author_id", "assigned_to_id"]:
-                if key in payload:
-                    wp_data[key] = payload[key]
-
-        # Copy subject and description
-        if "subject" in payload:
-            wp_data["subject"] = payload["subject"]
-        if "description" in payload:
-            wp_data["description"] = payload["description"]
-
-        # Call the internal batch method directly for single item
-        # to avoid process_batches wrapper which may alter return format
-        try:
-            result = self._create_work_packages_batch([wp_data])
-            if isinstance(result, dict) and result.get("results"):
-                results = result["results"]
-                if results and len(results) > 0:
-                    return results[0] if isinstance(results[0], dict) else {"id": results[0]}
-        except Exception as e:
-            logger.error("Failed to create work package: %s", e)
-        return None
+        return self.work_packages.create_work_package(payload)
 
     def update_work_package(
         self,
@@ -4181,19 +4056,9 @@ J2O_DATA
     ) -> dict[str, Any] | None:
         """Update a single work package.
 
-        Args:
-            wp_id: Work package ID
-            updates: Fields to update
-
-        Returns:
-            Updated work package data or None on failure
-
+        Thin delegator over ``self.work_packages.update_work_package``.
         """
-        update_data = {"id": wp_id, **updates}
-        result = self.batch_update_work_packages([update_data])
-        if result and result.get("results"):
-            return result["results"][0]
-        return None
+        return self.work_packages.update_work_package(wp_id, updates)
 
     def batch_get_users_by_emails(
         self,
