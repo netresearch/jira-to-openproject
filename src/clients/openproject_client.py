@@ -4,7 +4,6 @@ import json
 import os
 import random
 import re
-import secrets
 import shlex
 import shutil
 import subprocess
@@ -1068,117 +1067,11 @@ class OpenProjectClient:
         model_name: str,
         timeout: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Execute a query in batches to avoid any truncation issues."""
-        try:
-            # First, try a simple non-batched approach for smaller datasets
-            # This handles the common case where batching isn't needed
-            simple_query = f"{model_name}.limit({BATCH_SIZE_DEFAULT}).to_json"
-            result_output = self.execute_query(simple_query, timeout=timeout)
+        """Execute a query in batches to avoid any truncation issues.
 
-            try:
-                simple_data = self._parse_rails_output(result_output)
-
-                # If we get valid data and it's less than batch size, we're done
-                if isinstance(simple_data, list) and len(simple_data) < BATCH_SIZE_DEFAULT:
-                    logger.debug(
-                        "Retrieved %d total records using simple query",
-                        len(simple_data),
-                    )
-                    return simple_data
-                if isinstance(simple_data, list) and len(simple_data) == BATCH_SIZE_DEFAULT:
-                    # We might have more data, fall through to batched approach
-                    logger.debug(
-                        "Simple query returned 50 items, using batched approach for complete data",
-                    )
-                # Handle single item or other data types
-                elif isinstance(simple_data, dict):
-                    logger.debug("Retrieved 1 record using simple query")
-                    return [simple_data]
-                elif simple_data is not None:
-                    logger.debug("Retrieved non-list data using simple query")
-                    # For non-dict, non-list data, return empty list
-                    logger.warning(
-                        "Unexpected data type from simple query: %s",
-                        type(simple_data),
-                    )
-                    return []
-                else:
-                    return []
-
-            except Exception:
-                logger.debug(
-                    "Simple query failed, falling back to batched approach",
-                )
-
-            # Fall back to batched approach for larger datasets
-            all_results = []
-            batch_size = BATCH_SIZE_DEFAULT  # Increased batch size for better performance
-            offset = 0
-
-            while True:
-                # Apply adaptive rate limiting before Rails console operation
-                self.rate_limiter.wait_if_needed(f"batched_query_{model_name}")
-
-                # Use a more reliable query pattern that works with Rails scopes
-                # Use order by id to ensure consistent pagination
-                query = f"{model_name}.unscoped.order(:id).offset({offset}).limit({batch_size}).to_json"
-
-                operation_start = time.time()
-                result_output = self.execute_query(query, timeout=timeout)
-                operation_time = time.time() - operation_start
-
-                try:
-                    batch_data = self._parse_rails_output(result_output)
-
-                    # Record successful operation for rate limiting adaptation
-                    self.rate_limiter.record_response(operation_time, 200)
-
-                    # If we get no data or empty array, we're done
-                    if not batch_data or (isinstance(batch_data, list) and len(batch_data) == 0):
-                        break
-
-                    # If we get a single item instead of array, wrap it
-                    if isinstance(batch_data, dict):
-                        batch_data = [batch_data]
-
-                    # Add to results
-                    if isinstance(batch_data, list):
-                        all_results.extend(batch_data)
-
-                        # If we got fewer items than batch_size, we're done
-                        if len(batch_data) < batch_size:
-                            break
-                    else:
-                        logger.warning(
-                            "Unexpected data type from batch query: %s",
-                            type(batch_data),
-                        )
-                        break
-
-                    offset += batch_size
-
-                    # Increased safety limit for larger datasets
-                    if offset > SAFE_OFFSET_LIMIT:
-                        logger.warning("Reached safety limit of %d records, stopping", SAFE_OFFSET_LIMIT)
-                        break
-
-                except Exception:
-                    logger.exception("Failed to parse batch at offset %d", offset)
-                    # Record error for rate limiting adaptation
-                    self.rate_limiter.record_response(operation_time, 500)
-                    break
-
-            logger.debug(
-                "Retrieved %d total records using batched approach",
-                len(all_results),
-            )
-            return all_results
-
-        except Exception:
-            logger.exception("Batched query failed")
-        else:
-            # Should not reach here; safe default
-            return []
+        Thin delegator over ``self.rails_runner.execute_batched_query``.
+        """
+        return self.rails_runner.execute_batched_query(model_name, timeout)
 
     def _parse_rails_output(self, result_output: str) -> object:
         """Parse Rails console output to extract JSON or scalar values.
@@ -1197,82 +1090,9 @@ class OpenProjectClient:
     def count_records(self, model: str) -> int:
         """Count records for a given Rails model.
 
-        Args:
-            model: Model name (e.g., "User", "Project")
-
-        Returns:
-            Number of records
-
-        Raises:
-            QueryExecutionError: If the count query fails
-
+        Thin delegator over ``self.rails_runner.count_records``.
         """
-        self._validate_model_name(model)
-        # Use unique markers to extract count reliably from tmux output
-        marker_id = secrets.token_hex(8)
-        start_marker = f"J2O_COUNT_START_{marker_id}"
-        end_marker = f"J2O_COUNT_END_{marker_id}"
-
-        # Simple inline command that prints markers around the count
-        query = f'puts "{start_marker}"; puts {model}.count; puts "{end_marker}"'
-
-        # Get tmux target
-        target = self.rails_client._get_target()
-        tmux = shutil.which("tmux") or "tmux"
-
-        # Send the command
-        escaped_command = self.rails_client._escape_command(query)
-        subprocess.run(
-            [tmux, "send-keys", "-t", target, escaped_command, "Enter"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        # Wait for the end marker to appear (up to 30 seconds)
-        max_wait = 30
-        start_time = time.time()
-        result = ""
-
-        while time.time() - start_time < max_wait:
-            time.sleep(0.3)
-            cap = subprocess.run(
-                [tmux, "capture-pane", "-p", "-S", "-100", "-t", target],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            result = cap.stdout
-            if end_marker in result:
-                break
-
-        # Parse output using regex - markers must be on their own lines (not in command echo)
-        # The command echo looks like: >> puts "MARKER"; puts Model.count; puts "MARKER"
-        # The actual output looks like:
-        # MARKER
-        # 123
-        # MARKER
-        # Pattern: start_marker alone on line, then digit(s) on next line, then end_marker alone
-        pattern = rf"^{re.escape(start_marker)}$\n(\d+)\n^{re.escape(end_marker)}$"
-        match = re.search(pattern, result, re.MULTILINE)
-        if match:
-            return int(match.group(1))
-
-        # Fallback: scan lines looking for marker sequence (not in command echo)
-        lines = result.split("\n")
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            # Marker must be the entire line content (not part of a puts command)
-            if stripped == start_marker and not line.lstrip().startswith(">>"):
-                # Check next lines for count and end marker
-                if i + 2 < len(lines):
-                    count_line = lines[i + 1].strip()
-                    end_line = lines[i + 2].strip()
-                    if count_line.isdigit() and end_line == end_marker:
-                        return int(count_line)
-
-        msg = f"Unable to parse count result for {model}: end_marker={end_marker in result}"
-        raise QueryExecutionError(msg)
+        return self.rails_runner.count_records(model)
 
     # -------------------------------------------------------------
     # Work Package Custom Field helpers for fast-forward migrations

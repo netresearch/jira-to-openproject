@@ -1,8 +1,7 @@
-"""Rails console runner — parsing, connectivity, and the small/medium ``execute*`` family.
+"""Rails console runner — parsing, connectivity, and the ``execute*`` family.
 
-Phases 2e + 2f of ADR-002 collected the Rails-console helpers off
-``OpenProjectClient`` into this focused service. After Phase 2f the
-service owns:
+Phases 2e + 2f + 2g of ADR-002 collected the Rails-console helpers off
+``OpenProjectClient`` into this focused service. The service now owns:
 
 * **Connectivity** — ``is_connected()`` round-trips a unique echo against
   the persistent tmux Rails console.
@@ -10,17 +9,22 @@ service owns:
   ``assert_expected_console_notice`` flag Ruby errors and missing notices.
 * **Output parsing** — ``parse_rails_output`` handles JSON, ``=> <value>``
   Rails console responses, scalar values, and TMUX line-wrap artefacts.
-* **Small ``execute*`` family** — ``execute`` (raw script with JSON-or-dict
-  return), ``execute_query`` (low-level tmux send + capture),
+* **Small/medium ``execute*`` family** — ``execute`` (raw script with
+  JSON-or-dict return), ``execute_query`` (low-level tmux send + capture),
   ``execute_query_to_json_file`` (file-based JSON path),
   ``execute_json_query`` (auto-as_json wrapper), ``execute_transaction``
   (multi-command transaction wrapper).
+* **Batched / counted reads** — ``execute_batched_query`` (paged
+  ``offset+limit`` reads with adaptive rate limiting) and
+  ``count_records`` (marker-bracketed model count via direct tmux).
 
-The remaining heavyweights (``execute_script_with_data`` ~325 LOC,
-``execute_large_query_to_json_file`` ~240 LOC, ``_execute_batched_query``
-~115 LOC, ``count_records`` ~80 LOC) stay on ``OpenProjectClient`` for
-Phase 2g — they have heavier internal coupling (tmux subprocess, file
-transfers, retry logic) and want their own focused PR.
+The two giant heavyweights stay on ``OpenProjectClient`` for follow-up
+PRs (Phase 2h / 2i) — they have heavier internal coupling
+(per-script subprocess + file transfer + JSON marker extraction +
+Rails-runner fallback) and earn their own focused extraction:
+
+* ``execute_script_with_data`` (~325 LOC)
+* ``execute_large_query_to_json_file`` (~240 LOC)
 
 ``OpenProjectClient`` exposes the service via ``self.rails_runner`` and
 keeps thin delegators for the same method names so existing call sites
@@ -31,7 +35,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
+import shutil
+import subprocess
+import time
 from typing import TYPE_CHECKING, Any
 
 from src.clients.exceptions import JsonParseError, QueryExecutionError
@@ -363,3 +371,178 @@ class OpenProjectRailsRunnerService:
         except Exception as e:
             msg = "Transaction failed."
             raise QueryExecutionError(msg) from e
+
+    # ── batched / counted queries ─────────────────────────────────────────
+
+    def execute_batched_query(
+        self,
+        model_name: str,
+        timeout: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Execute a query in batches to avoid console-buffer truncation.
+
+        Tries a simple non-batched query first for small datasets; falls back
+        to ``unscoped.order(:id).offset(N).limit(B)`` paging when more rows
+        are available, with adaptive rate-limiting via the client's rate
+        limiter.
+        """
+        from src.clients.openproject_client import BATCH_SIZE_DEFAULT, SAFE_OFFSET_LIMIT
+
+        client = self._client
+        try:
+            simple_query = f"{model_name}.limit({BATCH_SIZE_DEFAULT}).to_json"
+            result_output = client.execute_query(simple_query, timeout=timeout)
+
+            try:
+                simple_data = client._parse_rails_output(result_output)
+
+                if isinstance(simple_data, list) and len(simple_data) < BATCH_SIZE_DEFAULT:
+                    self._logger.debug(
+                        "Retrieved %d total records using simple query",
+                        len(simple_data),
+                    )
+                    return simple_data
+                if isinstance(simple_data, list) and len(simple_data) == BATCH_SIZE_DEFAULT:
+                    self._logger.debug(
+                        "Simple query returned %d items, using batched approach for complete data",
+                        BATCH_SIZE_DEFAULT,
+                    )
+                elif isinstance(simple_data, dict):
+                    self._logger.debug("Retrieved 1 record using simple query")
+                    return [simple_data]
+                elif simple_data is not None:
+                    self._logger.debug("Retrieved non-list data using simple query")
+                    self._logger.warning(
+                        "Unexpected data type from simple query: %s",
+                        type(simple_data),
+                    )
+                    return []
+                else:
+                    return []
+
+            except Exception:
+                self._logger.debug(
+                    "Simple query failed, falling back to batched approach",
+                )
+
+            all_results: list[dict[str, Any]] = []
+            batch_size = BATCH_SIZE_DEFAULT
+            offset = 0
+
+            while True:
+                client.rate_limiter.wait_if_needed(f"batched_query_{model_name}")
+                query = f"{model_name}.unscoped.order(:id).offset({offset}).limit({batch_size}).to_json"
+                operation_start = time.time()
+                result_output = client.execute_query(query, timeout=timeout)
+                operation_time = time.time() - operation_start
+
+                try:
+                    batch_data = client._parse_rails_output(result_output)
+                    client.rate_limiter.record_response(operation_time, 200)
+
+                    if not batch_data or (isinstance(batch_data, list) and len(batch_data) == 0):
+                        break
+
+                    if isinstance(batch_data, dict):
+                        batch_data = [batch_data]
+
+                    if isinstance(batch_data, list):
+                        all_results.extend(batch_data)
+                        if len(batch_data) < batch_size:
+                            break
+                    else:
+                        self._logger.warning(
+                            "Unexpected data type from batch query: %s",
+                            type(batch_data),
+                        )
+                        break
+
+                    offset += batch_size
+
+                    if offset > SAFE_OFFSET_LIMIT:
+                        self._logger.warning(
+                            "Reached safety limit of %d records, stopping",
+                            SAFE_OFFSET_LIMIT,
+                        )
+                        break
+
+                except Exception:
+                    self._logger.exception("Failed to parse batch at offset %d", offset)
+                    client.rate_limiter.record_response(operation_time, 500)
+                    break
+
+            self._logger.debug(
+                "Retrieved %d total records using batched approach",
+                len(all_results),
+            )
+            return all_results
+
+        except Exception:
+            self._logger.exception("Batched query failed")
+            return []
+
+    def count_records(self, model: str) -> int:
+        """Count records for a given Rails model.
+
+        Sends ``puts {model}.count`` wrapped in unique start/end markers and
+        parses the count out of the tmux pane capture. Doesn't go through
+        ``execute_query`` because we need exact stdout positioning to extract
+        the integer reliably across timing variations.
+
+        Raises:
+            QueryExecutionError: If the count cannot be parsed.
+
+        """
+        client = self._client
+        client._validate_model_name(model)
+
+        marker_id = secrets.token_hex(8)
+        start_marker = f"J2O_COUNT_START_{marker_id}"
+        end_marker = f"J2O_COUNT_END_{marker_id}"
+
+        query = f'puts "{start_marker}"; puts {model}.count; puts "{end_marker}"'
+
+        target = client.rails_client._get_target()
+        tmux = shutil.which("tmux") or "tmux"
+
+        escaped_command = client.rails_client._escape_command(query)
+        subprocess.run(
+            [tmux, "send-keys", "-t", target, escaped_command, "Enter"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        max_wait = 30
+        start_time = time.time()
+        result = ""
+
+        while time.time() - start_time < max_wait:
+            time.sleep(0.3)
+            cap = subprocess.run(
+                [tmux, "capture-pane", "-p", "-S", "-100", "-t", target],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            result = cap.stdout
+            if end_marker in result:
+                break
+
+        pattern = rf"^{re.escape(start_marker)}$\n(\d+)\n^{re.escape(end_marker)}$"
+        match = re.search(pattern, result, re.MULTILINE)
+        if match:
+            return int(match.group(1))
+
+        lines = result.split("\n")
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == start_marker and not line.lstrip().startswith(">>"):
+                if i + 2 < len(lines):
+                    count_line = lines[i + 1].strip()
+                    end_line = lines[i + 2].strip()
+                    if count_line.isdigit() and end_line == end_marker:
+                        return int(count_line)
+
+        msg = f"Unable to parse count result for {model}: end_marker={end_marker in result}"
+        raise QueryExecutionError(msg)
