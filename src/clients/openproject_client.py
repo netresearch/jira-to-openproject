@@ -45,7 +45,6 @@ except Exception:
 BATCH_SIZE_DEFAULT = 50
 SAFE_OFFSET_LIMIT = 5000
 BATCH_LABEL_SAMPLE = 3
-USERS_CACHE_TTL_SECONDS = 300
 
 
 # Pre-compiled regex patterns for control character sanitization (hot path)
@@ -4906,14 +4905,17 @@ J2O_DATA
         self,
         emails: list[str],
         batch_size: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple users by email addresses in batches with idempotency support.
 
         Thin delegator over ``self.users.batch_get_users_by_emails``. The
-        ``@batch_idempotent`` decorator lives on the service method so the
-        cache key is computed from the same call shape as the original.
+        ``@batch_idempotent`` decorator lives on the service method; its
+        cache key comes from ``headers["X-Idempotency-Key"]`` when
+        supplied, or a fresh UUID per call otherwise (so callers that
+        actually want cached results must pass a stable header).
         """
-        return self.users.batch_get_users_by_emails(emails, batch_size)
+        return self.users.batch_get_users_by_emails(emails, batch_size, headers)
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for project identifier lookups
     def batch_get_projects_by_identifiers(

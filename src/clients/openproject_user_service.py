@@ -42,8 +42,8 @@ if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
 
 
-# Cache TTL kept on the service for clarity. The constant lives on the
-# client too (used by the delegator) — both reference the same value.
+# Cache TTL: 5 minutes. Single definition (was previously duplicated on
+# the client until Phase 2j; the client copy was unused after the move).
 USERS_CACHE_TTL_SECONDS = 300
 
 
@@ -237,17 +237,24 @@ class OpenProjectUserService:
         if hasattr(client, "_users_by_email_cache") and email_lower in client._users_by_email_cache:
             return client._users_by_email_cache[email_lower]
 
-        # Try to load all users to populate cache
+        # Try to load all users so we can serve subsequent lookups from cache.
+        # ``get_users`` does NOT populate ``_users_by_email_cache`` directly,
+        # so scan the returned list ourselves and warm the email index. This
+        # avoids a wasted Rails round-trip on every email lookup that misses
+        # the email cache but matches a user already in the full-list cache.
         try:
-            # Load all users - we ignore the returned value because we just
-            # want to populate the cache
-            self.get_users()
+            all_users = self.get_users()
 
-            # Check if we got the user in the newly populated cache
+            for user in all_users or []:
+                user_email = user.get("mail") or user.get("email")
+                if isinstance(user_email, str):
+                    client._users_by_email_cache[user_email.lower()] = user
+
+            # Now check if the email landed in the populated cache
             if email_lower in client._users_by_email_cache:
                 return client._users_by_email_cache[email_lower]
 
-            # If not in cache, try direct query
+            # If still not found, try direct query
             user = client.find_record("User", {"email": email})
             if user:
                 # Cache the result
@@ -267,26 +274,45 @@ class OpenProjectUserService:
         """Retrieve multiple users in batches.
 
         Filters the cached full users list — assumes ``get_users`` has been
-        primed once per migration run.
+        primed once per migration run. Lookups use a ``set`` so this stays
+        O(N + M) instead of O(N * M) for large id lists, and cached
+        ``user['id']`` values are coerced to ``int`` (some Rails JSON
+        responses surface ids as numeric strings) so callers don't miss
+        legitimate matches.
         """
         if not user_ids:
             return {}
 
-        # Get all users and filter to requested IDs
-        all_users = self.get_users()
-        return {user["id"]: user for user in all_users if user["id"] in user_ids}
+        wanted: set[int] = {int(uid) for uid in user_ids}
+        result: dict[int, dict] = {}
+        for user in self.get_users():
+            raw_id = user.get("id")
+            try:
+                uid = int(raw_id) if raw_id is not None else None
+            except TypeError, ValueError:
+                continue
+            if uid is not None and uid in wanted:
+                result[uid] = user
+        return result
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for user email lookups
     def batch_get_users_by_emails(
         self,
         emails: list[str],
         batch_size: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple users by email addresses in batches with idempotency support.
 
         Args:
             emails: List of email addresses to find
             batch_size: Size of each batch (defaults to configured batch_size)
+            headers: Optional headers dict; when ``X-Idempotency-Key`` is
+                present the ``@batch_idempotent`` decorator caches the
+                result under that key for the configured TTL. Without a
+                header the decorator's per-call UUID makes the cache a
+                no-op (so callers that need real idempotency MUST pass
+                a stable key).
 
         Returns:
             Dictionary mapping email to user data (missing emails are omitted)
@@ -295,6 +321,11 @@ class OpenProjectUserService:
             QueryExecutionError: If query fails
 
         """
+        # ``headers`` is consumed by the ``@batch_idempotent`` decorator's
+        # ``extract_headers_from_kwargs`` helper before the function body
+        # runs; we accept-and-discard it here to keep the signature
+        # compatible with that contract.
+        del headers
         client = self._client
         if not emails:
             return {}
