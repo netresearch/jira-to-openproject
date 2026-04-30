@@ -1,6 +1,6 @@
 """Rails console runner — parsing, connectivity, and the ``execute*`` family.
 
-Phases 2e + 2f + 2g of ADR-002 collected the Rails-console helpers off
+Phases 2e-2i of ADR-002 collected the Rails-console helpers off
 ``OpenProjectClient`` into this focused service. The service now owns:
 
 * **Connectivity** — ``is_connected()`` round-trips a unique echo against
@@ -17,14 +17,11 @@ Phases 2e + 2f + 2g of ADR-002 collected the Rails-console helpers off
 * **Batched / counted reads** — ``execute_batched_query`` (paged
   ``offset+limit`` reads with adaptive rate limiting) and
   ``count_records`` (marker-bracketed model count via direct tmux).
-
-The two giant heavyweights stay on ``OpenProjectClient`` for follow-up
-PRs (Phase 2h / 2i) — they have heavier internal coupling
-(per-script subprocess + file transfer + JSON marker extraction +
-Rails-runner fallback) and earn their own focused extraction:
-
-* ``execute_script_with_data`` (~325 LOC)
-* ``execute_large_query_to_json_file`` (~240 LOC)
+* **Heavyweight ``execute*`` family** — ``execute_script_with_data``
+  (per-call structured-input pipeline with tmux markers and rails-runner
+  fallback) and ``execute_large_query_to_json_file`` (large result sets
+  written to a container file then ``cat``-piped via SSH to bypass
+  tmux/console truncation).
 
 ``OpenProjectClient`` exposes the service via ``self.rails_runner`` and
 keeps thin delegators for the same method names so existing call sites
@@ -37,9 +34,11 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -875,3 +874,255 @@ class OpenProjectRailsRunnerService:
                         container_data_path,
                         cleanup_err,
                     )
+
+    # ── large-result-set queries via container file ──────────────────────
+
+    def execute_large_query_to_json_file(
+        self,
+        query: str,
+        container_file: str = "/tmp/j2o_query.json",
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        """Execute a Rails query by writing JSON to a container file, then read it back.
+
+        Use this for large result sets to avoid tmux/console truncation and parsing fragility.
+        This method suppresses console output and relies on Docker+SSH to retrieve data.
+
+        Args:
+            query: Rails query to execute; will be coerced to JSON in Ruby
+            container_file: Absolute path inside the container to write JSON content
+            timeout: Ruby execution timeout (defaults to client.command_timeout)
+
+        Returns:
+            Parsed JSON data
+
+        """
+        # Lazy import: ``escape_ruby_single_quoted`` lives on
+        # openproject_client and we still need it for path-quoting in
+        # generated Ruby. Lazy keeps the service ↔ client cycle out of
+        # module-load time.
+        from src.clients.openproject_client import escape_ruby_single_quoted
+
+        client = self._client
+
+        # Ensure JSON conversion on the Ruby side
+        ruby_json_expr = f"({query}).as_json"
+        # Build Ruby that writes JSON to file without printing large output to console
+        # IMPORTANT: Do not shell-quote here; we need the actual path string in Ruby.
+        ruby_path_literal = escape_ruby_single_quoted(str(container_file))
+
+        # Build provenance hint: where did this originate?
+        # Compose a concise hint like: "j2o: migration/work_packages func=_migrate_work_packages project=NRS ts=..."
+        _SKIP_CLIENT_FILES = (
+            "/src/clients/openproject_client.py",
+            "/src/clients/openproject_rails_runner_service.py",
+            "/src/clients/rails_console_client.py",
+            "/src/clients/docker_client.py",
+            "/src/clients/ssh_client.py",
+        )
+
+        def _caller_hint(default_component: str) -> str:
+            try:
+                import sys
+
+                # Use sys._getframe instead of inspect.stack (O(1) per frame, no source loading)
+                path: str | None = None
+                func: str | None = None
+                frame = sys._getframe(1)
+                for _ in range(49):
+                    if frame is None:
+                        break
+                    filename = frame.f_code.co_filename
+                    if "/src/" in filename and not any(skip in filename for skip in _SKIP_CLIENT_FILES):
+                        path = filename.split("/src/")[-1]
+                        func = frame.f_code.co_name
+                        break
+                    frame = frame.f_back
+
+                # Derive a concise component label from path
+                component = default_component
+                if path:
+                    component = (
+                        path.replace("migrations/", "migration/")
+                        .replace("clients/", "client/")
+                        .replace("_migration.py", "")
+                        .replace(".py", "")
+                    )
+
+                parts: list[str] = ["j2o:", component]
+                if func:
+                    parts.append(f"func={func}")
+                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+                parts.append(f"ts={ts}")
+                # include project filter if configured
+                proj = (config.jira_config or {}).get("project_filter")
+                if proj:
+                    parts.append(f"project={proj}")
+                return " ".join(parts)
+            except Exception:
+                return f"j2o: {default_component}"
+
+        provenance = _caller_hint("query/json")
+
+        ruby_script = (
+            f"# {provenance}\n"
+            "require 'json'\n"
+            "begin; require 'fileutils'; rescue; end\n"
+            f"data = {ruby_json_expr}\n"
+            f"File.open('{ruby_path_literal}', 'w') do |f|\n"
+            "  f.write(JSON.generate(data))\n"
+            "  begin; f.flush; f.fsync; rescue; end\n"
+            "end\n"
+            f"begin; FileUtils.chmod(0644, '{ruby_path_literal}'); rescue; end\n"
+        )
+
+        # Choose execution mode: use rails runner for long scripts to avoid pasting into console
+        # Use both max lines and char threshold (defaults: 10 lines OR 200 chars)
+        max_lines_env = os.environ.get("J2O_SCRIPT_RUNNER_MAX_LINES")
+        char_thresh_env = os.environ.get("J2O_SCRIPT_RUNNER_THRESHOLD")
+        try:
+            max_lines = int(max_lines_env) if max_lines_env else 10
+        except Exception:
+            max_lines = 10
+        try:
+            char_threshold = int(char_thresh_env) if char_thresh_env else 200
+        except Exception:
+            char_threshold = 200
+
+        script_lines = ruby_script.count("\n") + 1
+        use_runner = (script_lines >= max_lines) or (len(ruby_script) >= char_threshold)
+
+        if use_runner:
+            runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+            local_tmp = Path(client.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+            local_tmp.parent.mkdir(parents=True, exist_ok=True)
+            with local_tmp.open("w", encoding="utf-8") as f:
+                f.write(ruby_script)
+            client.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+
+            # Decide load mode: default to console `load` to avoid tmux pastes but keep low startup cost
+            # Force runner mode if J2O_FORCE_RAILS_RUNNER is set
+            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "console").lower()
+            if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
+                mode = "runner"
+            if mode == "console":
+                try:
+                    _console_output = client.rails_client.execute(
+                        f"load '{runner_script_path}'",
+                        timeout=timeout or 90,
+                        suppress_output=True,
+                    )
+                    self.check_console_output_for_errors(
+                        _console_output or "",
+                        context="execute_large_query_to_json_file(load)",
+                    )
+                except Exception as e:
+                    # Fallback to rails runner on console instability
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
+                    stdout, stderr, rc = client.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(q_msg) from e
+            else:
+                runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
+                stdout, stderr, rc = client.docker_client.execute_command(
+                    runner_cmd,
+                    timeout=timeout or 300,  # Increased from 120 for large projects
+                )
+                if rc != 0:
+                    q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                    raise QueryExecutionError(q_msg)
+        else:
+            # Execute via persistent tmux Rails console (faster than rails runner)
+            try:
+                _console_output = client.rails_client.execute(
+                    ruby_script,
+                    timeout=timeout or 90,
+                    suppress_output=True,
+                )
+                self.check_console_output_for_errors(
+                    _console_output or "",
+                    context="execute_large_query_to_json_file",
+                )
+            except Exception as e:
+                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
+                    if not config.migration_config.get("enable_runner_fallback", False):
+                        raise
+                    self._logger.warning(
+                        "Rails console failed during large query (%s); falling back to rails runner",
+                        type(e).__name__,
+                    )
+                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
+                    local_tmp = Path(client.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
+                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
+                    with local_tmp.open("w", encoding="utf-8") as f:
+                        f.write(ruby_script)
+                    client.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
+                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
+                    stdout, stderr, rc = client.docker_client.execute_command(runner_cmd)
+                    if rc != 0:
+                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(q_msg) from e
+                else:
+                    raise
+
+        # Read file back from container via SSH (avoids tmux buffer limits)
+        ssh_command = f"docker exec {shlex.quote(client.container_name)} cat {shlex.quote(container_file)}"
+
+        # Retry loop to handle race where file write completes slightly after command returns
+        wait_env = os.environ.get("J2O_QUERY_RESULT_WAIT_SECONDS")
+        try:
+            max_wait_seconds = int(wait_env) if wait_env else 600
+        except Exception:
+            max_wait_seconds = 60
+        poll_interval = 0.5
+        attempts = max(1, int(max_wait_seconds / poll_interval))
+
+        stdout = ""
+        stderr = ""
+        returncode = 1
+        for attempt in range(attempts):
+            try:
+                stdout, stderr, returncode = client.ssh_client.execute_command(
+                    ssh_command,
+                    check=False,
+                )
+            except Exception as e:
+                # Unexpected transport error; bubble it up immediately
+                raise QueryExecutionError(str(e)) from e
+
+            if returncode == 0 and stdout:
+                if attempt > 0:
+                    self._logger.debug(
+                        "Recovered after %d attempts reading container file %s",
+                        attempt + 1,
+                        container_file,
+                    )
+                break
+
+            # Non-zero return code with no stdout. Treat "file not yet present" as a retry case,
+            # otherwise escalate after the loop.
+            if "No such file or directory" in (stderr or ""):
+                # Emit a lightweight heartbeat every ~5 seconds so runs don't look hung
+                if attempt and (attempt % max(1, int(5 / poll_interval)) == 0):
+                    self._logger.info(
+                        "Waiting for query result file %s (waited %.1fs)",
+                        container_file,
+                        attempt * poll_interval,
+                    )
+                time.sleep(poll_interval)
+                continue
+
+            # Any other stderr/returncode is considered a hard failure
+            if returncode != 0:
+                break
+            time.sleep(poll_interval)
+
+        if returncode != 0:
+            msg = f"SSH command failed with code {returncode}: {stderr}"
+            raise QueryExecutionError(msg)
+
+        try:
+            return json.loads(stdout.strip())
+        except Exception as e:  # Normalize JSON parse errors
+            raise JsonParseError(str(e)) from e
