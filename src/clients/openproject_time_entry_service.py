@@ -57,17 +57,21 @@ class OpenProjectTimeEntryService:
             QueryExecutionError: If the query fails
 
         """
-        # Use file-based JSON retrieval to avoid console control-character issues
+        # Use file-based JSON retrieval to avoid console control-character issues.
+        # Unique container filename per call so concurrent invocations
+        # (e.g. across parallel migrations) don't overwrite each other's
+        # results before they're read back.
         query = (
             "TimeEntryActivity.active.map { |activity| "
             "{ id: activity.id, name: activity.name, position: activity.position, "
             "is_default: activity.is_default, active: activity.active } }"
         )
+        container_file = self._client._generate_unique_temp_filename("time_entry_activities")
 
         try:
             result = self._client.execute_large_query_to_json_file(
                 query,
-                container_file="/tmp/j2o_time_entry_activities.json",
+                container_file=container_file,
                 timeout=60,
             )
             return result if isinstance(result, list) else []
@@ -233,7 +237,11 @@ class OpenProjectTimeEntryService:
           # Provenance CF for time entries: J2O Origin Worklog Key
           begin
             key = '{escape_ruby_single_quoted(str(time_entry_data.get("_meta", {}).get("jira_worklog_key") or ""))}'
-            if key
+            # Empty strings are truthy in Ruby — skip CF assignment
+            # explicitly when the key is missing/blank so we don't
+            # create or set provenance for entries without a worklog
+            # source.
+            if !key.nil? && !key.strip.empty?
               cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
               if !cf
                 cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string',
@@ -323,8 +331,13 @@ class OpenProjectTimeEntryService:
 
         client = self._client
 
-        # Build entries data with necessary fields and ID extraction
+        # Build entries data with necessary fields and ID extraction.
+        # Track skipped (malformed) entries explicitly so the returned
+        # summary reflects every input index, not just the ones that
+        # made it into the Ruby payload — callers can then reconcile
+        # input list ↔ output ``results`` 1:1.
         entries_data: list[dict[str, Any]] = []
+        skipped_results: list[dict[str, Any]] = []
         for i, entry_data in enumerate(time_entries):
             embedded = entry_data.get("_embedded", {})
 
@@ -336,29 +349,47 @@ class OpenProjectTimeEntryService:
             user_id = extract_id(r"/users/(\d+)", embedded.get("user", {}).get("href", ""))
             activity_id = extract_id(r"/activities/(\d+)", embedded.get("activity", {}).get("href", ""))
 
-            if all([work_package_id, user_id, activity_id]):
-                # Normalize comment to string
-                comment_obj = entry_data.get("comment", "")
-                if isinstance(comment_obj, dict):
-                    comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
-                else:
-                    comment_str = str(comment_obj)
-
-                entries_data.append(
+            if not all([work_package_id, user_id, activity_id]):
+                # Record a structured failure for the caller — preserves
+                # the 1:1 input/output mapping the bulk callers rely on.
+                skipped_results.append(
                     {
                         "index": i,
-                        "work_package_id": work_package_id,
-                        "user_id": user_id,
-                        "activity_id": activity_id,
-                        "hours": entry_data.get("hours", 0),
-                        "spent_on": entry_data.get("spentOn", ""),
-                        "comments": comment_str,
-                        "jira_worklog_key": (entry_data.get("_meta", {}) or {}).get("jira_worklog_key"),
+                        "success": False,
+                        "error": (
+                            "Missing required IDs: "
+                            f"work_package_id={work_package_id}, user_id={user_id}, activity_id={activity_id}"
+                        ),
                     },
                 )
+                continue
+
+            # Normalize comment to string
+            comment_obj = entry_data.get("comment", "")
+            if isinstance(comment_obj, dict):
+                comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
+            else:
+                comment_str = str(comment_obj)
+
+            entries_data.append(
+                {
+                    "index": i,
+                    "work_package_id": work_package_id,
+                    "user_id": user_id,
+                    "activity_id": activity_id,
+                    "hours": entry_data.get("hours", 0),
+                    "spent_on": entry_data.get("spentOn", ""),
+                    "comments": comment_str,
+                    "jira_worklog_key": (entry_data.get("_meta", {}) or {}).get("jira_worklog_key"),
+                },
+            )
 
         if not entries_data:
-            return {"created": 0, "failed": len(time_entries), "results": []}
+            return {
+                "created": 0,
+                "failed": len(time_entries),
+                "results": skipped_results,
+            }
 
         # Prepare local JSON payload
         temp_dir = Path(client.file_manager.data_dir) / "bulk_create"
@@ -429,10 +460,20 @@ class OpenProjectTimeEntryService:
             "    end",
             "    begin",
             "      key = entry[:jira_worklog_key]",
-            "      if key",
-            "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')",
+            # Use the canonical 'J2O Origin Worklog Key' name so this
+            # batch path writes provenance to the SAME custom field as
+            # ``create_time_entry`` and ``ensure_origin_custom_fields`` —
+            # the previous 'Jira Worklog Key' would split provenance
+            # across two CFs and break idempotency lookups.
+            #
+            # Empty strings are truthy in Ruby, so the existence check
+            # has to be explicit (``!key.nil? && !key.to_s.empty?``)
+            # instead of the bare ``if key`` that the pre-extraction
+            # client code used.
+            "      if !key.nil? && !key.to_s.empty?",
+            "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')",
             "        if !cf",
-            "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')",
+            "          cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')",
             "          cf.save",
             "        end",
             "        begin",
@@ -456,6 +497,29 @@ class OpenProjectTimeEntryService:
             "end",
             "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))",
         ]
+        # Wrap the body in an outer ``begin/rescue/ensure`` so any
+        # top-level Ruby error (e.g. JSON parse failure on the input
+        # file, exception before the per-entry loop) writes an
+        # actionable error payload to ``result_path``. Without this,
+        # ``rails_client.execute(..., suppress_output=True)`` would
+        # eat the error and the only diagnostic would be a missing
+        # result file with no context.
+        wrapped_ruby_lines = (
+            ["begin"]
+            + ["  " + line for line in ruby_lines]
+            + [
+                "rescue => e",
+                "  File.write(result_path, JSON.generate({",
+                "    created: 0,",
+                "    failed: -1,",
+                "    error: e.class.name + ': ' + e.message,",
+                "    backtrace: e.backtrace.first(5),",
+                "    results: []",
+                "  }))",
+                "  raise",
+                "end",
+            ]
+        )
         ruby = (
             "\n".join(
                 [
@@ -463,33 +527,69 @@ class OpenProjectTimeEntryService:
                     "require 'date'",
                     "require 'logger'",
                     *header_lines,
-                    *ruby_lines,
+                    *wrapped_ruby_lines,
                 ],
             )
             + "\n"
         )
 
         try:
-            _ = client.rails_client.execute(ruby, timeout=120, suppress_output=True)
-        except Exception as e:
-            msg = f"Rails execution failed for batch_create_time_entries: {e}"
-            raise QueryExecutionError(msg) from e
-
-        # Retrieve result file
-        max_wait_seconds = 30
-        poll_interval = 1.0
-        waited = 0.0
-        while waited < max_wait_seconds:
             try:
-                client.transfer_file_from_container(container_result, local_result)
-                break
-            except Exception:
-                time.sleep(poll_interval)
-                waited += poll_interval
+                _ = client.rails_client.execute(ruby, timeout=120, suppress_output=True)
+            except Exception as e:
+                msg = f"Rails execution failed for batch_create_time_entries: {e}"
+                raise QueryExecutionError(msg) from e
 
-        if not local_result.exists():
-            msg = "Result file not found after batch_create_time_entries execution"
-            raise QueryExecutionError(msg)
+            # Retrieve result file
+            max_wait_seconds = 30
+            poll_interval = 1.0
+            waited = 0.0
+            while waited < max_wait_seconds:
+                try:
+                    client.transfer_file_from_container(container_result, local_result)
+                    break
+                except Exception:
+                    time.sleep(poll_interval)
+                    waited += poll_interval
 
-        with local_result.open("r", encoding="utf-8") as f:
-            return json.load(f)
+            if not local_result.exists():
+                msg = "Result file not found after batch_create_time_entries execution"
+                raise QueryExecutionError(msg)
+
+            with local_result.open("r", encoding="utf-8") as f:
+                ruby_result: dict[str, Any] = json.load(f)
+
+            # Merge the malformed-input failures captured during the
+            # Python pre-pass with the Ruby-side per-entry results so
+            # the returned dict reflects every input index 1:1.
+            if skipped_results:
+                ruby_result.setdefault("results", []).extend(skipped_results)
+                ruby_result["failed"] = int(ruby_result.get("failed", 0)) + len(skipped_results)
+            return ruby_result
+        finally:
+            # Best-effort cleanup of local + container temp files.
+            # Non-critical: we already have the parsed result in memory
+            # by this point, and any cleanup failure is logged at debug
+            # so it doesn't mask the real result.
+            for path in (local_json, local_result):
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception as cleanup_err:
+                    self._logger.debug(
+                        "Non-critical: failed to remove local temp %s: %s",
+                        path,
+                        cleanup_err,
+                    )
+            for cpath in (container_json, container_result):
+                try:
+                    import shlex
+
+                    rm_cmd = f"docker exec {shlex.quote(client.container_name)} rm -f {shlex.quote(cpath.as_posix())}"
+                    client.ssh_client.execute_command(rm_cmd, check=False)
+                except Exception as cleanup_err:
+                    self._logger.debug(
+                        "Non-critical: failed to remove container temp %s: %s",
+                        cpath,
+                        cleanup_err,
+                    )
