@@ -316,6 +316,7 @@ class OpenProjectClient:
         from src.clients.openproject_associations_service import OpenProjectAssociationsService
         from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
+        from src.clients.openproject_issue_priority_service import OpenProjectIssuePriorityService
         from src.clients.openproject_membership_service import OpenProjectMembershipService
         from src.clients.openproject_project_service import OpenProjectProjectService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
@@ -336,6 +337,7 @@ class OpenProjectClient:
         self.work_packages = OpenProjectWorkPackageService(self)
         self.associations = OpenProjectAssociationsService(self)
         self.time_entries = OpenProjectTimeEntryService(self)
+        self.priorities = OpenProjectIssuePriorityService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2612,42 +2614,16 @@ J2O_DATA
 
     # ----- Priority helpers -----
     def get_issue_priorities(self) -> list[dict[str, Any]]:
-        """Return list of IssuePriority with id, name, position, is_default, active."""
-        script = """
-        IssuePriority.order(:position).map do |p|
-          { id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }
-        end
-        """
-        try:
-            result = self.execute_json_query(script)
-            return result if isinstance(result, list) else []
-        except Exception:
-            logger.exception("Failed to get issue priorities")
-            return []
+        """Thin delegator over ``self.priorities.get_issue_priorities``."""
+        return self.priorities.get_issue_priorities()
 
     def find_issue_priority_by_name(self, name: str) -> dict[str, Any] | None:
-        # Use ensure_ascii=False to output UTF-8 directly
-        script = f"p = IssuePriority.find_by(name: {json.dumps(name, ensure_ascii=False)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
-        try:
-            result = self.execute_json_query(script)
-            return result if isinstance(result, dict) else None
-        except Exception:
-            logger.exception("Failed to find issue priority by name %s", name)
-            return None
+        """Thin delegator over ``self.priorities.find_issue_priority_by_name``."""
+        return self.priorities.find_issue_priority_by_name(name)
 
     def create_issue_priority(self, name: str, position: int | None = None, is_default: bool = False) -> dict[str, Any]:
-        pos_expr = "nil" if position is None else str(int(position))
-        # Use ensure_ascii=False to output UTF-8 directly
-        script = f"""
-        p = IssuePriority.create!(name: {json.dumps(name, ensure_ascii=False)}, position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
-        {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}
-        """
-        try:
-            result = self.execute_json_query(script)
-            return result if isinstance(result, dict) else {"id": None, "name": name}
-        except Exception as e:
-            msg = f"Failed to create issue priority {name}: {e}"
-            raise QueryExecutionError(msg) from e
+        """Thin delegator over ``self.priorities.create_issue_priority``."""
+        return self.priorities.create_issue_priority(name, position, is_default)
 
     def ensure_local_avatars_enabled(self) -> bool:
         """Enable local avatar uploads if disabled.
