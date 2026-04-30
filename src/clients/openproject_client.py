@@ -322,10 +322,12 @@ class OpenProjectClient:
         from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
+        from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
 
         self.custom_fields = OpenProjectCustomFieldService(self)
         self.provenance = OpenProjectProvenanceService(self)
         self.file_transfer = OpenProjectFileTransferService(self)
+        self.rails_runner = OpenProjectRailsRunnerService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -799,27 +801,9 @@ class OpenProjectClient:
     def is_connected(self) -> bool:
         """Test if connected to OpenProject.
 
-        Returns:
-            True if connected, False otherwise
-
+        Thin delegator over ``self.rails_runner.is_connected``.
         """
-        try:
-            # Generate a unique ID to verify connection
-            unique_id = secrets.token_hex(3)
-
-            # Simple command to echo the ID back
-            command = f'puts "OPENPROJECT_CONNECTION_TEST_{unique_id}"'
-
-            # Execute the command
-            result = self.rails_client.execute(command)
-
-            # Check if the unique ID is in the response
-            if f"OPENPROJECT_CONNECTION_TEST_{unique_id}" in result:
-                return True
-            return False
-        except Exception:
-            logger.exception("Connection test failed.")
-            return False
+        return self.rails_runner.is_connected()
 
     def execute_query(self, query: str, timeout: int | None = None) -> str:
         """Execute a Rails query.
@@ -1122,47 +1106,16 @@ class OpenProjectClient:
     def _check_console_output_for_errors(self, output: str, context: str) -> None:
         """Raise a QueryExecutionError if console output indicates a Ruby error.
 
-        This catches cases where start/end markers were missing and the console client
-        returned raw lines, including SystemStackError or other Ruby exceptions.
+        Thin delegator over ``self.rails_runner.check_console_output_for_errors``.
         """
-        if not output:
-            return
-        lines = [ln.strip() for ln in output.strip().splitlines()]
-        has_error_marker = any(ln == "--EXEC_ERROR--" or ln.startswith("--EXEC_ERROR--") for ln in lines)
-        severe_pattern = (
-            ("SystemStackError" in output) or ("full_message':" in output) or ("stack level too deep" in output)
-        )
-        if has_error_marker or severe_pattern:
-            # Preserve the most informative lines to aid diagnosis
-            informative = [
-                ln
-                for ln in lines
-                if ("SystemStackError" in ln)
-                or ("stack level too deep" in ln)
-                or ("full_message':" in ln)
-                or ln.startswith("--EXEC_ERROR--")
-            ]
-            snippet = informative or lines[:6]
-            q_msg = f"Console error during {context}: {' | '.join(snippet[:8])}"
-            raise QueryExecutionError(q_msg)
+        self.rails_runner.check_console_output_for_errors(output, context)
 
     def _assert_expected_console_notice(self, output: str, expected_prefix: str, context: str) -> None:
         """Treat any unexpected console response as error in strict file-write flows.
 
-        For file-based JSON writes we expect a specific notice line like
-        "Statuses data written to /tmp/...". If it's missing or output contains
-        unrelated content, flag as error to avoid silently accepting partial/garbled output.
+        Thin delegator over ``self.rails_runner.assert_expected_console_notice``.
         """
-        if not output:
-            # When suppress_output is used we still expect our explicit puts notice
-            q_msg = f"No console output during {context}; expected '{expected_prefix}...'"
-            raise QueryExecutionError(q_msg)
-        # Normalize
-        lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
-        if not any(expected_prefix in ln for ln in lines):
-            sample = " | ".join(lines[:5])
-            q_msg = f"Unexpected console output during {context}; expected '{expected_prefix}...'. Got: {sample[:300]}"
-            raise QueryExecutionError(q_msg)
+        self.rails_runner.assert_expected_console_notice(output, expected_prefix, context)
 
     # Removed rails runner helper; all scripts go through persistent tmux console
 
@@ -1286,165 +1239,9 @@ class OpenProjectClient:
     def _parse_rails_output(self, result_output: str) -> object:
         """Parse Rails console output to extract JSON or scalar values.
 
-        Handles various Rails console output formats including:
-        - JSON arrays and objects
-        - Scalar values (numbers, booleans, strings)
-        - Rails console responses with => prefix
-        - Empty/nil responses
-        - TMUX marker-based output extraction
-
-        Args:
-            result_output: Raw output from Rails console
-
-        Returns:
-            Parsed data (dict, list, scalar value, or None)
-
+        Thin delegator over ``self.rails_runner.parse_rails_output``.
         """
-        if not result_output or result_output.strip() == "":
-            logger.debug("Empty or None result output")
-            return None
-
-        try:
-            logger.debug("Raw result_output: %s", repr(result_output[:500]))
-            text = result_output.strip()
-
-            # Sanitize terminal artifacts to protect JSON parsing
-            try:
-                # 1) Strip ANSI escape sequences entirely
-                text = _RE_ANSI_ESCAPE.sub("", text)
-                # 2) Remove remaining control chars (except \t, \n, \r)
-                text = _RE_CTRL_CHARS.sub("", text)
-            except Exception:
-                logger.debug("ANSI/control char sanitization failed; continuing with raw text")
-
-            # If it's plain JSON, parse immediately
-
-            if text.startswith(("[", "{")):
-                try:
-                    return json.loads(text)
-                except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                    raise JsonParseError(str(e)) from e
-
-            # TMUX_CMD_* markers removed; rely on EXEC_* markers and direct JSON
-
-            # Drop Rails prompt lines, but preserve following JSON
-            lines_in = text.split("\n")
-            lines: list[str] = []
-            # skip_prompt variable removed (unused)
-            for ln in lines_in:
-                if ln.strip().startswith("open-project("):
-                    # Skip prompt lines
-                    continue
-                # Keep non-empty lines (including the JSON following the prompt)
-                if ln.strip():
-                    lines.append(ln)
-            text = "\n".join(lines)
-
-            # Handle Rails prefixed outputs like "=> <value>"
-            for ln in (seg.strip() for seg in text.split("\n")):
-                if ln.startswith("=> "):
-                    val = ln[3:].strip()
-                    # If this is '=> nil' but JSON is present elsewhere, prefer the JSON
-                    if val == "nil" and ("[" in text or "{" in text):
-                        continue
-                    if val.startswith(("[", "{")):
-                        try:
-                            return json.loads(val)
-                        except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                            raise JsonParseError(str(e)) from e
-                    if val == "nil":
-                        return None
-                    if val == "true":
-                        return True
-                    if val == "false":
-                        return False
-                    if val.isdigit():
-                        return int(val)
-                    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                        return val[1:-1]
-                    return val
-
-            # Try bracket-slice JSON extraction (prefer arrays before scalars)
-            lb = text.find("[")
-            rb = text.rfind("]")
-            if lb != -1 and rb != -1 and rb > lb:
-                try:
-                    return json.loads(text[lb : rb + 1])
-                except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                    # As a fallback, strip remaining control characters and retry once
-                    cleaned = _RE_CTRL_CHARS.sub("", text[lb : rb + 1])
-                    try:
-                        return json.loads(cleaned)
-                    except Exception:
-                        raise JsonParseError(str(e)) from e
-            lb = text.find("{")
-            rb = text.rfind("}")
-            if lb != -1 and rb != -1 and rb > lb:
-                try:
-                    return json.loads(text[lb : rb + 1])
-                except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                    cleaned = _RE_CTRL_CHARS.sub("", text[lb : rb + 1])
-                    try:
-                        return json.loads(cleaned)
-                    except Exception:
-                        raise JsonParseError(str(e)) from e
-
-            # Special case: prompt + JSON + => nil (common Rails console pattern)
-            if "=> nil" in text:
-                # Prefer the line immediately preceding the => nil
-                lines2 = text.split("\n")
-                for i, ln in enumerate(lines2):
-                    if ln.strip().startswith("=> nil") and i > 0:
-                        prev = lines2[i - 1].strip()
-                        if prev.startswith(("[", "{")):
-                            try:
-                                return json.loads(prev)
-                            except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                                raise JsonParseError(str(e)) from e
-                # Fallback to search earlier JSON
-                lb = text.find("[")
-                rb = text.rfind("]")
-                if lb != -1 and rb != -1 and rb > lb:
-                    try:
-                        return json.loads(text[lb : rb + 1])
-                    except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                        raise JsonParseError(str(e)) from e
-                lb = text.find("{")
-                rb = text.rfind("}")
-                if lb != -1 and rb != -1 and rb > lb:
-                    try:
-                        return json.loads(text[lb : rb + 1])
-                    except json.JSONDecodeError as e:  # type: ignore[name-defined]
-                        raise JsonParseError(str(e)) from e
-
-            # Scalars
-            t = text.strip()
-            if t.isdigit():
-                return int(t)
-            if t in ("true", "false"):
-                return t == "true"
-            if t == "nil":
-                return None
-            if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
-                return t[1:-1]
-
-            _msg = "Unable to parse Rails console output"
-            raise JsonParseError(_msg)
-
-        except JsonParseError:
-            # Re-raise JsonParseError
-            raise
-        except json.JSONDecodeError as e:  # type: ignore[name-defined]
-            # Normalize any JSON decoding errors to JsonParseError as tests expect
-            raise JsonParseError(str(e)) from e
-        except Exception as e:
-            logger.exception("Failed to process query result: %s", repr(e))
-            logger.exception("Raw output: %s", result_output[:200])
-            # Raise an exception instead of returning None to ensure proper error handling
-            msg = f"Failed to parse Rails console output: {e}"
-            raise QueryExecutionError(
-                msg,
-            ) from e
+        return self.rails_runner.parse_rails_output(result_output)
 
     def execute_json_query(self, query: str, timeout: int | None = None) -> object:
         """Execute a Rails query and return parsed JSON result.
