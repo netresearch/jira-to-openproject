@@ -33,7 +33,6 @@ work unchanged.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from src.clients.exceptions import (
@@ -86,15 +85,35 @@ class OpenProjectRecordsService:
         # Lazy import: ``_validate_model_name`` is a module-level function
         # on ``openproject_client``; lazy keeps the service ↔ client cycle
         # out of module-load time.
-        from src.clients.openproject_client import _validate_model_name
+        from src.clients.openproject_client import (
+            _validate_model_name,
+            escape_ruby_single_quoted,
+        )
 
         _validate_model_name(model)
         try:
             if isinstance(id_or_conditions, int):
                 query = f"{model}.find_by(id: {id_or_conditions})&.as_json"
             else:
-                # Convert Python dict to Ruby hash format
-                conditions_str = json.dumps(id_or_conditions).replace('"', "'")
+                # Build a Ruby hash literal explicitly. The previous
+                # ``json.dumps(...).replace('"', "'")`` shortcut broke
+                # for two common cases: (a) string values containing a
+                # literal apostrophe would unbalance the swap and emit
+                # invalid Ruby; (b) ``None`` became Ruby's ``null``
+                # (NameError) instead of ``nil``. Mirror the same
+                # ``format_cond_value`` shape used by ``find_all_records``
+                # so all CRUD helpers share one escaping policy.
+                def _format_cond_value(v: object) -> str:
+                    if isinstance(v, bool):
+                        return "true" if v else "false"
+                    if isinstance(v, str):
+                        return f"'{escape_ruby_single_quoted(v)}'"
+                    if v is None:
+                        return "nil"
+                    return str(v)
+
+                cond_parts = [f"'{k}' => {_format_cond_value(v)}" for k, v in id_or_conditions.items()]
+                conditions_str = "{" + ", ".join(cond_parts) + "}"
                 query = f"{model}.find_by({conditions_str})&.as_json"
 
             result = self._client.execute_json_query(query)
@@ -140,8 +159,12 @@ class OpenProjectRecordsService:
             than raising.
 
         Raises:
-            QueryExecutionError: If a non-batch error occurs (e.g. the
-                ``_validate_batch_size`` call rejects the input).
+            ValueError: If ``batch_size`` is not a positive integer and
+                ``_validate_batch_size`` rejects the input (this is the
+                actual exception type the validator emits, not
+                ``QueryExecutionError``).
+            QueryExecutionError: If a non-batch query-execution error
+                propagates out of an unexpected code path.
 
         """
         # ``headers`` is consumed by the ``@batch_idempotent`` decorator's
@@ -320,12 +343,19 @@ class OpenProjectRecordsService:
 
         # Build Rails command for creating a record
         # Use a simple, single-line approach that works well with tmux console
-        # Convert Python boolean values to Ruby equivalents
+        # Convert Python values to Ruby equivalents. Aligned with
+        # ``update_record``'s ``format_value`` so a ``None`` attribute
+        # becomes Ruby ``nil`` (creating a record with a nullable
+        # column) rather than the bare token ``None``, which the
+        # Rails parser would treat as a constant lookup and raise
+        # ``NameError``.
         def format_value(v: object) -> str:
             if isinstance(v, bool):
                 return "true" if v else "false"
             if isinstance(v, str):
                 return f"'{escape_ruby_single_quoted(v)}'"
+            if v is None:
+                return "nil"
             return str(v)
 
         attributes_str = ", ".join(
