@@ -14,7 +14,6 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from src import config
 from src.clients.docker_client import DockerClient
@@ -321,10 +320,12 @@ class OpenProjectClient:
         # functional seams). Backward-compat: same-named methods on
         # OpenProjectClient delegate to the corresponding service.
         from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
+        from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
 
         self.custom_fields = OpenProjectCustomFieldService(self)
         self.provenance = OpenProjectProvenanceService(self)
+        self.file_transfer = OpenProjectFileTransferService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -413,145 +414,30 @@ class OpenProjectClient:
     def _generate_unique_temp_filename(self, base_name: str) -> str:
         """Generate a temporary filename; stable for tests, unique in prod.
 
-        In normal runs we include timestamp/pid/random for uniqueness.
-        Under unit tests (detected via PYTEST_CURRENT_TEST), we return
-        deterministic '/tmp/{base_name}.json' to match test expectations.
+        Thin delegator over ``self.file_transfer.generate_unique_temp_filename``.
         """
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return f"/tmp/{base_name}.json"
-        timestamp = int(time.time())
-        pid = os.getpid()
-        random_suffix = secrets.token_hex(3)
-        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"
+        return self.file_transfer.generate_unique_temp_filename(base_name)
 
     def _create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the script content.
 
-        Args:
-            script_content: Content to write to the file
-
-        Returns:
-            Path to the created file
-
-        Raises:
-            OSError: If unable to create or write to the script file
-
+        Thin delegator over ``self.file_transfer.create_script_file``.
         """
-        file_path = None
-        try:
-            # Create a temporary directory if needed
-            temp_dir = Path(self.file_manager.data_dir) / "temp_scripts"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-
-            # Generate a unique filename
-            filename = f"openproject_script_{os.urandom(4).hex()}.rb"
-            file_path = temp_dir / filename
-
-            # Write the content directly instead of using tempfile module
-            with file_path.open("w", encoding="utf-8") as f:
-                f.write(script_content)
-
-            # Log the absolute path for easier debugging
-            logger.debug("Created temporary script file: %s", file_path.as_posix())
-        except OSError:
-            error_msg = f"Failed to create script file: {file_path}"
-            logger.exception(error_msg)
-            raise OSError(error_msg) from None
-        except Exception:
-            error_msg = f"Failed to create script file: {file_path}"
-            logger.exception(error_msg)
-            raise OSError(error_msg) from None
-        else:
-            return file_path
+        return self.file_transfer.create_script_file(script_content)
 
     def _transfer_rails_script(self, local_path: Path | str) -> Path:
         """Transfer a script to the Rails environment.
 
-        Args:
-            local_path: Path to the script file (Path object or string)
-
-        Returns:
-            Path to the script in the container
-
-        Raises:
-            FileTransferError: If transfer fails
-
+        Thin delegator over ``self.file_transfer.transfer_rails_script``.
         """
-        try:
-            # Convert string to Path if needed
-            if isinstance(local_path, str):
-                local_path = Path(local_path)
-
-            # Get the absolute path for better error messages
-            abs_path = local_path.absolute()
-            logger.debug("Transferring script from: %s", abs_path)
-
-            # Use just the base filename for the container path
-            container_path = Path("/tmp") / local_path.name
-
-            self.docker_client.transfer_file_to_container(abs_path, container_path)
-
-            logger.debug(
-                "Successfully transferred file to container at %s",
-                container_path,
-            )
-
-        except Exception as e:
-            # Verify the local file exists and is readable only after failure
-            if isinstance(local_path, Path):
-                if not local_path.is_file():
-                    msg = f"Local file does not exist: {local_path}"
-                    raise FileTransferError(msg) from e
-
-                if not os.access(local_path, os.R_OK):
-                    msg = f"Local file is not readable: {local_path}"
-                    raise FileTransferError(msg) from e
-
-            msg = "Failed to transfer script."
-            raise FileTransferError(msg) from e
-
-        return container_path
+        return self.file_transfer.transfer_rails_script(local_path)
 
     def _cleanup_script_files(self, files_or_local: Any, remote_path: Path | None = None) -> None:
         """Clean up temporary files after execution.
 
-        Two supported modes (for backward compatibility and tests):
-        - files_or_local is a list of filenames (str/Path): iterate and issue remote cleanup via SSH, suppressing errors
-        - files_or_local is a Path and remote_path is a Path: remove local and remote paths
+        Thin delegator over ``self.file_transfer.cleanup_script_files``.
         """
-        # Mode 1: list of remote filenames
-        if isinstance(files_or_local, (list, tuple)):
-            for name in files_or_local:
-                try:
-                    remote_file = name if isinstance(name, str) else getattr(name, "name", str(name))
-                    cmd = f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(f'/tmp/{Path(remote_file).name}')}"
-                    self.ssh_client.execute_command(cmd)
-                except Exception as e:
-                    logger.warning("Cleanup failed for %s: %s", name, e)
-            return
-
-        # Mode 2: explicit local/remote Path cleanup
-        local_path = files_or_local
-        # Clean up local file
-        try:
-            if isinstance(local_path, Path) and local_path.exists():
-                local_path.unlink()
-                logger.debug("Cleaned up local script file: %s", local_path)
-        except Exception as e:
-            logger.warning("Non-critical error cleaning up local file: %s", e)
-
-        # Clean up remote file
-        try:
-            if isinstance(remote_path, Path):
-                command = [
-                    "rm",
-                    "-f",
-                    quote(remote_path.as_posix()),
-                ]
-                self.ssh_client.execute_command(" ".join(command))
-                logger.debug("Cleaned up remote script file: %s", remote_path)
-        except Exception as e:
-            logger.warning("Non-critical error cleaning up remote file: %s", e)
+        self.file_transfer.cleanup_script_files(files_or_local, remote_path)
 
     def execute(self, script_content: str) -> dict[str, Any]:
         """Execute a Ruby script directly.
@@ -906,20 +792,9 @@ class OpenProjectClient:
     ) -> None:
         """Transfer a file from local to the OpenProject container.
 
-        Args:
-            local_path: Path to local file
-            container_path: Destination path in container
-
-        Raises:
-            FileTransferError: If the transfer fails for any reason
-
+        Thin delegator over ``self.file_transfer.transfer_file_to_container``.
         """
-        try:
-            self.docker_client.transfer_file_to_container(local_path, container_path)
-        except Exception as e:
-            error_msg = "Failed to transfer file to container."
-            logger.exception(error_msg)
-            raise FileTransferError(error_msg) from e
+        self.file_transfer.transfer_file_to_container(local_path, container_path)
 
     def is_connected(self) -> bool:
         """Test if connected to OpenProject.
@@ -3829,27 +3704,9 @@ J2O_DATA
     ) -> Path:
         """Copy a file from the container to the local system.
 
-        Args:
-            container_path: Path to the file in the container
-            local_path: Path where the file should be saved locally
-
-        Returns:
-            Path to the local file
-
-        Raises:
-            FileTransferError: If transfer fails
-            FileNotFoundError: If container file doesn't exist
-
+        Thin delegator over ``self.file_transfer.transfer_file_from_container``.
         """
-        try:
-            return self.docker_client.copy_file_from_container(
-                container_path,
-                local_path,
-            )
-
-        except Exception as e:
-            msg = "Error transferring file from container."
-            raise FileTransferError(msg) from e
+        return self.file_transfer.transfer_file_from_container(container_path, local_path)
 
     def get_users(self) -> list[dict[str, Any]]:
         """Get all users from OpenProject.
