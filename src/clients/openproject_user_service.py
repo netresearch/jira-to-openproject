@@ -300,6 +300,7 @@ class OpenProjectUserService:
         self,
         emails: list[str],
         batch_size: int | None = None,
+        *,
         headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple users by email addresses in batches with idempotency support.
@@ -312,13 +313,20 @@ class OpenProjectUserService:
                 result under that key for the configured TTL. Without a
                 header the decorator's per-call UUID makes the cache a
                 no-op (so callers that need real idempotency MUST pass
-                a stable key).
+                a stable key). Keyword-only so it cannot be passed
+                positionally — the decorator's ``extract_headers_from_kwargs``
+                only sees real kwargs, so positional arguments would
+                silently disable caching.
 
         Returns:
-            Dictionary mapping email to user data (missing emails are omitted)
+            Dictionary mapping email to user data for successfully fetched
+            users. Missing emails are omitted. If one or more batches fail,
+            those failures are logged and the method continues processing
+            remaining batches, so partial results may be returned.
 
         Raises:
-            QueryExecutionError: If query fails
+            QueryExecutionError: If a non-batch error occurs (e.g. the
+                ``_validate_batch_size`` call rejects the input).
 
         """
         # ``headers`` is consumed by the ``@batch_idempotent`` decorator's
@@ -330,8 +338,10 @@ class OpenProjectUserService:
         if not emails:
             return {}
 
-        # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(client, "batch_size", 100)
+        # Validate and clamp batch size to prevent memory exhaustion. Use
+        # ``is not None`` so a caller-supplied ``batch_size=0`` is
+        # respected literally rather than swapped for the default.
+        effective_batch_size = batch_size if batch_size is not None else getattr(client, "batch_size", 100)
         effective_batch_size = client._validate_batch_size(effective_batch_size)
 
         results = {}
