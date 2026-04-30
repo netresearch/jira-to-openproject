@@ -61,14 +61,24 @@ class OpenProjectWorkPackageContentService:
         # service ↔ client cycle at module load time.
         from src.clients.openproject_client import escape_ruby_single_quoted
 
+        # Coerce to int at runtime — the type hint alone doesn't enforce
+        # that callers actually pass an int, and a non-int value
+        # (especially from untrusted upstream data) would otherwise
+        # interpolate raw into the Ruby script.
+        wp_id = int(work_package_id)
         # Escape content for Ruby single-quoted string
         safe_content = escape_ruby_single_quoted(content).replace("\n", "\\n")
         safe_marker = escape_ruby_single_quoted(section_marker)
 
+        # Drop ``.to_json`` from the Ruby payload — the
+        # ``execute_query_to_json_file`` Python wrapper already
+        # serialises the final value via ``as_json``, so an explicit
+        # ``.to_json`` here would double-encode and the Python side
+        # would receive a string instead of a parsed dict.
         script = f"""
-          wp = WorkPackage.find_by(id: {work_package_id})
+          wp = WorkPackage.find_by(id: {wp_id})
           if !wp
-            {{ success: false, error: 'WorkPackage not found' }}.to_json
+            {{ success: false, error: 'WorkPackage not found' }}
           else
             desc = wp.description || ''
             marker = '## {safe_marker}'
@@ -88,9 +98,9 @@ class OpenProjectWorkPackageContentService:
 
             wp.description = desc.strip
             if wp.save
-              {{ success: true }}.to_json
+              {{ success: true }}
             else
-              {{ success: false, error: wp.errors.full_messages.join(', ') }}.to_json
+              {{ success: false, error: wp.errors.full_messages.join(', ') }}
             end
           end
         """
@@ -184,8 +194,11 @@ J2O_DATA
           end
 
           results[:success] = (results[:failed] == 0)
-          results.to_json
+          results
         """
+        # See ``upsert_work_package_description_section`` — drop the
+        # ``.to_json`` to avoid double-encoding through
+        # ``execute_query_to_json_file``.
         try:
             result = self._client.execute_query_to_json_file(script)
             if isinstance(result, dict):
@@ -217,6 +230,9 @@ J2O_DATA
         # service ↔ client cycle at module load time.
         from src.clients.openproject_client import escape_ruby_single_quoted
 
+        # Coerce to int at runtime — see ``upsert_work_package_description_section``.
+        wp_id = int(work_package_id)
+
         comment = activity_data.get("comment", {})
         if isinstance(comment, dict):
             comment_text = comment.get("raw", "")
@@ -232,7 +248,7 @@ J2O_DATA
         # OpenProject 15+ requires using journal_notes/journal_user + save!
         script = f"""
         begin
-          wp = WorkPackage.find({work_package_id})
+          wp = WorkPackage.find({wp_id})
           user = User.current || User.find_by(admin: true)
           wp.journal_notes = '{escaped_comment}'
           wp.journal_user = user
@@ -333,8 +349,11 @@ J2O_DATA
           end
 
           results[:success] = (results[:failed] == 0)
-          results.to_json
+          results
         """
+        # Drop ``.to_json`` (see other methods in this file) so
+        # ``execute_query_to_json_file`` can serialise via ``as_json``
+        # without double-encoding.
         try:
             result = self._client.execute_query_to_json_file(script)
             if isinstance(result, dict):
