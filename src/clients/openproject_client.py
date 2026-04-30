@@ -317,6 +317,9 @@ class OpenProjectClient:
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
         from src.clients.openproject_issue_priority_service import OpenProjectIssuePriorityService
         from src.clients.openproject_membership_service import OpenProjectMembershipService
+        from src.clients.openproject_project_attribute_service import (
+            OpenProjectProjectAttributeService,
+        )
         from src.clients.openproject_project_service import OpenProjectProjectService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
@@ -341,6 +344,7 @@ class OpenProjectClient:
         self.priorities = OpenProjectIssuePriorityService(self)
         self.status_types = OpenProjectStatusTypeService(self)
         self.wp_content = OpenProjectWorkPackageContentService(self)
+        self.project_attributes = OpenProjectProjectAttributeService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -1117,50 +1121,15 @@ JSON_DATA
     ) -> bool:
         """Persist origin metadata into Project attributes (description) idempotently.
 
-        We embed a small, machine-readable block between HTML comment markers so we can
-        replace it deterministically on subsequent runs without duplicating data.
-
-        Args:
-            project_id: OpenProject project ID
-            origin_system: e.g. "jira"
-            project_key: upstream project key (e.g. "SRVEP")
-            external_id: upstream immutable project id (stringified)
-            external_url: upstream canonical URL
-
-        Returns:
-            True on success, False otherwise.
-
+        Thin delegator over ``self.project_attributes.upsert_project_origin_attributes``.
         """
-        # Escape braces in f-string; Ruby string content uses literal markers.
-        marker_start = "<!-- J2O_ORIGIN_START -->"
-        marker_end = "<!-- J2O_ORIGIN_END -->"
-        payload = f"system={escape_ruby_single_quoted(origin_system)};key={escape_ruby_single_quoted(project_key)};id={escape_ruby_single_quoted(external_id or '')};url={escape_ruby_single_quoted(external_url or '')}"
-        # Ruby script to insert/replace the origin block in description
-        script = (
-            "project = Project.find(%d)\n" % project_id
-            + f"marker_start = '{marker_start}'\n"
-            + f"marker_end = '{marker_end}'\n"
-            + f"payload = '{payload}'.dup\n"
-            + "desc = project.description.to_s\n"
-            + "block = ['\\n', marker_start, '\\n', payload, '\\n', marker_end, '\\n'].join\n"
-            + "start_idx = desc.index(marker_start)\n"
-            + "end_idx = desc.index(marker_end)\n"
-            + "if start_idx && end_idx && end_idx > start_idx\n"
-            + "  pre = desc[0...start_idx]\n"
-            + "  post = desc[(end_idx + marker_end.length)..-1] || ''\n"
-            + "  desc = pre + block + post\n"
-            + "else\n"
-            + "  desc = desc + block\n"
-            + "end\n"
-            + "project.update_columns(description: desc)\n"
-            + "{ success: true }.to_json\n"
+        return self.project_attributes.upsert_project_origin_attributes(
+            project_id,
+            origin_system=origin_system,
+            project_key=project_key,
+            external_id=external_id,
+            external_url=external_url,
         )
-        try:
-            result = self.execute_query_to_json_file(script)
-            return bool(isinstance(result, dict) and result.get("success"))
-        except Exception as e:
-            self.logger.warning("Failed to upsert project origin attributes for %s: %s", project_id, e)
-            return False
 
     def upsert_project_attribute(
         self,
@@ -1170,71 +1139,16 @@ JSON_DATA
         value: str,
         field_format: str = "string",
     ) -> bool:
-        """Create/enable a Project attribute (ProjectCustomField) and set its value for a project.
+        """Create/enable a Project attribute and set its value for a project.
 
-        This uses ProjectCustomField (STI on custom_fields) and ProjectCustomFieldProjectMapping,
-        storing the actual value in CustomValue for customized_type='Project'.
+        Thin delegator over ``self.project_attributes.upsert_project_attribute``.
         """
-        ruby = f"""
-          pid = {project_id}
-          name = '{escape_ruby_single_quoted(name)}'.dup
-          fmt  = '{escape_ruby_single_quoted(field_format)}'.dup
-          val  = '{escape_ruby_single_quoted(value)}'.dup
-
-          # Ensure attribute definition
-          # Section is required for project attributes
-          begin
-            section = CustomFieldSection.find_or_create_by!(type: 'ProjectCustomFieldSection', name: 'J2O Origin')
-          rescue => e
-            section = nil
-          end
-
-          cf = ProjectCustomField.find_by(name: name)
-          if !cf
-            cf = ProjectCustomField.new(
-              name: name,
-              field_format: fmt,
-              is_required: false,
-              is_filter: false,
-              searchable: true,
-              editable: true,
-              admin_only: false
-            )
-            begin
-              cf.custom_field_section_id = section.id if section && cf.respond_to?(:custom_field_section_id=)
-            rescue
-            end
-            begin
-              cf.is_for_all = false if cf.respond_to?(:is_for_all=)
-            rescue
-            end
-            cf.save!
-          end
-
-          # If cf existed without section, attach it
-          if (!cf.custom_field_section_id || cf.custom_field_section_id.nil?) && section
-            begin
-              cf.update!(custom_field_section_id: section.id)
-            rescue
-            end
-          end
-
-          # Ensure mapping enabled for this project
-          ProjectCustomFieldProjectMapping.find_or_create_by!(project_id: pid, custom_field_id: cf.id)
-
-          # Upsert value
-          cv = CustomValue.find_or_initialize_by(customized_type: 'Project', customized_id: pid, custom_field_id: cf.id)
-          cv.value = val
-          cv.save!
-
-          {{ success: true, custom_field_id: cf.id, value: cv.value }}.to_json
-        """
-        try:
-            result = self.execute_query_to_json_file(ruby)
-            return bool(isinstance(result, dict) and result.get("success"))
-        except Exception as e:
-            self.logger.warning("Failed to upsert project attribute %s for %s: %s", name, project_id, e)
-            return False
+        return self.project_attributes.upsert_project_attribute(
+            project_id,
+            name=name,
+            value=value,
+            field_format=field_format,
+        )
 
     def bulk_upsert_project_attributes(
         self,
@@ -1242,171 +1156,23 @@ JSON_DATA
     ) -> dict[str, Any]:
         """Bulk upsert project attributes in a single Rails call.
 
-        Args:
-            attributes: List of dicts with keys:
-                - project_id: int
-                - name: str
-                - value: str
-                - field_format: str (default 'string')
-
-        Returns:
-            Dict with 'success': bool, 'processed': int, 'failed': int
-
+        Thin delegator over ``self.project_attributes.bulk_upsert_project_attributes``.
         """
-        if not attributes:
-            return {"success": True, "processed": 0, "failed": 0}
-
-        # Build JSON data for Ruby
-        data = []
-        for attr in attributes:
-            data.append(
-                {
-                    "pid": int(attr["project_id"]),
-                    "name": str(attr["name"]),
-                    "value": str(attr.get("value", "")),
-                    "fmt": str(attr.get("field_format", "string")),
-                },
-            )
-
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        data_json = json.dumps(data, ensure_ascii=False)
-        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
-        ruby = f"""
-          require 'json'
-          data = JSON.parse(<<-'J2O_DATA'
-{data_json}
-J2O_DATA
-)
-
-          # Ensure section exists once
-          section = nil
-          begin
-            section = CustomFieldSection.find_or_create_by!(type: 'ProjectCustomFieldSection', name: 'J2O Origin')
-          rescue => e
-          end
-
-          # Cache custom fields by name
-          cf_cache = {{}}
-
-          results = {{ processed: 0, failed: 0, errors: [] }}
-
-          data.each do |item|
-            begin
-              pid = item['pid']
-              name = item['name']
-              fmt = item['fmt']
-              val = item['value']
-
-              # Get or create custom field
-              cf = cf_cache[name]
-              if !cf
-                cf = ProjectCustomField.find_by(name: name)
-                if !cf
-                  cf = ProjectCustomField.new(
-                    name: name,
-                    field_format: fmt,
-                    is_required: false,
-                    is_filter: false,
-                    searchable: true,
-                    editable: true,
-                    admin_only: false
-                  )
-                  cf.custom_field_section_id = section.id if section && cf.respond_to?(:custom_field_section_id=) rescue nil
-                  cf.is_for_all = false if cf.respond_to?(:is_for_all=) rescue nil
-                  cf.save!
-                end
-                # Attach section if needed
-                if section && (!cf.custom_field_section_id || cf.custom_field_section_id.nil?)
-                  cf.update!(custom_field_section_id: section.id) rescue nil
-                end
-                cf_cache[name] = cf
-              end
-
-              # Ensure mapping for project
-              ProjectCustomFieldProjectMapping.find_or_create_by!(project_id: pid, custom_field_id: cf.id)
-
-              # Upsert value
-              cv = CustomValue.find_or_initialize_by(customized_type: 'Project', customized_id: pid, custom_field_id: cf.id)
-              cv.value = val
-              cv.save!
-
-              results[:processed] += 1
-            rescue => e
-              results[:failed] += 1
-              results[:errors] << {{ pid: item['pid'], name: item['name'], error: e.message }}
-            end
-          end
-
-          results[:success] = (results[:failed] == 0)
-          results.to_json
-        """
-        try:
-            result = self.execute_query_to_json_file(ruby)
-            if isinstance(result, dict):
-                return result
-            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(result)}
-        except Exception as e:
-            self.logger.warning("Bulk upsert project attributes failed: %s", e)
-            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(e)}
+        return self.project_attributes.bulk_upsert_project_attributes(attributes)
 
     def rename_project_attribute(self, *, old_name: str, new_name: str) -> bool:
         """Rename a Project attribute (ProjectCustomField) if it exists.
 
-        Returns True if renamed or already at new_name; False if missing or failed.
+        Thin delegator over ``self.project_attributes.rename_project_attribute``.
         """
-        ruby = f"""
-          old_name = '{escape_ruby_single_quoted(old_name)}'.dup
-          new_name = '{escape_ruby_single_quoted(new_name)}'.dup
-          cf = ProjectCustomField.find_by(name: old_name)
-          if cf
-            cf.update!(name: new_name)
-            {{ success: true, id: cf.id }}.to_json
-          else
-            cf2 = ProjectCustomField.find_by(name: new_name)
-            {{ success: !!cf2, id: (cf2 ? cf2.id : nil) }}.to_json
-          end
-        """
-        try:
-            result = self.execute_query_to_json_file(ruby)
-            return bool(isinstance(result, dict) and result.get("success"))
-        except Exception as e:
-            self.logger.warning("Failed to rename project attribute %s -> %s: %s", old_name, new_name, e)
-            return False
+        return self.project_attributes.rename_project_attribute(old_name=old_name, new_name=new_name)
 
     def get_project_wp_cf_snapshot(self, project_id: int) -> list[dict[str, Any]]:
         """Return snapshot of WorkPackages in a project with Jira CFs and updated_at.
 
-        Each item: { id, updated_at, jira_issue_key, jira_migration_date }
+        Thin delegator over ``self.project_attributes.get_project_wp_cf_snapshot``.
         """
-        ruby = f"""
-          cf_key = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Origin Key')
-          cf_mig = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Last Update Date')
-
-          # Pre-load custom values for all WPs in this project for efficiency
-          wp_ids = WorkPackage.where(project_id: {project_id}).pluck(:id)
-
-          key_values = {{}}
-          mig_values = {{}}
-
-          if cf_key
-            CustomValue.where(custom_field_id: cf_key.id, customized_type: 'WorkPackage', customized_id: wp_ids)
-              .each {{ |cv| key_values[cv.customized_id] = cv.value }}
-          end
-
-          if cf_mig
-            CustomValue.where(custom_field_id: cf_mig.id, customized_type: 'WorkPackage', customized_id: wp_ids)
-              .each {{ |cv| mig_values[cv.customized_id] = cv.value }}
-          end
-
-          WorkPackage.where(project_id: {project_id}).select(:id, :updated_at).map do |wp|
-            {{ id: wp.id, updated_at: (wp.updated_at&.utc&.iso8601), jira_issue_key: key_values[wp.id], jira_migration_date: mig_values[wp.id] }}
-          end
-        """
-        data = self.execute_large_query_to_json_file(ruby, timeout=120)
-        if not isinstance(data, list):
-            msg = "Invalid snapshot from OpenProject"
-            raise QueryExecutionError(msg)
-        return data
+        return self.project_attributes.get_project_wp_cf_snapshot(project_id)
 
     def set_wp_last_update_date_by_keys(
         self,
