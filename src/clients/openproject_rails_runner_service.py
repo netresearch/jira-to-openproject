@@ -40,10 +40,16 @@ import secrets
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from src import config
 from src.clients.exceptions import JsonParseError, QueryExecutionError
-from src.clients.rails_console_client import RubyError
+from src.clients.rails_console_client import (
+    CommandExecutionError,
+    ConsoleNotReadyError,
+    RubyError,
+)
 
 # Tunables for batched/paged Rails queries. Co-located with the service that
 # uses them so the batched-query implementation has no back-reference to
@@ -556,3 +562,316 @@ class OpenProjectRailsRunnerService:
 
         msg = f"Unable to parse count result for {model}: end_marker={end_marker in result}"
         raise QueryExecutionError(msg)
+
+    # ── script + structured-data execution ────────────────────────────────
+
+    def execute_script_with_data(
+        self,
+        script_content: str,
+        data: Any,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        """Execute a Ruby script in the Rails console with structured input data.
+
+        The data is serialized to JSON, transferred to the container under
+        ``/tmp``, and made available to the Ruby script as the variable
+        ``input_data``. The script is also written to a temp file and run via
+        ``load "/tmp/<script>.rb"``.
+
+        The Ruby script should print a JSON payload between the markers
+        ``JSON_OUTPUT_START_<exec_id>`` and ``JSON_OUTPUT_END_<exec_id>`` (the
+        exec_id is unique per call to distinguish from earlier-run output
+        still in the tmux buffer); the JSON is parsed and returned in the
+        ``data`` field.
+
+        Returns:
+            Dict with keys: status ("success"|"error"), message, data (parsed JSON), output (raw snippet).
+
+        """
+        # Lazy import: the ANSI/control-char regexes live on openproject_client
+        # module scope (used by execute_script_with_data here AND by
+        # execute_large_query_to_json_file which is still on the client),
+        # so importing them lazily here avoids the import cycle at module
+        # load time.
+        from src.clients.openproject_client import (
+            _RE_ANSI_ESCAPE,
+            _RE_CTRL_CHARS,
+            _RE_OSC_ESCAPE,
+            _RE_OTHER_ESCAPE,
+        )
+
+        client = self._client
+        # Prepare local temp paths
+        temp_dir = Path(client.file_manager.data_dir) / "temp_scripts"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        local_data_path = temp_dir / f"openproject_input_{os.urandom(4).hex()}.json"
+        try:
+            with local_data_path.open("w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception as e:
+            err_msg = f"Failed to serialize input data: {e}"
+            raise QueryExecutionError(err_msg) from e
+
+        # Compose Ruby script with a small header that loads JSON into `input_data`
+        container_data_path = Path("/tmp") / local_data_path.name
+        header = f"require 'json'\ninput_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
+        full_script = header + script_content
+
+        local_script_path: Path | None = None
+        container_script_path: Path | None = None
+        operation_succeeded = False  # Track success for debug file preservation
+        try:
+            # Create local script file and transfer both script and data
+            local_script_path = client._create_script_file(full_script)
+            container_script_path = client._transfer_rails_script(local_script_path)
+
+            # Transfer the input JSON to container
+            client.transfer_file_to_container(local_data_path, container_data_path)
+
+            # Execute the script inside Rails console.
+            # IMPORTANT: We use a unique execution ID to distinguish this run's output
+            # from any previous runs still visible in the tmux buffer.
+            exec_id = os.urandom(8).hex()
+            unique_start_marker = f"JSON_OUTPUT_START_{exec_id}"
+            unique_end_marker = f"JSON_OUTPUT_END_{exec_id}"
+
+            load_cmd = f'load "{container_script_path.as_posix()}"'
+            try:
+                target = client.rails_client._get_target()
+                tmux = shutil.which("tmux") or "tmux"
+
+                # Define the unique markers for this execution; the script
+                # uses these instead of hardcoded markers.
+                marker_setup = f"$j2o_start_marker = '{unique_start_marker}'; $j2o_end_marker = '{unique_end_marker}'"
+                subprocess.run(
+                    [tmux, "send-keys", "-t", target, marker_setup, "Enter"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                time.sleep(0.1)
+
+                escaped_cmd = client.rails_client._escape_command(load_cmd)
+                subprocess.run(
+                    [tmux, "send-keys", "-t", target, escaped_cmd, "Enter"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+                # Poll for our unique JSON_OUTPUT_END marker with timeout
+                effective_timeout = timeout or client.rails_client.command_timeout
+                start_time = time.time()
+                output = ""
+                found_markers = False
+
+                while time.time() - start_time < effective_timeout:
+                    cap = subprocess.run(
+                        [tmux, "capture-pane", "-p", "-S", "-2000", "-t", target],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    output = cap.stdout
+
+                    # Normalize output by removing newlines to handle markers
+                    # split by terminal width wrapping in tmux pane capture
+                    normalized = output.replace("\n", "").replace("\r", "")
+
+                    if unique_start_marker in normalized and unique_end_marker in normalized:
+                        # Use rfind for the LAST occurrence (actual JSON output,
+                        # not the command echo which contains markers in quotes).
+                        start_pos = normalized.rfind(unique_start_marker)
+                        if start_pos != -1:
+                            next_char_pos = start_pos + len(unique_start_marker)
+                            if next_char_pos < len(normalized):
+                                next_char = normalized[next_char_pos]
+                                if next_char in "[{":  # Actual JSON content
+                                    end_pos = normalized.find(unique_end_marker, next_char_pos)
+                                    if end_pos != -1 and end_pos > start_pos:
+                                        found_markers = True
+                                        output = normalized
+                                        break
+
+                    time.sleep(0.2)  # Poll every 200ms
+
+                if not found_markers:
+                    self._logger.warning(
+                        "JSON_OUTPUT_END_%s marker not found within %d seconds",
+                        exec_id,
+                        effective_timeout,
+                    )
+            except Exception as e:
+                # Fallback: if Rails console crashed or is unstable (e.g. Reline/IRB
+                # errors), execute via non-interactive runner to avoid TTY/Reline issues.
+                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError)):
+                    if not config.migration_config.get("enable_runner_fallback", False):
+                        raise
+                    self._logger.warning(
+                        "Rails console execution failed (%s). Falling back to rails runner.",
+                        type(e).__name__,
+                    )
+                    runner_cmd = (
+                        f"(cd /app || cd /opt/openproject) && "
+                        f"bundle exec rails runner {container_script_path.as_posix()}"
+                    )
+                    stdout, stderr, rc = client.docker_client.execute_command(
+                        runner_cmd,
+                        timeout=timeout or 120,
+                    )
+                    if rc != 0:
+                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
+                        raise QueryExecutionError(q_msg) from e
+                    output = stdout
+                else:
+                    raise
+
+            # Extract JSON payload between unique markers
+            normalized_output = output.replace("\n", "").replace("\r", "")
+            start_idx = normalized_output.rfind(unique_start_marker)
+            if start_idx != -1:
+                end_idx = normalized_output.find(unique_end_marker, start_idx + len(unique_start_marker))
+            else:
+                end_idx = -1
+
+            output = normalized_output
+
+            self._logger.debug(
+                "Marker extraction: start_idx=%s, end_idx=%s, marker=%s, output_len=%d",
+                start_idx,
+                end_idx,
+                exec_id,
+                len(output),
+            )
+            if start_idx != -1 and end_idx != -1:
+                json_preview = output[start_idx : end_idx + len(unique_end_marker)][:200]
+                self._logger.debug("JSON region preview: %r", json_preview)
+
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_str = output[start_idx + len(unique_start_marker) : end_idx].strip()
+
+                # Sanitisation guards against stray ANSI / control chars from
+                # IRB / tmux that would otherwise blow up json.loads.
+                def _try_parse(s: str) -> Any:
+                    return json.loads(s)
+
+                def _sanitize_control_chars(s: str) -> str:
+                    s = _RE_ANSI_ESCAPE.sub("", s)
+                    s = _RE_OSC_ESCAPE.sub("", s)
+                    s = _RE_OTHER_ESCAPE.sub("", s)
+                    return _RE_CTRL_CHARS.sub("", s)
+
+                def _extract_first_json_block(s: str) -> str | None:
+                    # Isolate the first balanced JSON object/array
+                    for i, ch in enumerate(s):
+                        if ch in "{[":
+                            opening = ch
+                            closing = "}" if ch == "{" else "]"
+                            depth = 0
+                            in_str = False
+                            esc = False
+                            for j in range(i, len(s)):
+                                c = s[j]
+                                if in_str:
+                                    if esc:
+                                        esc = False
+                                    elif c == "\\":
+                                        esc = True
+                                    elif c == '"':
+                                        in_str = False
+                                elif c == '"':
+                                    in_str = True
+                                elif c == opening:
+                                    depth += 1
+                                elif c == closing:
+                                    depth -= 1
+                                    if depth == 0:
+                                        return s[i : j + 1]
+                            break
+                    return None
+
+                json_str = _sanitize_control_chars(json_str)
+                try:
+                    parsed = _try_parse(json_str)
+                except Exception:
+                    try:
+                        parsed = _try_parse(json_str)  # Already sanitised
+                    except Exception:
+                        candidate = _extract_first_json_block(json_str)
+                        if candidate is None:
+                            candidate = _extract_first_json_block(_sanitize_control_chars(json_str)) or json_str
+                        try:
+                            parsed = _try_parse(candidate)
+                        except json.JSONDecodeError as e:
+                            pos = e.pos if hasattr(e, "pos") else 0
+                            start_ctx = max(0, pos - 20)
+                            end_ctx = min(len(candidate), pos + 20)
+                            ctx = candidate[start_ctx:end_ctx]
+                            char_at_pos = repr(candidate[pos : pos + 5]) if pos < len(candidate) else "EOF"
+                            self._logger.warning(
+                                "JSON parse error at pos %d: char=%s, context=%r",
+                                pos,
+                                char_at_pos,
+                                ctx,
+                            )
+                            q_msg = f"Failed to parse JSON output: {e}"
+                            raise QueryExecutionError(q_msg) from e
+                        except Exception as e:
+                            q_msg = f"Failed to parse JSON output: {e}"
+                            raise QueryExecutionError(q_msg) from e
+
+                operation_succeeded = True
+                return {
+                    "status": "success",
+                    "message": "Script executed successfully",
+                    "data": parsed,
+                    "output": output[:2000],
+                }
+
+            # No JSON markers found — return an error envelope (still mark
+            # 'succeeded' since execution completed; just no JSON found).
+            operation_succeeded = True
+            return {
+                "status": "error",
+                "message": "JSON markers not found in Rails output",
+                "output": output[:2000],
+            }
+
+        finally:
+            # Cleanup logic: preserve debug files on errors if configured
+            preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
+            should_cleanup = operation_succeeded or not preserve_on_error
+
+            if not should_cleanup:
+                self._logger.warning(
+                    "Preserving debug files due to error (set preserve_debug_files_on_error=false to auto-cleanup):\n"
+                    "  Local script: %s\n"
+                    "  Container script: %s\n"
+                    "  Local data: %s\n"
+                    "  Container data: %s",
+                    local_script_path,
+                    container_script_path,
+                    local_data_path,
+                    container_data_path,
+                )
+            else:
+                try:
+                    if local_script_path is not None and container_script_path is not None:
+                        client._cleanup_script_files(local_script_path, container_script_path)
+                except Exception as cleanup_err:
+                    self._logger.warning(
+                        "Failed to cleanup script files (local=%s, container=%s): %s",
+                        local_script_path,
+                        container_script_path,
+                        cleanup_err,
+                    )
+                try:
+                    client._cleanup_script_files(local_data_path, container_data_path)
+                except Exception as cleanup_err:
+                    self._logger.warning(
+                        "Failed to cleanup data files (local=%s, container=%s): %s",
+                        local_data_path,
+                        container_data_path,
+                        cleanup_err,
+                    )
