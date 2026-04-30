@@ -316,6 +316,7 @@ class OpenProjectClient:
         # OpenProjectClient delegate to the corresponding service.
         from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
+        from src.clients.openproject_membership_service import OpenProjectMembershipService
         from src.clients.openproject_project_service import OpenProjectProjectService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
@@ -327,6 +328,7 @@ class OpenProjectClient:
         self.rails_runner = OpenProjectRailsRunnerService(self)
         self.users = OpenProjectUserService(self)
         self.projects = OpenProjectProjectService(self)
+        self.memberships = OpenProjectMembershipService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -701,166 +703,35 @@ class OpenProjectClient:
         return self.provenance.bulk_record_entities(entity_type, mappings)
 
     def get_roles(self) -> list[dict[str, Any]]:
-        """Return OpenProject roles (id, name, builtin flag)."""
-        ruby = "Role.all.map { |r| r.as_json(only: [:id, :name, :builtin]) }"
-        try:
-            result = self.execute_json_query(ruby)
-            if isinstance(result, list):
-                return result
-            msg = "Unexpected OpenProject role payload"
-            raise QueryExecutionError(msg)
-        except Exception as e:
-            msg = f"Failed to fetch OpenProject roles: {e}"
-            raise QueryExecutionError(msg) from e
+        """Return OpenProject roles (id, name, builtin flag).
+
+        Thin delegator over ``self.memberships.get_roles``.
+        """
+        return self.memberships.get_roles()
 
     def get_groups(self) -> list[dict[str, Any]]:
-        """Return existing OpenProject groups with member IDs."""
-        ruby = (
-            "Group.includes(:users).order(:name).map do |g| "
-            "  { id: g.id, name: g.name, user_ids: g.users.pluck(:id) }"
-            "end"
-        )
-        try:
-            result = self.execute_json_query(ruby)
-            if isinstance(result, list):
-                return result
-            msg = "Unexpected OpenProject group payload"
-            raise QueryExecutionError(msg)
-        except Exception as e:
-            msg = f"Failed to fetch OpenProject groups: {e}"
-            raise QueryExecutionError(msg) from e
+        """Return existing OpenProject groups with member IDs.
+
+        Thin delegator over ``self.memberships.get_groups``.
+        """
+        return self.memberships.get_groups()
 
     def sync_group_memberships(self, assignments: list[dict[str, Any]]) -> dict[str, int]:
-        """Ensure each group has the provided membership list."""
-        if not assignments:
-            return {"updated": 0, "errors": 0}
+        """Ensure each group has the provided membership list.
 
-        temp_dir = Path(self.file_manager.data_dir) / "group_sync"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = temp_dir / f"group_memberships_{os.getpid()}_{int(time.time())}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
-
-        try:
-            with payload_path.open("w", encoding="utf-8") as handle:
-                json.dump(assignments, handle)
-
-            container_input = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
-            self.transfer_file_to_container(payload_path, container_input)
-
-            ruby = (
-                "require 'json'\n"
-                f"input_path = '{container_input.as_posix()}'\n"
-                f"output_path = '{container_output.as_posix()}'\n"
-                "rows = JSON.parse(File.read(input_path))\n"
-                "updated = 0\n"
-                "errors = []\n"
-                "rows.each do |row|\n"
-                "  name = row['name']\n"
-                "  next unless name && !name.strip.empty?\n"
-                "  begin\n"
-                "    group = Group.find_or_create_by(name: name)\n"
-                "    desired_ids = Array(row['user_ids']).map(&:to_i).reject(&:nil?).uniq.sort\n"
-                "    current_ids = group.user_ids.sort\n"
-                "    if desired_ids != current_ids\n"
-                "      group.user_ids = desired_ids\n"
-                "      group.save\n"
-                "      updated += 1\n"
-                "    end\n"
-                "  rescue => e\n"
-                "    errors << { name: name, error: e.message }\n"
-                "  end\n"
-                "end\n"
-                "File.write(output_path, { updated: updated, errors: errors.length }.to_json)\n"
-                "nil\n"
-            )
-
-            self.execute_query(ruby, timeout=90)
-
-            summary = self._read_result_file(container_output, result_path)
-            return {
-                "updated": int(summary.get("updated", 0)),
-                "errors": int(summary.get("errors", 0)),
-            }
-        finally:
-            with suppress(OSError):
-                payload_path.unlink()
-            with suppress(OSError):
-                result_path.unlink()
+        Thin delegator over ``self.memberships.sync_group_memberships``.
+        """
+        return self.memberships.sync_group_memberships(assignments)
 
     def assign_group_roles(
         self,
         assignments: list[dict[str, Any]],
     ) -> dict[str, int]:
-        """Assign OpenProject groups to projects with given role IDs."""
-        if not assignments:
-            return {"updated": 0, "errors": 0}
+        """Assign OpenProject groups to projects with given role IDs.
 
-        temp_dir = Path(self.file_manager.data_dir) / "group_roles"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = temp_dir / f"group_roles_{os.getpid()}_{int(time.time())}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
-
-        try:
-            with payload_path.open("w", encoding="utf-8") as handle:
-                json.dump(assignments, handle)
-
-            container_input = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
-            self.transfer_file_to_container(payload_path, container_input)
-
-            ruby = (
-                "require 'json'\n"
-                f"input_path = '{container_input.as_posix()}'\n"
-                f"output_path = '{container_output.as_posix()}'\n"
-                "updated = 0\n"
-                "errors = []\n"
-                "begin\n"
-                "  File.write(output_path, { updated: 0, errors: 0, status: 'initialised' }.to_json)\n"
-                "  rows = JSON.parse(File.read(input_path))\n"
-                "  Array(rows).each do |row|\n"
-                "    begin\n"
-                "      name = row['group_name']\n"
-                "      project_id = row['project_id'].to_i\n"
-                "      role_ids = Array(row['role_ids']).map(&:to_i).reject(&:nil?).uniq\n"
-                "      next if name.nil? || name.empty? || project_id <= 0 || role_ids.empty?\n"
-                "      group = Group.find_by(name: name)\n"
-                "      project = Project.find_by(id: project_id)\n"
-                "      next unless group && project\n"
-                "      member = Member.find_or_initialize_by(project: project, principal: group)\n"
-                "      existing_ids = Array(member.role_ids).map(&:to_i)\n"
-                "      new_ids = (existing_ids + role_ids).uniq\n"
-                "      if member.new_record? || new_ids.sort != existing_ids.sort\n"
-                "        member.role_ids = new_ids\n"
-                "        member.save\n"
-                "        updated += 1\n"
-                "      end\n"
-                "    rescue => e\n"
-                "      errors << { group: row['group_name'], project: row['project_id'], error: e.message }\n"
-                "    end\n"
-                "  end\n"
-                "rescue => e\n"
-                "  errors << { error: e.message }\n"
-                "ensure\n"
-                "  summary = { updated: updated, errors: errors.length }\n"
-                "  summary[:error_details] = errors if errors.any?\n"
-                "  File.write(output_path, summary.to_json)\n"
-                "end\n"
-                "nil\n"
-            )
-
-            self.execute_query(ruby, timeout=90)
-
-            summary = self._read_result_file(container_output, result_path)
-            return {
-                "updated": int(summary.get("updated", 0)),
-                "errors": int(summary.get("errors", 0)),
-            }
-        finally:
-            with suppress(OSError):
-                payload_path.unlink()
-            with suppress(OSError):
-                result_path.unlink()
+        Thin delegator over ``self.memberships.assign_group_roles``.
+        """
+        return self.memberships.assign_group_roles(assignments)
 
     def assign_user_roles(
         self,
@@ -869,46 +740,15 @@ class OpenProjectClient:
         user_id: int,
         role_ids: list[int],
     ) -> dict[str, Any]:
-        """Ensure a user has the given roles on a project."""
-        valid_role_ids = [int(r) for r in role_ids if isinstance(r, (int, str)) and int(r) > 0]
-        if not valid_role_ids:
-            return {"success": False, "error": "role_ids empty"}
+        """Ensure a user has the given roles on a project.
 
-        head = f"project_id = {int(project_id)}\nuser_id = {int(user_id)}\nrole_ids = {json.dumps(valid_role_ids)}\n"
-        body = """
-project = Project.find_by(id: project_id)
-user = User.find_by(id: user_id)
-
-unless project && user
-  return { success: false, error: 'project or user not found' }
-end
-
-desired = Array(role_ids).map(&:to_i).reject { |rid| rid <= 0 }
-if desired.empty?
-  return { success: false, error: 'no roles specified' }
-end
-
-member = Member.find_or_initialize_by(project: project, principal: user)
-existing = Array(member.role_ids).map(&:to_i)
-
-if member.new_record? || (existing.sort != desired.sort)
-  member.role_ids = desired
-  changed = true
-else
-  changed = false
-end
-
-if member.save
-  { success: true, changed: changed, role_ids: member.role_ids }
-else
-  { success: false, error: member.errors.full_messages.join(', ') }
-end
-"""
-        script = head + body
-        result = self.execute_query_to_json_file(script, timeout=90)
-        if isinstance(result, dict):
-            return result
-        return {"success": False, "error": "unexpected response"}
+        Thin delegator over ``self.memberships.assign_user_roles``.
+        """
+        return self.memberships.assign_user_roles(
+            project_id=project_id,
+            user_id=user_id,
+            role_ids=role_ids,
+        )
 
     def sync_workflow_transitions(
         self,
