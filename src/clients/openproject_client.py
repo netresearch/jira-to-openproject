@@ -45,7 +45,6 @@ except Exception:
 BATCH_SIZE_DEFAULT = 50
 SAFE_OFFSET_LIMIT = 5000
 BATCH_LABEL_SAMPLE = 3
-USERS_CACHE_TTL_SECONDS = 300
 
 
 # Pre-compiled regex patterns for control character sanitization (hot path)
@@ -319,11 +318,13 @@ class OpenProjectClient:
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
+        from src.clients.openproject_user_service import OpenProjectUserService
 
         self.custom_fields = OpenProjectCustomFieldService(self)
         self.provenance = OpenProjectProvenanceService(self)
         self.file_transfer = OpenProjectFileTransferService(self)
         self.rails_runner = OpenProjectRailsRunnerService(self)
+        self.users = OpenProjectUserService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2695,206 +2696,25 @@ J2O_DATA
     def get_users(self) -> list[dict[str, Any]]:
         """Get all users from OpenProject.
 
-        Uses caching to avoid repeated Rails console queries.
-
-        Returns:
-            List of OpenProject users
-
-        Raises:
-            QueryExecutionError: If unable to retrieve users
-
+        Thin delegator over ``self.users.get_users``. Uses caching to avoid
+        repeated Rails console queries.
         """
-        # Check cache first (5 minutes validity)
-        current_time = time.time()
-        cache_valid = (
-            hasattr(self, "_users_cache")
-            and hasattr(self, "_users_cache_time")
-            and self._users_cache is not None
-            and self._users_cache_time is not None
-            and current_time - self._users_cache_time < USERS_CACHE_TTL_SECONDS
-        )
-
-        if cache_valid:
-            logger.debug("Using cached users data (%d users)", len(self._users_cache))
-            return self._users_cache
-
-        try:
-            # Route through centralized helper for uniform behavior
-            # Include the 'mail' attribute and the J2O provenance custom fields if present
-            file_path = self._generate_unique_temp_filename("users")
-            ruby_query = (
-                "cf_origin_system = CustomField.find_by(type: 'UserCustomField', name: 'J2O Origin System'); "
-                "cf_origin_id = CustomField.find_by(type: 'UserCustomField', name: 'J2O User ID'); "
-                "cf_origin_key = CustomField.find_by(type: 'UserCustomField', name: 'J2O User Key'); "
-                "cf_origin_url = CustomField.find_by(type: 'UserCustomField', name: 'J2O External URL'); "
-                "User.all.map do |u|\n"
-                "  next unless u.is_a?(::User)\n"
-                "  data = u.as_json\n"
-                "  data['mail'] = u.mail\n"
-                "  data['j2o_origin_system'] = (cf_origin_system ? u.custom_value_for(cf_origin_system)&.value : nil)\n"
-                "  data['j2o_user_id'] = (cf_origin_id ? u.custom_value_for(cf_origin_id)&.value : nil)\n"
-                "  data['j2o_user_key'] = (cf_origin_key ? u.custom_value_for(cf_origin_key)&.value : nil)\n"
-                "  data['j2o_external_url'] = (cf_origin_url ? u.custom_value_for(cf_origin_url)&.value : nil)\n"
-                "  pref = (u.respond_to?(:pref) ? u.pref : nil)\n"
-                "  data['time_zone'] = (pref ? pref.time_zone : nil)\n"
-                "  if pref && pref.respond_to?(:language)\n"
-                "    data['language'] = pref.language\n"
-                "  end\n"
-                "  data\n"
-                "end.compact"
-            )
-            json_data = self.execute_large_query_to_json_file(ruby_query, container_file=file_path, timeout=180)
-        except QueryExecutionError:
-            # Propagate specific high-signal errors (tests assert exact messages)
-            raise
-        except Exception as e:
-            msg = "Failed to retrieve users."
-            raise QueryExecutionError(msg) from e
-        else:
-            # Validate that we got a list
-            if not isinstance(json_data, list):
-                logger.error(
-                    "Expected list of users, got %s: %s",
-                    type(json_data),
-                    str(json_data)[:200],
-                )
-                msg = f"Invalid users data format - expected list, got {type(json_data)}"
-                raise QueryExecutionError(msg)
-
-            # Update cache
-            self._users_cache = json_data or []
-            self._users_cache_time = current_time
-
-            logger.info("Retrieved %d users from OpenProject", len(self._users_cache))
-            return self._users_cache
+        return self.users.get_users()
 
     def get_user(self, user_identifier: int | str) -> dict[str, Any]:
         """Get a single user by id, email, or login.
 
-        This is a convenience wrapper over ``find_record`` and existing helpers,
-        with light cache lookups to reduce Rails console round-trips.
-
-        Args:
-            user_identifier: An integer id, numeric string id, email, or login
-
-        Returns:
-            User data as a dictionary
-
-        Raises:
-            RecordNotFoundError: If the user cannot be found
-            QueryExecutionError: If the lookup fails
-
+        Thin delegator over ``self.users.get_user``.
         """
-        try:
-            # Normalize identifier
-            identifier: str | int
-            if isinstance(user_identifier, str):
-                identifier = user_identifier.strip()
-                if not identifier:
-                    msg = "Empty user identifier"
-                    raise ValueError(msg)
-            else:
-                identifier = int(user_identifier)
-
-            # If numeric string, treat as id
-            if isinstance(identifier, str) and identifier.isdigit():
-                identifier = int(identifier)
-
-            # Try cache fast-paths when possible
-            if isinstance(identifier, int):
-                # Check cached users first
-                if getattr(self, "_users_cache", None):
-                    for user in self._users_cache or []:
-                        try:
-                            uid = user.get("id")
-                            if isinstance(uid, int) and uid == identifier:
-                                return user
-                            if isinstance(uid, str) and uid.isdigit() and int(uid) == identifier:
-                                return user
-                        except Exception:
-                            logger.debug("Malformed user cache entry encountered")
-                            continue
-
-                # Fallback to direct lookup by id
-                return self.find_record("User", identifier)
-
-            # Email lookup
-            if isinstance(identifier, str) and "@" in identifier:
-                return self.get_user_by_email(identifier)
-
-            # Login lookup (try cache first)
-            login = identifier  # type: ignore[assignment]
-            if getattr(self, "_users_cache", None):
-                for user in self._users_cache or []:
-                    if user.get("login") == login:
-                        # Opportunistically cache by email for future lookups
-                        email = user.get("mail") or user.get("email")
-                        if isinstance(email, str):
-                            self._users_by_email_cache[email.lower()] = user
-                        return user
-
-            # Fallback to direct lookup by login
-            user = self.find_record("User", {"login": login})
-            # Opportunistically cache by email for future lookups
-            email = user.get("mail") or user.get("email")
-            if isinstance(email, str):
-                self._users_by_email_cache[email.lower()] = user
-            return user
-
-        except RecordNotFoundError:
-            raise
-        except Exception as e:
-            msg = "Error getting user."
-            raise QueryExecutionError(msg) from e
+        return self.users.get_user(user_identifier)
 
     def get_user_by_email(self, email: str) -> dict[str, Any]:
         """Get a user by email address.
 
-        Uses cached user data if available.
-
-        Args:
-            email: Email address of the user
-
-        Returns:
-            User data
-
-        Raises:
-            RecordNotFoundError: If user with given email is not found
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.users.get_user_by_email``. Uses cached
+        user data if available.
         """
-        # Normalize email to lowercase
-        email_lower = email.lower()
-
-        # Check cache first
-        if hasattr(self, "_users_by_email_cache") and email_lower in self._users_by_email_cache:
-            return self._users_by_email_cache[email_lower]
-
-        # Try to load all users to populate cache
-        try:
-            # Load all users - we ignore the returned value because we just
-            # want to populate the cache
-            self.get_users()
-
-            # Check if we got the user in the newly populated cache
-            if email_lower in self._users_by_email_cache:
-                return self._users_by_email_cache[email_lower]
-
-            # If not in cache, try direct query
-            user = self.find_record("User", {"email": email})
-            if user:
-                # Cache the result
-                self._users_by_email_cache[email_lower] = user
-                return user
-
-            msg = f"User with email '{email}' not found"
-            raise RecordNotFoundError(msg)
-
-        except RecordNotFoundError:
-            raise  # Re-raise RecordNotFoundError
-        except Exception as e:
-            msg = "Error finding user by email."
-            raise QueryExecutionError(msg) from e
+        return self.users.get_user_by_email(email)
 
     def get_custom_field_by_name(self, name: str) -> dict[str, Any]:
         """Find a custom field by name.
@@ -3724,19 +3544,11 @@ J2O_DATA
             raise QueryExecutionError(msg) from e
 
     def ensure_local_avatars_enabled(self) -> bool:
-        """Enable local avatar uploads if disabled."""
-        ruby = (
-            "settings = Setting.plugin_openproject_avatars || {}\n"
-            "if ActiveModel::Type::Boolean.new.cast(settings['enable_local_avatars'])\n"
-            "  { enabled: true }.to_json\n"
-            "else\n"
-            "  settings['enable_local_avatars'] = true\n"
-            "  Setting.plugin_openproject_avatars = settings\n"
-            "  { enabled: true }.to_json\n"
-            "end\n"
-        )
-        result = self.execute_query_to_json_file(ruby)
-        return bool(isinstance(result, dict) and result.get("enabled"))
+        """Enable local avatar uploads if disabled.
+
+        Thin delegator over ``self.users.ensure_local_avatars_enabled``.
+        """
+        return self.users.ensure_local_avatars_enabled()
 
     def set_user_avatar(
         self,
@@ -3746,41 +3558,16 @@ J2O_DATA
         filename: str,
         content_type: str,
     ) -> dict[str, Any]:
-        """Upload and assign a local avatar for a user."""
-        safe_content_type = escape_ruby_single_quoted(content_type or "image/png")
-        safe_filename = escape_ruby_single_quoted(filename)
-        head = (
-            f"user_id = {int(user_id)}\n"
-            f"file_path = '{container_path.as_posix()}'\n"
-            f"filename = '{safe_filename}'\n"
-            f"content_type = '{safe_content_type}'\n"
-        )
-        body = """require 'rack/test'
-require 'avatars/update_service'
+        """Upload and assign a local avatar for a user.
 
-result = { success: false }
-user = User.find_by(id: user_id)
-if user.nil?
-  result = { success: false, error: 'user not found' }
-elsif !OpenProject::Avatars::AvatarManager.local_avatars_enabled?
-  result = { success: false, error: 'local avatars disabled' }
-else
-  uploader = Rack::Test::UploadedFile.new(file_path, content_type, true)
-  service = ::Avatars::UpdateService.new(user)
-  outcome = service.replace(uploader)
-  if outcome.success?
-    result = { success: true }
-  else
-    result = { success: false, error: outcome.errors.full_messages.join(', ') }
-  end
-end
-result.to_json
-"""
-        script = head + body
-        response = self.execute_query_to_json_file(script, timeout=180)
-        if isinstance(response, dict):
-            return response
-        return {"success": False, "error": "unexpected response"}
+        Thin delegator over ``self.users.set_user_avatar``.
+        """
+        return self.users.set_user_avatar(
+            user_id=user_id,
+            container_path=container_path,
+            filename=filename,
+            content_type=content_type,
+        )
 
     # ----- Watchers helpers -----
     def find_watcher(self, work_package_id: int, user_id: int) -> dict[str, Any] | None:
@@ -4942,13 +4729,11 @@ J2O_DATA
             return {"success": False, "processed": 0, "failed": len(data), "error": str(e)}
 
     def batch_get_users_by_ids(self, user_ids: list[int]) -> dict[int, dict]:
-        """Retrieve multiple users in batches."""
-        if not user_ids:
-            return {}
+        """Retrieve multiple users in batches.
 
-        # Get all users and filter to requested IDs
-        all_users = self.get_users()
-        return {user["id"]: user for user in all_users if user["id"] in user_ids}
+        Thin delegator over ``self.users.batch_get_users_by_ids``.
+        """
+        return self.users.batch_get_users_by_ids(user_ids)
 
     def stream_work_packages_for_project(
         self,
@@ -5116,76 +4901,21 @@ J2O_DATA
             return result["results"][0]
         return None
 
-    @batch_idempotent(ttl=3600)  # 1 hour TTL for user email lookups
     def batch_get_users_by_emails(
         self,
         emails: list[str],
         batch_size: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find multiple users by email addresses in batches with idempotency support.
 
-        Args:
-            emails: List of email addresses to find
-            batch_size: Size of each batch (defaults to configured batch_size)
-            headers: Optional headers containing X-Idempotency-Key
-
-        Returns:
-            Dictionary mapping email to user data (missing emails are omitted)
-
-        Raises:
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.users.batch_get_users_by_emails``. The
+        ``@batch_idempotent`` decorator lives on the service method; its
+        cache key comes from ``headers["X-Idempotency-Key"]`` when
+        supplied, or a fresh UUID per call otherwise (so callers that
+        actually want cached results must pass a stable header).
         """
-        if not emails:
-            return {}
-
-        # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(self, "batch_size", 100)
-        effective_batch_size = self._validate_batch_size(effective_batch_size)
-
-        results = {}
-
-        # Process emails in batches
-        for i in range(0, len(emails), effective_batch_size):
-            batch_emails = emails[i : i + effective_batch_size]
-
-            def batch_operation(batch_emails: list[str] = batch_emails) -> list[dict[str, Any]]:
-                # Use safe query builder with ActiveRecord parameterization
-                query = self._build_safe_batch_query("User", "mail", batch_emails)
-                return self.execute_json_query(query)  # type: ignore[return-value]
-
-            try:
-                # Execute batch operation with retry logic (with idempotency key propagation)
-                batch_results = self._retry_with_exponential_backoff(
-                    batch_operation,
-                    f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",
-                )
-
-                if batch_results:
-                    # Ensure we have a list
-                    if isinstance(batch_results, dict):
-                        batch_results = [batch_results]
-
-                    # Map results by email
-                    for record in batch_results:
-                        if isinstance(record, dict) and "mail" in record:
-                            email = record["mail"]
-                            if email in batch_emails:
-                                results[email] = record
-
-            except Exception as e:
-                self.logger.warning(
-                    "Failed to fetch batch of user emails %s after retries: %s",
-                    batch_emails,
-                    e,
-                )
-                # Continue processing other batches rather than failing completely
-                # Log individual failures for post-run review
-                for email in batch_emails:
-                    self.logger.debug("Failed to fetch user by email %s: %s", email, e)
-                continue
-
-        return results
+        return self.users.batch_get_users_by_emails(emails, batch_size, headers)
 
     @batch_idempotent(ttl=3600)  # 1 hour TTL for project identifier lookups
     def batch_get_projects_by_identifiers(
