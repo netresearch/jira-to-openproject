@@ -277,7 +277,10 @@ class OpenProjectRailsRunnerService:
         Returns the parsed JSON if the result is valid JSON, otherwise wraps
         the raw text in a ``{"result": ...}`` dict.
         """
-        result = self.execute_query(script_content)
+        # Route through the client's delegator so monkeypatches on
+        # ``op_client.execute_query`` (used in tests) take effect, mirroring
+        # the same pattern used in ChangeAwareRunner.
+        result = self._client.execute_query(script_content)
         try:
             return json.loads(result)
         except json.JSONDecodeError, TypeError:
@@ -354,7 +357,9 @@ class OpenProjectRailsRunnerService:
         """
 
         try:
-            return self.execute_query(transaction_block)
+            # Same monkeypatch-friendly pattern as ``execute`` above —
+            # route through the client's delegator.
+            return self._client.execute_query(transaction_block)
         except Exception as e:
             msg = "Transaction failed."
             raise QueryExecutionError(msg) from e
