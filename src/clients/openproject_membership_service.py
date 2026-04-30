@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -52,13 +53,18 @@ class OpenProjectMembershipService:
         ruby = "Role.all.map { |r| r.as_json(only: [:id, :name, :builtin]) }"
         try:
             result = self._client.execute_json_query(ruby)
-            if isinstance(result, list):
-                return result
-            msg = "Unexpected OpenProject role payload"
-            raise QueryExecutionError(msg)
+        except QueryExecutionError:
+            # Let the more-specific error pass through unchanged so the
+            # downstream message keeps its query/marker context instead
+            # of being flattened into a generic "Failed to fetch" wrapper.
+            raise
         except Exception as e:
             msg = f"Failed to fetch OpenProject roles: {e}"
             raise QueryExecutionError(msg) from e
+        if isinstance(result, list):
+            return result
+        msg = "Unexpected OpenProject role payload"
+        raise QueryExecutionError(msg)
 
     def get_groups(self) -> list[dict[str, Any]]:
         """Return existing OpenProject groups with member IDs."""
@@ -69,13 +75,17 @@ class OpenProjectMembershipService:
         )
         try:
             result = self._client.execute_json_query(ruby)
-            if isinstance(result, list):
-                return result
-            msg = "Unexpected OpenProject group payload"
-            raise QueryExecutionError(msg)
+        except QueryExecutionError:
+            # Same rationale as ``get_roles`` — preserve the
+            # specific Rails-side error rather than re-wrapping.
+            raise
         except Exception as e:
             msg = f"Failed to fetch OpenProject groups: {e}"
             raise QueryExecutionError(msg) from e
+        if isinstance(result, list):
+            return result
+        msg = "Unexpected OpenProject group payload"
+        raise QueryExecutionError(msg)
 
     # ── group membership ────────────────────────────────────────────────
 
@@ -87,7 +97,12 @@ class OpenProjectMembershipService:
         client = self._client
         temp_dir = Path(client.file_manager.data_dir) / "group_sync"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = temp_dir / f"group_memberships_{os.getpid()}_{int(time.time())}.json"
+        # ``token_hex(4)`` adds 8 random hex chars so two calls within
+        # the same process during the same wall-clock second can't
+        # collide on the payload, the result file, or the container
+        # ``/tmp`` paths derived from the filename.
+        unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
+        payload_path = temp_dir / f"group_memberships_{unique_suffix}.json"
         result_path = temp_dir / (payload_path.name + ".result")
 
         try:
@@ -110,11 +125,19 @@ class OpenProjectMembershipService:
                 "  next unless name && !name.strip.empty?\n"
                 "  begin\n"
                 "    group = Group.find_or_create_by(name: name)\n"
-                "    desired_ids = Array(row['user_ids']).map(&:to_i).reject(&:nil?).uniq.sort\n"
+                # ``compact`` drops nils first, then ``map(&:to_i)`` is
+                # safe; ``select { |id| id.positive? }`` filters the 0
+                # values that ``nil``-ish or non-numeric inputs would
+                # otherwise smuggle through (ActiveRecord would raise
+                # later when assigning a non-existent user id 0).
+                "    desired_ids = Array(row['user_ids']).compact.map(&:to_i).select { |id| id.positive? }.uniq.sort\n"
                 "    current_ids = group.user_ids.sort\n"
                 "    if desired_ids != current_ids\n"
                 "      group.user_ids = desired_ids\n"
-                "      group.save\n"
+                # ``save!`` so a validation failure raises into the
+                # outer ``rescue`` (and is recorded as an error)
+                # instead of silently flagging ``updated += 1``.
+                "      group.save!\n"
                 "      updated += 1\n"
                 "    end\n"
                 "  rescue => e\n"
@@ -144,14 +167,30 @@ class OpenProjectMembershipService:
         self,
         assignments: list[dict[str, Any]],
     ) -> dict[str, int]:
-        """Assign OpenProject groups to projects with given role IDs."""
+        """Assign OpenProject groups to projects with given role IDs.
+
+        Note on semantics: this is an *additive* operation, not a sync.
+        Existing role ids on the project membership are preserved and the
+        supplied ``role_ids`` are merged in. This differs from
+        ``assign_user_roles`` (which replaces) and
+        ``sync_group_memberships`` (which replaces user_ids). The
+        difference is intentional: migrations call
+        ``assign_group_roles`` to *grant* roles imported from Jira
+        without nuking project-side roles that admins may have added by
+        hand. Use a separate "sync" entry point if true replacement is
+        ever needed.
+        """
         if not assignments:
             return {"updated": 0, "errors": 0}
 
         client = self._client
         temp_dir = Path(client.file_manager.data_dir) / "group_roles"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = temp_dir / f"group_roles_{os.getpid()}_{int(time.time())}.json"
+        # See ``sync_group_memberships`` for the suffix rationale —
+        # pid + whole-second timestamp alone can collide within a single
+        # process when this method is called from a tight loop.
+        unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
+        payload_path = temp_dir / f"group_roles_{unique_suffix}.json"
         result_path = temp_dir / (payload_path.name + ".result")
 
         try:
@@ -175,17 +214,25 @@ class OpenProjectMembershipService:
                 "    begin\n"
                 "      name = row['group_name']\n"
                 "      project_id = row['project_id'].to_i\n"
-                "      role_ids = Array(row['role_ids']).map(&:to_i).reject(&:nil?).uniq\n"
+                # ``compact`` drops nils, ``select { |id| id.positive? }``
+                # drops 0s that ``to_i`` would emit for non-numeric
+                # inputs — the prior ``reject(&:nil?)`` after ``to_i``
+                # was a no-op (``to_i`` never produces nil).
+                "      role_ids = Array(row['role_ids']).compact.map(&:to_i).select { |id| id.positive? }.uniq\n"
                 "      next if name.nil? || name.empty? || project_id <= 0 || role_ids.empty?\n"
                 "      group = Group.find_by(name: name)\n"
                 "      project = Project.find_by(id: project_id)\n"
                 "      next unless group && project\n"
                 "      member = Member.find_or_initialize_by(project: project, principal: group)\n"
                 "      existing_ids = Array(member.role_ids).map(&:to_i)\n"
+                # Additive merge by design — see Python docstring above.
                 "      new_ids = (existing_ids + role_ids).uniq\n"
                 "      if member.new_record? || new_ids.sort != existing_ids.sort\n"
                 "        member.role_ids = new_ids\n"
-                "        member.save\n"
+                # ``save!`` so failed validations raise into the inner
+                # ``rescue`` (and are recorded under ``errors``) instead
+                # of silently incrementing ``updated``.
+                "        member.save!\n"
                 "        updated += 1\n"
                 "      end\n"
                 "    rescue => e\n"
@@ -224,7 +271,23 @@ class OpenProjectMembershipService:
     ) -> dict[str, Any]:
         """Ensure a user has the given roles on a project."""
         client = self._client
-        valid_role_ids = [int(r) for r in role_ids if isinstance(r, (int, str)) and int(r) > 0]
+        # Parse defensively: ``role_ids`` may arrive as a mixed list of
+        # ``int``s and string-encoded ints from Ruby/JSON round-trips.
+        # The previous comprehension called ``int(r) > 0`` inside the
+        # filter, which raises ``ValueError`` on non-numeric strings
+        # (e.g. ``"abc"``) and crashes the migration. Use try/except
+        # so unparseable entries are skipped silently rather than
+        # aborting the whole call.
+        valid_role_ids: list[int] = []
+        for r in role_ids:
+            if not isinstance(r, (int, str)):
+                continue
+            try:
+                parsed = int(r)
+            except TypeError, ValueError:
+                continue
+            if parsed > 0:
+                valid_role_ids.append(parsed)
         if not valid_role_ids:
             return {"success": False, "error": "role_ids empty"}
 
