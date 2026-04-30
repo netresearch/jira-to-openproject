@@ -80,51 +80,55 @@ class OpenProjectProjectAttributeService:
         # Lazy import to avoid the service ↔ client cycle at module load time.
         from src.clients.openproject_client import escape_ruby_single_quoted
 
-        # Coerce to int at runtime — the type hint alone doesn't enforce
-        # that callers actually pass an int, and a non-int value
-        # (especially from untrusted upstream data) would otherwise
-        # interpolate raw into the Ruby script.
-        pid = int(project_id)
-
-        # Escape braces in f-string; Ruby string content uses literal markers.
-        marker_start = "<!-- J2O_ORIGIN_START -->"
-        marker_end = "<!-- J2O_ORIGIN_END -->"
-        payload = (
-            f"system={escape_ruby_single_quoted(origin_system)};"
-            f"key={escape_ruby_single_quoted(project_key)};"
-            f"id={escape_ruby_single_quoted(external_id or '')};"
-            f"url={escape_ruby_single_quoted(external_url or '')}"
-        )
-        # Ruby script to insert/replace the origin block in description.
-        # Drop ``.to_json`` from the final expression — the
-        # ``execute_query_to_json_file`` Python wrapper already
-        # serialises the final value via ``as_json``, so an explicit
-        # ``.to_json`` here would double-encode and the Python side
-        # would receive a string instead of a parsed dict.
-        script = (
-            "project = Project.find(%d)\n" % pid
-            + f"marker_start = '{marker_start}'\n"
-            + f"marker_end = '{marker_end}'\n"
-            + f"payload = '{payload}'.dup\n"
-            + "desc = project.description.to_s\n"
-            + "block = ['\\n', marker_start, '\\n', payload, '\\n', marker_end, '\\n'].join\n"
-            + "start_idx = desc.index(marker_start)\n"
-            + "end_idx = desc.index(marker_end)\n"
-            + "if start_idx && end_idx && end_idx > start_idx\n"
-            + "  pre = desc[0...start_idx]\n"
-            + "  post = desc[(end_idx + marker_end.length)..-1] || ''\n"
-            + "  desc = pre + block + post\n"
-            + "else\n"
-            + "  desc = desc + block\n"
-            + "end\n"
-            + "project.update_columns(description: desc)\n"
-            + "{ success: true }\n"
-        )
+        # The whole body, including the ``int(project_id)`` runtime
+        # coercion and the f-string interpolation that escapes user
+        # strings, lives inside the existing try/except so a malformed
+        # ``project_id`` (``str``-that-isn't-numeric, ``None``, etc.)
+        # falls through to the documented ``return False`` contract
+        # rather than raising ``ValueError`` / ``TypeError`` past the
+        # caller.
         try:
+            pid = int(project_id)
+
+            # Escape braces in f-string; Ruby string content uses literal markers.
+            marker_start = "<!-- J2O_ORIGIN_START -->"
+            marker_end = "<!-- J2O_ORIGIN_END -->"
+            payload = (
+                f"system={escape_ruby_single_quoted(origin_system)};"
+                f"key={escape_ruby_single_quoted(project_key)};"
+                f"id={escape_ruby_single_quoted(external_id or '')};"
+                f"url={escape_ruby_single_quoted(external_url or '')}"
+            )
+            # Ruby script to insert/replace the origin block in description.
+            # Drop ``.to_json`` from the final expression — the
+            # ``execute_query_to_json_file`` Python wrapper already
+            # serialises the final value via ``as_json``, so an
+            # explicit ``.to_json`` here would double-encode and the
+            # Python side would receive a string instead of a parsed
+            # dict.
+            script = (
+                "project = Project.find(%d)\n" % pid
+                + f"marker_start = '{marker_start}'\n"
+                + f"marker_end = '{marker_end}'\n"
+                + f"payload = '{payload}'.dup\n"
+                + "desc = project.description.to_s\n"
+                + "block = ['\\n', marker_start, '\\n', payload, '\\n', marker_end, '\\n'].join\n"
+                + "start_idx = desc.index(marker_start)\n"
+                + "end_idx = desc.index(marker_end)\n"
+                + "if start_idx && end_idx && end_idx > start_idx\n"
+                + "  pre = desc[0...start_idx]\n"
+                + "  post = desc[(end_idx + marker_end.length)..-1] || ''\n"
+                + "  desc = pre + block + post\n"
+                + "else\n"
+                + "  desc = desc + block\n"
+                + "end\n"
+                + "project.update_columns(description: desc)\n"
+                + "{ success: true }\n"
+            )
             result = self._client.execute_query_to_json_file(script)
             return bool(isinstance(result, dict) and result.get("success"))
         except Exception as e:
-            self._logger.warning("Failed to upsert project origin attributes for %s: %s", pid, e)
+            self._logger.warning("Failed to upsert project origin attributes for %s: %s", project_id, e)
             return False
 
     def upsert_project_attribute(
@@ -143,13 +147,17 @@ class OpenProjectProjectAttributeService:
         # Lazy import to avoid the service ↔ client cycle at module load time.
         from src.clients.openproject_client import escape_ruby_single_quoted
 
-        # Coerce to int at runtime — a str from upstream data would
-        # otherwise interpolate raw into the Ruby script.
-        pid = int(project_id)
+        # Move ``int(project_id)`` and the f-string interpolation
+        # inside the existing try/except so a malformed
+        # ``project_id`` (non-numeric / None / etc.) returns
+        # ``False`` per the documented contract instead of raising
+        # ``ValueError`` / ``TypeError`` past the caller.
+        try:
+            pid = int(project_id)
 
-        # Drop ``.to_json`` from the final expression — see
-        # ``upsert_project_origin_attributes`` for the rationale.
-        ruby = f"""
+            # Drop ``.to_json`` from the final expression — see
+            # ``upsert_project_origin_attributes`` for the rationale.
+            ruby = f"""
           pid = {pid}
           name = '{escape_ruby_single_quoted(name)}'.dup
           fmt  = '{escape_ruby_single_quoted(field_format)}'.dup
@@ -203,11 +211,10 @@ class OpenProjectProjectAttributeService:
 
           {{ success: true, custom_field_id: cf.id, value: cv.value }}
         """
-        try:
             result = self._client.execute_query_to_json_file(ruby)
             return bool(isinstance(result, dict) and result.get("success"))
         except Exception as e:
-            self._logger.warning("Failed to upsert project attribute %s for %s: %s", name, pid, e)
+            self._logger.warning("Failed to upsert project attribute %s for %s: %s", name, project_id, e)
             return False
 
     def bulk_upsert_project_attributes(
@@ -230,17 +237,34 @@ class OpenProjectProjectAttributeService:
         if not attributes:
             return {"success": True, "processed": 0, "failed": 0}
 
-        # Build JSON data for Ruby
-        data = []
+        # Build JSON data for Ruby. Validate each row defensively —
+        # malformed rows (missing ``project_id`` / ``name``,
+        # non-numeric ``project_id``) are recorded against ``failed``
+        # and skipped, so the method always returns its documented
+        # ``{success, processed, failed}`` envelope rather than
+        # raising ``KeyError`` / ``ValueError`` past the caller.
+        data: list[dict[str, Any]] = []
+        skipped_failures = 0
         for attr in attributes:
-            data.append(
-                {
+            try:
+                row = {
                     "pid": int(attr["project_id"]),
                     "name": str(attr["name"]),
                     "value": str(attr.get("value", "")),
                     "fmt": str(attr.get("field_format", "string")),
-                },
-            )
+                }
+            except (KeyError, TypeError, ValueError) as e:
+                self._logger.warning(
+                    "Skipping malformed attribute row in bulk_upsert_project_attributes: %s (error: %s)",
+                    attr,
+                    e,
+                )
+                skipped_failures += 1
+                continue
+            data.append(row)
+
+        if not data:
+            return {"success": False, "processed": 0, "failed": skipped_failures}
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         # that Ruby misinterprets as invalid Unicode escape sequences.
@@ -322,11 +346,29 @@ J2O_DATA
         try:
             result = self._client.execute_query_to_json_file(ruby)
             if isinstance(result, dict):
+                # Roll the Python-side malformed-row failures into the
+                # Ruby-side result envelope so callers see a single
+                # ``failed`` count covering both validation and
+                # Rails-side errors.
+                if skipped_failures:
+                    result["failed"] = int(result.get("failed", 0)) + skipped_failures
+                    if result.get("success") and skipped_failures:
+                        result["success"] = False
                 return result
-            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(result)}
+            return {
+                "success": False,
+                "processed": 0,
+                "failed": len(attributes),
+                "error": str(result),
+            }
         except Exception as e:
             self._logger.warning("Bulk upsert project attributes failed: %s", e)
-            return {"success": False, "processed": 0, "failed": len(attributes), "error": str(e)}
+            return {
+                "success": False,
+                "processed": 0,
+                "failed": len(attributes),
+                "error": str(e),
+            }
 
     def rename_project_attribute(self, *, old_name: str, new_name: str) -> bool:
         """Rename a Project attribute (ProjectCustomField) if it exists.
@@ -361,10 +403,20 @@ J2O_DATA
         """Return snapshot of WorkPackages in a project with Jira CFs and updated_at.
 
         Each item: { id, updated_at, jira_issue_key, jira_migration_date }
+
+        Raises:
+            QueryExecutionError: If the snapshot query fails or
+                ``project_id`` cannot be coerced to ``int``. Wrapping
+                the coercion error here keeps the method's
+                documented exception type uniform — callers only have
+                to catch one thing.
+
         """
-        # Coerce to int at runtime — the type hint alone doesn't enforce
-        # that callers actually pass an int.
-        pid = int(project_id)
+        try:
+            pid = int(project_id)
+        except (TypeError, ValueError) as e:
+            msg = f"Invalid project_id for snapshot: {project_id!r}"
+            raise QueryExecutionError(msg) from e
 
         ruby = f"""
           cf_key = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Origin Key')
