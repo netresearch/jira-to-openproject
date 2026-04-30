@@ -613,9 +613,25 @@ class OpenProjectRailsRunnerService:
             err_msg = f"Failed to serialize input data: {e}"
             raise QueryExecutionError(err_msg) from e
 
-        # Compose Ruby script with a small header that loads JSON into `input_data`
+        # Generate per-call unique markers BEFORE composing the script so the
+        # Ruby header can define ``$j2o_start_marker``/``$j2o_end_marker``
+        # itself. This keeps the tmux and rails-runner fallback paths
+        # symmetric: in tmux the globals are also set via ``send-keys`` for
+        # backward compatibility, but the runner subprocess (which never sees
+        # those tmux ENV writes) gets the same markers from the script body.
+        exec_id = os.urandom(8).hex()
+        unique_start_marker = f"JSON_OUTPUT_START_{exec_id}"
+        unique_end_marker = f"JSON_OUTPUT_END_{exec_id}"
+
+        # Compose Ruby script with a header that defines the markers and
+        # loads the input JSON into ``input_data``.
         container_data_path = Path("/tmp") / local_data_path.name
-        header = f"require 'json'\ninput_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
+        header = (
+            f"$j2o_start_marker = '{unique_start_marker}'\n"
+            f"$j2o_end_marker = '{unique_end_marker}'\n"
+            f"require 'json'\n"
+            f"input_data = JSON.parse(File.read('{container_data_path.as_posix()}'))\n"
+        )
         full_script = header + script_content
 
         local_script_path: Path | None = None
@@ -629,20 +645,15 @@ class OpenProjectRailsRunnerService:
             # Transfer the input JSON to container
             client.transfer_file_to_container(local_data_path, container_data_path)
 
-            # Execute the script inside Rails console.
-            # IMPORTANT: We use a unique execution ID to distinguish this run's output
-            # from any previous runs still visible in the tmux buffer.
-            exec_id = os.urandom(8).hex()
-            unique_start_marker = f"JSON_OUTPUT_START_{exec_id}"
-            unique_end_marker = f"JSON_OUTPUT_END_{exec_id}"
-
             load_cmd = f'load "{container_script_path.as_posix()}"'
             try:
                 target = client.rails_client._get_target()
                 tmux = shutil.which("tmux") or "tmux"
 
-                # Define the unique markers for this execution; the script
-                # uses these instead of hardcoded markers.
+                # Also set the markers in the tmux Rails console session so
+                # any caller-script that references the globals before
+                # ``load`` runs sees the correct values. Redundant with the
+                # script header but kept for backward compatibility.
                 marker_setup = f"$j2o_start_marker = '{unique_start_marker}'; $j2o_end_marker = '{unique_end_marker}'"
                 subprocess.run(
                     [tmux, "send-keys", "-t", target, marker_setup, "Enter"],
@@ -795,31 +806,26 @@ class OpenProjectRailsRunnerService:
                 try:
                     parsed = _try_parse(json_str)
                 except Exception:
+                    candidate = _extract_first_json_block(json_str) or json_str
                     try:
-                        parsed = _try_parse(json_str)  # Already sanitised
-                    except Exception:
-                        candidate = _extract_first_json_block(json_str)
-                        if candidate is None:
-                            candidate = _extract_first_json_block(_sanitize_control_chars(json_str)) or json_str
-                        try:
-                            parsed = _try_parse(candidate)
-                        except json.JSONDecodeError as e:
-                            pos = e.pos if hasattr(e, "pos") else 0
-                            start_ctx = max(0, pos - 20)
-                            end_ctx = min(len(candidate), pos + 20)
-                            ctx = candidate[start_ctx:end_ctx]
-                            char_at_pos = repr(candidate[pos : pos + 5]) if pos < len(candidate) else "EOF"
-                            self._logger.warning(
-                                "JSON parse error at pos %d: char=%s, context=%r",
-                                pos,
-                                char_at_pos,
-                                ctx,
-                            )
-                            q_msg = f"Failed to parse JSON output: {e}"
-                            raise QueryExecutionError(q_msg) from e
-                        except Exception as e:
-                            q_msg = f"Failed to parse JSON output: {e}"
-                            raise QueryExecutionError(q_msg) from e
+                        parsed = _try_parse(candidate)
+                    except json.JSONDecodeError as e:
+                        pos = e.pos if hasattr(e, "pos") else 0
+                        start_ctx = max(0, pos - 20)
+                        end_ctx = min(len(candidate), pos + 20)
+                        ctx = candidate[start_ctx:end_ctx]
+                        char_at_pos = repr(candidate[pos : pos + 5]) if pos < len(candidate) else "EOF"
+                        self._logger.warning(
+                            "JSON parse error at pos %d: char=%s, context=%r",
+                            pos,
+                            char_at_pos,
+                            ctx,
+                        )
+                        q_msg = f"Failed to parse JSON output: {e}"
+                        raise QueryExecutionError(q_msg) from e
+                    except Exception as e:
+                        q_msg = f"Failed to parse JSON output: {e}"
+                        raise QueryExecutionError(q_msg) from e
 
                 operation_succeeded = True
                 return {
@@ -857,7 +863,12 @@ class OpenProjectRailsRunnerService:
                 )
             else:
                 try:
-                    if local_script_path is not None and container_script_path is not None:
+                    # ``container_script_path`` may be None if the local file
+                    # was created but the container transfer failed; the
+                    # underlying cleanup helper accepts ``None`` for the
+                    # remote path and will only delete the local file in
+                    # that case, which prevents a temp-file leak.
+                    if local_script_path is not None:
                         client._cleanup_script_files(local_script_path, container_script_path)
                 except Exception as cleanup_err:
                     self._logger.warning(
