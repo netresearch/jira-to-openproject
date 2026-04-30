@@ -1735,7 +1735,13 @@ class OpenProjectClient:
         return self.custom_fields.remove_custom_field(name, cf_type=cf_type)
 
     def ensure_origin_custom_fields(self) -> dict[str, list[dict[str, Any]]]:
-        """Ensure origin mapping CFs exist for WP, Project, User, TimeEntry.
+        """Ensure origin mapping CFs exist for WorkPackage / User / TimeEntry.
+
+        Project custom fields are intentionally skipped on this OpenProject
+        instance; project origin metadata is persisted via
+        ``upsert_project_origin_attributes`` / ``upsert_project_attribute``
+        instead. The returned dict still has a ``project`` key but it is
+        always an empty list.
 
         Thin delegator over ``self.custom_fields.ensure_origin_custom_fields``.
         """
