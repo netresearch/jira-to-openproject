@@ -311,6 +311,7 @@ class OpenProjectClient:
         # Composed services (Phase 2 of ADR-002 — splitting the god-class along
         # functional seams). Backward-compat: same-named methods on
         # OpenProjectClient delegate to the corresponding service.
+        from src.clients.openproject_admin_cleanup_service import OpenProjectAdminCleanupService
         from src.clients.openproject_associations_service import OpenProjectAssociationsService
         from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
@@ -346,6 +347,7 @@ class OpenProjectClient:
         self.wp_content = OpenProjectWorkPackageContentService(self)
         self.project_attributes = OpenProjectProjectAttributeService(self)
         self.project_setup = OpenProjectProjectSetupService(self)
+        self.admin_cleanup = OpenProjectAdminCleanupService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -1868,19 +1870,9 @@ JSON_DATA
     def delete_all_projects(self) -> int:
         """Delete all projects in bulk.
 
-        Returns:
-            Number of deleted projects
-
-        Raises:
-            QueryExecutionError: If bulk deletion fails
-
+        Thin delegator over ``self.admin_cleanup.delete_all_projects``.
         """
-        try:
-            count = self.execute_query("Project.delete_all")
-            return count if isinstance(count, int) else 0
-        except Exception as e:
-            msg = "Failed to delete all projects."
-            raise QueryExecutionError(msg) from e
+        return self.admin_cleanup.delete_all_projects()
 
     def delete_all_custom_fields(self) -> int:
         """Delete all custom fields in bulk.
@@ -1892,50 +1884,16 @@ JSON_DATA
     def delete_non_default_issue_types(self) -> int:
         """Delete non-default issue types (work package types).
 
-        Returns:
-            Number of deleted types
-
-        Raises:
-            QueryExecutionError: If deletion fails
-
+        Thin delegator over ``self.admin_cleanup.delete_non_default_issue_types``.
         """
-        script = """
-        non_default_types = Type.where(is_default: false, is_standard: false)
-        count = non_default_types.count
-        non_default_types.destroy_all
-        count
-        """
-
-        try:
-            count = self.execute_query(script)
-            return count if isinstance(count, int) else 0
-        except Exception as e:
-            msg = "Failed to delete non-default issue types."
-            raise QueryExecutionError(msg) from e
+        return self.admin_cleanup.delete_non_default_issue_types()
 
     def delete_non_default_issue_statuses(self) -> int:
         """Delete non-default issue statuses.
 
-        Returns:
-            Number of deleted statuses
-
-        Raises:
-            QueryExecutionError: If deletion fails
-
+        Thin delegator over ``self.admin_cleanup.delete_non_default_issue_statuses``.
         """
-        script = """
-        non_default_statuses = Status.where(is_default: false)
-        count = non_default_statuses.count
-        non_default_statuses.destroy_all
-        count
-        """
-
-        try:
-            count = self.execute_query(script)
-            return count if isinstance(count, int) else 0
-        except Exception as e:
-            msg = "Failed to delete non-default issue statuses."
-            raise QueryExecutionError(msg) from e
+        return self.admin_cleanup.delete_non_default_issue_statuses()
 
     def get_time_entry_activities(self) -> list[dict[str, Any]]:
         """Get all available time entry activities from OpenProject.
