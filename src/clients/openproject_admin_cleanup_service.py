@@ -25,10 +25,12 @@ The pre-extraction implementation routed through
 ``self.execute_query`` whose result is the raw console output as a
 *string* — so the previous ``isinstance(count, int)`` guard always
 saw ``False`` and the methods silently reported 0 even when
-``Project.delete_all`` etc. succeeded. Same bug Gemini caught for
-``delete_all_work_packages`` during Phase 2n review. Fixed at the
-move by routing through ``execute_json_query`` so the integer comes
-back as an actual ``int``.
+``Project.delete_all`` etc. succeeded. Same shape as the
+``delete_all_work_packages`` bug fixed during Phase 2n review.
+Fixed at the move by routing through ``execute_json_query`` so the
+integer comes back as an actual ``int``. When the response somehow
+isn't an integer the method warns via ``self._logger`` and returns
+0 — still honest, but flags the anomaly for log scraping.
 
 ``OpenProjectClient`` exposes the service via ``self.admin_cleanup``
 and keeps thin delegators for the same method names so existing call
@@ -70,7 +72,13 @@ class OpenProjectAdminCleanupService:
             # the ``isinstance(count, int)`` guard always saw
             # ``False``, masking successful runs as "0 deleted".
             count = self._client.execute_json_query("Project.delete_all")
-            return count if isinstance(count, int) else 0
+            if isinstance(count, int):
+                return count
+            self._logger.warning(
+                "Project.delete_all returned non-int %s; reporting 0 deleted",
+                type(count).__name__,
+            )
+            return 0
         except Exception as e:
             msg = "Failed to delete all projects."
             raise QueryExecutionError(msg) from e
@@ -97,7 +105,13 @@ class OpenProjectAdminCleanupService:
             # ``execute_query`` to ``execute_json_query`` so the count
             # comes back as a real int rather than a console string.
             count = self._client.execute_json_query(script)
-            return count if isinstance(count, int) else 0
+            if isinstance(count, int):
+                return count
+            self._logger.warning(
+                "delete_non_default_issue_types returned non-int %s; reporting 0 deleted",
+                type(count).__name__,
+            )
+            return 0
         except Exception as e:
             msg = "Failed to delete non-default issue types."
             raise QueryExecutionError(msg) from e
@@ -121,7 +135,13 @@ class OpenProjectAdminCleanupService:
 
         try:
             count = self._client.execute_json_query(script)
-            return count if isinstance(count, int) else 0
+            if isinstance(count, int):
+                return count
+            self._logger.warning(
+                "delete_non_default_issue_statuses returned non-int %s; reporting 0 deleted",
+                type(count).__name__,
+            )
+            return 0
         except Exception as e:
             msg = "Failed to delete non-default issue statuses."
             raise QueryExecutionError(msg) from e
