@@ -893,9 +893,12 @@ class OpenProjectRailsRunnerService:
             container_file: Absolute path inside the container to write JSON content
             timeout: Optional Ruby execution timeout. When ``None`` the per-path
                 defaults are used: 90s for the persistent tmux console
-                ``execute()`` call (matches ``RailsConsoleClient`` defaults) and
-                300s for ``bundle exec rails runner`` subprocesses, since the
-                runner has higher cold-start cost on large projects.
+                ``execute()`` call and 300s for ``bundle exec rails runner``
+                subprocesses (the runner has higher cold-start cost on large
+                projects). These values are deliberately tighter than the
+                ``RailsConsoleClient.command_timeout`` default (180s) — large
+                JSON queries should fail fast when the console is unstable so
+                the rails-runner fallback can take over.
 
         Returns:
             Parsed JSON data
@@ -1024,11 +1027,13 @@ class OpenProjectRailsRunnerService:
                     # Fallback to rails runner on console instability. Use the
                     # same runner timeout as the explicit-runner path so this
                     # branch doesn't silently inherit the DockerClient default
-                    # (which would either time out short or hang long).
+                    # (which would either time out short or hang long). Use
+                    # ``is not None`` so a caller-supplied ``timeout=0`` is
+                    # respected literally rather than treated as "default".
                     runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
                     stdout, stderr, rc = client.docker_client.execute_command(
                         runner_cmd,
-                        timeout=timeout or 300,
+                        timeout=timeout if timeout is not None else 300,
                     )
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
@@ -1072,10 +1077,12 @@ class OpenProjectRailsRunnerService:
                     # Same explicit timeout as the other runner paths. This
                     # fallback fires when the persistent tmux console crashed
                     # mid-query, so a fresh ``bundle exec rails runner`` boots
-                    # cold — 300s matches the explicit-runner branch.
+                    # cold — 300s matches the explicit-runner branch. Use
+                    # ``is not None`` so a caller-supplied ``timeout=0`` is
+                    # respected literally rather than treated as "default".
                     stdout, stderr, rc = client.docker_client.execute_command(
                         runner_cmd,
-                        timeout=timeout or 300,
+                        timeout=timeout if timeout is not None else 300,
                     )
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
