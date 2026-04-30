@@ -9,8 +9,12 @@ custom-field methods live here, organised by purpose:
   ``ensure_origin_custom_fields``.
 * **Lookup** — ``get_by_name``, ``get_id_by_name``, ``get_all``.
 * **Deletion** — ``remove_custom_field``, ``delete_all_custom_fields``.
-* **Bulk read / write** — ``bulk_set_wp_custom_field_values``,
-  ``batch_get_custom_fields_by_names``.
+* **Bulk read** — ``batch_get_custom_fields_by_names``.
+
+The per-work-package CF *value* writes
+(``bulk_set_wp_custom_field_values``) live on
+``OpenProjectWorkPackageCustomFieldService`` (Phase 2w), exposed on
+the client as ``self.wp_cf``.
 
 The provenance custom-field helpers (``ensure_j2o_provenance_custom_fields``
 plus the rest of the J2O Migration Provenance machinery) stay on
@@ -456,91 +460,7 @@ class OpenProjectCustomFieldService:
             msg = "Failed to delete all custom fields."
             raise QueryExecutionError(msg) from e
 
-    # ── bulk read / write ─────────────────────────────────────────────────
-
-    def bulk_set_wp_custom_field_values(
-        self,
-        cf_values: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Set custom-field values for multiple work packages in one Rails call.
-
-        Args:
-            cf_values: List of dicts with keys ``work_package_id`` (int),
-                ``custom_field_id`` (int), ``value`` (str).
-
-        Returns:
-            Dict with ``success`` (bool), ``updated`` (int), ``failed`` (int).
-
-        """
-        if not cf_values:
-            return {"success": True, "updated": 0, "failed": 0}
-
-        data = [
-            {
-                "wp_id": int(cv["work_package_id"]),
-                "cf_id": int(cv["custom_field_id"]),
-                "value": str(cv["value"]),
-            }
-            for cv in cf_values
-        ]
-
-        # Use ensure_ascii=False to keep UTF-8 literal; <<-'X' heredoc prevents
-        # \u escape interpretation by Ruby.
-        data_json = json.dumps(data, ensure_ascii=False)
-        script = f"""
-          require 'json'
-          data = JSON.parse(<<-'J2O_DATA'
-{data_json}
-J2O_DATA
-)
-
-          results = {{ updated: 0, failed: 0, errors: [] }}
-
-          # Pre-fetch all referenced WPs and CFs to avoid N+1 queries
-          wp_ids = data.map {{ |d| d['wp_id'] }}.compact.uniq
-          cf_ids = data.map {{ |d| d['cf_id'] }}.compact.uniq
-          wps = WorkPackage.where(id: wp_ids).index_by(&:id)
-          cfs = CustomField.where(id: cf_ids).index_by(&:id)
-
-          data.each do |item|
-            begin
-              wp_id = item['wp_id']
-              cf_id = item['cf_id']
-              val = item['value']
-
-              wp = wps[wp_id]
-              cf = cfs[cf_id]
-              if wp && cf
-                cv = wp.custom_value_for(cf)
-                if cv
-                  cv.value = val
-                  cv.save
-                else
-                  wp.custom_field_values = {{ cf.id => val }}
-                end
-                wp.save!
-                results[:updated] += 1
-              else
-                results[:failed] += 1
-                results[:errors] << {{ wp_id: wp_id, cf_id: cf_id, error: 'WorkPackage or CustomField not found' }}
-              end
-            rescue => e
-              results[:failed] += 1
-              results[:errors] << {{ wp_id: item['wp_id'], cf_id: item['cf_id'], error: e.message }}
-            end
-          end
-
-          results[:success] = (results[:failed] == 0)
-          results.to_json
-        """
-        try:
-            result = self._client.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                return result
-            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(result)}
-        except Exception as e:
-            self._logger.warning("Bulk set WP CF values failed: %s", e)
-            return {"success": False, "updated": 0, "failed": len(cf_values), "error": str(e)}
+    # ── bulk read ─────────────────────────────────────────────────────────
 
     def batch_get_custom_fields_by_names(
         self,
