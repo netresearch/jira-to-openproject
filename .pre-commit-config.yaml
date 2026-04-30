@@ -33,32 +33,29 @@ repos:
         name: ruff format
 
   # Mypy as a pre-push gate. Slower than ruff so we don't run it on every
-  # commit. ``files: ^src/`` matches the [tool.mypy] scope in pyproject.toml.
+  # commit. Configured to run over the *entire* ``[tool.mypy] files = ["src"]``
+  # scope from pyproject.toml every time — not just the touched files —
+  # because cross-module type errors only surface that way (and pre-commit's
+  # default file-by-file invocation can silently skip pushes that don't
+  # change ``src/``). This mirrors how CI invokes ``mypy src/``.
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.20.2
     hooks:
       - id: mypy
         name: mypy (src/)
         args: [--config-file=pyproject.toml]
-        files: ^src/
+        pass_filenames: false
+        always_run: true
         stages: [pre-push]
-        # Mypy needs the project deps to resolve types; let pre-commit set
-        # up its own venv with the type stubs declared in pyproject.toml.
+        # Keep the pre-commit mypy env reproducible by installing only
+        # explicit type stubs here. Runtime deps are handled by mypy's
+        # ``ignore_missing_imports = true`` in pyproject.toml — adding them
+        # as unpinned ``additional_dependencies`` would drift away from
+        # ``uv.lock`` and break unpredictably on upstream releases.
         additional_dependencies:
           - types-PyYAML
           - types-aiofiles
           - types-requests
-          - pydantic
-          - jira
-          - sqlalchemy
-          - tenacity
-          - pybreaker
-          - structlog
-          - psutil
-          - jsonschema
-          - fastapi
-          - rich
-          - redis
 
   # Pre-commit's own house-keeping hooks.
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -85,10 +82,15 @@ repos:
         files: ^tests/.*\.py$
         pass_filenames: false
 
-      # Pre-push: run the same unit suite CI runs, with an 80% coverage gate.
-      # Mirrors the "Tests (pytest)" required check in CI.
-      # Uses ``python -m pytest`` so the hook works regardless of the user's
-      # virtual-env directory name (.venv, venv, env, system pip install, ...).
+      # Pre-push: unit tests with an 80% coverage gate. Faster than CI's
+      # full pytest run (which collects all of tests/ and lets conftest
+      # skip integration/functional/e2e by default) but covers the same
+      # fast-failure surface — anything that breaks the unit suite would
+      # also break the CI "Tests (pytest)" check. Running ``tests/unit/``
+      # explicitly keeps this hook predictable and quick (~5 min) so
+      # contributors actually run it before push.
+      # Uses ``python -m pytest`` so the hook works regardless of the
+      # virtual-env directory name (.venv, venv, env, system, ...).
       - id: unit-tests
         name: Unit tests (with coverage gate)
         entry: python -m pytest --cov=src --cov-fail-under=80 tests/unit/
