@@ -891,7 +891,14 @@ class OpenProjectRailsRunnerService:
         Args:
             query: Rails query to execute; will be coerced to JSON in Ruby
             container_file: Absolute path inside the container to write JSON content
-            timeout: Ruby execution timeout (defaults to client.command_timeout)
+            timeout: Optional Ruby execution timeout. When ``None`` the per-path
+                defaults are used: 90s for the persistent tmux console
+                ``execute()`` call and 300s for ``bundle exec rails runner``
+                subprocesses (the runner has higher cold-start cost on large
+                projects). These values are deliberately tighter than the
+                ``RailsConsoleClient.command_timeout`` default (180s) — large
+                JSON queries should fail fast when the console is unstable so
+                the rails-runner fallback can take over.
 
         Returns:
             Parsed JSON data
@@ -1017,9 +1024,17 @@ class OpenProjectRailsRunnerService:
                         context="execute_large_query_to_json_file(load)",
                     )
                 except Exception as e:
-                    # Fallback to rails runner on console instability
+                    # Fallback to rails runner on console instability. Use the
+                    # same runner timeout as the explicit-runner path so this
+                    # branch doesn't silently inherit the DockerClient default
+                    # (which would either time out short or hang long). Use
+                    # ``is not None`` so a caller-supplied ``timeout=0`` is
+                    # respected literally rather than treated as "default".
                     runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
-                    stdout, stderr, rc = client.docker_client.execute_command(runner_cmd)
+                    stdout, stderr, rc = client.docker_client.execute_command(
+                        runner_cmd,
+                        timeout=timeout if timeout is not None else 300,
+                    )
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                         raise QueryExecutionError(q_msg) from e
@@ -1059,7 +1074,16 @@ class OpenProjectRailsRunnerService:
                         f.write(ruby_script)
                     client.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
                     runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
-                    stdout, stderr, rc = client.docker_client.execute_command(runner_cmd)
+                    # Same explicit timeout as the other runner paths. This
+                    # fallback fires when the persistent tmux console crashed
+                    # mid-query, so a fresh ``bundle exec rails runner`` boots
+                    # cold — 300s matches the explicit-runner branch. Use
+                    # ``is not None`` so a caller-supplied ``timeout=0`` is
+                    # respected literally rather than treated as "default".
+                    stdout, stderr, rc = client.docker_client.execute_command(
+                        runner_cmd,
+                        timeout=timeout if timeout is not None else 300,
+                    )
                     if rc != 0:
                         q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
                         raise QueryExecutionError(q_msg) from e
@@ -1074,7 +1098,11 @@ class OpenProjectRailsRunnerService:
         try:
             max_wait_seconds = int(wait_env) if wait_env else 600
         except Exception:
-            max_wait_seconds = 60
+            # Invalid env value: fall back to the same 600s default as the
+            # no-env branch instead of an unrelated 60s short window. The
+            # original 60s here was a copy-paste from another caller and
+            # made invalid env values silently shrink the wait by 10×.
+            max_wait_seconds = 600
         poll_interval = 0.5
         attempts = max(1, int(max_wait_seconds / poll_interval))
 
