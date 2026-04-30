@@ -10,9 +10,15 @@ onto a focused service. The service owns:
 * **Batch writes** — ``batch_update_work_packages`` (per-row
   ``find / send / save!`` loop with structured success/failure
   result).
-* **Reads** — ``stream_work_packages_for_project`` (memory-efficient
-  paged iterator over a project's work packages).
-* **Cleanup** — ``delete_all_work_packages`` (admin-only mass delete).
+* **Reads** — ``stream_work_packages_for_project`` yields the first
+  ``batch_size`` work packages of a project (the historical
+  ``stream_*`` name doesn't paginate; behaviour preserved as-is —
+  see method docstring).
+* **Cleanup** — ``delete_all_work_packages`` mass-deletes via
+  ``WorkPackage.delete_all``. Authorisation is the caller's
+  responsibility; the Rails console path runs whatever the
+  console session is allowed to run, so wrap it in your own
+  guard if you need to restrict it.
 
 What stays on the client (deferred to follow-up phases)
 -------------------------------------------------------
@@ -67,15 +73,21 @@ class OpenProjectWorkPackageService:
         project_id: int,
         batch_size: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Stream work packages for a project with memory-efficient pagination.
+        """Yield work packages for a project, capped at ``batch_size``.
 
-        Note: the current implementation runs a single ``limit({batch_size})``
-        query and yields the result list. Pagination is not actually
-        implemented — preserved as-is from the pre-extraction client to
-        avoid changing migration behaviour.
+        Despite the historical ``stream_*`` name, this method does NOT
+        paginate — it runs one ``limit({batch_size})`` query against
+        ``project.work_packages`` and yields the resulting list. The
+        name and behaviour are preserved as-is from the pre-extraction
+        client to avoid changing migration semantics. An honest
+        paginating rewrite earns its own PR.
         """
         client = self._client
-        effective_batch_size = batch_size or client.batch_size
+        # Use ``is not None`` so a caller-supplied ``batch_size=0`` is
+        # respected literally rather than swapped for the configured
+        # default — consistent with the same fix applied in the
+        # records / projects / users batch services.
+        effective_batch_size = batch_size if batch_size is not None else client.batch_size
 
         script = f"""
         project = Project.find({project_id})
@@ -255,7 +267,12 @@ class OpenProjectWorkPackageService:
 
         """
         try:
-            count = self._client.execute_query("WorkPackage.delete_all")
+            # ``execute_query`` returns the raw console output as a string
+            # (e.g. ``"10"``), so the previous ``isinstance(count, int)``
+            # guard always saw ``False`` and the method silently reported
+            # 0 deletions even when ``WorkPackage.delete_all`` succeeded.
+            # ``execute_json_query`` parses the response into a real int.
+            count = self._client.execute_json_query("WorkPackage.delete_all")
             return count if isinstance(count, int) else 0
         except Exception as e:
             msg = "Failed to delete all work packages."
