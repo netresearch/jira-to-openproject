@@ -321,6 +321,7 @@ class OpenProjectClient:
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
         from src.clients.openproject_records_service import OpenProjectRecordsService
+        from src.clients.openproject_time_entry_service import OpenProjectTimeEntryService
         from src.clients.openproject_user_service import OpenProjectUserService
         from src.clients.openproject_work_package_service import OpenProjectWorkPackageService
 
@@ -334,6 +335,7 @@ class OpenProjectClient:
         self.records = OpenProjectRecordsService(self)
         self.work_packages = OpenProjectWorkPackageService(self)
         self.associations = OpenProjectAssociationsService(self)
+        self.time_entries = OpenProjectTimeEntryService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2582,30 +2584,9 @@ J2O_DATA
     def get_time_entry_activities(self) -> list[dict[str, Any]]:
         """Get all available time entry activities from OpenProject.
 
-        Returns:
-            List of time entry activity dictionaries with id, name, and other properties
-
-        Raises:
-            QueryExecutionError: If the query fails
-
+        Thin delegator over ``self.time_entries.get_time_entry_activities``.
         """
-        # Use file-based JSON retrieval to avoid console control-character issues
-        query = (
-            "TimeEntryActivity.active.map { |activity| "
-            "{ id: activity.id, name: activity.name, position: activity.position, "
-            "is_default: activity.is_default, active: activity.active } }"
-        )
-
-        try:
-            result = self.execute_large_query_to_json_file(
-                query,
-                container_file="/tmp/j2o_time_entry_activities.json",
-                timeout=60,
-            )
-            return result if isinstance(result, list) else []
-        except Exception as e:
-            msg = f"Failed to retrieve time entry activities: {e}"
-            raise QueryExecutionError(msg) from e
+        return self.time_entries.get_time_entry_activities()
 
     def create_time_entry(
         self,
@@ -2613,152 +2594,9 @@ J2O_DATA
     ) -> dict[str, Any] | None:
         """Create a time entry in OpenProject.
 
-        Args:
-            time_entry_data: Time entry data in OpenProject API format
-
-        Returns:
-            Created time entry data with ID, or None if creation failed
-
-        Raises:
-            QueryExecutionError: If the creation fails
-
+        Thin delegator over ``self.time_entries.create_time_entry``.
         """
-        # Extract embedded references and convert to IDs
-        embedded = time_entry_data.get("_embedded", {})
-
-        # Get work package ID from href
-        work_package_href = embedded.get("workPackage", {}).get("href", "")
-        work_package_id = None
-        if work_package_href:
-            # Extract ID from href like "/api/v3/work_packages/123"
-            match = re.search(r"/work_packages/(\d+)", work_package_href)
-            if match:
-                work_package_id = int(match.group(1))
-
-        # Get user ID from href
-        user_href = embedded.get("user", {}).get("href", "")
-        user_id = None
-        if user_href:
-            # Extract ID from href like "/api/v3/users/456"
-            match = re.search(r"/users/(\d+)", user_href)
-            if match:
-                user_id = int(match.group(1))
-
-        # Get activity ID from href
-        activity_href = embedded.get("activity", {}).get("href", "")
-        activity_id = None
-        if activity_href:
-            # Extract ID from href like "/api/v3/time_entries/activities/789"
-            match = re.search(r"/activities/(\d+)", activity_href)
-            if match:
-                activity_id = int(match.group(1))
-
-        if not all([work_package_id, user_id, activity_id]):
-            msg = (
-                f"Missing required IDs: work_package_id={work_package_id}, user_id={user_id}, activity_id={activity_id}"
-            )
-            raise ValueError(
-                msg,
-            )
-
-        # Normalize comment value (can be string or {raw,text})
-        comment_obj = time_entry_data.get("comment", "")
-        if isinstance(comment_obj, dict):
-            comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
-        else:
-            comment_str = str(comment_obj)
-
-        # Prepare the script with proper Ruby syntax
-        script = f"""
-        begin
-          require 'logger'
-          begin; Rails.logger.level = Logger::WARN; rescue; end
-          begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end
-          begin; GoodJob.logger = Logger.new(nil); rescue; end
-          time_entry = TimeEntry.new(
-            entity_id: {work_package_id},
-            entity_type: 'WorkPackage',
-            user_id: {user_id},
-            logged_by_id: {user_id},
-            activity_id: {activity_id},
-            hours: {float(time_entry_data.get("hours", 0))},
-            spent_on: Date.parse('{escape_ruby_single_quoted(time_entry_data.get("spentOn", ""))}'),
-            comments: '{escape_ruby_single_quoted(comment_str)}'
-          )
-
-          # Ensure project is set from associated work package to satisfy validations
-          begin
-            wp = WorkPackage.find_by(id: {work_package_id})
-            if wp
-              time_entry.entity = wp
-              time_entry.project = wp.project
-            end
-          rescue => e
-            # ignore association errors here; validations will surface below
-          end
-
-          # Provenance CF for time entries: J2O Origin Worklog Key
-          begin
-            key = '{escape_ruby_single_quoted(str(time_entry_data.get("_meta", {}).get("jira_worklog_key") or ""))}'
-            if key
-              cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
-              if !cf
-                cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string',
-                  is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
-                cf.save
-              end
-              begin
-                time_entry.custom_field_values = {{ cf.id => key }}
-              rescue => e
-                # ignore CF assignment errors
-              end
-            end
-          rescue => e
-            # ignore provenance CF errors
-          end
-
-          if time_entry.save
-            {{
-              id: time_entry.id,
-              work_package_id: time_entry.entity_id,
-              user_id: time_entry.user_id,
-              activity_id: time_entry.activity_id,
-              hours: time_entry.hours.to_f,
-              spent_on: time_entry.spent_on.to_s,
-              comments: time_entry.comments,
-              created_at: time_entry.created_at.to_s,
-              updated_at: time_entry.updated_at.to_s
-            }}
-          else
-            {{
-              error: "Validation failed",
-              errors: time_entry.errors.full_messages
-            }}
-          end
-        rescue => e
-          {{
-            error: "Creation failed",
-            message: e.message,
-            backtrace: e.backtrace.first(3)
-          }}
-        end
-        """
-
-        try:
-            result = self.execute_query_to_json_file(script)
-
-            if isinstance(result, dict):
-                if result.get("error"):
-                    logger.warning("Time entry creation failed: %s", result)
-                    return None
-                return result
-
-            logger.warning("Unexpected time entry creation result: %s", result)
-            return None
-
-        except Exception as e:
-            msg = f"Failed to create time entry: {e}"
-            raise QueryExecutionError(msg) from e
+        return self.time_entries.create_time_entry(time_entry_data)
 
     def get_time_entries(
         self,
@@ -2768,54 +2606,9 @@ J2O_DATA
     ) -> list[dict[str, Any]]:
         """Get time entries from OpenProject with optional filtering.
 
-        Args:
-            work_package_id: Filter by work package ID
-            user_id: Filter by user ID
-            limit: Maximum number of entries to return
-
-        Returns:
-            List of time entry dictionaries
-
-        Raises:
-            QueryExecutionError: If the query fails
-
+        Thin delegator over ``self.time_entries.get_time_entries``.
         """
-        conditions = []
-        if work_package_id:
-            conditions.append(f"work_package_id: {work_package_id}")
-        if user_id:
-            conditions.append(f"user_id: {user_id}")
-
-        where_clause = f".where({', '.join(conditions)})" if conditions else ""
-
-        # Build Ruby expression that avoids relying on a 'work_package' association (use explicit lookup)
-        query = (
-            f"TimeEntry{where_clause}.limit({limit})"
-            ".map do |entry| "
-            "wp = (begin WorkPackage.find_by(id: entry.work_package_id); rescue; nil end); "
-            "act = (begin entry.activity; rescue; nil end); usr = (begin entry.user; rescue; nil end); "
-            "{ id: entry.id, "
-            "work_package_id: entry.work_package_id, "
-            "work_package_subject: (wp ? wp.subject : nil), "
-            "user_id: entry.user_id, user_name: (usr ? usr.name : nil), "
-            "activity_id: entry.activity_id, activity_name: (act ? act.name : nil), "
-            "hours: entry.hours.to_f, spent_on: entry.spent_on.to_s, "
-            "comments: entry.comments, created_at: entry.created_at.to_s, updated_at: entry.updated_at.to_s, "
-            "custom_fields: (begin cf = entry.custom_field_values; cf.respond_to?(:to_json) ? cf : {}; rescue; {} end) } end"
-        )
-
-        try:
-            # Use a unique container file to avoid collisions across concurrent calls
-            unique_name = f"/tmp/j2o_time_entries_{os.getpid()}_{int(time.time())}_{os.urandom(2).hex()}.json"
-            result = self.execute_large_query_to_json_file(
-                query,
-                container_file=unique_name,
-                timeout=120,
-            )
-            return result if isinstance(result, list) else []
-        except Exception as e:
-            msg = "Failed to retrieve time entries."
-            raise QueryExecutionError(msg) from e
+        return self.time_entries.get_time_entries(work_package_id, user_id, limit)
 
     # ----- Priority helpers -----
     def get_issue_priorities(self) -> list[dict[str, Any]]:
@@ -3253,192 +3046,9 @@ J2O_DATA
     ) -> dict[str, Any]:
         """Create multiple time entries via file-based JSON in the container.
 
-        This avoids console output parsing by writing input and results to files
-        inside the container and reading results back via docker exec.
-
-        Args:
-            time_entries: List of time entry data dictionaries
-
-        Returns:
-            Dictionary with creation results and statistics
-
-        Raises:
-            QueryExecutionError: If the batch operation fails
-
+        Thin delegator over ``self.time_entries.batch_create_time_entries``.
         """
-        if not time_entries:
-            return {"created": 0, "failed": 0, "results": []}
-
-        # Build entries data with necessary fields and ID extraction
-        entries_data: list[dict[str, Any]] = []
-        for i, entry_data in enumerate(time_entries):
-            embedded = entry_data.get("_embedded", {})
-
-            def extract_id(pattern: str, href: str) -> int | None:
-                m = re.search(pattern, href or "")
-                return int(m.group(1)) if m else None
-
-            work_package_id = extract_id(r"/work_packages/(\d+)", embedded.get("workPackage", {}).get("href", ""))
-            user_id = extract_id(r"/users/(\d+)", embedded.get("user", {}).get("href", ""))
-            activity_id = extract_id(r"/activities/(\d+)", embedded.get("activity", {}).get("href", ""))
-
-            if all([work_package_id, user_id, activity_id]):
-                # Normalize comment to string
-                comment_obj = entry_data.get("comment", "")
-                if isinstance(comment_obj, dict):
-                    comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
-                else:
-                    comment_str = str(comment_obj)
-
-                entries_data.append(
-                    {
-                        "index": i,
-                        "work_package_id": work_package_id,
-                        "user_id": user_id,
-                        "activity_id": activity_id,
-                        "hours": entry_data.get("hours", 0),
-                        "spent_on": entry_data.get("spentOn", ""),
-                        "comments": comment_str,
-                        "jira_worklog_key": (entry_data.get("_meta", {}) or {}).get("jira_worklog_key"),
-                    },
-                )
-
-        if not entries_data:
-            return {"created": 0, "failed": len(time_entries), "results": []}
-
-        # Prepare local JSON payload
-        temp_dir = Path(self.file_manager.data_dir) / "bulk_create"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        local_json = temp_dir / f"time_entries_bulk_{os.urandom(4).hex()}.json"
-        with local_json.open("w", encoding="utf-8") as f:
-            json.dump(entries_data, f)
-
-        # Transfer JSON to container and define result path
-        container_json = Path("/tmp") / local_json.name
-        self.transfer_file_to_container(local_json, container_json)
-
-        result_name = f"bulk_result_time_entries_{os.urandom(3).hex()}.json"
-        container_result = Path("/tmp") / result_name
-        local_result = temp_dir / result_name
-
-        # Build Ruby runner that writes results JSON to file via helper assembly
-        header_lines = [
-            f"data_path = '{container_json.as_posix()}'",
-            f"result_path = '{container_result.as_posix()}'",
-        ]
-        ruby_lines = [
-            "begin; Rails.logger.level = Logger::WARN; rescue; end",
-            "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end",
-            "begin; GoodJob.logger = Logger.new(nil); rescue; end",
-            "entries = JSON.parse(File.read(data_path), symbolize_names: true)",
-            "results = []",
-            "created_count = 0",
-            "failed_count = 0",
-            "entries.each do |entry|",
-            "  begin",
-            "    te = TimeEntry.new(",
-            "      activity_id: entry[:activity_id],",
-            "      hours: entry[:hours],",
-            "      spent_on: Date.parse(entry[:spent_on]),",
-            "      comments: entry[:comments],",
-            "      entity_id: entry[:work_package_id],",
-            "      entity_type: 'WorkPackage'",
-            "    )",
-            "    begin",
-            "      wp = WorkPackage.find_by(id: entry[:work_package_id])",
-            "      if wp.nil?",
-            "        failed_count += 1",
-            "        results << { index: entry[:index], success: false, error: 'WorkPackage not found: ' + entry[:work_package_id].to_s }",
-            "        next",
-            "      end",
-            "      te.entity = wp",
-            "      te.project = wp.project",
-            "    rescue => e",
-            "      failed_count += 1",
-            "      results << { index: entry[:index], success: false, error: 'WorkPackage lookup failed: ' + e.message }",
-            "      next",
-            "    end",
-            "    begin",
-            "      user = User.find_by(id: entry[:user_id])",
-            "      if user.nil?",
-            "        failed_count += 1",
-            "        results << { index: entry[:index], success: false, error: 'User not found: ' + entry[:user_id].to_s }",
-            "        next",
-            "      end",
-            "      te.user = user",
-            "      te.user_id = entry[:user_id]",
-            "      te.logged_by_id = entry[:user_id]",
-            "    rescue => e",
-            "      failed_count += 1",
-            "      results << { index: entry[:index], success: false, error: 'User lookup failed: ' + e.message }",
-            "      next",
-            "    end",
-            "    begin",
-            "      key = entry[:jira_worklog_key]",
-            "      if key",
-            "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'Jira Worklog Key')",
-            "        if !cf",
-            "          cf = CustomField.new(name: 'Jira Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')",
-            "          cf.save",
-            "        end",
-            "        begin",
-            "          te.custom_field_values = { cf.id => key }",
-            "        rescue => e",
-            "        end",
-            "      end",
-            "    rescue => e",
-            "    end",
-            "    if te.save",
-            "      created_count += 1",
-            "      results << { index: entry[:index], success: true, id: te.id }",
-            "    else",
-            "      failed_count += 1",
-            "      results << { index: entry[:index], success: false, errors: te.errors.full_messages }",
-            "    end",
-            "  rescue => e",
-            "    failed_count += 1",
-            "    results << { index: entry[:index], success: false, error: e.message }",
-            "  end",
-            "end",
-            "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))",
-        ]
-        ruby = (
-            "\n".join(
-                [
-                    "require 'json'",
-                    "require 'date'",
-                    "require 'logger'",
-                    *header_lines,
-                    *ruby_lines,
-                ],
-            )
-            + "\n"
-        )
-
-        try:
-            _ = self.rails_client.execute(ruby, timeout=120, suppress_output=True)
-        except Exception as e:
-            msg = f"Rails execution failed for batch_create_time_entries: {e}"
-            raise QueryExecutionError(msg) from e
-
-        # Retrieve result file
-        max_wait_seconds = 30
-        poll_interval = 1.0
-        waited = 0.0
-        while waited < max_wait_seconds:
-            try:
-                self.transfer_file_from_container(container_result, local_result)
-                break
-            except Exception:
-                time.sleep(poll_interval)
-                waited += poll_interval
-
-        if not local_result.exists():
-            msg = "Result file not found after batch_create_time_entries execution"
-            raise QueryExecutionError(msg)
-
-        with local_result.open("r", encoding="utf-8") as f:
-            return json.load(f)
+        return self.time_entries.batch_create_time_entries(time_entries)
 
     # ===== ENHANCED PERFORMANCE FEATURES =====
 
