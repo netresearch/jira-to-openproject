@@ -329,6 +329,9 @@ class OpenProjectClient:
         from src.clients.openproject_time_entry_service import OpenProjectTimeEntryService
         from src.clients.openproject_user_service import OpenProjectUserService
         from src.clients.openproject_work_package_content_service import OpenProjectWorkPackageContentService
+        from src.clients.openproject_work_package_custom_field_service import (
+            OpenProjectWorkPackageCustomFieldService,
+        )
         from src.clients.openproject_work_package_service import OpenProjectWorkPackageService
 
         self.custom_fields = OpenProjectCustomFieldService(self)
@@ -348,6 +351,7 @@ class OpenProjectClient:
         self.project_attributes = OpenProjectProjectAttributeService(self)
         self.project_setup = OpenProjectProjectSetupService(self)
         self.admin_cleanup = OpenProjectAdminCleanupService(self)
+        self.wp_cf = OpenProjectWorkPackageCustomFieldService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -991,66 +995,8 @@ JSON_DATA
         jira_keys: list[str],
         date_str: str,
     ) -> dict[str, Any]:
-        """Set 'J2O Last Update Date' CF for work packages by Jira Issue Key.
-
-        Args:
-            project_id: OpenProject project ID to scope updates
-            jira_keys: List of Jira issue keys to update
-            date_str: Date string (YYYY-MM-DD)
-
-        Returns:
-            Result dict with counts.
-
-        """
-        if not jira_keys:
-            return {"updated": 0, "examined": 0}
-
-        # Build a small Ruby script that resolves the two CFs and updates values
-        # for all WPs in the given project that have matching Jira Issue Key.
-        # Use JSON to safely embed the key list.
-        keys_json = json.dumps(list(jira_keys))
-        ruby = f"""
-          require 'json'
-          proj_id = {project_id}
-          target_date = '{date_str}'
-          keys = JSON.parse({json.dumps(keys_json)})
-          updated = 0
-          examined = 0
-          key_cf = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Issue Key')
-          last_cf = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Last Update Date')
-          if key_cf && last_cf
-            keys.each do |k|
-              examined += 1
-              begin
-                # Find WP id by custom value match in project
-                cv = CustomValue.where(customized_type: 'WorkPackage', custom_field_id: key_cf.id, value: k).first
-                if cv
-                  # Ensure WP belongs to project
-                  wp = WorkPackage.find_by(id: cv.customized_id, project_id: proj_id)
-                  if wp
-                    last_cv = CustomValue.find_or_initialize_by(customized_type: 'WorkPackage', customized_id: wp.id, custom_field_id: last_cf.id)
-                    if last_cv.new_record? || last_cv.value.to_s.strip != target_date
-                      last_cv.value = target_date
-                      begin; last_cv.save!; updated += 1; rescue; end
-                    end
-                  end
-                end
-              rescue
-              end
-            end
-          end
-          {{ updated: updated, examined: examined }}
-        """
-        try:
-            result = self.execute_query_to_json_file(ruby)
-            return result if isinstance(result, dict) else {"updated": 0, "examined": 0}
-        except Exception as e:
-            self.logger.warning(
-                "Failed to set J2O Last Update Date for project %s: %s",
-                project_id,
-                e,
-            )
-            return {"updated": 0, "examined": 0, "error": str(e)}
+        """Thin delegator over ``self.wp_cf.set_wp_last_update_date_by_keys``."""
+        return self.wp_cf.set_wp_last_update_date_by_keys(project_id, jira_keys, date_str)
 
     def bulk_create_records(
         self,
@@ -1992,11 +1938,8 @@ JSON_DATA
         self,
         cf_values: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Set custom field values for multiple work packages in a single Rails call.
-
-        Thin delegator over ``self.custom_fields.bulk_set_wp_custom_field_values``.
-        """
-        return self.custom_fields.bulk_set_wp_custom_field_values(cf_values)
+        """Thin delegator over ``self.wp_cf.bulk_set_wp_custom_field_values``."""
+        return self.wp_cf.bulk_set_wp_custom_field_values(cf_values)
 
     def upsert_work_package_description_section(
         self,
