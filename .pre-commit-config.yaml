@@ -87,17 +87,21 @@ repos:
 
       # Pre-push: run the same unit suite CI runs, with an 80% coverage gate.
       # Mirrors the "Tests (pytest)" required check in CI.
+      # Uses ``python -m pytest`` so the hook works regardless of the user's
+      # virtual-env directory name (.venv, venv, env, system pip install, ...).
       - id: unit-tests
         name: Unit tests (with coverage gate)
-        entry: bash -c '.venv/bin/pytest --cov=src --cov-fail-under=80 tests/unit/'
+        entry: python -m pytest --cov=src --cov-fail-under=80 tests/unit/
         language: system
         stages: [pre-push]
         pass_filenames: false
 
       # JSON sanity check for the taskmaster file (kept from previous config).
+      # Open with encoding="utf-8" so the check is deterministic across
+      # platforms (Windows defaults to cp1252) and survives non-ASCII data.
       - id: check-tasks-json
         name: Check tasks.json for valid JSON
-        entry: python -c "import json; f=open('.taskmaster/tasks/tasks.json'); json.load(f)"
+        entry: python -c "import json; json.load(open('.taskmaster/tasks/tasks.json', encoding='utf-8'))"
         language: python
         files: ^\.taskmaster/tasks/tasks\.json$
         stages: [pre-commit]
