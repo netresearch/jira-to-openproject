@@ -165,8 +165,12 @@ class TestOpenProjectClient(unittest.TestCase):
         """Test script file creation."""
         test_script = "puts 'Hello, World!'"
 
-        # Mock the data_dir path and os.urandom for the random filename
-        with patch("src.clients.openproject_client.os.urandom", return_value=b"abcd"):
+        # Mock the data_dir path and os.urandom for the random filename.
+        # ``_create_script_file`` is a delegator on OpenProjectClient over
+        # ``OpenProjectFileTransferService.create_script_file`` (Phase 2d of
+        # ADR-002 moved the implementation there), so the os.urandom call now
+        # resolves through the service module's ``os`` import.
+        with patch("src.clients.openproject_file_transfer_service.os.urandom", return_value=b"abcd"):
             # Mock Path.open to return a mock file
             mock_file = MagicMock()
             mock_file.__enter__.return_value = mock_file
