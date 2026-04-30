@@ -324,6 +324,7 @@ class OpenProjectClient:
         from src.clients.openproject_status_type_service import OpenProjectStatusTypeService
         from src.clients.openproject_time_entry_service import OpenProjectTimeEntryService
         from src.clients.openproject_user_service import OpenProjectUserService
+        from src.clients.openproject_work_package_content_service import OpenProjectWorkPackageContentService
         from src.clients.openproject_work_package_service import OpenProjectWorkPackageService
 
         self.custom_fields = OpenProjectCustomFieldService(self)
@@ -339,6 +340,7 @@ class OpenProjectClient:
         self.time_entries = OpenProjectTimeEntryService(self)
         self.priorities = OpenProjectIssuePriorityService(self)
         self.status_types = OpenProjectStatusTypeService(self)
+        self.wp_content = OpenProjectWorkPackageContentService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2471,56 +2473,13 @@ J2O_DATA
     ) -> bool:
         """Upsert a section in a work package's description.
 
-        Args:
-            work_package_id: The work package ID
-            section_marker: The section title/marker (e.g., "Remote Links")
-            content: The markdown content for the section
-
-        Returns:
-            True if successful, False otherwise
-
+        Thin delegator over ``self.wp_content.upsert_work_package_description_section``.
         """
-        # Escape content for Ruby single-quoted string
-        safe_content = escape_ruby_single_quoted(content).replace("\n", "\\n")
-        safe_marker = escape_ruby_single_quoted(section_marker)
-
-        script = f"""
-          wp = WorkPackage.find_by(id: {work_package_id})
-          if !wp
-            {{ success: false, error: 'WorkPackage not found' }}.to_json
-          else
-            desc = wp.description || ''
-            marker = '## {safe_marker}'
-            content = '{safe_content}'
-
-            # Find existing section
-            escaped_marker = Regexp.escape('## {safe_marker}')
-            section_regex = /\\n?#{{escaped_marker}}\\n[\\s\\S]*?(?=\\n## |\\z)/
-            if desc.match?(section_regex)
-              # Replace existing section
-              new_section = "\\n" + marker + "\\n" + content
-              desc = desc.gsub(section_regex, new_section)
-            else
-              # Append new section
-              desc = desc.strip + "\\n\\n" + marker + "\\n" + content
-            end
-
-            wp.description = desc.strip
-            if wp.save
-              {{ success: true }}.to_json
-            else
-              {{ success: false, error: wp.errors.full_messages.join(', ') }}.to_json
-            end
-          end
-        """
-        try:
-            result = self.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                return result.get("success", False)
-            return False
-        except Exception as e:
-            logger.warning("Failed to upsert WP description section: %s", e)
-            return False
+        return self.wp_content.upsert_work_package_description_section(
+            work_package_id,
+            section_marker,
+            content,
+        )
 
     def bulk_upsert_wp_description_sections(
         self,
@@ -2528,91 +2487,9 @@ J2O_DATA
     ) -> dict[str, Any]:
         """Upsert description sections for multiple work packages in a single Rails call.
 
-        Args:
-            sections: List of dicts with keys:
-                - work_package_id: int
-                - section_marker: str
-                - content: str
-
-        Returns:
-            Dict with 'success': bool, 'updated': int, 'failed': int
-
+        Thin delegator over ``self.wp_content.bulk_upsert_wp_description_sections``.
         """
-        if not sections:
-            return {"success": True, "updated": 0, "failed": 0}
-
-        # Build JSON data for Ruby
-        data = []
-        for s in sections:
-            data.append(
-                {
-                    "wp_id": int(s["work_package_id"]),
-                    "marker": str(s["section_marker"]),
-                    "content": str(s["content"]),
-                },
-            )
-
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        data_json = json.dumps(data, ensure_ascii=False)
-        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
-        script = f"""
-          require 'json'
-          data = JSON.parse(<<-'J2O_DATA'
-{data_json}
-J2O_DATA
-)
-
-          results = {{ updated: 0, failed: 0, errors: [] }}
-
-          data.each do |item|
-            begin
-              wp_id = item['wp_id']
-              marker_text = item['marker']
-              content = item['content']
-
-              wp = WorkPackage.find_by(id: wp_id)
-              if !wp
-                results[:failed] += 1
-                results[:errors] << {{ wp_id: wp_id, error: 'WorkPackage not found' }}
-                next
-              end
-
-              desc = wp.description || ''
-              marker = '## ' + marker_text
-
-              # Find existing section using regex
-              section_regex = Regexp.new("\\n?" + Regexp.escape(marker) + "\\n[\\s\\S]*?(?=\\n## |\\z)")
-              if desc.match?(section_regex)
-                new_section = "\\n" + marker + "\\n" + content
-                desc = desc.gsub(section_regex, new_section)
-              else
-                desc = desc.strip + "\\n\\n" + marker + "\\n" + content
-              end
-
-              wp.description = desc.strip
-              if wp.save
-                results[:updated] += 1
-              else
-                results[:failed] += 1
-                results[:errors] << {{ wp_id: wp_id, error: wp.errors.full_messages.join(', ') }}
-              end
-            rescue => e
-              results[:failed] += 1
-              results[:errors] << {{ wp_id: item['wp_id'], error: e.message }}
-            end
-          end
-
-          results[:success] = (results[:failed] == 0)
-          results.to_json
-        """
-        try:
-            result = self.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                return result
-            return {"success": False, "updated": 0, "failed": len(sections), "error": str(result)}
-        except Exception as e:
-            logger.warning("Bulk upsert WP description sections failed: %s", e)
-            return {"success": False, "updated": 0, "failed": len(sections), "error": str(e)}
+        return self.wp_content.bulk_upsert_wp_description_sections(sections)
 
     def create_work_package_activity(
         self,
@@ -2621,48 +2498,9 @@ J2O_DATA
     ) -> dict[str, Any] | None:
         """Create a journal/activity (comment) on a work package.
 
-        Args:
-            work_package_id: The work package ID
-            activity_data: Dict with 'comment' key containing {'raw': 'comment text'}
-
-        Returns:
-            Created journal data or None on failure
-
+        Thin delegator over ``self.wp_content.create_work_package_activity``.
         """
-        comment = activity_data.get("comment", {})
-        if isinstance(comment, dict):
-            comment_text = comment.get("raw", "")
-        else:
-            comment_text = str(comment)
-
-        if not comment_text:
-            return None
-
-        # Escape single quotes for Ruby
-        escaped_comment = escape_ruby_single_quoted(comment_text)
-
-        # OpenProject 15+ requires using journal_notes/journal_user + save!
-        script = f"""
-        begin
-          wp = WorkPackage.find({work_package_id})
-          user = User.current || User.find_by(admin: true)
-          wp.journal_notes = '{escaped_comment}'
-          wp.journal_user = user
-          wp.save!
-          {{ id: wp.journals.last.id, status: 'created' }}
-        rescue => e
-          {{ error: e.message }}
-        end
-        """
-        try:
-            result = self.execute_query_to_json_file(script)
-            if isinstance(result, dict) and not result.get("error"):
-                return result
-            logger.debug("Failed to create activity: %s", result)
-            return None
-        except Exception as e:
-            logger.debug("Failed to create activity for WP#%d: %s", work_package_id, e)
-            return None
+        return self.wp_content.create_work_package_activity(work_package_id, activity_data)
 
     def bulk_create_work_package_activities(
         self,
@@ -2670,91 +2508,9 @@ J2O_DATA
     ) -> dict[str, Any]:
         """Create multiple journal/activity entries (comments) in a single Rails call.
 
-        Args:
-            activities: List of dicts with keys:
-                - work_package_id: int
-                - comment: str (the comment text)
-                - user_id: int (optional, defaults to admin user)
-
-        Returns:
-            Dict with 'success': bool, 'created': int, 'failed': int
-
+        Thin delegator over ``self.wp_content.bulk_create_work_package_activities``.
         """
-        if not activities:
-            return {"success": True, "created": 0, "failed": 0}
-
-        # Build JSON data for Ruby - escape properly
-        data = []
-        for act in activities:
-            comment = act.get("comment", "")
-            if isinstance(comment, dict):
-                comment = comment.get("raw", "")
-            data.append(
-                {
-                    "work_package_id": int(act["work_package_id"]),
-                    "comment": str(comment),
-                    "user_id": act.get("user_id"),
-                },
-            )
-
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        data_json = json.dumps(data, ensure_ascii=False)
-        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
-        # NOTE: OpenProject 15+ requires using journal_notes/journal_user + save!
-        # instead of direct journals.create! to properly set validity_period and data_type
-        script = f"""
-          require 'json'
-          data = JSON.parse(<<-'J2O_DATA'
-{data_json}
-J2O_DATA
-)
-
-          results = {{ created: 0, failed: 0, errors: [] }}
-          default_user = User.current || User.find_by(admin: true)
-
-          # Pre-fetch all referenced WPs and Users to avoid N+1 queries
-          wp_ids = data.map {{ |d| d['work_package_id'] }}.compact.uniq
-          user_ids = data.map {{ |d| d['user_id'] }}.compact.uniq
-          wps = WorkPackage.where(id: wp_ids).index_by(&:id)
-          users = User.where(id: user_ids).index_by(&:id)
-
-          data.each do |item|
-            begin
-              wp = wps[item['work_package_id']]
-              unless wp
-                results[:failed] += 1
-                results[:errors] << {{ wp_id: item['work_package_id'], error: 'WorkPackage not found' }}
-                next
-              end
-
-              user = item['user_id'] ? (users[item['user_id']] || default_user) : default_user
-              user ||= default_user
-
-              comment_text = item['comment'].to_s
-              next if comment_text.empty?
-
-              # OpenProject 15+ journal creation - use journal_notes/journal_user
-              wp.journal_notes = comment_text
-              wp.journal_user = user
-              wp.save!
-              results[:created] += 1
-            rescue => e
-              results[:failed] += 1
-              results[:errors] << {{ wp_id: item['work_package_id'], error: e.message }}
-            end
-          end
-
-          results[:success] = (results[:failed] == 0)
-          results.to_json
-        """
-        try:
-            result = self.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                return result
-            return {"success": False, "created": 0, "failed": len(activities), "error": str(result)}
-        except Exception as e:
-            logger.warning("Bulk create WP activities failed: %s", e)
-            return {"success": False, "created": 0, "failed": len(activities), "error": str(e)}
+        return self.wp_content.bulk_create_work_package_activities(activities)
 
     def find_relation(
         self,
