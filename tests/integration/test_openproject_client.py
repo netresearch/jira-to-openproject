@@ -324,8 +324,12 @@ class TestOpenProjectClient(unittest.TestCase):
 
     def test_is_connected(self) -> None:
         """Test connection check."""
-        # Patch secrets.token_hex to return a fixed value (method uses secrets, not random)
-        with patch("src.clients.openproject_client.secrets.token_hex", return_value="abcdef"):
+        # Patch secrets.token_hex to return a fixed value. ``is_connected`` is
+        # a delegator on OpenProjectClient over
+        # ``OpenProjectRailsRunnerService.is_connected`` (Phase 2e of ADR-002
+        # moved the implementation there), so the secrets call now resolves
+        # through the service module's ``secrets`` import.
+        with patch("src.clients.openproject_rails_runner_service.secrets.token_hex", return_value="abcdef"):
             # Configure mock for successful validation
             self.mock_rails_client.execute.side_effect = None  # Clear any previous side effects
             self.mock_rails_client.execute.return_value = "OPENPROJECT_CONNECTION_TEST_abcdef"
