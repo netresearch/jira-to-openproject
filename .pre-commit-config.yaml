@@ -1,25 +1,66 @@
+# Pre-commit hooks for fast local feedback before push.
+#
+# Mirrors the *required* CI checks on this repo (Lint (ruff), Type check (mypy),
+# Tests (pytest)) so local commits/pushes catch the same issues CI does — the
+# previous setup was running legacy tools (black, isort, flake8) that the
+# project no longer enforces, and CI checks could fail despite green pre-commit.
+#
+# Hook stages
+# -----------
+# - ``pre-commit`` (default): fast checks that run on every commit
+#   (ruff lint+format, file-shape checks, JSON validation).
+# - ``pre-push``: heavier checks that run before push but not every commit
+#   (mypy, unit tests with coverage gate). These mirror CI's required checks.
+#
+# Run all on demand:
+#     pre-commit run --all-files
+#     pre-commit run --hook-stage pre-push --all-files
+#
+# Install:
+#     pre-commit install              # commit-stage hooks
+#     pre-commit install --hook-type pre-push   # pre-push hooks
+
 repos:
-  - repo: https://github.com/psf/black
-    rev: 25.12.0
+  # Ruff replaces black + isort + flake8 + pyupgrade. Keep the version pin in
+  # sync with pyproject.toml's [project.optional-dependencies] dev pin.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
     hooks:
-      - id: black
+      - id: ruff
+        name: ruff lint
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        name: ruff format
 
-  - repo: https://github.com/pycqa/isort
-    rev: 7.0.0
+  # Mypy as a pre-push gate. Slower than ruff so we don't run it on every
+  # commit. ``files: ^src/`` matches the [tool.mypy] scope in pyproject.toml.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.20.2
     hooks:
-      - id: isort
+      - id: mypy
+        name: mypy (src/)
+        args: [--config-file=pyproject.toml]
+        files: ^src/
+        stages: [pre-push]
+        # Mypy needs the project deps to resolve types; let pre-commit set
+        # up its own venv with the type stubs declared in pyproject.toml.
+        additional_dependencies:
+          - types-PyYAML
+          - types-aiofiles
+          - types-requests
+          - pydantic
+          - jira
+          - sqlalchemy
+          - tenacity
+          - pybreaker
+          - structlog
+          - psutil
+          - jsonschema
+          - fastapi
+          - rich
+          - redis
 
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.3.0
-    hooks:
-      - id: flake8
-
-  # Temporarily disabled mypy due to large number of type annotation issues
-  # - repo: https://github.com/pre-commit/mirrors-mypy
-  #   rev: v1.16.1
-  #   hooks:
-  #     - id: mypy
-
+  # Pre-commit's own house-keeping hooks.
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -27,37 +68,33 @@ repos:
       - id: trailing-whitespace
       - id: check-added-large-files
       - id: check-yaml
+        # The .pre-commit-config.yaml uses block-scalar literals that some
+        # variants of check-yaml stumble on; the default config is fine.
+      - id: check-toml
+      - id: check-merge-conflict
 
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.21.2
-    hooks:
-      - id: pyupgrade
-        args: [--py313-plus]
-
-  # Test-related hooks for improved developer experience
+  # Project-local hooks for tests + JSON sanity.
   - repo: local
     hooks:
-      - id: quick-tests
-        name: Quick Unit Tests
-        entry: python scripts/test_helper.py quick
-        language: system
-        stages: [pre-push]
-        pass_filenames: false
-
+      # Fast smoke-test on commit when test files change. Cheap enough not to
+      # gate everyone's flow but catches obvious "I broke a test fixture" cases.
       - id: smoke-tests-on-commit
-        name: Smoke Tests (if tests changed)
+        name: Smoke tests (when tests/ changed)
         entry: python scripts/test_helper.py smoke
         language: system
         files: ^tests/.*\.py$
         pass_filenames: false
 
-      - id: test-coverage-check
-        name: Test Coverage Check
-        entry: bash -c 'python -m pytest --cov=src --cov-fail-under=80 tests/unit/'
+      # Pre-push: run the same unit suite CI runs, with an 80% coverage gate.
+      # Mirrors the "Tests (pytest)" required check in CI.
+      - id: unit-tests
+        name: Unit tests (with coverage gate)
+        entry: bash -c '.venv/bin/pytest --cov=src --cov-fail-under=80 tests/unit/'
         language: system
         stages: [pre-push]
         pass_filenames: false
 
+      # JSON sanity check for the taskmaster file (kept from previous config).
       - id: check-tasks-json
         name: Check tasks.json for valid JSON
         entry: python -c "import json; f=open('.taskmaster/tasks/tasks.json'); json.load(f)"
