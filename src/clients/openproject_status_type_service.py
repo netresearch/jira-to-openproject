@@ -150,6 +150,15 @@ class OpenProjectStatusTypeService:
                         continue
                     _emsg = f"Failed to read statuses file: {stderr or 'unknown error'}"
                     raise QueryExecutionError(_emsg)
+                # Final returncode check after the retry loop — if the
+                # file never appeared (e.g. persistent "No such file"
+                # across all 8 attempts), ``stdout`` is empty and the
+                # later ``json.loads`` would raise ``JSONDecodeError``,
+                # obscuring the real failure. Match the explicit guard
+                # ``get_work_package_types`` already has.
+                if returncode != 0:
+                    _emsg = f"Failed to read statuses file after retries: {stderr or 'unknown error'}"
+                    raise QueryExecutionError(_emsg)
                 parsed = json.loads(stdout)
                 self._logger.info("Successfully loaded %d statuses from container file", len(parsed))
                 operation_succeeded = True
