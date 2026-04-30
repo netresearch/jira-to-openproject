@@ -7,7 +7,6 @@ import re
 import subprocess
 import time
 from collections.abc import Callable, Iterator
-from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -321,6 +320,7 @@ class OpenProjectClient:
             OpenProjectProjectAttributeService,
         )
         from src.clients.openproject_project_service import OpenProjectProjectService
+        from src.clients.openproject_project_setup_service import OpenProjectProjectSetupService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
         from src.clients.openproject_records_service import OpenProjectRecordsService
@@ -345,6 +345,7 @@ class OpenProjectClient:
         self.status_types = OpenProjectStatusTypeService(self)
         self.wp_content = OpenProjectWorkPackageContentService(self)
         self.project_attributes = OpenProjectProjectAttributeService(self)
+        self.project_setup = OpenProjectProjectSetupService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -353,82 +354,8 @@ class OpenProjectClient:
         )
 
     def ensure_reporting_project(self, identifier: str, name: str) -> int:
-        """Ensure a dedicated OpenProject project exists for reporting artefacts.
-
-        Creates the project when missing, enables the wiki module, and returns its ID.
-
-        Args:
-            identifier: Desired project identifier (lowercase/hyphenated)
-            name: Human readable project name
-
-        Returns:
-            OpenProject project ID
-
-        Raises:
-            QueryExecutionError: when creation fails or no project can be ensured
-
-        """
-        clean_identifier = re.sub(r"[^a-z0-9-]", "-", identifier.lower()).strip("-")
-        clean_identifier = re.sub(r"-+", "-", clean_identifier) or "j2o-reporting"
-        clean_name = name.strip() or "Jira Dashboards"
-
-        script = (
-            "begin\n"
-            "  user = User.admin.first || User.active.first || User.first\n"
-            "  raise 'no admin user available' unless user\n"
-            f"  identifier = '{clean_identifier}'\n"
-            f"  display_name = '{escape_ruby_single_quoted(clean_name)}'\n"
-            "  project = Project.find_by(identifier: identifier)\n"
-            "  created = false\n"
-            "  unless project\n"
-            "    if defined?(::Projects::CreateService)\n"
-            "      service = ::Projects::CreateService.new(user: user)\n"
-            "      params = { name: display_name, identifier: identifier, public: false, active: false, enabled_module_names: ['wiki'], workspace_type: 'project' }\n"
-            "      result = service.call(**params)\n"
-            "      unless result.success?\n"
-            "        raise result.errors.full_messages.join(', ')\n"
-            "      end\n"
-            "      project = result.result\n"
-            "    else\n"
-            "      project = Project.new(name: display_name, identifier: identifier)\n"
-            "      project.public = false if project.respond_to?(:public=)\n"
-            "      project.active = false if project.respond_to?(:active=)\n"
-            "      project.workspace_type = 'project' if project.respond_to?(:workspace_type=)\n"
-            "      project.enabled_module_names = ['wiki'] if project.respond_to?(:enabled_module_names=)\n"
-            "      project.save!\n"
-            "    end\n"
-            "    created = true\n"
-            "  end\n"
-            "  if project.enabled_module_names.exclude?('wiki')\n"
-            "    project.enabled_module_names = (project.enabled_module_names + ['wiki']).uniq\n"
-            "    project.save!\n"
-            "  end\n"
-            "  if project.respond_to?(:workspace_type=) && project.workspace_type != 'project'\n"
-            "    project.workspace_type = 'project'\n"
-            "    project.save!\n"
-            "  end\n"
-            "  { success: true, id: project.id, created: created, identifier: project.identifier }\n"
-            "rescue => e\n"
-            "  { success: false, error: e.message }\n"
-            "end\n"
-        )
-
-        result = self.execute_query_to_json_file(script, timeout=180)
-        if not isinstance(result, dict):
-            msg = f"Unexpected response when ensuring reporting project: {result!r}"
-            raise QueryExecutionError(msg)
-        if not result.get("success"):
-            msg = f"Failed to ensure reporting project '{clean_identifier}': {result.get('error')}"
-            raise QueryExecutionError(
-                msg,
-            )
-        project_id = int(result.get("id", 0) or 0)
-        if project_id <= 0:
-            msg = f"Reporting project '{clean_identifier}' returned invalid id: {project_id}"
-            raise QueryExecutionError(
-                msg,
-            )
-        return project_id
+        """Thin delegator over ``self.project_setup.ensure_reporting_project``."""
+        return self.project_setup.ensure_reporting_project(identifier, name)
 
     def _generate_unique_temp_filename(self, base_name: str) -> str:
         """Generate a temporary filename; stable for tests, unique in prod.
@@ -771,84 +698,8 @@ class OpenProjectClient:
         transitions: list[dict[str, int]],
         role_ids: list[int],
     ) -> dict[str, int]:
-        """Ensure workflow transitions exist for the provided type/status/role combinations."""
-        if not transitions or not role_ids:
-            return {"created": 0, "existing": 0, "errors": 0}
-
-        temp_dir = Path(self.file_manager.data_dir) / "workflow_sync"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = temp_dir / f"workflow_transitions_{os.getpid()}_{int(time.time())}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
-
-        payload = {
-            "transitions": [
-                {
-                    "type_id": int(row.get("type_id", 0)),
-                    "from_status_id": int(row.get("from_status_id", 0)),
-                    "to_status_id": int(row.get("to_status_id", 0)),
-                }
-                for row in transitions
-            ],
-            "role_ids": [int(r) for r in role_ids if int(r) > 0],
-        }
-
-        try:
-            with payload_path.open("w", encoding="utf-8") as handle:
-                json.dump(payload, handle)
-
-            container_payload = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
-            self.transfer_file_to_container(payload_path, container_payload)
-
-            ruby = (
-                "require 'json'\n"
-                f"payload_path = '{container_payload.as_posix()}'\n"
-                f"output_path = '{container_output.as_posix()}'\n"
-                "data = JSON.parse(File.read(payload_path))\n"
-                "transitions = Array(data['transitions'])\n"
-                "role_ids = Array(data['role_ids']).map(&:to_i).reject { |rid| rid <= 0 }.uniq\n"
-                "created = 0\n"
-                "existing = 0\n"
-                "errors = []\n"
-                "seen = {}\n"
-                "transitions.each do |row|\n"
-                "  type_id = row['type_id'].to_i\n"
-                "  from_id = row['from_status_id'].to_i\n"
-                "  to_id = row['to_status_id'].to_i\n"
-                "  next if type_id <= 0 || from_id <= 0 || to_id <= 0\n"
-                "  key = [type_id, from_id, to_id]\n"
-                "  next if seen[key]\n"
-                "  seen[key] = true\n"
-                "  role_ids.each do |role_id|\n"
-                "    begin\n"
-                "      wf = Workflow.find_by(type_id: type_id, role_id: role_id, old_status_id: from_id, new_status_id: to_id)\n"
-                "      if wf\n"
-                "        existing += 1\n"
-                "      else\n"
-                "        Workflow.create!(type_id: type_id, role_id: role_id, old_status_id: from_id, new_status_id: to_id)\n"
-                "        created += 1\n"
-                "      end\n"
-                "    rescue => e\n"
-                "      errors << { type_id: type_id, role_id: role_id, from: from_id, to: to_id, error: e.message }\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "File.write(output_path, { created: created, existing: existing, errors: errors.length }.to_json)\n"
-                "nil\n"
-            )
-
-            self.execute_query(ruby, timeout=180)
-            summary = self._read_result_file(container_output, result_path)
-            return {
-                "created": int(summary.get("created", 0)),
-                "existing": int(summary.get("existing", 0)),
-                "errors": int(summary.get("errors", 0)),
-            }
-        finally:
-            with suppress(OSError):
-                payload_path.unlink()
-            with suppress(OSError):
-                result_path.unlink()
+        """Thin delegator over ``self.project_setup.sync_workflow_transitions``."""
+        return self.project_setup.sync_workflow_transitions(transitions, role_ids)
 
     def _read_result_file(
         self,
@@ -896,58 +747,16 @@ class OpenProjectClient:
         status: str | None = None,
         sharing: str | None = None,
     ) -> dict[str, Any]:
-        """Create or update a Version (Sprint/Release) for a project."""
-        payload = {
-            "project_id": int(project_id),
-            "name": name,
-            "description": description,
-            "start_date": start_date,
-            "due_date": due_date,
-            "status": status,
-            "sharing": sharing or "none",
-        }
-
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        payload_json = json.dumps(payload, ensure_ascii=False)
-        script = f"""
-        require 'json'
-        input = JSON.parse(<<'JSON_DATA')
-{payload_json}
-JSON_DATA
-
-        project = Project.find_by(id: input['project_id'].to_i)
-        unless project
-          return {{ success: false, error: 'project not found' }}.to_json
-        end
-
-        version = project.versions.where(name: input['name']).first_or_initialize
-        was_new = version.new_record?
-        attrs = {{ name: input['name'], sharing: input['sharing'] || 'none' }}
-        attrs[:description] = input['description'] if input['description']
-        attrs[:start_date] = input['start_date'] if input['start_date']
-        attrs[:due_date] = input['due_date'] if input['due_date']
-        attrs[:status] = input['status'] if input['status']
-        version.assign_attributes(attrs)
-
-        changed = version.changed?
-        if changed
-          version.save!
-        else
-          version.save! if was_new
-        end
-
-        {{
-          success: true,
-          id: version.id,
-          created: was_new,
-          updated: changed
-        }}.to_json
-        """
-
-        result = self.execute_query_to_json_file(script, timeout=90)
-        if isinstance(result, dict):
-            return result
-        return {"success": False, "error": "unexpected response"}
+        """Thin delegator over ``self.project_setup.ensure_project_version``."""
+        return self.project_setup.ensure_project_version(
+            project_id,
+            name=name,
+            description=description,
+            start_date=start_date,
+            due_date=due_date,
+            status=status,
+            sharing=sharing,
+        )
 
     def create_or_update_query(
         self,
@@ -2542,131 +2351,15 @@ JSON_DATA
         return self.projects.get_project_enhanced(project_id)
 
     def enable_project_modules(self, project_id: int, modules: list[str]) -> bool:
-        """Ensure the given project has the specified modules enabled.
-
-        Idempotent: adds any missing modules to `enabled_module_names` and saves the project.
-
-        Args:
-            project_id: OpenProject project ID
-            modules: List of module identifiers (e.g., ['time_tracking'])
-
-        Returns:
-            True if the modules are enabled (already or after change), False on error
-
-        """
-        if not modules:
-            return True
-        # Build Ruby script that ensures all modules are present
-        mods_json = json.dumps([str(m) for m in modules])
-        script = f"""
-        begin
-          p = Project.find({int(project_id)})
-          names = p.enabled_module_names.map(&:to_s)
-          desired = {mods_json}
-          added = false
-          desired.each do |m|
-            unless names.include?(m)
-              names << m
-              added = true
-            end
-          end
-          if added
-            p.enabled_module_names = names
-            p.save!
-          end
-          {{ changed: added, enabled: names }}
-        rescue => e
-          {{ error: e.message }}
-        end
-        """
-        try:
-            result = self.execute_json_query(script)
-            if isinstance(result, dict) and not result.get("error"):
-                return True
-            logger.warning("Failed to enable modules on project %s: %s", project_id, result)
-            return False
-        except Exception as e:
-            logger.warning("Exception enabling modules on project %s: %s", project_id, e)
-            return False
+        """Thin delegator over ``self.project_setup.enable_project_modules``."""
+        return self.project_setup.enable_project_modules(project_id, modules)
 
     def bulk_enable_project_modules(
         self,
         project_modules: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Enable modules for multiple projects in a single Rails call.
-
-        Args:
-            project_modules: List of dicts with keys:
-                - project_id: int
-                - modules: list[str]
-
-        Returns:
-            Dict with 'success': bool, 'processed': int, 'failed': int
-
-        """
-        if not project_modules:
-            return {"success": True, "processed": 0, "failed": 0}
-
-        # Build JSON data for Ruby
-        data = []
-        for pm in project_modules:
-            if pm.get("modules"):
-                data.append(
-                    {
-                        "pid": int(pm["project_id"]),
-                        "modules": [str(m) for m in pm["modules"]],
-                    },
-                )
-
-        if not data:
-            return {"success": True, "processed": 0, "failed": 0}
-
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        data_json = json.dumps(data, ensure_ascii=False)
-        # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
-        script = f"""
-          require 'json'
-          data = JSON.parse(<<-'J2O_DATA'
-{data_json}
-J2O_DATA
-)
-
-          results = {{ processed: 0, failed: 0, errors: [] }}
-
-          data.each do |item|
-            begin
-              p = Project.find(item['pid'])
-              names = p.enabled_module_names.map(&:to_s)
-              desired = item['modules']
-              added = false
-              desired.each do |m|
-                unless names.include?(m)
-                  names << m
-                  added = true
-                end
-              end
-              if added
-                p.enabled_module_names = names
-                p.save!
-              end
-              results[:processed] += 1
-            rescue => e
-              results[:failed] += 1
-              results[:errors] << {{ pid: item['pid'], error: e.message }}
-            end
-          end
-
-          results[:success] = (results[:failed] == 0)
-          results.to_json
-        """
-        try:
-            result = self.execute_json_query(script)
-            if isinstance(result, dict):
-                return result
-            return {"success": False, "processed": 0, "failed": len(data), "error": str(result)}
-        except Exception as e:
-            logger.warning("Bulk enable project modules failed: %s", e)
-            return {"success": False, "processed": 0, "failed": len(data), "error": str(e)}
+        """Thin delegator over ``self.project_setup.bulk_enable_project_modules``."""
+        return self.project_setup.bulk_enable_project_modules(project_modules)
 
     def batch_get_users_by_ids(self, user_ids: list[int]) -> dict[int, dict]:
         """Retrieve multiple users in batches.
