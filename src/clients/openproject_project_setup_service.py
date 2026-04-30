@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -156,7 +157,13 @@ class OpenProjectProjectSetupService:
         client = self._client
         temp_dir = Path(client.file_manager.data_dir) / "workflow_sync"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        payload_path = temp_dir / f"workflow_transitions_{os.getpid()}_{int(time.time())}.json"
+        # ``token_hex(4)`` adds 8 random hex chars so two calls within
+        # the same process during the same wall-clock second can't
+        # collide on the payload, the ``.result`` file, or the
+        # container ``/tmp`` paths derived from the filename. Same
+        # pattern the membership service uses for identical reasons.
+        unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
+        payload_path = temp_dir / f"workflow_transitions_{unique_suffix}.json"
         result_path = temp_dir / (payload_path.name + ".result")
 
         payload = {
