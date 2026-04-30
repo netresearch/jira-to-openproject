@@ -4,7 +4,6 @@ import json
 import os
 import random
 import re
-import shlex
 import subprocess
 import time
 from collections.abc import Callable, Iterator
@@ -322,6 +321,7 @@ class OpenProjectClient:
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
         from src.clients.openproject_records_service import OpenProjectRecordsService
+        from src.clients.openproject_status_type_service import OpenProjectStatusTypeService
         from src.clients.openproject_time_entry_service import OpenProjectTimeEntryService
         from src.clients.openproject_user_service import OpenProjectUserService
         from src.clients.openproject_work_package_service import OpenProjectWorkPackageService
@@ -338,6 +338,7 @@ class OpenProjectClient:
         self.associations = OpenProjectAssociationsService(self)
         self.time_entries = OpenProjectTimeEntryService(self)
         self.priorities = OpenProjectIssuePriorityService(self)
+        self.status_types = OpenProjectStatusTypeService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2255,240 +2256,16 @@ J2O_DATA
     def get_statuses(self) -> list[dict[str, Any]]:
         """Get all statuses from OpenProject.
 
-        Returns:
-            List of status objects
-
-        Raises:
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.status_types.get_statuses``.
         """
-        try:
-            # Use file-based JSON to avoid tmux/console control characters
-            file_path = self._generate_unique_temp_filename("statuses")
-            file_path_interpolated = f"'{file_path}'"
-            write_query = (
-                "require 'json'; "
-                f"statuses = Status.all.as_json; File.write({file_path_interpolated}, "
-                "JSON.pretty_generate(statuses)); nil"
-            )
-
-            try:
-                # Skip console attempt entirely if forced runner mode
-                if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
-                    from src.clients.rails_console_client import ConsoleNotReadyError
-
-                    msg = "Forced runner mode via J2O_FORCE_RAILS_RUNNER"
-                    raise ConsoleNotReadyError(msg)
-                output = self.rails_client.execute(write_query, suppress_output=True)
-                self._check_console_output_for_errors(output or "", context="get_statuses")
-                logger.debug("Successfully executed statuses write command")
-            except Exception as e:
-                from src.clients.rails_console_client import (
-                    CommandExecutionError,
-                    ConsoleNotReadyError,
-                    RubyError,
-                )
-
-                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
-                    if not config.migration_config.get("enable_runner_fallback", False):
-                        # Respect user's preference to avoid per-request rails runner fallback
-                        raise
-                    logger.warning(
-                        "Rails console failed for statuses (%s); falling back to rails runner",
-                        type(e).__name__,
-                    )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
-                    local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
-                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
-                    ruby_runner = (
-                        "require 'json'\n"
-                        "statuses = Status.all.as_json\n"
-                        f"File.write('{file_path}', JSON.pretty_generate(statuses))\n"
-                    )
-                    with local_tmp.open("w", encoding="utf-8") as f:
-                        f.write(ruby_runner)
-                    self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
-                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
-                    if rc != 0:
-                        msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                        raise QueryExecutionError(msg) from e
-                else:
-                    raise
-
-            operation_succeeded = False  # Track success for debug file preservation
-            try:
-                ssh_command = f"docker exec {shlex.quote(self.container_name)} cat {shlex.quote(file_path)}"
-                stdout = ""
-                stderr = ""
-                returncode = 1
-                # Small retry loop to handle race where file may not be written yet
-                for attempt in range(8):  # ~2 seconds total
-                    try:
-                        stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
-                    except Exception as e:
-                        if "No such file or directory" in str(e):
-                            time.sleep(0.25)
-                            continue
-                        raise
-                    if returncode == 0:
-                        if attempt > 0:
-                            logger.debug(
-                                "Recovered after %d attempts reading container file %s",
-                                attempt + 1,
-                                file_path,
-                            )
-                        break
-                    if stderr and "No such file or directory" in stderr:
-                        time.sleep(0.25)
-                        continue
-                    _emsg = f"Failed to read statuses file: {stderr or 'unknown error'}"
-                    raise QueryExecutionError(_emsg)
-                parsed = json.loads(stdout)
-                logger.info("Successfully loaded %d statuses from container file", len(parsed))
-                operation_succeeded = True
-                return parsed if isinstance(parsed, list) else []
-            finally:
-                preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
-                should_cleanup = operation_succeeded or not preserve_on_error
-                if not should_cleanup:
-                    logger.warning(
-                        "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
-                        file_path,
-                    )
-                else:
-                    try:
-                        self.ssh_client.execute_command(
-                            f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(file_path)}",
-                        )
-                    except Exception as cleanup_err:
-                        logger.warning(
-                            "Failed to cleanup container temp file %s: %s",
-                            file_path,
-                            cleanup_err,
-                        )
-        except Exception as e:
-            msg = "Failed to get statuses."
-            raise QueryExecutionError(msg) from e
+        return self.status_types.get_statuses()
 
     def get_work_package_types(self) -> list[dict[str, Any]]:
         """Get all work package types from OpenProject.
 
-        Returns:
-            List of work package type objects
-
-        Raises:
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.status_types.get_work_package_types``.
         """
-        try:
-            # Use file-based JSON to avoid tmux/console artifacts and project only minimal fields
-            file_path = self._generate_unique_temp_filename("work_package_types")
-            file_path_interpolated = f"'{file_path}'"
-            # Avoid Type#as_json on full AR models to prevent recursion/stack overflows in IRB
-            # Only extract minimal attributes we actually need for mapping
-            write_query = (
-                "require 'json'; "
-                "types = Type.select(:id, :name).map { |t| { id: t.id, name: t.name } }; "
-                f"File.write({file_path_interpolated}, JSON.pretty_generate(types)); nil"
-            )
-
-            try:
-                # Skip console attempt entirely if forced runner mode
-                if os.environ.get("J2O_FORCE_RAILS_RUNNER"):
-                    from src.clients.rails_console_client import ConsoleNotReadyError
-
-                    msg = "Forced runner mode via J2O_FORCE_RAILS_RUNNER"
-                    raise ConsoleNotReadyError(msg)
-                self.rails_client.execute(write_query, suppress_output=True)
-                logger.debug("Successfully executed work package types write command")
-            except Exception as e:
-                from src.clients.rails_console_client import (
-                    CommandExecutionError,
-                    ConsoleNotReadyError,
-                    RubyError,
-                )
-
-                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
-                    if not config.migration_config.get("enable_runner_fallback", False):
-                        raise
-                    logger.warning(
-                        "Rails console failed for work package types (%s); falling back to rails runner",
-                        type(e).__name__,
-                    )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
-                    local_tmp = Path(self.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
-                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
-                    ruby_runner = (
-                        "require 'json'\n"
-                        "types = Type.select(:id, :name).map { |t| { id: t.id, name: t.name } }\n"
-                        f"File.write('{file_path}', JSON.pretty_generate(types))\n"
-                    )
-                    with local_tmp.open("w", encoding="utf-8") as f:
-                        f.write(ruby_runner)
-                    self.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
-                    stdout, stderr, rc = self.docker_client.execute_command(runner_cmd)
-                    if rc != 0:
-                        _emsg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                        raise QueryExecutionError(_emsg) from e
-                else:
-                    raise
-
-            operation_succeeded = False  # Track success for debug file preservation
-            try:
-                ssh_command = f"docker exec {shlex.quote(self.container_name)} cat {shlex.quote(file_path)}"
-                stdout = ""
-                stderr = ""
-                returncode = 1
-                # Small retry loop to handle race where file may not be written yet
-                for _ in range(8):  # ~2 seconds total
-                    try:
-                        stdout, stderr, returncode = self.ssh_client.execute_command(ssh_command)
-                    except Exception as e:
-                        if "No such file or directory" in str(e):
-                            time.sleep(0.25)
-                            continue
-                        raise
-                    if returncode == 0:
-                        break
-                    if stderr and "No such file or directory" in stderr:
-                        time.sleep(0.25)
-                        continue
-                    _emsg = f"Failed to read work package types file: {stderr or 'unknown error'}"
-                    raise QueryExecutionError(_emsg)
-                if returncode != 0:
-                    _emsg = f"Failed to read work package types file: {stderr or 'unknown error'}"
-                    raise QueryExecutionError(_emsg)
-                parsed = json.loads(stdout.strip())
-                logger.info(
-                    "Successfully loaded %d work package types from container file",
-                    len(parsed) if isinstance(parsed, list) else 0,
-                )
-                operation_succeeded = True
-                return parsed if isinstance(parsed, list) else []
-            finally:
-                preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
-                should_cleanup = operation_succeeded or not preserve_on_error
-                if not should_cleanup:
-                    logger.warning(
-                        "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
-                        file_path,
-                    )
-                else:
-                    try:
-                        self.ssh_client.execute_command(
-                            f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(file_path)}",
-                        )
-                    except Exception as cleanup_err:
-                        logger.warning(
-                            "Failed to cleanup container temp file %s: %s",
-                            file_path,
-                            cleanup_err,
-                        )
-        except Exception as e:
-            msg = "Failed to get work package types."
-            raise QueryExecutionError(msg) from e
+        return self.status_types.get_work_package_types()
 
     def get_projects(self, *, top_level_only: bool = False) -> list[dict[str, Any]]:
         """Get projects from OpenProject using file-based approach.
