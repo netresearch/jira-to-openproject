@@ -47,12 +47,17 @@ class OpenProjectAssociationsService:
 
     def find_watcher(self, work_package_id: int, user_id: int) -> dict[str, Any] | None:
         """Find a watcher for a work package and user if it exists."""
+        # ``execute_query`` returns the raw console string, so the
+        # previous ``isinstance(res, dict)`` guard always saw ``False``
+        # and this method always returned ``None``. Switch to
+        # ``execute_query_to_json_file`` so the Ruby hash is parsed into
+        # a real Python dict.
         query = (
             "Watcher.where(watchable_type: 'WorkPackage', watchable_id: %d, user_id: %d).limit(1).map do |w| "
             "{ id: w.id, user_id: w.user_id, watchable_id: w.watchable_id } end.first"
         ) % (work_package_id, user_id)
         try:
-            res = self._client.execute_query(query)
+            res = self._client.execute_query_to_json_file(query)
             if isinstance(res, dict) and res:
                 return res
             return None
@@ -72,16 +77,27 @@ class OpenProjectAssociationsService:
             # Proceed to attempt create even if find failed
             pass
 
+        # Drop the ``.to_json`` calls in the Ruby script:
+        # ``execute_query_to_json_file`` already serialises the final
+        # expression to JSON. Returning a JSON *string* instead would
+        # double-encode and the resulting Python value would always be
+        # a non-empty string — so the previous ``isinstance(created, dict)``
+        # branch was unreachable and the fallback ``bool(created)`` was
+        # always ``True`` regardless of whether the watcher actually
+        # was created.
         script = (
             "wp = WorkPackage.find(%d); u = User.find(%d); "
             "if !Watcher.exists?(watchable_type: 'WorkPackage', watchable_id: wp.id, user_id: u.id); "
-            "w = Watcher.new(user: u, watchable: wp); w.save!; {created: true}.to_json; else; {created: false}.to_json; end"
+            "w = Watcher.new(user: u, watchable: wp); w.save!; {created: true}; else; {created: false}; end"
         ) % (work_package_id, user_id)
         try:
-            created = self._client.execute_query(script)
-            if isinstance(created, dict):
-                return True
-            return bool(created)
+            created = self._client.execute_query_to_json_file(script)
+            # Either branch of the Ruby script returns a dict, and both
+            # mean the watcher now exists on the work package — the
+            # ``created`` key only distinguishes "newly inserted" from
+            # "already existed". This method's contract is "watcher
+            # exists OR was created", so both dict shapes are success.
+            return isinstance(created, dict)
         except Exception as e:
             msg = "Failed to add watcher."
             raise QueryExecutionError(msg) from e
@@ -169,8 +185,14 @@ J2O_DATA
           end
 
           results[:success] = (results[:failed] == 0)
-          results.to_json
+          results
         """
+        # Drop the ``.to_json`` from the Ruby script:
+        # ``execute_query_to_json_file`` already serialises the final
+        # expression via ``as_json``, so returning an explicit JSON
+        # string here would double-encode and the Python side would
+        # see a *string* (the JSON repr of the hash) rather than a
+        # parsed dict.
         try:
             result = self._client.execute_query_to_json_file(script)
             if isinstance(result, dict):
@@ -196,10 +218,16 @@ J2O_DATA
             "{ id: r.id, relation_type: r.relation_type, from_id: r.from_id, to_id: r.to_id } end.first"
             % (from_work_package_id, to_work_package_id)
         )
+        # Generate a unique container filename so two concurrent
+        # ``find_relation`` calls (e.g. across the WP-relation
+        # migration's per-row loop) cannot race on the same
+        # ``/tmp/j2o_find_relation.json`` path and read each other's
+        # half-written results.
+        container_file = self._client._generate_unique_temp_filename("find_relation")
         try:
             result = self._client.execute_large_query_to_json_file(
                 query,
-                container_file="/tmp/j2o_find_relation.json",
+                container_file=container_file,
                 timeout=30,
             )
             return result if isinstance(result, dict) else None
@@ -304,9 +332,15 @@ J2O_DATA
               to_id = item['to_id']
               rel_type = item['type']
 
-              # Check if relation already exists (either direction for symmetric types)
-              existing = Relation.where(from_id: from_id, to_id: to_id).first
-              existing ||= Relation.where(from_id: to_id, to_id: from_id).first if ['relates'].include?(rel_type)
+              # Check if relation already exists (either direction for symmetric types).
+              # Match on ``relation_type`` too — without that filter a
+              # caller asking for a 'blocks' relation would be skipped
+              # whenever any other relation (e.g. 'relates') already
+              # connects the same pair of work packages.
+              existing = Relation.where(from_id: from_id, to_id: to_id, relation_type: rel_type).first
+              if existing.nil? && ['relates'].include?(rel_type)
+                existing = Relation.where(from_id: to_id, to_id: from_id, relation_type: rel_type).first
+              end
 
               if existing
                 results[:skipped] += 1
