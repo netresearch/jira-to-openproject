@@ -18,7 +18,6 @@ work unchanged.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from src.clients.exceptions import QueryExecutionError
@@ -49,8 +48,22 @@ class OpenProjectIssuePriorityService:
             return []
 
     def find_issue_priority_by_name(self, name: str) -> dict[str, Any] | None:
-        # Use ensure_ascii=False to output UTF-8 directly
-        script = f"p = IssuePriority.find_by(name: {json.dumps(name, ensure_ascii=False)}); p && {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}"
+        # Lazy import: ``escape_ruby_single_quoted`` lives on the
+        # client; lazy keeps the service ↔ client cycle out of
+        # module-load time.
+        from src.clients.openproject_client import escape_ruby_single_quoted
+
+        # SECURITY: build a single-quoted Ruby literal. The previous
+        # ``json.dumps(name)`` produced a double-quoted Ruby string,
+        # which Ruby parses with ``#{...}`` interpolation — a priority
+        # name from Jira (untrusted source) could have triggered
+        # arbitrary Ruby execution in the Rails console.
+        safe_name = escape_ruby_single_quoted(name)
+        script = (
+            f"p = IssuePriority.find_by(name: '{safe_name}'); "
+            "p && { id: p.id, name: p.name, position: p.position, "
+            "is_default: p.is_default, active: p.active }"
+        )
         try:
             result = self._client.execute_json_query(script)
             return result if isinstance(result, dict) else None
@@ -64,10 +77,14 @@ class OpenProjectIssuePriorityService:
         position: int | None = None,
         is_default: bool = False,
     ) -> dict[str, Any]:
+        # Same security note as ``find_issue_priority_by_name`` —
+        # untrusted ``name`` would otherwise interpolate as Ruby.
+        from src.clients.openproject_client import escape_ruby_single_quoted
+
         pos_expr = "nil" if position is None else str(int(position))
-        # Use ensure_ascii=False to output UTF-8 directly
+        safe_name = escape_ruby_single_quoted(name)
         script = f"""
-        p = IssuePriority.create!(name: {json.dumps(name, ensure_ascii=False)}, position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
+        p = IssuePriority.create!(name: '{safe_name}', position: {pos_expr}, is_default: {str(is_default).lower()}, active: true)
         {{ id: p.id, name: p.name, position: p.position, is_default: p.is_default, active: p.active }}
         """
         try:
