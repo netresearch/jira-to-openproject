@@ -23,7 +23,6 @@ from src.clients.exceptions import (
 )
 from src.clients.rails_console_client import (
     RailsConsoleClient,
-    RubyError,
 )
 from src.clients.ssh_client import SSHClient
 from src.display import configure_logging
@@ -320,6 +319,7 @@ class OpenProjectClient:
         from src.clients.openproject_project_service import OpenProjectProjectService
         from src.clients.openproject_provenance_service import OpenProjectProvenanceService
         from src.clients.openproject_rails_runner_service import OpenProjectRailsRunnerService
+        from src.clients.openproject_records_service import OpenProjectRecordsService
         from src.clients.openproject_user_service import OpenProjectUserService
 
         self.custom_fields = OpenProjectCustomFieldService(self)
@@ -329,6 +329,7 @@ class OpenProjectClient:
         self.users = OpenProjectUserService(self)
         self.projects = OpenProjectProjectService(self)
         self.memberships = OpenProjectMembershipService(self)
+        self.records = OpenProjectRecordsService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -2026,35 +2027,9 @@ J2O_DATA
     ) -> dict[str, Any]:
         """Find a record by ID or conditions.
 
-        Args:
-            model: Model name (e.g., "User", "Project")
-            id_or_conditions: ID or conditions hash
-
-        Returns:
-            Record data
-
-        Raises:
-            RecordNotFoundError: If no record is found
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.records.find_record``.
         """
-        _validate_model_name(model)
-        try:
-            if isinstance(id_or_conditions, int):
-                query = f"{model}.find_by(id: {id_or_conditions})&.as_json"
-            else:
-                # Convert Python dict to Ruby hash format
-                conditions_str = json.dumps(id_or_conditions).replace('"', "'")
-                query = f"{model}.find_by({conditions_str})&.as_json"
-
-            result = self.execute_json_query(query)
-        except (QueryExecutionError, JsonParseError) as e:
-            msg = f"Error finding record for {model}."
-            raise QueryExecutionError(msg) from e
-        if result is None:
-            msg = f"No {model} found with {id_or_conditions}"
-            raise RecordNotFoundError(msg)
-        return result
+        return self.records.find_record(model, id_or_conditions)
 
     def _retry_with_exponential_backoff(
         self,
@@ -2150,200 +2125,30 @@ J2O_DATA
         _msg = f"{operation_name} failed after {max_retries} retries"
         raise QueryExecutionError(_msg)
 
-    @batch_idempotent(ttl=3600)  # 1 hour TTL for batch record lookups
     def batch_find_records(
         self,
         model: str,
         ids: list[int | str],
         batch_size: int | None = None,
+        *,
+        headers: dict[str, str] | None = None,
     ) -> dict[int | str, dict[str, Any]]:
         """Find multiple records by IDs in batches with idempotency support.
 
-        Args:
-            model: Model name (e.g., "User", "Project")
-            ids: List of IDs to find
-            batch_size: Size of each batch (defaults to configured batch_size)
-            headers: Optional headers containing X-Idempotency-Key
-
-        Returns:
-            Dictionary mapping ID to record data (missing IDs are omitted)
-
-        Raises:
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.records.batch_find_records``. The
+        ``@batch_idempotent`` decorator lives on the service method;
+        ``headers`` is keyword-only and forwarded as a kwarg so the
+        decorator's ``extract_headers_from_kwargs`` helper can see it
+        (positional headers would silently disable caching).
         """
-        if not ids:
-            return {}
-
-        # Validate and clamp batch size to prevent memory exhaustion
-        effective_batch_size = batch_size or getattr(self, "batch_size", 100)
-        effective_batch_size = self._validate_batch_size(effective_batch_size)
-
-        results: dict[int | str, dict[str, Any]] = {}
-
-        # Process IDs in batches
-        for i in range(0, len(ids), effective_batch_size):
-            batch_ids = ids[i : i + effective_batch_size]
-
-            def batch_operation(batch_ids: list[int | str] = batch_ids) -> object:
-                # Use safe query builder with ActiveRecord parameterization
-                query = self._build_safe_batch_query(model, "id", batch_ids)
-                return self.execute_json_query(query)
-
-            try:
-                # Execute batch operation with retry logic (with idempotency key propagation)
-                label_prefix = f"Batch fetch {model} records "
-                sample_label = f"{batch_ids[:BATCH_LABEL_SAMPLE]}{'...' if len(batch_ids) > BATCH_LABEL_SAMPLE else ''}"
-                batch_results = self._retry_with_exponential_backoff(
-                    batch_operation,
-                    f"{label_prefix}{sample_label}",
-                    jitter=True,
-                )
-
-                if batch_results:
-                    # Ensure we have a list
-                    if isinstance(batch_results, dict):
-                        batch_results = [batch_results]
-
-                    # Optimize ID mapping - create lookup sets for O(1) performance
-                    batch_id_set = {str(bid) for bid in batch_ids}
-                    original_id_map = {str(bid): bid for bid in batch_ids}
-
-                    # Map results by ID with O(1) lookups
-                    for record in batch_results:
-                        if isinstance(record, dict) and "id" in record:
-                            record_id_str = str(record["id"])
-                            if record_id_str in batch_id_set:
-                                original_id = original_id_map[record_id_str]
-                                results[original_id] = record
-
-            except Exception as e:
-                self.logger.warning(
-                    "Failed to fetch batch of %s records (IDs %s) after retries: %s",
-                    model,
-                    batch_ids,
-                    e,
-                )
-                # Continue processing other batches rather than failing completely
-                # Log individual failures for post-run review
-                for batch_id in batch_ids:
-                    self.logger.debug(
-                        "Failed to fetch %s record ID %s: %s",
-                        model,
-                        batch_id,
-                        e,
-                    )
-                continue
-
-        return results
+        return self.records.batch_find_records(model, ids, batch_size, headers=headers)
 
     def create_record(self, model: str, attributes: dict[str, Any]) -> dict[str, Any]:
         """Create a new record.
 
-        Args:
-            model: Model name (e.g., "User", "Project")
-            attributes: Attributes to set on the record
-
-        Returns:
-            Created record data
-
-        Raises:
-            QueryExecutionError: If creation fails
-
+        Thin delegator over ``self.records.create_record``.
         """
-        _validate_model_name(model)
-
-        # Build Rails command for creating a record
-        # Use a simple, single-line approach that works well with tmux console
-        # Convert Python boolean values to Ruby equivalents
-        def format_value(v: object) -> str:
-            if isinstance(v, bool):
-                return "true" if v else "false"
-            if isinstance(v, str):
-                return f"'{escape_ruby_single_quoted(v)}'"
-            return str(v)
-
-        attributes_str = ", ".join(
-            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()],
-        )
-        command = (
-            f"record = {model}.new({{{attributes_str}}}); "
-            f"record.save ? record.as_json : {{'error' => record.errors.full_messages}}"
-        )
-
-        try:
-            # Try execute_query_to_json_file first for better output handling
-            result = self.execute_query_to_json_file(command)
-
-            # Check if we got a valid dictionary
-            if isinstance(result, dict):
-                return result
-
-            # If result is None, empty, or not a dict, try the fallback method
-            if result is None or not isinstance(result, dict):
-                logger.debug(
-                    "First method returned invalid result (%s), trying fallback",
-                    type(result),
-                )
-
-                # Fallback to simpler command with execute_json_query
-                # Use the safely-escaped attributes_str (not the unsafe ruby_hash)
-                simple_command = f"""
-                record = {model}.create({{{attributes_str}}})
-                if record.persisted?
-                  record.as_json
-                else
-                  raise "Failed to create record: #{{record.errors.full_messages.join(', ')}}"
-                end
-                """
-                result = self.execute_json_query(simple_command)
-
-            # Final validation
-            if not isinstance(result, dict):
-                # If we still don't have a dict, but the command didn't raise an error,
-                # assume success and try to get the record by its attributes
-                logger.warning(
-                    (
-                        "Could not parse JSON response from %s creation, but command executed. "
-                        "Attempting to find created record."
-                    ),
-                    model,
-                )
-
-                # Try to find the record we just created
-                try:
-                    # Use a subset of attributes that are likely to be unique
-                    search_attrs = {}
-                    for key in ["name", "title", "identifier", "email"]:
-                        if key in attributes:
-                            search_attrs[key] = attributes[key]
-                            break
-
-                    if search_attrs:
-                        found_record = self.find_record(model, search_attrs)
-                        if found_record:
-                            logger.info("Successfully found created %s record", model)
-                            return found_record
-                except Exception as e:
-                    logger.debug("Could not find created record: %s", e)
-
-                # If all else fails, create a minimal response
-                logger.warning("Creating minimal response for %s creation", model)
-                return {
-                    "id": None,
-                    "created": True,
-                    "model": model,
-                    "attributes": attributes,
-                }
-
-            return result
-
-        except RubyError as e:
-            msg = f"Failed to create {model}."
-            raise QueryExecutionError(msg) from e
-        except Exception as e:
-            msg = f"Error creating {model}."
-            raise QueryExecutionError(msg) from e
+        return self.records.create_record(model, attributes)
 
     def update_record(
         self,
@@ -2353,102 +2158,16 @@ J2O_DATA
     ) -> dict[str, Any]:
         """Update a record with given attributes.
 
-        Args:
-            model: Model name (e.g., "User", "Project")
-            record_id: Record ID
-            attributes: Attributes to update
-
-        Returns:
-            Updated record data
-
-        Raises:
-            RecordNotFoundError: If record doesn't exist
-            QueryExecutionError: If update fails
-
+        Thin delegator over ``self.records.update_record``.
         """
-        _validate_model_name(model)
-
-        # Build safely-escaped attributes for Ruby
-        def format_value(v: object) -> str:
-            if isinstance(v, bool):
-                return "true" if v else "false"
-            if isinstance(v, str):
-                return f"'{escape_ruby_single_quoted(v)}'"
-            if v is None:
-                return "nil"
-            return str(v)
-
-        attributes_str = ", ".join(
-            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()],
-        )
-
-        # Build command to update the record
-        command = f"""
-        record = {model}.find_by(id: {record_id})
-        if record.nil?
-          raise "Record not found"
-        elsif record.update({{{attributes_str}}})
-          record.as_json
-        else
-          raise "Failed to update record: #{{record.errors.full_messages.join(', ')}}"
-        end
-        """
-
-        try:
-            result = self.execute_json_query(command)
-        except RubyError as e:
-            if "Record not found" in str(e):
-                msg = f"{model} with ID {record_id} not found"
-                raise RecordNotFoundError(msg) from e
-            msg = f"Failed to update {model}."
-            raise QueryExecutionError(msg) from e
-        except Exception as e:
-            # Normalize to the same message tests expect for generic failures
-            msg = f"Failed to update {model}."
-            raise QueryExecutionError(msg) from e
-        else:
-            if not isinstance(result, dict):
-                msg = (
-                    f"Failed to update {model}: Invalid response from OpenProject (type={type(result)}, value={result})"
-                )
-                raise QueryExecutionError(msg)
-            return result
+        return self.records.update_record(model, record_id, attributes)
 
     def delete_record(self, model: str, record_id: int) -> None:
         """Delete a record.
 
-        Args:
-            model: Model name (e.g., "User", "Project")
-            record_id: Record ID
-
-        Raises:
-            RecordNotFoundError: If record doesn't exist
-            QueryExecutionError: If deletion fails
-
+        Thin delegator over ``self.records.delete_record``.
         """
-        _validate_model_name(model)
-        command = f"""
-        record = {model}.find_by(id: {record_id})
-        if record.nil?
-          raise "Record not found"
-        elsif record.destroy
-          true
-        else
-          raise "Failed to delete record: #{{record.errors.full_messages.join(', ')}}"
-        end
-        """
-
-        try:
-            self.execute_query(command)
-        except RubyError as e:
-            if "Record not found" in str(e):
-                msg = f"{model} with ID {record_id} not found"
-                raise RecordNotFoundError(msg) from e
-            msg = f"Failed to delete {model}."
-            raise QueryExecutionError(msg) from e
-        except Exception as e:
-            msg = f"Error deleting {model}."
-            raise QueryExecutionError(msg) from e
+        self.records.delete_record(model, record_id)
 
     def find_all_records(
         self,
@@ -2459,63 +2178,9 @@ J2O_DATA
     ) -> list[dict[str, Any]]:
         """Find all records matching conditions.
 
-        Args:
-            model: Model name (e.g., "User", "Project")
-            conditions: Optional conditions hash
-            limit: Optional limit on number of records
-            includes: Optional list of associations to include
-
-        Returns:
-            List of record data
-
-        Raises:
-            QueryExecutionError: If query fails
-
+        Thin delegator over ``self.records.find_all_records``.
         """
-        self._validate_model_name(model)
-        # Start building the query
-        query = f"{model}"
-
-        # Add conditions if provided (with safe escaping)
-        if conditions:
-
-            def format_cond_value(v: object) -> str:
-                if isinstance(v, bool):
-                    return "true" if v else "false"
-                if isinstance(v, str):
-                    return f"'{escape_ruby_single_quoted(v)}'"
-                if v is None:
-                    return "nil"
-                return str(v)
-
-            cond_parts = [f"'{k}' => {format_cond_value(v)}" for k, v in conditions.items()]
-            query += f".where({{{', '.join(cond_parts)}}})"
-
-        # Add includes if provided
-        if includes:
-            symbols = ", ".join(f":{inc}" for inc in includes)
-            query += f".includes({symbols})"
-
-        # Add limit if provided
-        if limit:
-            query += f".limit({limit})"
-
-        # Build Ruby expression that returns array/dicts directly
-        ruby_expr = f"{query}.as_json"
-
-        try:
-            # Prefer file-based for multi-record results to avoid console artifacts
-            data = self.execute_large_query_to_json_file(
-                ruby_expr,
-                container_file=f"/tmp/j2o_{model.lower()}_records.json",
-                timeout=60,
-            )
-            if data is None:
-                return []
-            return data if isinstance(data, list) else [data]
-        except Exception as e:
-            msg = f"Error finding records for {model}."
-            raise QueryExecutionError(msg) from e
+        return self.records.find_all_records(model, conditions, limit, includes)
 
     def execute_transaction(self, commands: list[str]) -> object:
         """Execute multiple commands in a transaction.
