@@ -440,8 +440,13 @@ class OpenProjectClient:
         """
         self.file_transfer.cleanup_script_files(files_or_local, remote_path)
 
-    def execute(self, script_content: str) -> dict[str, Any]:
+    def execute(self, script_content: str) -> Any:
         """Execute a Ruby script directly.
+
+        Returns the parsed JSON value (dict / list / scalar / None) when the
+        console output is valid JSON, otherwise a ``{"result": ...}`` dict
+        with the raw text. Return is intentionally ``Any`` because callers
+        cannot rely on a dict shape.
 
         Thin delegator over ``self.rails_runner.execute``.
         """

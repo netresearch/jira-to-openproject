@@ -45,6 +45,12 @@ from typing import TYPE_CHECKING, Any
 from src.clients.exceptions import JsonParseError, QueryExecutionError
 from src.clients.rails_console_client import RubyError
 
+# Tunables for batched/paged Rails queries. Co-located with the service that
+# uses them so the batched-query implementation has no back-reference to
+# ``openproject_client``.
+BATCH_SIZE_DEFAULT: int = 50
+SAFE_OFFSET_LIMIT: int = 5000
+
 if TYPE_CHECKING:
     from src.clients.openproject_client import OpenProjectClient
 
@@ -279,11 +285,17 @@ class OpenProjectRailsRunnerService:
 
     # ── execute family (small/medium) ─────────────────────────────────────
 
-    def execute(self, script_content: str) -> dict[str, Any]:
+    def execute(self, script_content: str) -> Any:
         """Execute a Ruby script directly.
 
-        Returns the parsed JSON if the result is valid JSON, otherwise wraps
-        the raw text in a ``{"result": ...}`` dict.
+        Returns the parsed JSON value if the console output is valid JSON
+        (which can be a dict, list, or scalar — ``json.loads`` is structure-
+        preserving). Otherwise wraps the raw text in a ``{"result": ...}``
+        dict.
+
+        The return is therefore deliberately ``Any`` rather than
+        ``dict[str, Any]``: callers must inspect the shape if they need to
+        distinguish list/scalar/None responses from the dict-wrapped fallback.
         """
         # Route through the client's delegator so monkeypatches on
         # ``op_client.execute_query`` (used in tests) take effect, mirroring
@@ -386,8 +398,6 @@ class OpenProjectRailsRunnerService:
         are available, with adaptive rate-limiting via the client's rate
         limiter.
         """
-        from src.clients.openproject_client import BATCH_SIZE_DEFAULT, SAFE_OFFSET_LIMIT
-
         client = self._client
         try:
             simple_query = f"{model_name}.limit({BATCH_SIZE_DEFAULT}).to_json"
