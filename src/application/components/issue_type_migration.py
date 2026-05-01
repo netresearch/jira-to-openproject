@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """Issue type migration module for Jira to OpenProject migration.
 Handles mapping and creation of issue types from Jira to work package types in OpenProject.
+
+Phase 7h notes
+--------------
+This migration is **orthogonal to the Phase 7 typed wp_map pipeline**.
+It owns two private mapping namespaces -- ``issue_type`` (Jira type
+name -> ``{openproject_id, openproject_name, color, ...}``) and
+``issue_type_id`` (Jira type id -> OpenProject type id) -- and does
+not consume the ``work_package`` mapping. There are therefore no
+``wp_map`` ladders, no :class:`WorkPackageMappingEntry` normalisation
+sites, and no Jira issue / user payloads to parse through
+:class:`JiraIssueFields` / :class:`JiraUser` here. The remaining
+``isinstance(...)`` branches all guard Ruby script return values from
+:meth:`OpenProjectClient.execute_query` (``dict`` envelopes with
+``status`` / ``id`` / ``exists`` / ``created`` keys) -- those are SDK
+boundary shapes, not mapping rows, so the Phase 7 typed-pipeline
+helpers do not apply. Documented as out-of-scope and otherwise
+untouched.
 """
 
 from __future__ import annotations

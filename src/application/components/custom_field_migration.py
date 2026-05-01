@@ -1,6 +1,24 @@
 """Custom field migration module for Jira to OpenProject migration.
 
 Handles the migration of custom fields from Jira to OpenProject.
+
+Phase 7h notes
+--------------
+This migration is **orthogonal to the Phase 7 typed wp_map pipeline**.
+It owns its own ``custom_field`` mapping namespace (Jira custom-field
+id -> OpenProject custom-field id + metadata such as ``field_format``,
+``possible_values`` and ``matched_by``) and does not consume the
+``work_package`` mapping. There are therefore no ``wp_map`` ladders,
+no :class:`WorkPackageMappingEntry` normalisation sites, and no Jira
+issue / user payloads to parse through :class:`JiraIssueFields` /
+:class:`JiraUser` here. The remaining ``isinstance(...)`` branches
+operate on Ruby script return values from
+:meth:`OpenProjectClient.execute_query` (``dict`` envelopes with
+``status`` / ``errors`` / ``created`` / ``existing`` keys, plus
+``possible_values`` lists for list-format fields) -- those are SDK
+boundary shapes, not mapping rows, so the Phase 7 typed-pipeline
+helpers do not apply. Documented as out-of-scope and otherwise
+untouched.
 """
 
 from __future__ import annotations
