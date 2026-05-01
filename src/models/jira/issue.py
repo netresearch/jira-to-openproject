@@ -86,10 +86,17 @@ def _safe_user(obj: Any) -> JiraUser | None:
     Mocks that fail Pydantic validation. The migration's previous
     attribute-walking code never tried to construct a user payload from
     those, so we silently treat them as missing here.
+
+    Dict-shaped inputs (cached payloads, integration test fixtures)
+    take the :meth:`JiraUser.from_dict` path so attribute aliases
+    (``accountId`` etc.) are honoured; everything else flows through
+    :meth:`JiraUser.from_jira_obj` for SDK-style attribute access.
     """
     if obj is None:
         return None
     try:
+        if isinstance(obj, dict):
+            return JiraUser.from_dict(obj)
         return JiraUser.from_jira_obj(obj)
     except Exception:
         return None
@@ -133,6 +140,8 @@ def _jira_fields_payload(sdk_fields: Any) -> dict[str, Any]:
                 "filename": getattr(att, "filename", None),
                 "size": getattr(att, "size", None),
                 "content": getattr(att, "url", None),
+                "author": _safe_user(getattr(att, "author", None)),
+                "created": _str_attr(att, "created"),
             },
         )
 
@@ -298,7 +307,14 @@ class JiraComment(BaseModel):
 
 
 class JiraAttachment(BaseModel):
-    """A Jira issue attachment reference."""
+    """A Jira issue attachment reference.
+
+    The provenance-aware fields (``author`` and ``created``) carry the
+    upload metadata the attachment-provenance migration writes back onto
+    the OpenProject side. Both are optional because the SDK boundary may
+    strip them in older payloads (e.g. cached fixtures captured before
+    phase 7c added these fields).
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -307,6 +323,10 @@ class JiraAttachment(BaseModel):
     size: int | None = None
     content: str | None = None
     """Download URL — the SDK calls this attribute ``url``."""
+    author: JiraUser | None = None
+    """Author of the attachment — used for provenance preservation."""
+    created: str | None = None
+    """ISO-8601 timestamp the attachment was uploaded, when known."""
 
 
 class JiraIssueFields(BaseModel):

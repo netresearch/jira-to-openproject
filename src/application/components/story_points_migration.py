@@ -8,6 +8,18 @@ Detection strategy:
 - Fallback to common custom field key `fields.customfield_10016`
 - As last resort, scan `fields` attributes for a numeric value where the
   attribute name contains both 'story' and 'point' (case-insensitive)
+
+Note on dict access patterns kept here
+--------------------------------------
+The story-points field is a tenant-specific Jira custom field whose
+attribute name varies per instance (``storyPoints``,
+``customfield_10016``, or any ``customfield_*`` whose name contains
+"story" and "point"). :class:`JiraIssueFields` does not model these
+dynamic attributes, so the boundary parse stays as direct ``getattr``
+on the raw fields object — same rationale as the
+``customfields_generic_migration`` carry-over from phase 7b. The
+work-package mapping ladder, on the other hand, is normalised through
+:class:`WorkPackageMappingEntry.from_legacy`.
 """
 
 from __future__ import annotations
@@ -18,7 +30,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 STORY_POINTS_CF_NAME = "Story Points"
 
@@ -82,7 +94,15 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract Jira story points per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map]
+        # Production wp_map is keyed by str(jira_id) (numeric) outer with
+        # the human-readable ``jira_key`` stored inside. Prefer the inner
+        # ``jira_key`` so we feed _merge_batch_issues the human-readable
+        # form it expects; fall back to the outer key for legacy or test
+        # fixtures that key by jira_key directly.
+        keys: list[str] = []
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            keys.append(str(inner_jira_key or outer_key))
         if not keys:
             return ComponentResult(success=True, data={"sp": {}})
 
@@ -119,17 +139,30 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         failed = 0
         projects_with_values: set[int] = set()
 
+        # Build a fast jira_key → typed-entry lookup once. We walk
+        # ``wp_map.items()`` and use the inner ``jira_key`` (production
+        # layout: outer key is numeric jira_id, inner ``jira_key`` is the
+        # human-readable form) so subsequent lookups work regardless of
+        # which key shape the on-disk file uses.
+        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            key_for_legacy = str(inner_jira_key or outer_key)
+            try:
+                entries_by_jira_key[key_for_legacy] = WorkPackageMappingEntry.from_legacy(key_for_legacy, raw_entry)
+            except ValueError:
+                continue
+
         for jira_key, text in text_by_key.items():
             if text is None or text == "0":
                 continue
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            entry = entries_by_jira_key.get(jira_key)
+            if entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            wp_id = int(entry.openproject_id)
             # Track project for selective enablement
-            project_id = entry.get("openproject_project_id")
-            if project_id:
-                projects_with_values.add(int(project_id))
+            if entry.openproject_project_id is not None:
+                projects_with_values.add(int(entry.openproject_project_id))
             try:
                 val = escape_ruby_single_quoted(str(text))
                 set_script = (

@@ -1,4 +1,20 @@
-"""Watcher migration: add Jira watchers as OpenProject watchers idempotently."""
+"""Watcher migration: add Jira watchers as OpenProject watchers idempotently.
+
+Note on dict access patterns kept here
+--------------------------------------
+The ``user`` mapping is a flat dict keyed by Jira identifier (login,
+accountId, …) whose values are typically dicts with an
+``openproject_id`` field but may legacy-fall back to bare ints. There
+is no dedicated typed user-mapping model yet (it is its own
+boundary), so ``_resolve_user_id`` keeps its narrow ``isinstance``
+ladder; the work-package side, however, is normalised through
+:class:`WorkPackageMappingEntry.from_legacy`.
+
+The Jira watchers list returned by
+:meth:`JiraClient.get_issue_watchers` is parsed at the boundary into
+:class:`JiraWatcher` instances so the per-row ``isinstance(w, dict)``
+ladder disappears from this file.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +24,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, JiraWatcher, WorkPackageMappingEntry
 
 
 @register_entity_types("watchers")
@@ -42,37 +58,69 @@ class WatcherMigration(BaseMigration):
         raise ValueError(msg)
 
     def _resolve_wp_id(self, jira_key: str) -> int | None:
+        # Production wp_map is keyed by str(jira_id) (numeric) outer with
+        # the human-readable ``jira_key`` stored in the inner dict. Walk
+        # values and match on the inner ``jira_key`` so callers can pass
+        # either the numeric id or the human-readable key.
         wp_map = self.mappings.get_mapping("work_package") or {}
-        entry = wp_map.get(jira_key)
-        if isinstance(entry, int):
-            return entry
-        if isinstance(entry, dict):
-            op_id = entry.get("openproject_id")
-            if isinstance(op_id, int):
-                return op_id
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            candidate = inner_jira_key or str(outer_key)
+            if candidate != jira_key:
+                continue
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(candidate, raw_entry)
+            except ValueError:
+                return None
+            return int(entry.openproject_id)
         return None
 
-    def _resolve_user_id(self, jira_username: str | None) -> int | None:
-        if not jira_username:
-            return None
+    def _resolve_user_id(self, watcher: JiraWatcher) -> int | None:
+        """Map a typed watcher to an OP user id.
+
+        Probes the user mapping using (in order): ``account_id``,
+        ``name``, ``email_address``, ``display_name`` — matching the
+        pattern used in :class:`AttachmentProvenanceMigration`. Cloud
+        instances primarily key on ``account_id``; Server/DC on ``name``.
+        """
         user_map = self.mappings.get_mapping("user") or {}
-        entry = user_map.get(jira_username)
-        if isinstance(entry, dict):
-            op_id = entry.get("openproject_id")
-            if isinstance(op_id, int):
-                return op_id
-        if isinstance(entry, int):
-            return entry
+        for probe in (
+            watcher.account_id,
+            watcher.name,
+            watcher.email_address,
+            watcher.display_name,
+        ):
+            if not probe:
+                continue
+            entry = user_map.get(probe)
+            if isinstance(entry, dict):
+                op_id = entry.get("openproject_id")
+                if isinstance(op_id, int):
+                    return op_id
+            if isinstance(entry, int):
+                return entry
         return None
 
     def run(self) -> ComponentResult:  # type: ignore[override]
         logger.info("Starting watcher migration...")
         result = ComponentResult(success=True, message="Watcher migration completed", details={})
 
-        # Build Jira keys list from work package mapping
+        # Build Jira keys list from work package mapping. The on-disk
+        # layout is ``{str(jira_id): {"jira_key": str, "openproject_id":
+        # int, …}}`` — outer key is numeric, inner ``jira_key`` is the
+        # human-readable PROJ-123 form. Read the inner ``jira_key`` for
+        # the typed entry so downstream code uses the human-readable key
+        # rather than the numeric id.
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [(v.get("jira_key", k) if isinstance(v, dict) else k) for k, v in wp_map.items()]
-        jira_keys = [str(k) for k in jira_keys if k]
+        jira_keys: list[str] = []
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            key_for_legacy = inner_jira_key or str(outer_key)
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(str(key_for_legacy), raw_entry)
+            except ValueError:
+                continue
+            jira_keys.append(str(entry.jira_key))
         if not jira_keys:
             logger.info("No work package mappings; skipping watcher migration")
             return result
@@ -122,8 +170,11 @@ class WatcherMigration(BaseMigration):
 
             for w in watchers or []:
                 try:
-                    username = w.get("name") if isinstance(w, dict) else getattr(w, "name", None)
-                    user_id = self._resolve_user_id(username)
+                    parsed = JiraWatcher.from_any(w)
+                    if parsed is None:
+                        skipped += 1
+                        continue
+                    user_id = self._resolve_user_id(parsed)
                     if not user_id:
                         skipped += 1
                         continue

@@ -21,6 +21,7 @@ from src.models.jira import (
     JiraUser,
     JiraVersionRef,
     JiraVotesRef,
+    JiraWatcher,
 )
 from src.models.mapping import WorkPackageMappingEntry
 from src.models.migration_error import MigrationError
@@ -53,6 +54,7 @@ __all__ = [
     "JiraUser",
     "JiraVersionRef",
     "JiraVotesRef",
+    "JiraWatcher",
     "MigrationError",
     "MigrationResult",
     "OpCustomField",

@@ -25,6 +25,7 @@ from src.models.jira.project import (
     JiraProjectComponent,
 )
 from src.models.jira.user import JiraUser
+from src.models.jira.watcher import JiraWatcher
 
 __all__ = [
     "JiraAttachment",
@@ -46,4 +47,5 @@ __all__ = [
     "JiraUser",
     "JiraVersionRef",
     "JiraVotesRef",
+    "JiraWatcher",
 ]

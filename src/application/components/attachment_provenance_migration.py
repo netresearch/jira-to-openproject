@@ -3,6 +3,16 @@
 Reads Jira attachments for mapped issues, resolves OP user IDs for authors,
 and updates existing OP attachments (matched by filename on the WP) to set
 author and created_at.
+
+Note on dict access patterns kept here
+--------------------------------------
+The ``user`` mapping resolved by :meth:`_resolve_user_id` is a flat
+dict whose values are dicts with ``openproject_id``; there is no
+typed user-mapping model yet, so the narrow lookup ladder remains.
+The Jira side (``fields.attachment``) is parsed at the boundary
+through :class:`JiraIssueFields.from_issue_any`, and the polymorphic
+work-package mapping reads use
+:class:`WorkPackageMappingEntry.from_legacy`.
 """
 
 from __future__ import annotations
@@ -13,7 +23,8 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, JiraUser, WorkPackageMappingEntry
+from src.models.jira import JiraIssueFields
 
 
 @register_entity_types("attachment_provenance")
@@ -22,18 +33,46 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     @staticmethod
-    def _get(val: Any, key: str, default: Any = None) -> Any:
-        if isinstance(val, dict):
-            return val.get(key, default)
-        return getattr(val, key, default)
+    def _author_identifiers(author: Any) -> list[str]:
+        """Return the candidate identifier strings from an attachment author.
+
+        Accepts a typed :class:`JiraUser`, the legacy dict shape, or an
+        SDK-like object. Probe order matches the legacy code:
+        ``accountId`` → ``name`` → ``key`` → ``emailAddress`` →
+        ``email`` → ``displayName``. ``email`` is a non-standard alias
+        the legacy code probed for; we keep it for back-compat with
+        upstream user-mapping fixtures that use it.
+        """
+        if author is None:
+            return []
+        if isinstance(author, JiraUser):
+            ordered = [
+                author.account_id,
+                author.name,
+                author.key,
+                author.email_address,
+                author.email_address,  # legacy "email" alias points to the same field
+                author.display_name,
+            ]
+            return [v for v in ordered if isinstance(v, str)]
+
+        def _read(key: str) -> Any:
+            if isinstance(author, dict):
+                return author.get(key)
+            return getattr(author, key, None)
+
+        out: list[str] = []
+        for k in ("accountId", "name", "key", "emailAddress", "email", "displayName"):
+            v = _read(k)
+            if isinstance(v, str):
+                out.append(v)
+        return out
 
     def _resolve_user_id(self, author: Any) -> int | None:
         try:
             umap = self.mappings.get_mapping("user") or {}
-            # Try common Jira identifiers
-            for k in ("accountId", "name", "key", "emailAddress", "email", "displayName"):
-                v = self._get(author, k)
-                if isinstance(v, str) and v in umap:
+            for v in self._author_identifiers(author):
+                if v in umap:
                     rec = umap[v]
                     if isinstance(rec, dict) and rec.get("openproject_id"):
                         return int(rec["openproject_id"])  # type: ignore[arg-type]
@@ -60,22 +99,22 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             return []
         items: list[dict[str, Any]] = []
         for k, issue in issues.items():
-            fields = getattr(issue, "fields", None)
-            atts = []
-            if fields is not None:
-                atts = self._get(fields, "attachment", []) or []
-            for a in atts or []:
-                filename = self._get(a, "filename") or self._get(a, "name")
-                created = self._get(a, "created")
-                author = self._get(a, "author")
+            try:
+                fields = JiraIssueFields.from_issue_any(issue)
+            except Exception:
+                continue
+            for a in fields.attachments:
+                filename = a.filename
                 if not isinstance(filename, str) or not filename.strip():
                     continue
                 items.append(
                     {
                         "jira_key": k,
                         "filename": filename,
-                        "created": created,
-                        "author": author,
+                        "created": a.created,
+                        # Pass the typed author through so ``_resolve_user_id``
+                        # can probe its identifier fields uniformly.
+                        "author": a.author,
                     },
                 )
         return items
@@ -85,19 +124,28 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         items = data.get("items", []) if isinstance(data, dict) else []
         wp_map = self.mappings.get_mapping("work_package") or {}
 
-        # Build a lookup from jira_key to entry since wp_map uses jira_id as keys
-        key_to_entry: dict[str, dict[str, Any]] = {}
-        for entry in wp_map.values():
-            if isinstance(entry, dict) and "jira_key" in entry:
-                key_to_entry[entry["jira_key"]] = entry
+        # Build a lookup from jira_key to typed mapping entry. The
+        # outer wp_map key is ``str(jira_id)`` (numeric id), while the
+        # inner record carries the human-readable ``jira_key`` — we
+        # index by inner ``jira_key`` so attachment items (keyed by
+        # the same human-readable key) can join cleanly.
+        key_to_entry: dict[str, WorkPackageMappingEntry] = {}
+        for raw_entry in wp_map.values():
+            inner_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            if not inner_key:
+                continue
+            try:
+                key_to_entry[str(inner_key)] = WorkPackageMappingEntry.from_legacy(str(inner_key), raw_entry)
+            except ValueError:
+                continue
 
         out: list[dict[str, Any]] = []
         for it in items:
             jira_key = it.get("jira_key")
             entry = key_to_entry.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            if entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            wp_id = int(entry.openproject_id)
             author_id = self._resolve_user_id(it.get("author"))
             created_at = it.get("created") if isinstance(it.get("created"), str) else None
             out.append(
@@ -152,15 +200,24 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             self.logger.warning("No work package mapping found - skipping provenance migration")
             return ComponentResult(success=True, updated=0, message="No work packages to process")
 
-        # Group jira keys by project for efficient processing
+        # Group jira keys by project for efficient processing. Each entry
+        # is normalised through :class:`WorkPackageMappingEntry.from_legacy`
+        # — the inner ``jira_key`` is the source of truth (the outer
+        # wp_map key is ``str(jira_id)`` in production).
         by_project: dict[str, list[str]] = {}
-        for entry in wp_map.values():
-            if isinstance(entry, dict) and "jira_key" in entry:
-                jira_key = str(entry["jira_key"])
-                project_key = self._issue_project_key(jira_key)
-                if project_key not in by_project:
-                    by_project[project_key] = []
-                by_project[project_key].append(jira_key)
+        for raw_entry in wp_map.values():
+            inner_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            if not inner_key:
+                continue
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(str(inner_key), raw_entry)
+            except ValueError:
+                continue
+            jira_key = str(entry.jira_key)
+            project_key = self._issue_project_key(jira_key)
+            if project_key not in by_project:
+                by_project[project_key] = []
+            by_project[project_key].append(jira_key)
 
         total_issues = sum(len(keys) for keys in by_project.values())
         self.logger.info(
