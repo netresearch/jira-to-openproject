@@ -814,7 +814,10 @@ async def run_migration(
                         from src.application.components.base_migration import EntityTypeRegistry
 
                         entity_type = EntityTypeRegistry.resolve(component.__class__)
-                    except ValueError, AttributeError:
+                    except (
+                        ValueError,
+                        AttributeError,
+                    ):
                         # If entity type can't be resolved, run_with_change_detection will fall back to run()
                         pass
 
