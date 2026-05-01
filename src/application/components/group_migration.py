@@ -1,3 +1,29 @@
+"""Synchronise Jira groups and project role memberships into OpenProject.
+
+Phase 7e notes
+--------------
+This migration does **not** consume the ``work_package`` mapping. The
+mappings it touches — ``group``, ``user``, ``project`` — each carry
+their own polymorphic shape that is orthogonal to the ``wp_map``
+``dict | int`` ladder phase 7 retires:
+
+* ``user_mapping`` is read in :meth:`_synchronize_memberships` to build
+  a flat ``user_lookup`` dict. The probe order (``key``/``jira_key``/
+  ``jira_name``) is not a per-user multi-identifier walk against a
+  single :class:`JiraUser` instance; it pre-indexes by *all* known
+  identifiers so the membership step can resolve actor names that come
+  from arbitrary upstream shapes (Jira group members, project
+  role-actor envelopes). Switching to a typed walk would not simplify
+  this and would change the lookup semantics around case-insensitive
+  fallbacks.
+* ``group_mapping`` and ``project_mapping`` values are dicts; their
+  shape is local to this migration and is not modelled in
+  :mod:`src.models`.
+
+Phase 7's scope is the ``wp_map`` ladder; this migration is left as-is.
+Behaviour preserved.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict

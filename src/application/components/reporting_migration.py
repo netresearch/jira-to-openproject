@@ -1,4 +1,17 @@
-"""Migrate Jira filters and dashboards into OpenProject queries and wiki summaries."""
+"""Migrate Jira filters and dashboards into OpenProject queries and wiki summaries.
+
+Phase 7e notes
+--------------
+This migration does **not** consume the ``work_package`` mapping. The
+``project`` mapping is read only to resolve a fallback wiki project for
+dashboard imports — the values flow through a local
+:func:`_lookup_project_id` helper that already handles the dict-shape
+defensively. The Jira inputs (filters, dashboards, share permissions,
+gadgets) arrive as uniform REST dicts; there is no polymorphic ladder
+of the kind phase 7 retires. Modelling them as Pydantic types would be
+cosmetic at this site and is intentionally deferred. Behaviour
+preserved.
+"""
 
 from __future__ import annotations
 

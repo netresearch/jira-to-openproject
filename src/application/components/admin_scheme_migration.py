@@ -1,4 +1,25 @@
-"""Migrate Jira permission roles into OpenProject project memberships."""
+"""Migrate Jira permission roles into OpenProject project memberships.
+
+Phase 7e notes
+--------------
+This migration does **not** consume the ``work_package`` mapping. The
+three mappings it touches — ``project``, ``user`` and ``group`` — each
+have their own polymorphic shape that is unrelated to the ``wp_map``
+``dict | int`` ladder phase 7 retires:
+
+* ``project_mapping`` values are dicts with ``openproject_id`` (and
+  occasionally bare ints in older fixtures); used only for filtering
+  which projects to fetch role data for.
+* ``user_mapping`` values are dicts; the multi-identifier probe in
+  :func:`resolve_user_id` already orders ``accountId`` → ``userKey`` →
+  ``name`` explicitly, but the *actor* shape it walks is a custom Jira
+  REST role-actor envelope (``type``, ``name``, ``accountId``,
+  ``userKey``, ``groupName``) that :class:`JiraUser` does not model.
+* ``group_mapping`` values are dicts keyed by group name.
+
+Modelling these as Pydantic types would be pure cosmetic churn at this
+site and is intentionally deferred. Behaviour preserved.
+"""
 
 from __future__ import annotations
 

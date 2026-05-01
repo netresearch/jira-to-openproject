@@ -1,5 +1,15 @@
 """Tempo account migration module for Jira to OpenProject migration.
 Handles the migration of Tempo Timesheet accounts from Jira to OpenProject.
+
+Phase 7e notes
+--------------
+This migration is plugin-specific (Tempo Timesheets) and does **not**
+consume the ``work_package`` mapping. It walks the Tempo REST shape
+(``id``, ``key``, ``name``, ``leadDisplayName``, ``customerName``,
+``viewUrl``, …) which is not modelled in :mod:`src.models`. The
+``account_mapping`` it persists is local to this migration (Tempo
+account id → OP company id). There is no polymorphic ladder of the
+kind phase 7 retires. Behaviour preserved.
 """
 
 from __future__ import annotations
