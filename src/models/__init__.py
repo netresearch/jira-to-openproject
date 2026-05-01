@@ -16,6 +16,7 @@ from src.models.jira import (
     JiraUser,
     JiraVersionRef,
 )
+from src.models.mapping import JiraToOPMapping, WorkPackageMappingEntry
 from src.models.migration_error import MigrationError
 from src.models.migration_results import MigrationResult
 from src.models.openproject import (
@@ -38,6 +39,7 @@ __all__ = [
     "JiraProject",
     "JiraProjectCategoryRef",
     "JiraStatusRef",
+    "JiraToOPMapping",
     "JiraUser",
     "JiraVersionRef",
     "MigrationError",
@@ -46,4 +48,5 @@ __all__ = [
     "OpProject",
     "OpUser",
     "OpWorkPackage",
+    "WorkPackageMappingEntry",
 ]

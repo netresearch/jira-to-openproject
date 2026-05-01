@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -96,11 +96,16 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         for key, issue in issues.items():
             try:
                 wp_entry = wp_map.get(key)
-                wp_id = None
-                if isinstance(wp_entry, dict):
-                    wp_id = wp_entry.get("openproject_id")
-                elif isinstance(wp_entry, int):
-                    wp_id = wp_entry
+                if wp_entry is None:
+                    continue
+                try:
+                    typed_entry = WorkPackageMappingEntry.from_legacy(key, wp_entry)
+                except ValueError:
+                    # Corrupt or unsupported shape — skip this issue rather
+                    # than abort the run; phase 3c's normalisation script
+                    # will scrub these on the next pass.
+                    continue
+                wp_id = typed_entry.openproject_id
                 if not wp_id:
                     continue
 

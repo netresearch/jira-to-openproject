@@ -3,6 +3,8 @@
 Defines the mapping strategies between Jira and OpenProject data models.
 """
 
+from __future__ import annotations
+
 # Add the logger import
 from src.display import configure_logging
 from src.type_definitions import JiraData, OpenProjectData, StatusMapping, TypeMapping
