@@ -237,7 +237,7 @@ class JiraProjectService:
                 project_key,
             )
             return roles
-        except (JiraCaptchaError, JiraAuthenticationError, JiraConnectionError):
+        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise
         except Exception as e:
             error_msg = f"Failed to fetch Jira project roles for {project_key}: {e!s}"
