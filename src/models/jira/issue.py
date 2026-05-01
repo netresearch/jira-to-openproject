@@ -141,8 +141,36 @@ def _jira_fields_payload(sdk_fields: Any) -> dict[str, Any]:
     fix_versions_iter = getattr(sdk_fields, "fixVersions", None)
     fix_versions_payload = [_jira_ref(v) for v in _safe_iter(fix_versions_iter) if v is not None]
 
+    affects_versions_iter = getattr(sdk_fields, "versions", None)
+    affects_versions_payload = [_jira_ref(v) for v in _safe_iter(affects_versions_iter) if v is not None]
+
     components_iter = getattr(sdk_fields, "components", None)
     components_payload = [_jira_ref(c) for c in _safe_iter(components_iter) if c is not None]
+
+    # ``remotelinks`` is not a standard inner ``fields`` attribute on the
+    # Jira SDK — it surfaces as a per-issue dict on cached/test payloads.
+    # We accept any of a handful of synonym attributes and normalise into
+    # a single ``remote_links`` list of ``{title, url}`` dicts. The model
+    # validates these into typed :class:`JiraRemoteLinkRef` instances.
+    remote_links_payload: list[dict[str, Any]] = []
+    for attr in ("remotelinks", "remote_links", "webLinks", "weblinks", "issuelinks"):
+        candidates = getattr(sdk_fields, attr, None)
+        if candidates is None:
+            continue
+        for item in _safe_iter(candidates):
+            obj: Any
+            if isinstance(item, dict):
+                obj = item.get("object", item)
+            else:
+                obj = getattr(item, "object", item)
+            if isinstance(obj, dict):
+                url = obj.get("url")
+                title = obj.get("title") or obj.get("summary")
+            else:
+                url = getattr(obj, "url", None)
+                title = getattr(obj, "title", None) or getattr(obj, "summary", None)
+            remote_links_payload.append({"title": title, "url": url})
+        break
 
     votes_obj = getattr(sdk_fields, "votes", None)
     votes_payload: dict[str, Any] | None = None
@@ -165,7 +193,9 @@ def _jira_fields_payload(sdk_fields: Any) -> dict[str, Any]:
         "updated": _str_attr(sdk_fields, "updated"),
         "labels": [str(label) for label in labels if isinstance(label, (str, int, float))],
         "fixVersions": fix_versions_payload,
+        "versions": affects_versions_payload,
         "components": components_payload,
+        "remote_links": remote_links_payload,
         "comments": comments_payload,
         "attachments": attachments_payload,
     }
@@ -227,6 +257,22 @@ class JiraSecurityLevelRef(BaseModel):
     name: str | None = None
 
 
+class JiraRemoteLinkRef(BaseModel):
+    """Reference to a Jira remote/web link entry on an issue.
+
+    Jira returns remote links via several near-synonymous attributes
+    (``remotelinks``, ``webLinks``, ``issuelinks``) and either as a flat
+    ``{url, title}`` dict or with the payload nested under ``object``.
+    The boundary helper (:func:`_jira_fields_payload`) flattens those
+    shapes so this model only carries the two fields the migration
+    actually needs.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    url: str | None = None
+    title: str | None = None
+
+
 class JiraVotesRef(BaseModel):
     """Reference to the Jira ``votes`` block on an issue.
 
@@ -286,7 +332,9 @@ class JiraIssueFields(BaseModel):
 
     labels: list[str] = Field(default_factory=list)
     fix_versions: list[JiraVersionRef] = Field(default_factory=list, alias="fixVersions")
+    affects_versions: list[JiraVersionRef] = Field(default_factory=list, alias="versions")
     components: list[JiraComponentRef] = Field(default_factory=list)
+    remote_links: list[JiraRemoteLinkRef] = Field(default_factory=list)
 
     comments: list[JiraComment] = Field(default_factory=list)
     attachments: list[JiraAttachment] = Field(default_factory=list)
@@ -394,7 +442,10 @@ class JiraIssue(BaseModel):
             "labels",
             "fixVersions",
             "fix_versions",
+            "versions",
+            "affects_versions",
             "components",
+            "remote_links",
             "comments",
             "attachments",
         ):
@@ -435,6 +486,7 @@ __all__ = [
     "JiraIssueFields",
     "JiraIssueTypeRef",
     "JiraPriorityRef",
+    "JiraRemoteLinkRef",
     "JiraResolutionRef",
     "JiraSecurityLevelRef",
     "JiraStatusRef",

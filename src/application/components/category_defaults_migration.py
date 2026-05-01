@@ -13,6 +13,7 @@ from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 from src.models import ComponentResult
+from src.models.jira import JiraComponentLead, JiraProjectComponent
 
 
 @register_entity_types("category_defaults")
@@ -44,36 +45,49 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
         raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
-        """Extract per-project component->lead mapping from Jira."""
-        # Expect jira_client.get_project_components(project_key) to yield components with 'name' and 'lead' (name/mail)
+        """Extract per-project component->lead mapping from Jira.
+
+        Each component is parsed at the boundary into a typed
+        :class:`JiraProjectComponent` so downstream code reads
+        ``comp.name`` / ``comp.effective_lead`` rather than juggling
+        dict lookups.
+        """
+        # Expect jira_client.get_project_components(project_key) to yield raw
+        # component shapes (dicts with 'name' and 'lead', or SDK-like objects).
         proj_map = self.mappings.get_mapping("project") or {}
-        components_by_project: dict[str, list[dict[str, Any]]] = {}
+        components_by_project: dict[str, list[JiraProjectComponent]] = {}
         for jira_key in proj_map or {}:
             try:
-                comps = self.jira_client.get_project_components(jira_key)  # type: ignore[attr-defined]
-                if isinstance(comps, list) and comps:
-                    components_by_project[jira_key] = comps
+                comps_raw = self.jira_client.get_project_components(jira_key)  # type: ignore[attr-defined]
             except Exception:
                 continue
+            if not isinstance(comps_raw, list) or not comps_raw:
+                continue
+            typed: list[JiraProjectComponent] = []
+            for raw in comps_raw:
+                try:
+                    typed.append(JiraProjectComponent.from_any(raw))
+                except Exception:
+                    continue
+            if typed:
+                components_by_project[jira_key] = typed
         return ComponentResult(success=True, data={"components": components_by_project})
 
-    def _resolve_user_id(self, user_hint: Any) -> int | None:
-        # Map via user mapping by login/mail if present
+    def _resolve_user_id(self, lead: JiraComponentLead | None) -> int | None:
+        """Map a typed component lead to an OpenProject user id.
+
+        Probes the user mapping using (in order): ``accountId``, ``name``,
+        ``key``, ``emailAddress``. ``None`` is returned when no probe
+        hits — the caller skips silently.
+        """
+        if lead is None:
+            return None
         try:
             umap = self.mappings.get_mapping("user") or {}
-            if isinstance(user_hint, dict):
-                key = (
-                    user_hint.get("accountId")
-                    or user_hint.get("name")
-                    or user_hint.get("email")
-                    or user_hint.get("mail")
-                )
-                if key and key in umap:
-                    rec = umap[key]
-                    if isinstance(rec, dict) and rec.get("openproject_id"):
-                        return int(rec["openproject_id"])  # type: ignore[arg-type]
-            elif isinstance(user_hint, str) and user_hint in umap:
-                rec = umap[user_hint]
+            for probe in (lead.account_id, lead.name, lead.key, lead.email_address):
+                if not probe or probe not in umap:
+                    continue
+                rec = umap[probe]
                 if isinstance(rec, dict) and rec.get("openproject_id"):
                     return int(rec["openproject_id"])  # type: ignore[arg-type]
         except Exception:
@@ -82,7 +96,7 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
-        components_by_project: dict[str, list[dict[str, Any]]] = (
+        components_by_project: dict[str, list[JiraProjectComponent]] = (
             data.get("components", {}) if isinstance(data, dict) else {}
         )
 
@@ -98,14 +112,10 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
 
             for comp in comps:
                 try:
-                    name = None
-                    lead = None
-                    if isinstance(comp, dict):
-                        name = comp.get("name")
-                        lead = comp.get("lead") or comp.get("componentLead")
+                    name = comp.name
                     if not (isinstance(name, str) and name.strip()):
                         continue
-                    user_id = self._resolve_user_id(lead)
+                    user_id = self._resolve_user_id(comp.effective_lead)
                     if not user_id:
                         continue
                     # Rails script: find category by name+project, set assigned_to
@@ -120,7 +130,7 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
                     else:
                         failed += 1
                 except Exception:
-                    logger.exception("Failed to set category default for %s/%s", jira_key, comp)
+                    logger.exception("Failed to set category default for %s/%s", jira_key, comp.name)
                     failed += 1
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
