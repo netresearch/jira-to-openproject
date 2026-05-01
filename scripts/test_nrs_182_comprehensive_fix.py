@@ -15,10 +15,10 @@ from datetime import datetime
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from src.application.components.work_package_migration import WorkPackageMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.config import logger
-from src.migrations.work_package_migration import WorkPackageMigration
 
 
 def test_nrs_182_comprehensive_fix():

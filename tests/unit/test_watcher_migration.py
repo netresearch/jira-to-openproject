@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.watcher_migration import WatcherMigration
+from src.application.components.watcher_migration import WatcherMigration
 
 
 class DummyOpClient:

@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.inline_refs_migration import InlineRefsMigration
+from src.application.components.inline_refs_migration import InlineRefsMigration
 
 
 class DummyJira:

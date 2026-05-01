@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from src.migrations.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_migration import WorkPackageMigration
 
 
 class DummyNormalizer:

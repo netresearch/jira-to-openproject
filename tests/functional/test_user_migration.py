@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from src.migrations.user_migration import UserMigration
+from src.application.components.user_migration import UserMigration
 
 
 class TestUserMigration(unittest.TestCase):
@@ -79,7 +79,7 @@ class TestUserMigration(unittest.TestCase):
             },
         }
 
-    @patch("src.migrations.user_migration.config.get_path")
+    @patch("src.application.components.user_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_users(
@@ -113,7 +113,7 @@ class TestUserMigration(unittest.TestCase):
         assert len(result) == 2
         assert migration.jira_users == self.jira_users
 
-    @patch("src.migrations.user_migration.config.get_path")
+    @patch("src.application.components.user_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_users(
@@ -149,8 +149,8 @@ class TestUserMigration(unittest.TestCase):
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
-    @patch("src.migrations.user_migration.config.get_path")
-    @patch("src.migrations.user_migration.ProgressTracker")
+    @patch("src.application.components.user_migration.config.get_path")
+    @patch("src.application.components.user_migration.ProgressTracker")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_user_mapping(
@@ -195,8 +195,8 @@ class TestUserMigration(unittest.TestCase):
         assert result["user2"]["openproject_email"] is None
         assert result["user2"]["matched_by"] == "none"
 
-    @patch("src.migrations.user_migration.config.get_path")
-    @patch("src.migrations.user_migration.ProgressTracker")
+    @patch("src.application.components.user_migration.config.get_path")
+    @patch("src.application.components.user_migration.ProgressTracker")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_missing_users(
@@ -370,9 +370,9 @@ class TestUserMigration(unittest.TestCase):
             assert email.endswith("@noreply.migration.local")
             assert len(email.split("@")[0]) == 8  # UUID should be 8 chars
 
-    @patch("src.migrations.user_migration.OpenProjectClient")
-    @patch("src.migrations.user_migration.JiraClient")
-    @patch("src.migrations.user_migration.config.get_path")
+    @patch("src.application.components.user_migration.OpenProjectClient")
+    @patch("src.application.components.user_migration.JiraClient")
+    @patch("src.application.components.user_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     @pytest.mark.xfail(reason="Zero-created gating not yet implemented for UserMigration", strict=False)

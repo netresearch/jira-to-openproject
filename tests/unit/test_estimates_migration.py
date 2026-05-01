@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.estimates_migration import EstimatesMigration
+from src.application.components.estimates_migration import EstimatesMigration
 
 
 class DummyTT:

@@ -4,7 +4,7 @@ import unittest
 from typing import Any
 from unittest.mock import MagicMock
 
-from src.migrations.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_migration import WorkPackageMigration
 
 
 class TestWorkPackageMigration(unittest.TestCase):

@@ -17,10 +17,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
+from src.application.components.work_package_migration import WorkPackageMigration
 from src.clients.exceptions import RateLimitError
 from src.clients.openproject_client import OpenProjectClient
 from src.migration import Migration
-from src.migrations.work_package_migration import WorkPackageMigration
 
 
 class TestMemoryPressureScenarios:

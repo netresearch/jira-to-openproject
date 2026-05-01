@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.affects_versions_migration import (
+from src.application.components.affects_versions_migration import (
     AFFECTS_VERSIONS_CF_NAME,
     AffectsVersionsMigration,
 )

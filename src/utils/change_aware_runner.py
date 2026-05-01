@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from src.migrations.base_migration import BaseMigration
+    from src.application.components.base_migration import BaseMigration
     from src.utils.change_detector import ChangeReport
 
 
@@ -251,7 +251,7 @@ class ChangeAwareRunner:
 
     def auto_detect_entity_type(self) -> str | None:
         """Resolve the migration class's primary entity type via the registry."""
-        from src.migrations.base_migration import EntityTypeRegistry
+        from src.application.components.base_migration import EntityTypeRegistry
 
         try:
             return EntityTypeRegistry.resolve(type(self.migration))

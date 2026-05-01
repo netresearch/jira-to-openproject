@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.category_defaults_migration import CategoryDefaultsMigration
+from src.application.components.category_defaults_migration import CategoryDefaultsMigration
 
 
 class DummyJira:

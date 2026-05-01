@@ -19,56 +19,56 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from src import config
+from src.application.components.account_migration import AccountMigration
+from src.application.components.admin_scheme_migration import AdminSchemeMigration
+from src.application.components.affects_versions_migration import AffectsVersionsMigration
+from src.application.components.agile_board_migration import AgileBoardMigration
+from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.application.components.attachments_migration import AttachmentsMigration
+from src.application.components.category_defaults_migration import CategoryDefaultsMigration
+from src.application.components.company_migration import CompanyMigration
+from src.application.components.components_migration import ComponentsMigration
+from src.application.components.custom_field_migration import CustomFieldMigration
+from src.application.components.customfields_generic_migration import CustomFieldsGenericMigration
+from src.application.components.estimates_migration import EstimatesMigration
+from src.application.components.group_migration import GroupMigration
+from src.application.components.inline_refs_migration import InlineRefsMigration
+from src.application.components.issue_type_migration import IssueTypeMigration
+from src.application.components.labels_migration import LabelsMigration
+from src.application.components.link_type_migration import LinkTypeMigration
+from src.application.components.native_tags_migration import NativeTagsMigration
+from src.application.components.priority_migration import PriorityMigration
+from src.application.components.project_migration import ProjectMigration
+from src.application.components.relation_migration import RelationMigration
+from src.application.components.remote_links_migration import RemoteLinksMigration
+from src.application.components.reporting_migration import ReportingMigration
+from src.application.components.resolution_migration import ResolutionMigration
+from src.application.components.security_levels_migration import SecurityLevelsMigration
+from src.application.components.simpletasks_migration import SimpleTasksMigration
+from src.application.components.sprint_epic_migration import SprintEpicMigration
+from src.application.components.status_migration import StatusMigration
+from src.application.components.story_points_migration import StoryPointsMigration
+from src.application.components.time_entry_migration import TimeEntryMigration
+from src.application.components.user_migration import UserMigration
+from src.application.components.versions_migration import VersionsMigration
+from src.application.components.votes_migration import VotesMigration
+from src.application.components.watcher_migration import WatcherMigration
+from src.application.components.work_package_content_migration import WorkPackageContentMigration
+from src.application.components.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_skeleton_migration import WorkPackageSkeletonMigration
+from src.application.components.workflow_migration import WorkflowMigration
 from src.clients.docker_client import DockerClient
 from src.clients.health_check_client import HealthCheckClient
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.clients.rails_console_client import RailsConsoleClient
 from src.clients.ssh_client import SSHClient
-from src.migrations.account_migration import AccountMigration
-from src.migrations.admin_scheme_migration import AdminSchemeMigration
-from src.migrations.affects_versions_migration import AffectsVersionsMigration
-from src.migrations.agile_board_migration import AgileBoardMigration
-from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
-from src.migrations.attachments_migration import AttachmentsMigration
-from src.migrations.category_defaults_migration import CategoryDefaultsMigration
-from src.migrations.company_migration import CompanyMigration
-from src.migrations.components_migration import ComponentsMigration
-from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
-from src.migrations.estimates_migration import EstimatesMigration
-from src.migrations.group_migration import GroupMigration
-from src.migrations.inline_refs_migration import InlineRefsMigration
-from src.migrations.issue_type_migration import IssueTypeMigration
-from src.migrations.labels_migration import LabelsMigration
-from src.migrations.link_type_migration import LinkTypeMigration
-from src.migrations.native_tags_migration import NativeTagsMigration
-from src.migrations.priority_migration import PriorityMigration
-from src.migrations.project_migration import ProjectMigration
-from src.migrations.relation_migration import RelationMigration
-from src.migrations.remote_links_migration import RemoteLinksMigration
-from src.migrations.reporting_migration import ReportingMigration
-from src.migrations.resolution_migration import ResolutionMigration
-from src.migrations.security_levels_migration import SecurityLevelsMigration
-from src.migrations.simpletasks_migration import SimpleTasksMigration
-from src.migrations.sprint_epic_migration import SprintEpicMigration
-from src.migrations.status_migration import StatusMigration
-from src.migrations.story_points_migration import StoryPointsMigration
-from src.migrations.time_entry_migration import TimeEntryMigration
-from src.migrations.user_migration import UserMigration
-from src.migrations.versions_migration import VersionsMigration
-from src.migrations.votes_migration import VotesMigration
-from src.migrations.watcher_migration import WatcherMigration
-from src.migrations.work_package_content_migration import WorkPackageContentMigration
-from src.migrations.work_package_migration import WorkPackageMigration
-from src.migrations.work_package_skeleton_migration import WorkPackageSkeletonMigration
-from src.migrations.workflow_migration import WorkflowMigration
 from src.models import ComponentResult, MigrationResult
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
 
 if TYPE_CHECKING:
-    from src.migrations.base_migration import BaseMigration
+    from src.application.components.base_migration import BaseMigration
 
 console = Console()
 
@@ -753,7 +753,7 @@ async def run_migration(
                 # Run the component (diagnose if base run is invoked)
                 try:
                     try:
-                        from src.migrations.base_migration import (
+                        from src.application.components.base_migration import (
                             BaseMigration,  # local import to avoid cycles
                         )
 
@@ -811,7 +811,7 @@ async def run_migration(
                     # Try to determine entity_type for the component
                     entity_type = None
                     try:
-                        from src.migrations.base_migration import EntityTypeRegistry
+                        from src.application.components.base_migration import EntityTypeRegistry
 
                         entity_type = EntityTypeRegistry.resolve(component.__class__)
                     except ValueError, AttributeError:

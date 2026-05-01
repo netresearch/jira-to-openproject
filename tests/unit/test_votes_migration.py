@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.votes_migration import VOTES_CF_NAME, VotesMigration
+from src.application.components.votes_migration import VOTES_CF_NAME, VotesMigration
 
 
 class DummyVotes:

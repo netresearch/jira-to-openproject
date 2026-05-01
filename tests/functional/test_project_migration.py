@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, Mock, mock_open, patch
 import pytest
 
 from src import config
-from src.migrations.project_migration import (
+from src.application.components.project_migration import (
     PROJECT_AVATAR_CF_NAME,
     PROJECT_CATEGORY_CF_NAME,
     PROJECT_LEAD_CF_NAME,
@@ -108,8 +108,8 @@ class TestProjectMigration(unittest.TestCase):
             },
         }
 
-    @patch("src.migrations.project_migration.config.get_path")
-    @patch("src.migrations.project_migration.config.migration_config")
+    @patch("src.application.components.project_migration.config.get_path")
+    @patch("src.application.components.project_migration.config.migration_config")
     @patch("os.path.exists")
     def test_extract_jira_projects(
         self,
@@ -156,8 +156,8 @@ class TestProjectMigration(unittest.TestCase):
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
-    @patch("src.migrations.project_migration.config.get_path")
-    @patch("src.migrations.project_migration.config.migration_config")
+    @patch("src.application.components.project_migration.config.get_path")
+    @patch("src.application.components.project_migration.config.migration_config")
     @patch("os.path.exists")
     def test_extract_openproject_projects(
         self,
@@ -192,7 +192,7 @@ class TestProjectMigration(unittest.TestCase):
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
-    @patch("src.migrations.project_migration.config.get_path")
+    @patch("src.application.components.project_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_project_mapping(
@@ -803,7 +803,7 @@ def test_persist_project_metadata_sanitizes_values(project_migration) -> None:
     assert "avatar" in avatar_val
 
 
-@patch("src.migrations.project_migration.logger")
+@patch("src.application.components.project_migration.logger")
 def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
     """Assign project lead should grant role membership and persist provenance.
 
@@ -838,7 +838,7 @@ def test_assign_project_lead_happy_path(mock_logger: MagicMock) -> None:
     mock_logger.debug.assert_not_called()
 
 
-@patch("src.migrations.project_migration.logger")
+@patch("src.application.components.project_migration.logger")
 def test_assign_project_lead_missing_user_mapping(mock_logger: MagicMock) -> None:
     """Skip role assignment when the Jira lead cannot be mapped to OpenProject.
 
@@ -865,7 +865,7 @@ def test_assign_project_lead_missing_user_mapping(mock_logger: MagicMock) -> Non
     mock_logger.debug.assert_called_once()
 
 
-@patch("src.migrations.project_migration.logger")
+@patch("src.application.components.project_migration.logger")
 def test_assign_project_lead_role_fallback_and_error_logging(
     mock_logger: MagicMock,
 ) -> None:

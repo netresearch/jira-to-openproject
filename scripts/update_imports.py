@@ -72,7 +72,7 @@ def main() -> None:
 
     # Define directories to search
     dirs_to_search = [
-        root_dir / "src" / "migrations",
+        root_dir / "src" / "application" / "components",
         root_dir / "tests",
         root_dir / "src",
     ]

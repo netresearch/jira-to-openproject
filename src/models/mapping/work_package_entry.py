@@ -1,7 +1,7 @@
 """Pydantic v2 model for the work-package mapping entry (ADR-002 phase 3c).
 
 Historically the ``work_package`` mapping persisted by
-:mod:`src.migrations.work_package_migration` is a flat ``dict`` whose
+:mod:`src.application.components.work_package_migration` is a flat ``dict`` whose
 values are *polymorphic*:
 
 * the modern shape is a ``dict`` with at least ``jira_key`` and
@@ -32,7 +32,7 @@ class WorkPackageMappingEntry(BaseModel):
 
     The two required fields (``jira_key`` and ``openproject_id``) are
     always present after construction. Optional fields mirror what
-    :class:`~src.migrations.work_package_migration.WorkPackageMigration`
+    :class:`~src.application.components.work_package_migration.WorkPackageMigration`
     stores today; see :meth:`from_legacy` for the coercion rules used
     when normalising persisted user data.
     """

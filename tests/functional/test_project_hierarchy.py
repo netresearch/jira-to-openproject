@@ -6,11 +6,11 @@ This verifies the proper organization of projects under their parent Tempo compa
 from pathlib import Path
 from typing import Any
 
+from src.application.components.company_migration import CompanyMigration
+from src.application.components.project_migration import ProjectMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
-from src.migrations.company_migration import CompanyMigration
-from src.migrations.project_migration import ProjectMigration
 
 # Set up logging
 logger = configure_logging("INFO", None)

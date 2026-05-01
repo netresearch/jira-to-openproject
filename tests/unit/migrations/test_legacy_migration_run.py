@@ -4,10 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.migrations.affects_versions_migration import AffectsVersionsMigration
-from src.migrations.components_migration import ComponentsMigration
-from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
-from src.migrations.versions_migration import VersionsMigration
+from src.application.components.affects_versions_migration import AffectsVersionsMigration
+from src.application.components.components_migration import ComponentsMigration
+from src.application.components.customfields_generic_migration import CustomFieldsGenericMigration
+from src.application.components.versions_migration import VersionsMigration
 from src.models import ComponentResult
 
 # Only migrations that use the standard ETL pipeline (extract→map→load via _run_etl_pipeline).

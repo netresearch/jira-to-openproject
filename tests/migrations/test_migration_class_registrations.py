@@ -9,7 +9,7 @@ import importlib
 
 import pytest
 
-from src.migrations.base_migration import BaseMigration, EntityTypeRegistry
+from src.application.components.base_migration import BaseMigration, EntityTypeRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -31,17 +31,17 @@ def clean_registry():
 # 3. A list of all entity types expected to be registered (primary type first)
 MIGRATION_CLASSES_TO_TEST = [
     (
-        "src.migrations.account_migration",
+        "src.application.components.account_migration",
         "AccountMigration",
         ["accounts", "tempo_accounts"],
     ),
     (
-        "src.migrations.custom_field_migration",
+        "src.application.components.custom_field_migration",
         "CustomFieldMigration",
         ["custom_fields"],
     ),
     (
-        "src.migrations.status_migration",
+        "src.application.components.status_migration",
         "StatusMigration",
         ["statuses", "status_types"],
     ),
@@ -173,7 +173,7 @@ class TestMigrationClassRegistrationIntegration:
 
     def test_registry_state_persistence(self) -> None:
         """Verify that registry state persists across multiple imports of the same module."""
-        module_path = "src.migrations.account_migration"
+        module_path = "src.application.components.account_migration"
         class_name = "AccountMigration"
         expected_types = ["accounts", "tempo_accounts"]
 
@@ -229,7 +229,7 @@ class TestMigrationClassRegistrationErrorScenarios:
         # Act: Force reload and import a module to populate registry
         import sys
 
-        module_path = "src.migrations.account_migration"
+        module_path = "src.application.components.account_migration"
         if module_path in sys.modules:
             importlib.reload(sys.modules[module_path])
         importlib.import_module(module_path)
@@ -244,12 +244,12 @@ class TestMigrationClassRegistrationErrorScenarios:
         # Focus on classes with multiple entity types
         multi_type_classes = [
             (
-                "src.migrations.account_migration",
+                "src.application.components.account_migration",
                 "AccountMigration",
                 ["accounts", "tempo_accounts"],
             ),
             (
-                "src.migrations.status_migration",
+                "src.application.components.status_migration",
                 "StatusMigration",
                 ["statuses", "status_types"],
             ),

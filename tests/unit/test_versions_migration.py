@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.versions_migration import VersionsMigration
+from src.application.components.versions_migration import VersionsMigration
 
 
 class DummyFV:

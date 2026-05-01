@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.resolution_migration import RESOLUTION_CF_NAME, ResolutionMigration
+from src.application.components.resolution_migration import RESOLUTION_CF_NAME, ResolutionMigration
 
 
 class DummyIssue:

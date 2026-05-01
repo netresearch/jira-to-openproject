@@ -13,7 +13,7 @@ exercises the surviving concurrency guarantees end-to-end.
 
 import pytest
 
-from src.migrations.base_migration import BaseMigration
+from src.application.components.base_migration import BaseMigration
 from src.utils.checkpoint_manager import CheckpointManager, CheckpointStatus
 
 

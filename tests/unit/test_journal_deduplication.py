@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.migrations.resolution_migration import ResolutionMigration
+from src.application.components.resolution_migration import ResolutionMigration
 from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 
 
@@ -390,7 +390,7 @@ class TestCustomFieldProjectEnablement:
 
         FIX VERIFIED: Migrations can enable CFs per-project.
         """
-        from src.migrations.resolution_migration import ResolutionMigration
+        from src.application.components.resolution_migration import ResolutionMigration
 
         # Verify the method exists
         assert hasattr(ResolutionMigration, "_enable_cf_for_projects"), (

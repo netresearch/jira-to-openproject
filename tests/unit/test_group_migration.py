@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src import config
-from src.migrations.group_migration import GroupMigration
+from src.application.components.group_migration import GroupMigration
 
 pytestmark = pytest.mark.unit
 

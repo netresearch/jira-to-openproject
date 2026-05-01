@@ -4,7 +4,7 @@
 ## Overview
 - Core Python package for the Jira→OpenProject migration CLI, clients, mappings, and migrations.
 - Entry points: `src/main.py` (`j2o` CLI) and migration orchestration in `src/migration.py`.
-- Architecture: `clients/` (Jira/OpenProject/SSH/Docker/RailsConsole), `migrations/` (41 extract-map-load modules), `mappings/`, `models/`, `utils/`, `ruby/`, `dashboard/`.
+- Architecture: `clients/` (Jira/OpenProject/SSH/Docker/RailsConsole), `application/components/` (41 extract-map-load migration modules), `mappings/`, `models/`, `utils/`, `ruby/`, `dashboard/`.
 
 ## Setup & environment
 - Require Python 3.14+, `uv`, and a configured `.env`; copy `.env.example` then set real Jira/OpenProject credentials. `.env.local` is automatically loaded for developer-specific overrides.
@@ -44,7 +44,7 @@
 - When modifying checkpoint/fast-forward logic, re-run `make container-test TEST_OPTS="-k work_package_checkpoint"`.
 
 ## Good vs. bad examples
-- Good: `src/migrations/work_package_migration.py` — demonstrates chunked extract/map/load with retries and rich diagnostics.
+- Good: `src/application/components/work_package_migration.py` — demonstrates chunked extract/map/load with retries and rich diagnostics.
 - Good: `src/clients/openproject_client.py` — encapsulates Rails console execution with structured logging and input validation.
 - Caution: `src/cleanup_openproject.py` — legacy direct-deletion script; do not model new migrations on this ad-hoc pattern.
 

@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
+from src.application.components.company_migration import CompanyMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.migrations.company_migration import CompanyMigration
 
 
 class TestCompanyMigration(unittest.TestCase):
@@ -128,9 +128,9 @@ class TestCompanyMigration(unittest.TestCase):
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
-    @patch("src.migrations.company_migration.config.get_path")
-    @patch("src.migrations.company_migration.Path.exists")
-    @patch("src.migrations.company_migration.data_handler.load_dict")
+    @patch("src.application.components.company_migration.config.get_path")
+    @patch("src.application.components.company_migration.Path.exists")
+    @patch("src.application.components.company_migration.data_handler.load_dict")
     @patch("pathlib.Path.open", new_callable=mock_open)
     def test_extract_tempo_companies(
         self,
@@ -156,7 +156,7 @@ class TestCompanyMigration(unittest.TestCase):
 
         # Mock _load_from_json to return None during initialization
         with patch(
-            "src.migrations.company_migration.CompanyMigration._load_from_json",
+            "src.application.components.company_migration.CompanyMigration._load_from_json",
         ) as mock_load:
             mock_load.return_value = None
 
@@ -337,7 +337,7 @@ class TestCompanyMigration(unittest.TestCase):
         assert analysis["unmatched_companies"] == 1
         assert analysis["actually_created"] == 1
 
-    @patch("src.migrations.company_migration.config.migration_config")
+    @patch("src.application.components.company_migration.config.migration_config")
     def test_migrate_companies_bulk(self, mock_migration_config: MagicMock) -> None:
         """Test the bulk migration of companies."""
         # Configure the mock to return False for dry_run
@@ -358,7 +358,7 @@ class TestCompanyMigration(unittest.TestCase):
                 patch("pathlib.Path.open"),
                 patch.object(self.company_migration, "_save_to_json"),
                 patch(
-                    "src.migrations.company_migration.CompanyMigration.migrate_companies_bulk",
+                    "src.application.components.company_migration.CompanyMigration.migrate_companies_bulk",
                     side_effect=lambda: {
                         "2": {
                             "tempo_id": "2",

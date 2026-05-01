@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
-from src.migrations.link_type_migration import LinkTypeMigration
+from src.application.components.link_type_migration import LinkTypeMigration
 
 
 class TestLinkTypeMigration(unittest.TestCase):
@@ -104,10 +104,10 @@ class TestLinkTypeMigration(unittest.TestCase):
             },
         }
 
-    @patch("src.migrations.link_type_migration.JiraClient")
-    @patch("src.migrations.link_type_migration.OpenProjectClient")
-    @patch("src.migrations.link_type_migration.config.get_path")
-    @patch("src.migrations.link_type_migration.config.migration_config")
+    @patch("src.application.components.link_type_migration.JiraClient")
+    @patch("src.application.components.link_type_migration.OpenProjectClient")
+    @patch("src.application.components.link_type_migration.config.get_path")
+    @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_link_types(
@@ -143,10 +143,10 @@ class TestLinkTypeMigration(unittest.TestCase):
         # Instead verify that the right data is returned
         assert len(result) == len(self.jira_link_types)
 
-    @patch("src.migrations.link_type_migration.JiraClient")
-    @patch("src.migrations.link_type_migration.OpenProjectClient")
-    @patch("src.migrations.link_type_migration.config.get_path")
-    @patch("src.migrations.link_type_migration.config.migration_config")
+    @patch("src.application.components.link_type_migration.JiraClient")
+    @patch("src.application.components.link_type_migration.OpenProjectClient")
+    @patch("src.application.components.link_type_migration.config.get_path")
+    @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_link_type_mapping(
@@ -186,10 +186,10 @@ class TestLinkTypeMigration(unittest.TestCase):
         assert isinstance(result, dict)
         assert all(key in result for key in ["10100", "10101", "10102"])
 
-    @patch("src.migrations.link_type_migration.JiraClient")
-    @patch("src.migrations.link_type_migration.OpenProjectClient")
-    @patch("src.migrations.link_type_migration.config.get_path")
-    @patch("src.migrations.link_type_migration.config.migration_config")
+    @patch("src.application.components.link_type_migration.JiraClient")
+    @patch("src.application.components.link_type_migration.OpenProjectClient")
+    @patch("src.application.components.link_type_migration.config.get_path")
+    @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("src.display.ProgressTracker")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -250,10 +250,10 @@ class TestLinkTypeMigration(unittest.TestCase):
         assert result.details["status"] == "success"
         assert "DRY RUN:" in result.message
 
-    @patch("src.migrations.link_type_migration.JiraClient")
-    @patch("src.migrations.link_type_migration.OpenProjectClient")
-    @patch("src.migrations.link_type_migration.config.get_path")
-    @patch("src.migrations.link_type_migration.config.migration_config")
+    @patch("src.application.components.link_type_migration.JiraClient")
+    @patch("src.application.components.link_type_migration.OpenProjectClient")
+    @patch("src.application.components.link_type_migration.config.get_path")
+    @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_link_type_mapping(
@@ -312,11 +312,11 @@ class TestLinkTypeMigration(unittest.TestCase):
         assert result["total_types"] == 3
         assert result["matched_types"] == 3  # All are now matched
 
-    @patch("src.migrations.link_type_migration.JiraClient")
-    @patch("src.migrations.link_type_migration.OpenProjectClient")
-    @patch("src.migrations.link_type_migration.config.get_path")
-    @patch("src.migrations.link_type_migration.config.migration_config")
-    @patch("src.migrations.link_type_migration.CustomFieldMigration")
+    @patch("src.application.components.link_type_migration.JiraClient")
+    @patch("src.application.components.link_type_migration.OpenProjectClient")
+    @patch("src.application.components.link_type_migration.config.get_path")
+    @patch("src.application.components.link_type_migration.config.migration_config")
+    @patch("src.application.components.link_type_migration.CustomFieldMigration")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_custom_fields_for_link_types(
@@ -423,10 +423,10 @@ class TestLinkTypeMigration(unittest.TestCase):
         assert result["success_count"] == 1
         assert result["failure_count"] == 0
 
-    @patch("src.migrations.link_type_migration.JiraClient")
-    @patch("src.migrations.link_type_migration.OpenProjectClient")
-    @patch("src.migrations.link_type_migration.config.get_path")
-    @patch("src.migrations.link_type_migration.config.migration_config")
+    @patch("src.application.components.link_type_migration.JiraClient")
+    @patch("src.application.components.link_type_migration.OpenProjectClient")
+    @patch("src.application.components.link_type_migration.config.get_path")
+    @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_run_with_custom_field_creation(
@@ -539,10 +539,10 @@ class TestLinkTypeMigration(unittest.TestCase):
             # Verify the message indicates custom fields were created
             assert "custom fields" in result.message
 
-    @patch("src.migrations.link_type_migration.JiraClient")
-    @patch("src.migrations.link_type_migration.OpenProjectClient")
-    @patch("src.migrations.link_type_migration.config.get_path")
-    @patch("src.migrations.link_type_migration.config.migration_config")
+    @patch("src.application.components.link_type_migration.JiraClient")
+    @patch("src.application.components.link_type_migration.OpenProjectClient")
+    @patch("src.application.components.link_type_migration.config.get_path")
+    @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_none_guards_prevent_attribute_error(

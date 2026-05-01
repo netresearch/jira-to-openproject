@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.migrations.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_migration import WorkPackageMigration
 
 
 @pytest.mark.unit

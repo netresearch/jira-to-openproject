@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from src.migrations.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_migration import WorkPackageMigration
 
 
 def test_sanitize_wp_dict_removes_links_and_extracts_ids_unit() -> None:

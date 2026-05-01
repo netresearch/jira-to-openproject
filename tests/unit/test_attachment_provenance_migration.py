@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
 from src.models import ComponentResult
 
 

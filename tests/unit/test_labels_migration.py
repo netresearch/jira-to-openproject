@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.labels_migration import LABELS_CF_NAME, LabelsMigration
+from src.application.components.labels_migration import LABELS_CF_NAME, LabelsMigration
 
 
 class DummyIssue:

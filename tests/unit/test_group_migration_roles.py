@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.migrations.group_migration import GroupMigration
+from src.application.components.group_migration import GroupMigration
 
 pytestmark = pytest.mark.unit
 

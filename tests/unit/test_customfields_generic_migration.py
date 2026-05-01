@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
+from src.application.components.customfields_generic_migration import CustomFieldsGenericMigration
 
 
 class FieldsObj:

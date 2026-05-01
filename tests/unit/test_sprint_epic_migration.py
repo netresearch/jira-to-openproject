@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.sprint_epic_migration import SPRINT_CF_NAME, SprintEpicMigration
+from src.application.components.sprint_epic_migration import SPRINT_CF_NAME, SprintEpicMigration
 
 
 class DummyFields:

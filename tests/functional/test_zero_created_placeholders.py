@@ -12,14 +12,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.migrations.custom_field_migration import CustomFieldMigration
-from src.migrations.status_migration import StatusMigration
-from src.migrations.user_migration import UserMigration
+from src.application.components.custom_field_migration import CustomFieldMigration
+from src.application.components.status_migration import StatusMigration
+from src.application.components.user_migration import UserMigration
 
 
 @pytest.mark.xfail(reason="Zero-created gating not yet implemented for UserMigration", strict=False)
-@patch("src.migrations.user_migration.OpenProjectClient")
-@patch("src.migrations.user_migration.JiraClient")
+@patch("src.application.components.user_migration.OpenProjectClient")
+@patch("src.application.components.user_migration.JiraClient")
 def test_users_zero_created_gating(mock_jira: MagicMock, mock_op: MagicMock) -> None:
     mig = UserMigration(jira_client=mock_jira.return_value, op_client=mock_op.return_value)
     # Pretend there are unmatched users
@@ -41,8 +41,8 @@ def test_users_zero_created_gating(mock_jira: MagicMock, mock_op: MagicMock) -> 
 
 
 @pytest.mark.xfail(reason="Zero-created gating not yet implemented for CustomFieldMigration", strict=False)
-@patch("src.migrations.custom_field_migration.OpenProjectClient")
-@patch("src.migrations.custom_field_migration.JiraClient")
+@patch("src.application.components.custom_field_migration.OpenProjectClient")
+@patch("src.application.components.custom_field_migration.JiraClient")
 def test_custom_fields_zero_created_gating(mock_jira: MagicMock, mock_op: MagicMock) -> None:
     mig = CustomFieldMigration(jira_client=mock_jira.return_value, op_client=mock_op.return_value)
     # Force a scenario where Jira has fields but migration creates none
@@ -55,8 +55,8 @@ def test_custom_fields_zero_created_gating(mock_jira: MagicMock, mock_op: MagicM
 
 
 @pytest.mark.xfail(reason="Zero-created gating not yet implemented for StatusMigration", strict=False)
-@patch("src.migrations.status_migration.OpenProjectClient")
-@patch("src.migrations.status_migration.JiraClient")
+@patch("src.application.components.status_migration.OpenProjectClient")
+@patch("src.application.components.status_migration.JiraClient")
 def test_statuses_zero_created_gating(mock_jira: MagicMock, mock_op: MagicMock) -> None:
     mig = StatusMigration(jira_client=mock_jira.return_value, op_client=mock_op.return_value)
     # Force statuses present but mapping leads to zero updates/creations

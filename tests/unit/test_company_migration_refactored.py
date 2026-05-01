@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.migrations.company_migration import CompanyMigration
+from src.application.components.company_migration import CompanyMigration
 from src.models.migration_error import MigrationError
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.remote_links_migration import SECTION_TITLE, RemoteLinksMigration
+from src.application.components.remote_links_migration import SECTION_TITLE, RemoteLinksMigration
 
 
 class DummyFields:

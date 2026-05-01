@@ -22,7 +22,7 @@ from src.utils.markdown_converter import MarkdownConverter
 logger = configure_logging("INFO", None)
 
 
-# Add config attribute for tests and modules expecting src.migrations.tempo_account_migration.config
+# Add config attribute for tests and modules expecting src.application.components.tempo_account_migration.config
 def _default_get_path(key: str) -> Path:
     # Default to local ./data for tests unless overridden by patches
     if key == "data":

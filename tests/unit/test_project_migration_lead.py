@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.migrations.project_migration import (
+from src.application.components.project_migration import (
     PROJECT_LEAD_CF_NAME,
     PROJECT_LEAD_DISPLAY_CF_NAME,
     ProjectMigration,

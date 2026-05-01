@@ -50,14 +50,14 @@ class TestSelectiveProjectEnablementVerification:
 
     def test_all_cf_migrations_use_shared_ensure_method(self):
         """Verify all CF migrations delegate to BaseMigration._ensure_wp_custom_field."""
-        from src.migrations.affects_versions_migration import AffectsVersionsMigration
-        from src.migrations.customfields_generic_migration import CustomFieldsGenericMigration
-        from src.migrations.labels_migration import LabelsMigration
-        from src.migrations.resolution_migration import ResolutionMigration
-        from src.migrations.security_levels_migration import SecurityLevelsMigration
-        from src.migrations.sprint_epic_migration import SprintEpicMigration
-        from src.migrations.story_points_migration import StoryPointsMigration
-        from src.migrations.votes_migration import VotesMigration
+        from src.application.components.affects_versions_migration import AffectsVersionsMigration
+        from src.application.components.customfields_generic_migration import CustomFieldsGenericMigration
+        from src.application.components.labels_migration import LabelsMigration
+        from src.application.components.resolution_migration import ResolutionMigration
+        from src.application.components.security_levels_migration import SecurityLevelsMigration
+        from src.application.components.sprint_epic_migration import SprintEpicMigration
+        from src.application.components.story_points_migration import StoryPointsMigration
+        from src.application.components.votes_migration import VotesMigration
 
         for cls in (
             AffectsVersionsMigration,
@@ -279,9 +279,9 @@ class TestMigrationIntegrationWithUsageTracking:
 
         FIX VERIFIED: Migrations now have helper method to enable CFs per-project.
         """
-        from src.migrations.resolution_migration import ResolutionMigration
-        from src.migrations.story_points_migration import StoryPointsMigration
-        from src.migrations.votes_migration import VotesMigration
+        from src.application.components.resolution_migration import ResolutionMigration
+        from src.application.components.story_points_migration import StoryPointsMigration
+        from src.application.components.votes_migration import VotesMigration
 
         # Verify each migration has the enablement method
         assert hasattr(ResolutionMigration, "_enable_cf_for_projects")

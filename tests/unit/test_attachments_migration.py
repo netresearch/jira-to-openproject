@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.migrations.attachments_migration import AttachmentsMigration
+from src.application.components.attachments_migration import AttachmentsMigration
 from src.models import ComponentResult
 
 
