@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -132,10 +134,17 @@ class OpenProjectBulkCreateService:
                     self._logger.warning(f"Failed to load journal creation template: {e}")
                     journal_creation_ruby = ""
 
-        # Result file path in container and local debug path
-        # Always ensure uniqueness to avoid collisions across batches
+        # Result file path in container and local debug path.
+        # Always ensure uniqueness to avoid collisions across batches.
+        # Sanitise ``result_basename``: it's caller-supplied and lands
+        # both in filesystem paths AND in a Ruby single-quoted literal.
+        # Reduce to a strict ``[A-Za-z0-9._-]`` basename so a
+        # value like ``../etc/passwd`` or ``foo'; system('rm -rf /') #``
+        # can't escape the temp dir or break out of the Ruby string.
         if result_basename:
-            base = str(result_basename)
+            base = re.sub(r"[^A-Za-z0-9._-]", "_", Path(str(result_basename)).name)
+            if not base:
+                base = "bulk_result"
             if not base.endswith(".json"):
                 base = f"{base}.json"
             unique_suffix = f"_{int(time.time())}_{os.getpid()}_{os.urandom(2).hex()}"
@@ -611,17 +620,39 @@ class OpenProjectBulkCreateService:
             _msg = "Result file not found after bulk_create_records execution"
             raise QueryExecutionError(_msg)
 
-        # Parse and return result
+        # Parse and return result. Wrap in try/finally to clean up
+        # container temp files on the happy path (the most common
+        # exit point and where disk pressure accumulates). Failures
+        # earlier in the method body — JSON serialisation,
+        # ``transfer_file_to_container``, the Rails execution path —
+        # still leak their respective temps, matching the
+        # pre-extraction behaviour; an unhappy-path-cleanup pass can
+        # land as a follow-up.
         try:
-            with local_result.open("r", encoding="utf-8") as f:
-                result = json.load(f)
-                # Attach raw output snippet for callers that want to persist it
-                if isinstance(output, str):
-                    result["output"] = output[:2000]
-                return result
-        except Exception as e:
-            _msg = f"Failed to parse result JSON: {e}"
-            raise QueryExecutionError(_msg) from e
+            try:
+                with local_result.open("r", encoding="utf-8") as f:
+                    result = json.load(f)
+                    # Attach raw output snippet for callers that want to persist it
+                    if isinstance(output, str):
+                        result["output"] = output[:2000]
+                    return result
+            except Exception as e:
+                _msg = f"Failed to parse result JSON: {e}"
+                raise QueryExecutionError(_msg) from e
+        finally:
+            # Best-effort cleanup of container temp files. Failures
+            # log at debug only so they don't mask the real result.
+            for cpath in (container_json, container_result, container_progress):
+                try:
+                    client.docker_client.execute_command(
+                        f"rm -f {shlex.quote(cpath.as_posix())}",
+                    )
+                except Exception as cleanup_err:
+                    self._logger.debug(
+                        "Non-critical: failed to remove container temp %s: %s",
+                        cpath,
+                        cleanup_err,
+                    )
 
     # ── work-package batch wrappers ──────────────────────────────────────
 
@@ -653,15 +684,26 @@ class OpenProjectBulkCreateService:
         batch_id = uuid.uuid4().hex[:8]
         container_json_path = f"/tmp/j2o_batch_{batch_id}.json"
 
-        # Write JSON to local temp file, then transfer to container
+        # Write JSON to local temp file, then transfer to container.
+        # ``local_json_path`` is captured BEFORE ``json.dump`` so the
+        # finally-block cleanup still works if dump raises (e.g. on
+        # non-JSON-serialisable data) — otherwise ``unlink`` would
+        # raise ``UnboundLocalError`` and mask the original error.
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(work_packages, f)
             local_json_path = f.name
+            json.dump(work_packages, f)
 
         try:
             client.docker_client.transfer_file_to_container(Path(local_json_path), Path(container_json_path))
         finally:
-            os.unlink(local_json_path)
+            # Guard against ``FileNotFoundError`` so a missing temp
+            # (e.g. if a future change ever moves the dump into a
+            # try/except that deletes on failure) doesn't shadow the
+            # real error.
+            try:
+                os.unlink(local_json_path)
+            except FileNotFoundError:
+                pass
 
         # Build batch work package creation script - read JSON from file
         script = f"""
@@ -813,7 +855,16 @@ class OpenProjectBulkCreateService:
                 )
             else:
                 try:
-                    client.docker_client.execute_command(f"rm -f {container_json_path}")
+                    # ``shlex.quote`` is defence-in-depth here — the
+                    # current ``container_json_path`` is hex-only via
+                    # ``uuid.uuid4().hex[:8]``, but quoting matches
+                    # the codebase's standard pattern for ``rm -f``
+                    # commands routed through ``execute_command`` and
+                    # protects against future changes to the path
+                    # source.
+                    client.docker_client.execute_command(
+                        f"rm -f {shlex.quote(container_json_path)}",
+                    )
                 except Exception as cleanup_err:
                     self._logger.warning(
                         "Failed to cleanup container temp file %s: %s",
