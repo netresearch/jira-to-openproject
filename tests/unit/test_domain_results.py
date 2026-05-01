@@ -263,7 +263,7 @@ class TestFromComponentResult:
         assert isinstance(result, Success)
         assert result.message == "Found 3 records but kept them as-is"
 
-    def test_default_legacy_is_failed_when_unsuccessful_with_no_errors(self):
+    def test_default_legacy_falls_through_to_success_with_no_error_signal(self):
         # A bare ``ComponentResult()`` has ``success=False`` and no
         # errors — by our rule that lands on the success arm (no
         # signal that anything went wrong). Documenting the edge.

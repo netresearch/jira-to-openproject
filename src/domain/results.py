@@ -24,9 +24,14 @@ Pattern matrix (per ADR-002):
   operations that collect multiple failures), and any partial ``counts``.
 
 The union is discriminated by the literal ``kind`` field, so Pydantic v2
-will pick the right concrete model when validating dict input::
+will pick the right concrete model when validating dict input. Because
+:data:`StepResult` is an :class:`Annotated` union alias (not a
+``BaseModel``), validation runs through a ``TypeAdapter``::
 
-    StepResult.model_validate({"kind": "skipped", "reason": "no work"})
+    from pydantic import TypeAdapter
+
+    adapter = TypeAdapter(StepResult)
+    result = adapter.validate_python({"kind": "skipped", "reason": "no work"})
 
 Future PRs (phase 8b+) can incrementally migrate call sites; until then
 both shapes coexist and round-trip via the adapter helpers.
@@ -281,9 +286,15 @@ def _apply_counts(envelope: ComponentResult, counts: dict[str, int]) -> None:
 
     Unknown keys are silently dropped — the legacy envelope has a fixed
     schema and there is no escape hatch for arbitrary counters.
+
+    The ``type(...) is int`` check (rather than ``isinstance``) deliberately
+    excludes ``bool``, since ``bool`` is an ``int`` subclass in Python.
+    Without the exclusion a ``"success"`` or ``"dry_run"`` key in
+    ``counts`` would silently overwrite the boolean flags on
+    ``ComponentResult``.
     """
     for name, value in counts.items():
-        if hasattr(envelope, name) and isinstance(getattr(envelope, name), int):
+        if hasattr(envelope, name) and type(getattr(envelope, name)) is int:
             setattr(envelope, name, value)
 
 
