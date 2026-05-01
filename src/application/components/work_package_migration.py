@@ -370,7 +370,12 @@ class WorkPackageMigration(BaseMigration):
                 jira_key = str(inner_jira_key or outer_key)
                 try:
                     typed_entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-                except ValidationError, ValueError, TypeError, AttributeError:
+                except (
+                    ValidationError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                ):
                     continue
                 work_package_mapping[jira_key] = int(typed_entry.openproject_id)
 
@@ -564,7 +569,10 @@ class WorkPackageMigration(BaseMigration):
             if isinstance(result, str):
                 try:
                     result = json.loads(result)
-                except json.JSONDecodeError, TypeError:
+                except (
+                    json.JSONDecodeError,
+                    TypeError,
+                ):
                     pass
             if isinstance(result, dict) and result.get("id"):
                 version_id = int(result["id"])
@@ -3417,7 +3425,10 @@ class WorkPackageMigration(BaseMigration):
                 try:
                     seconds = int(seconds_str)
                     return round(seconds / 3600, 2)  # Convert to hours with 2 decimal places
-                except ValueError, TypeError:
+                except (
+                    ValueError,
+                    TypeError,
+                ):
                     return None
 
             from_hours = seconds_to_hours(from_seconds)
@@ -4054,7 +4065,11 @@ class WorkPackageMigration(BaseMigration):
                             "openproject_id": op_id,
                             "openproject_project_id": int(op_project_id),
                         }
-            except TypeError, AttributeError, ValueError:
+            except (
+                TypeError,
+                AttributeError,
+                ValueError,
+            ):
                 continue
 
     def _migrate_work_packages(self) -> dict[str, Any]:
