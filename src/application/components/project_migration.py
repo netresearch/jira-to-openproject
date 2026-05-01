@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING, Any
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
+from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import (
     OpenProjectClient,
-    QueryExecutionError,
     escape_ruby_single_quoted,
 )
 from src.mappings.mappings import Mappings

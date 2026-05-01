@@ -2,8 +2,11 @@
 """Check journal count for NRS-182 work package"""
 
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/sme/p/j2o/src")
+# Imports use the ``src.infrastructure...`` package path, so the project
+# root (parent of ``src/``) must be on sys.path, not ``src/`` itself.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 
