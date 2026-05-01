@@ -53,12 +53,27 @@ class JiraUserService:
             raise JiraConnectionError(msg)
 
         try:
-            users = self._client.jira.search_users(
-                user=".",
-                includeInactive=True,
-                startAt=0,
-                maxResults=1000,
-            )
+            # Paginate through all users — the pre-extraction code did
+            # a single ``search_users(..., maxResults=1000)`` call,
+            # which silently truncated to the first 1000 on
+            # instances with more users. Same pattern the agile
+            # service uses for boards/sprints.
+            users: list[Any] = []
+            start_at = 0
+            page_size = 1000
+            while True:
+                page = self._client.jira.search_users(
+                    user=".",
+                    includeInactive=True,
+                    startAt=start_at,
+                    maxResults=page_size,
+                )
+                if not page:
+                    break
+                users.extend(page)
+                if len(page) < page_size:
+                    break
+                start_at += page_size
 
             self._logger.info("Retrieved %s users from Jira API", len(users))
 
@@ -150,6 +165,14 @@ class JiraUserService:
         if not avatar_url:
             return None
 
+        # Distinguish "no client" from "no session on the client" so
+        # callers see consistent error messages with the rest of this
+        # service. Pre-extraction code conflated the two via
+        # ``getattr(None, '_session', None)``.
+        if not self._client.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         session = getattr(self._client.jira, "_session", None)
         if session is None:
             msg = "Jira session not initialized"
@@ -178,8 +201,19 @@ class JiraUserService:
         if not user_keys:
             return {}
 
-        # Get all users and filter to requested keys
+        # Get all users and filter to requested keys. Build the lookup
+        # by walking the candidate identifiers in priority order
+        # (``key`` → ``accountId`` → ``name``) and taking the first
+        # *truthy* one. The previous shape
+        # ``user.get("key", user.get("accountId", ""))`` returned
+        # ``None`` whenever ``"key"`` was present with a ``None``
+        # value, breaking lookups by accountId for accounts that
+        # only carried an accountId.
         all_users = self.get_users()
-        user_dict = {user.get("key", user.get("accountId", "")): user for user in all_users}
+        user_dict: dict[str, dict] = {}
+        for user in all_users:
+            identifier = user.get("key") or user.get("accountId") or user.get("name")
+            if identifier:
+                user_dict[str(identifier)] = user
 
         return {key: user_dict[key] for key in user_keys if key in user_dict}
