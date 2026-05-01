@@ -16,14 +16,25 @@ from src.models.jira import JiraIssueFields
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
+    from src.domain.repositories import MappingRepository
 
 LABELS_CF_NAME = "Labels"
 
 
 @register_entity_types("labels")
 class LabelsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
-        super().__init__(jira_client=jira_client, op_client=op_client)
+    def __init__(
+        self,
+        jira_client: JiraClient,
+        op_client: OpenProjectClient,
+        *,
+        mapping_repo: MappingRepository | None = None,
+    ) -> None:
+        super().__init__(
+            jira_client=jira_client,
+            op_client=op_client,
+            mapping_repo=mapping_repo,
+        )
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for change detection.
