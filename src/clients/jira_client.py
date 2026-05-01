@@ -238,17 +238,19 @@ class JiraClient:
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
-        # Service composition (Phase 3a/3b/3c of ADR-002 — see ADR for the
+        # Service composition (Phase 3a/3b/3c/3d/3e of ADR-002 — see ADR for the
         # decomposition plan).
         from src.clients.jira_agile_service import JiraAgileService
         from src.clients.jira_project_service import JiraProjectService
         from src.clients.jira_user_service import JiraUserService
         from src.clients.jira_workflow_service import JiraWorkflowService
+        from src.clients.jira_worklog_service import JiraWorklogService
 
         self.projects = JiraProjectService(self)
         self.workflows = JiraWorkflowService(self)
         self.agile = JiraAgileService(self)
         self.users = JiraUserService(self)
+        self.worklogs = JiraWorklogService(self)
 
         # Connect to Jira
         self._connect()
@@ -1295,102 +1297,12 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_issue_link_types(self) -> list[dict[str, Any]]:
-        """Get all issue link types from Jira.
-
-        Returns:
-            List of issue link type dictionaries with id, name, inward, and outward
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
-        try:
-            link_types = self.jira.issue_link_types()
-            result = [
-                {
-                    "id": link_type.id,
-                    "name": link_type.name,
-                    "inward": link_type.inward,
-                    "outward": link_type.outward,
-                }
-                for link_type in link_types
-            ]
-
-            if not link_types:
-                logger.warning("No issue link types found in Jira")
-
-            return result
-        except Exception as e:
-            error_msg = f"Failed to get issue link types: {e!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        """Delegate to ``self.worklogs.get_issue_link_types``."""
+        return self.worklogs.get_issue_link_types()
 
     def get_work_logs_for_issue(self, issue_key: str) -> list[dict[str, Any]]:
-        """Get all work logs for a specific issue.
-
-        Args:
-            issue_key: The key of the issue to get work logs for
-
-        Returns:
-            List of work log dictionaries with complete metadata
-
-        Raises:
-            JiraResourceNotFoundError: If the issue is not found
-            JiraApiError: If the API request fails
-
-        """
-        try:
-            # Get work logs using the JIRA library's worklog method
-            work_logs = self.jira.worklogs(issue_key)
-
-            result = []
-            for work_log in work_logs:
-                work_log_data = {
-                    "id": work_log.id,
-                    "issue_key": issue_key,
-                    "author": {
-                        "name": getattr(work_log.author, "name", None),
-                        "display_name": getattr(work_log.author, "displayName", None),
-                        "email": getattr(work_log.author, "emailAddress", None),
-                        "account_id": getattr(work_log.author, "accountId", None),
-                    },
-                    "started": work_log.started,
-                    "time_spent": work_log.timeSpent,
-                    "time_spent_seconds": work_log.timeSpentSeconds,
-                    "comment": getattr(work_log, "comment", None),
-                    "created": work_log.created,
-                    "updated": work_log.updated,
-                }
-
-                # Add update author if different from original author
-                if hasattr(work_log, "updateAuthor") and work_log.updateAuthor:
-                    work_log_data["update_author"] = {
-                        "name": getattr(work_log.updateAuthor, "name", None),
-                        "display_name": getattr(
-                            work_log.updateAuthor,
-                            "displayName",
-                            None,
-                        ),
-                        "email": getattr(work_log.updateAuthor, "emailAddress", None),
-                        "account_id": getattr(work_log.updateAuthor, "accountId", None),
-                    }
-
-                result.append(work_log_data)
-
-            logger.debug(
-                "Retrieved %s work logs for issue %s",
-                len(result),
-                issue_key,
-            )
-            return result
-
-        except Exception as e:
-            error_msg = f"Failed to get work logs for issue {issue_key}: {e!s}"
-            logger.exception(error_msg)
-            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
-                msg = f"Issue {issue_key} not found"
-                raise JiraResourceNotFoundError(msg) from e
-            raise JiraApiError(error_msg) from e
+        """Delegate to ``self.worklogs.get_work_logs_for_issue``."""
+        return self.worklogs.get_work_logs_for_issue(issue_key)
 
     def get_all_work_logs_for_project(
         self,
@@ -1398,157 +1310,15 @@ class JiraClient:
         *,
         include_empty: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
-        """Get all work logs for all issues in a project."""
-        try:
-            logger.info(
-                "Fetching work logs for all issues in project '%s'...",
-                project_key,
-            )
-
-            # Get all issues for the project with worklog field expanded
-            all_issues = self.get_all_issues_for_project(
-                project_key,
-                expand_changelog=False,
-            )
-
-            work_logs_by_issue = {}
-            issues_with_logs = 0
-            total_work_logs = 0
-
-            for issue in all_issues:
-                issue_key = issue.key
-
-                # Check if issue has work logs in the basic fields first
-                has_work_logs = (
-                    hasattr(issue.fields, "worklog") and issue.fields.worklog and issue.fields.worklog.total > 0
-                )
-
-                if has_work_logs or include_empty:
-                    # Apply adaptive rate limiting before request
-                    self.rate_limiter.wait_if_needed(f"get_work_logs_{project_key}")
-
-                    try:
-                        request_start = time.time()
-                        work_logs = self.get_work_logs_for_issue(issue_key)
-                        response_time = time.time() - request_start
-
-                        # Record successful response for rate limiting adaptation
-                        self.rate_limiter.record_response(response_time, HTTP_OK)
-
-                        if work_logs or include_empty:
-                            work_logs_by_issue[issue_key] = work_logs
-                            if work_logs:
-                                issues_with_logs += 1
-                                total_work_logs += len(work_logs)
-
-                    except JiraResourceNotFoundError:
-                        # Issue was deleted between listing and fetching work logs
-                        logger.warning(
-                            "Issue %s not found when fetching work logs",
-                            issue_key,
-                        )
-                        # Record 404 response
-                        self.rate_limiter.record_response(
-                            time.time() - request_start,
-                            HTTP_BAD_REQUEST_MIN + 4,  # 404
-                        )
-                        continue
-                    except JiraApiError as e:
-                        logger.warning(
-                            "Failed to get work logs for issue %s: %s",
-                            issue_key,
-                            e,
-                        )
-                        # Record error response (assuming 500 for API errors)
-                        self.rate_limiter.record_response(
-                            time.time() - request_start,
-                            HTTP_BAD_REQUEST_MIN + 5,  # 500
-                        )
-                        continue
-
-            logger.info(
-                "Work log extraction complete for project '%s': %s issues with work logs, %s total work logs",
-                project_key,
-                issues_with_logs,
-                total_work_logs,
-            )
-
-            return work_logs_by_issue
-
-        except Exception as e:
-            error_msg = f"Failed to get work logs for project {project_key}: {e!s}"
-            logger.exception(error_msg)
-            if "project does not exist" in str(e).lower() or "project not found" in str(e).lower():
-                msg = f"Project {project_key} not found"
-                raise JiraResourceNotFoundError(msg) from e
-            raise JiraApiError(error_msg) from e
+        """Delegate to ``self.worklogs.get_all_work_logs_for_project``."""
+        return self.worklogs.get_all_work_logs_for_project(
+            project_key,
+            include_empty=include_empty,
+        )
 
     def get_work_log_details(self, issue_key: str, work_log_id: str) -> dict[str, Any]:
-        """Get detailed information for a specific work log.
-
-        Args:
-            issue_key: The key of the issue containing the work log
-            work_log_id: The ID of the work log to get details for
-
-        Returns:
-            Dictionary containing detailed work log information
-
-        Raises:
-            JiraResourceNotFoundError: If the issue or work log is not found
-            JiraApiError: If the API request fails
-
-        """
-        try:
-            # Use the JIRA library's worklog method to get specific work log
-            work_log = self.jira.worklog(issue_key, work_log_id)
-
-            work_log_data = {
-                "id": work_log.id,
-                "issue_key": issue_key,
-                "author": {
-                    "name": getattr(work_log.author, "name", None),
-                    "display_name": getattr(work_log.author, "displayName", None),
-                    "email": getattr(work_log.author, "emailAddress", None),
-                    "account_id": getattr(work_log.author, "accountId", None),
-                },
-                "started": work_log.started,
-                "time_spent": work_log.timeSpent,
-                "time_spent_seconds": work_log.timeSpentSeconds,
-                "comment": getattr(work_log, "comment", None),
-                "created": work_log.created,
-                "updated": work_log.updated,
-            }
-
-            # Add update author if different from original author
-            if hasattr(work_log, "updateAuthor") and work_log.updateAuthor:
-                work_log_data["update_author"] = {
-                    "name": getattr(work_log.updateAuthor, "name", None),
-                    "display_name": getattr(work_log.updateAuthor, "displayName", None),
-                    "email": getattr(work_log.updateAuthor, "emailAddress", None),
-                    "account_id": getattr(work_log.updateAuthor, "accountId", None),
-                }
-
-            # Add visibility restrictions if present
-            if hasattr(work_log, "visibility") and work_log.visibility:
-                work_log_data["visibility"] = {
-                    "type": getattr(work_log.visibility, "type", None),
-                    "value": getattr(work_log.visibility, "value", None),
-                }
-
-            return work_log_data
-
-        except Exception as e:
-            error_msg = f"Failed to get work log {work_log_id} for issue {issue_key}: {e!s}"
-            logger.exception(error_msg)
-            if (
-                "issue does not exist" in str(e).lower()
-                or "issue not found" in str(e).lower()
-                or "worklog does not exist" in str(e).lower()
-                or "worklog not found" in str(e).lower()
-            ):
-                msg = f"Issue {issue_key} or work log {work_log_id} not found"
-                raise JiraResourceNotFoundError(msg) from e
-            raise JiraApiError(error_msg) from e
+        """Delegate to ``self.worklogs.get_work_log_details``."""
+        return self.worklogs.get_work_log_details(issue_key, work_log_id)
 
     def get_tempo_work_logs(
         self,

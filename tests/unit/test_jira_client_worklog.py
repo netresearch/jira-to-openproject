@@ -46,11 +46,17 @@ class TestJiraClientWorkLog:
         # Set required attributes that __init__ would normally set
         import time
 
+        from src.clients.jira_worklog_service import JiraWorklogService
         from src.utils.rate_limiter import create_jira_rate_limiter
 
         client.rate_limiter = create_jira_rate_limiter()
         client.request_count = 0
         client.period_start = time.time()
+
+        # Phase 3e: ``get_work_logs_for_issue`` and friends now delegate
+        # through ``self.worklogs``. Fixtures that bypass ``__init__``
+        # have to wire the service explicitly.
+        client.worklogs = JiraWorklogService(client)
 
         return client
 
