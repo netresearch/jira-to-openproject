@@ -25,8 +25,6 @@ from src.display import configure_logging
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
 from src.utils.performance_optimizer import (
     PerformanceOptimizer,
-    StreamingPaginator,
-    rate_limited,
 )
 from src.utils.rate_limiter import create_jira_rate_limiter
 
@@ -241,6 +239,7 @@ class JiraClient:
         from src.clients.jira_agile_service import JiraAgileService
         from src.clients.jira_field_service import JiraFieldService
         from src.clients.jira_group_service import JiraGroupService
+        from src.clients.jira_issue_service import JiraIssueService
         from src.clients.jira_project_service import JiraProjectService
         from src.clients.jira_reporting_service import JiraReportingService
         from src.clients.jira_search_service import JiraSearchService
@@ -259,6 +258,7 @@ class JiraClient:
         self.reporting = JiraReportingService(self)
         self.search = JiraSearchService(self)
         self.fields = JiraFieldService(self)
+        self.issues = JiraIssueService(self)
 
         # Connect to Jira
         self._connect()
@@ -352,176 +352,15 @@ class JiraClient:
         *,
         expand_changelog: bool = True,
     ) -> list[Issue]:
-        """Get all issues for a specific project, handling pagination."""
-        all_issues: list[Issue] = []
-        start_at = 0
-        max_results = 100  # Fetch in batches of 100
-        # Surround project key with quotes to handle reserved words
-        jql = f'project = "{project_key}" ORDER BY created ASC'
-        fields = None  # Get all fields
-        # Include renderedFields to fetch comments, along with optional changelog
-        expand_parts = []
-        if expand_changelog:
-            expand_parts.append("changelog")
-        expand_parts.append("renderedFields")  # Includes comments
-        expand = ",".join(expand_parts)
-
-        logger.notice("Fetching all issues for project '%s'...", project_key)
-
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        # Verify project exists
-        try:
-            # Simple way to check if project exists - will raise exception if not found
-            self.jira.project(project_key)
-        except Exception as e:
-            msg = f"Project '{project_key}' not found: {e!s}"
-            raise JiraResourceNotFoundError(msg) from e
-
-        # Fetch all pages
-        while True:
-            try:
-                logger.debug(
-                    "Fetching issues for %s: startAt=%s, maxResults=%s",
-                    project_key,
-                    start_at,
-                    max_results,
-                )
-
-                issues_page = self.jira.search_issues(
-                    jql,
-                    startAt=start_at,
-                    maxResults=max_results,
-                    fields=fields,
-                    expand=expand,
-                    json_result=False,  # Get jira.Issue objects
-                )
-
-                if not issues_page:
-                    logger.debug(
-                        "No more issues found for %s at startAt=%s",
-                        project_key,
-                        start_at,
-                    )
-                    break  # Exit loop if no more issues are returned
-
-                all_issues.extend(issues_page)
-                logger.debug(
-                    "Fetched %s issues (total: %s) for %s",
-                    len(issues_page),
-                    len(all_issues),
-                    project_key,
-                )
-
-                # Check if this was the last page
-                if len(issues_page) < max_results:
-                    break
-
-                start_at += len(issues_page)
-
-            except Exception as e:
-                error_msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {e!s}"
-                logger.exception(error_msg)
-                raise JiraApiError(error_msg) from e
-
-        logger.info(
-            "Finished fetching %s issues for project '%s'.",
-            len(all_issues),
+        """Thin delegator over ``self.issues.get_all_issues_for_project``."""
+        return self.issues.get_all_issues_for_project(
             project_key,
+            expand_changelog=expand_changelog,
         )
-        return all_issues
 
     def get_issue_details(self, issue_key: str) -> dict[str, Any]:
-        """Get detailed information about a specific issue.
-
-        Args:
-            issue_key: The key of the issue to get details for
-
-        Returns:
-            A dictionary containing detailed issue information
-
-        Raises:
-            JiraResourceNotFoundError: If the issue is not found
-            JiraApiError: If the API request fails
-
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            issue = self.jira.issue(issue_key)
-
-            # Extract basic issue data
-            issue_data = {
-                "id": issue.id,
-                "key": issue.key,
-                "summary": issue.fields.summary,
-                "description": issue.fields.description,
-                "issue_type": {
-                    "id": issue.fields.issuetype.id,
-                    "name": issue.fields.issuetype.name,
-                },
-                "status": {
-                    "id": issue.fields.status.id,
-                    "name": issue.fields.status.name,
-                },
-                "created": issue.fields.created,
-                "updated": issue.fields.updated,
-                "assignee": None,
-                "reporter": None,
-                "comments": [],
-                "attachments": [],
-            }
-
-            # Add assignee if exists
-            if hasattr(issue.fields, "assignee") and issue.fields.assignee:
-                issue_data["assignee"] = {
-                    "name": issue.fields.assignee.name,
-                    "display_name": issue.fields.assignee.displayName,
-                }
-
-            # Add reporter if exists
-            if hasattr(issue.fields, "reporter") and issue.fields.reporter:
-                issue_data["reporter"] = {
-                    "name": issue.fields.reporter.name,
-                    "display_name": issue.fields.reporter.displayName,
-                }
-
-            # Add comments
-            if hasattr(issue.fields, "comment") and issue.fields.comment:
-                issue_data["comments"] = [
-                    {
-                        "id": comment.id,
-                        "body": comment.body,
-                        "author": comment.author.displayName,
-                        "created": comment.created,
-                    }
-                    for comment in issue.fields.comment.comments
-                ]
-
-            # Add attachments
-            if hasattr(issue.fields, "attachment") and issue.fields.attachment:
-                issue_data["attachments"] = [
-                    {
-                        "id": attachment.id,
-                        "filename": attachment.filename,
-                        "size": attachment.size,
-                        "content": attachment.url,
-                    }
-                    for attachment in issue.fields.attachment
-                ]
-
-            return issue_data
-        except Exception as e:
-            error_msg = f"Failed to get issue details for {issue_key}: {e!s}"
-            logger.exception(error_msg)
-            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
-                msg = f"Issue {issue_key} not found"
-                raise JiraResourceNotFoundError(msg) from e
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.issues.get_issue_details``."""
+        return self.issues.get_issue_details(issue_key)
 
     def get_users(self) -> list[dict[str, Any]]:
         """Thin delegator over ``self.users.get_users``."""
@@ -939,36 +778,8 @@ class JiraClient:
     # ===== BATCH OPERATIONS =====
 
     def batch_get_issues(self, issue_keys: list[str]) -> dict[str, Issue]:
-        """Retrieve multiple issues in batches for optimal performance."""
-        if not issue_keys:
-            return {}
-
-        return self.performance_optimizer.batch_processor.process_batches(
-            issue_keys,
-            self._fetch_issues_batch,
-        )
-
-    def _fetch_issues_batch(self, issue_keys: list[str], **kwargs: object) -> dict[str, Issue]:
-        """Fetch a batch of issues from Jira API."""
-        if not issue_keys:
-            return {}
-
-        # Use JQL to fetch multiple issues at once
-        jql = f"key in ({','.join(issue_keys)})"
-
-        try:
-            issues = self.jira.search_issues(
-                jql,
-                maxResults=len(issue_keys),
-                expand="changelog",
-            )
-            return {issue.key: issue for issue in issues}
-        except Exception:
-            logger.exception(
-                "Batch issue fetch failed for %d issues",
-                len(issue_keys),
-            )
-            return {}
+        """Thin delegator over ``self.issues.batch_get_issues``."""
+        return self.issues.batch_get_issues(issue_keys)
 
     def batch_get_projects(self, project_keys: list[str]) -> dict[str, dict]:
         """Retrieve multiple projects in batches for optimal performance."""
@@ -979,25 +790,17 @@ class JiraClient:
         all_projects = self.get_projects()
         return {project["key"]: project for project in all_projects if project["key"] in project_keys}
 
-    @rate_limited()
     def stream_all_issues_for_project(
         self,
         project_key: str,
         fields: str | None = None,
         batch_size: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Stream all issues for a project with memory-efficient pagination."""
-        effective_batch_size = batch_size or self.batch_size
-
-        paginator = StreamingPaginator(
-            batch_size=effective_batch_size,
-            rate_limiter=self.rate_limiter,
-        )
-
-        return paginator.paginate_jql_search(
-            jira_client=self.jira,
-            jql=f"project = {project_key}",
+        """Thin delegator over ``self.issues.stream_all_issues_for_project``."""
+        return self.issues.stream_all_issues_for_project(
+            project_key,
             fields=fields,
+            batch_size=batch_size,
         )
 
     def batch_get_users_by_keys(self, user_keys: list[str]) -> dict[str, dict]:
