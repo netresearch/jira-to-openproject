@@ -10,7 +10,8 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
+from src.models.jira import JiraIssueFields
 
 VOTES_CF_NAME = "Votes"
 
@@ -46,9 +47,8 @@ class VotesMigration(BaseMigration):  # noqa: D101
         votes_by_key: dict[str, int] = {}
         for k, issue in issues.items():
             try:
-                fields = getattr(issue, "fields", None)
-                votes_obj = getattr(fields, "votes", None)
-                count = getattr(votes_obj, "votes", None)
+                fields = JiraIssueFields.from_issue_any(issue)
+                count = fields.votes.votes if fields.votes else None
                 if isinstance(count, int):
                     votes_by_key[k] = count
             except Exception:
@@ -71,14 +71,19 @@ class VotesMigration(BaseMigration):  # noqa: D101
             # Only track non-zero votes (meaningful values)
             if count == 0:
                 continue
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                # Corrupt or unsupported wp_map shape — skip silently to
+                # preserve the pre-typed call-site behaviour.
+                continue
+            wp_id = int(entry.openproject_id)
             # Track project for selective enablement
-            project_id = entry.get("openproject_project_id")
-            if project_id:
-                projects_with_values.add(int(project_id))
+            if entry.openproject_project_id is not None:
+                projects_with_values.add(int(entry.openproject_project_id))
             cf_values_to_set.append(
                 {
                     "work_package_id": wp_id,

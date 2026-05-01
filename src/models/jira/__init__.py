@@ -10,8 +10,11 @@ from src.models.jira.issue import (
     JiraIssueFields,
     JiraIssueTypeRef,
     JiraPriorityRef,
+    JiraResolutionRef,
+    JiraSecurityLevelRef,
     JiraStatusRef,
     JiraVersionRef,
+    JiraVotesRef,
 )
 from src.models.jira.priority import JiraPriority
 from src.models.jira.project import JiraProject, JiraProjectCategoryRef
@@ -28,7 +31,10 @@ __all__ = [
     "JiraPriorityRef",
     "JiraProject",
     "JiraProjectCategoryRef",
+    "JiraResolutionRef",
+    "JiraSecurityLevelRef",
     "JiraStatusRef",
     "JiraUser",
     "JiraVersionRef",
+    "JiraVotesRef",
 ]

@@ -12,9 +12,12 @@ from src.models.jira import (
     JiraPriorityRef,
     JiraProject,
     JiraProjectCategoryRef,
+    JiraResolutionRef,
+    JiraSecurityLevelRef,
     JiraStatusRef,
     JiraUser,
     JiraVersionRef,
+    JiraVotesRef,
 )
 from src.models.mapping import WorkPackageMappingEntry
 from src.models.migration_error import MigrationError
@@ -38,9 +41,12 @@ __all__ = [
     "JiraPriorityRef",
     "JiraProject",
     "JiraProjectCategoryRef",
+    "JiraResolutionRef",
+    "JiraSecurityLevelRef",
     "JiraStatusRef",
     "JiraUser",
     "JiraVersionRef",
+    "JiraVotesRef",
     "MigrationError",
     "MigrationResult",
     "OpCustomField",
