@@ -429,15 +429,19 @@ class TestBaseMigrationInjection:
         we always pass explicit dummies and never want the real
         constructors firing. The fixture asserts that path is taken.
         """
-        from src.clients import jira_client as jc_mod
-        from src.clients import openproject_client as op_mod
+        # ``BaseMigration`` does ``from src.clients... import JiraClient/
+        # OpenProjectClient`` so the local binding is what
+        # ``self.jira_client = jira_client or JiraClient()`` resolves.
+        # Patching the source modules wouldn't intercept those calls;
+        # patch the symbols on ``base_migration`` itself.
+        from src.migrations import base_migration as bm_mod
 
         def _boom(*_a: object, **_k: object) -> None:
             msg = "real client constructed in unit test"
             raise AssertionError(msg)
 
-        monkeypatch.setattr(jc_mod, "JiraClient", _boom)
-        monkeypatch.setattr(op_mod, "OpenProjectClient", _boom)
+        monkeypatch.setattr(bm_mod, "JiraClient", _boom)
+        monkeypatch.setattr(bm_mod, "OpenProjectClient", _boom)
         return
 
     def test_priority_migration_reads_from_injected_repo(

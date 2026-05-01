@@ -33,10 +33,28 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 _module_logger = logging.getLogger(__name__)
+
+
+def _json_default(value: Any) -> Any:
+    """Best-effort encoder for non-JSON-native objects.
+
+    Mirrors :func:`src.utils.data_handler._json_default` so the repository
+    handles the same shapes the legacy ``Mappings.set_mapping`` did.
+    Falling back to ``str(value)`` keeps test fixtures (which sometimes
+    pass ``unittest.mock.MagicMock`` instances through migration
+    bookkeeping) writable rather than raising ``TypeError``.
+    """
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    return str(value)
 
 
 class JsonFileMappingRepository:
@@ -243,7 +261,7 @@ class JsonFileMappingRepository:
                     )
                 raise
             with fh:
-                json.dump(payload, fh, indent=2, sort_keys=True)
+                json.dump(payload, fh, indent=2, sort_keys=True, default=_json_default)
                 fh.write("\n")
                 fh.flush()
                 os.fsync(fh.fileno())
