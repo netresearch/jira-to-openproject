@@ -17,6 +17,32 @@ Prerequisites:
 
 Usage:
     python -m src.main migrate --components work_packages_content
+
+Phase 7g notes
+--------------
+The on-disk ``work_package_mapping.json`` produced by Phase 1 is the
+sole source of truth for Jira→OpenProject WP id resolution here. Each
+row is normalised through :meth:`WorkPackageMappingEntry.from_legacy`
+when building the ``jira_key → openproject_id`` lookup used for link
+rewriting. The mapping file is keyed by ``str(jira_id)`` outer with
+the human-readable ``jira_key`` stored inside each value; legacy
+bare-``int`` rows (which carry no recoverable ``jira_key``) are SKIPPED
+to avoid emitting invalid downstream link targets — see PR #162 for
+the equivalent fix in :class:`AttachmentsMigration`.
+
+Watcher resolution probes ``user_mapping`` using the canonical
+multi-identifier order — ``account_id`` → ``name`` → ``key`` →
+``email_address`` → ``display_name`` — by parsing each Jira watcher
+payload through :class:`JiraUser` at the boundary. This matches the
+order used by :meth:`work_package_skeleton_migration._map_user` and
+:meth:`category_defaults_migration._resolve_user_id`.
+
+Custom-field id resolution (`mapping.get("openproject_id") if
+isinstance(mapping, dict) else mapping`) is a *different*, orthogonal
+``dict | int`` polymorphism on ``custom_field_mapping`` rows — not a
+``wp_map`` ladder. Phase 7's scope is the ``wp_map`` ladder; the
+custom_field_mapping shape is shared with several status / issue-type
+mappings across the codebase and is deferred.
 """
 
 from __future__ import annotations
@@ -31,7 +57,7 @@ from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, JiraUser, WorkPackageMappingEntry
 from src.utils.markdown_converter import MarkdownConverter
 
 if TYPE_CHECKING:
@@ -124,12 +150,26 @@ class WorkPackageContentMigration(BaseMigration):
             with self.work_package_mapping_file.open("r") as f:
                 self.work_package_mapping = json.load(f)
 
-            # Build quick lookup by Jira key
-            self.jira_key_to_wp_id = {
-                entry.get("jira_key"): entry.get("openproject_id")
-                for entry in self.work_package_mapping.values()
-                if entry.get("jira_key") and entry.get("openproject_id")
-            }
+            # Build the canonical jira_key → openproject_id lookup by
+            # normalising every row through WorkPackageMappingEntry.
+            # Production rows are dict-shaped (jira_key + openproject_id);
+            # bare-int legacy rows have no recoverable jira_key and are
+            # SKIPPED here — emitting them as ``int → int`` link targets
+            # would corrupt the rewritten descriptions / comments.
+            # Mirrors the rule applied in :class:`AttachmentsMigration`
+            # (see PR #162).
+            self.jira_key_to_wp_id = {}
+            for outer_key, raw_entry in self.work_package_mapping.items():
+                if not isinstance(raw_entry, dict):
+                    # Bare-int legacy rows have no recoverable Jira key.
+                    continue
+                inner_jira_key = raw_entry.get("jira_key")
+                jira_key = str(inner_jira_key or outer_key)
+                try:
+                    entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+                except ValueError:
+                    continue
+                self.jira_key_to_wp_id[jira_key] = int(entry.openproject_id)
 
             self.logger.info(
                 "Loaded work package mapping: %d entries, %d key lookups",
@@ -488,18 +528,56 @@ class WorkPackageContentMigration(BaseMigration):
             return 0
 
         for watcher in watchers:
-            # Get OpenProject user ID
-            jira_username = watcher.get("name") or watcher.get("accountId")
-            if jira_username and jira_username in self.user_mapping:
-                op_user_id = self.user_mapping[jira_username].get("openproject_id")
-                if op_user_id:
-                    try:
-                        self.op_client.add_watcher(wp_id, op_user_id)
-                        added += 1
-                    except Exception:
-                        pass
+            op_user_id = self._resolve_watcher_user_id(watcher)
+            if not op_user_id:
+                continue
+            try:
+                self.op_client.add_watcher(wp_id, op_user_id)
+                added += 1
+            except Exception:
+                pass
 
         return added
+
+    def _resolve_watcher_user_id(self, watcher: Any) -> int | None:
+        """Resolve a Jira watcher payload to an OpenProject user id.
+
+        Phase 7g: parse the watcher payload at the boundary via
+        :class:`JiraUser` and probe ``user_mapping`` using the canonical
+        multi-identifier order — ``account_id`` (Cloud-first per
+        repository convention) → ``name`` → ``key`` → ``email_address``
+        → ``display_name``. Same probe order as
+        :meth:`work_package_skeleton_migration._map_user` and
+        :meth:`category_defaults_migration._resolve_user_id`.
+
+        Args:
+            watcher: The Jira watcher payload (dict from
+                :meth:`JiraClient.get_issue_watchers`, or any
+                attribute-bearing SDK object).
+
+        Returns:
+            OpenProject user ID or ``None`` if no probe matched.
+
+        """
+        if not watcher:
+            return None
+        try:
+            user = JiraUser.from_dict(watcher) if isinstance(watcher, dict) else JiraUser.from_jira_obj(watcher)
+        except Exception:
+            return None
+        for probe in (
+            user.account_id,
+            user.name,
+            user.key,
+            user.email_address,
+            user.display_name,
+        ):
+            if not probe:
+                continue
+            user_entry = self.user_mapping.get(probe)
+            if isinstance(user_entry, dict) and user_entry.get("openproject_id"):
+                return int(user_entry["openproject_id"])
+        return None
 
     def _collect_content_for_issue(
         self,
@@ -563,11 +641,9 @@ class WorkPackageContentMigration(BaseMigration):
         try:
             watchers = self.jira_client.get_issue_watchers(jira_issue.key)
             for watcher in watchers:
-                jira_username = watcher.get("name") or watcher.get("accountId")
-                if jira_username and jira_username in self.user_mapping:
-                    op_user_id = self.user_mapping[jira_username].get("openproject_id")
-                    if op_user_id:
-                        collected["watchers"].append(op_user_id)
+                op_user_id = self._resolve_watcher_user_id(watcher)
+                if op_user_id:
+                    collected["watchers"].append(op_user_id)
         except Exception:
             pass
 
