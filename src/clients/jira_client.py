@@ -242,6 +242,7 @@ class JiraClient:
         from src.clients.jira_group_service import JiraGroupService
         from src.clients.jira_project_service import JiraProjectService
         from src.clients.jira_reporting_service import JiraReportingService
+        from src.clients.jira_search_service import JiraSearchService
         from src.clients.jira_tempo_service import JiraTempoService
         from src.clients.jira_user_service import JiraUserService
         from src.clients.jira_workflow_service import JiraWorkflowService
@@ -255,6 +256,7 @@ class JiraClient:
         self.tempo = JiraTempoService(self)
         self.groups = JiraGroupService(self)
         self.reporting = JiraReportingService(self)
+        self.search = JiraSearchService(self)
 
         # Connect to Jira
         self._connect()
@@ -548,44 +550,8 @@ class JiraClient:
         return self.projects.get_project_permission_scheme(project_key)
 
     def get_issue_count(self, project_key: str) -> int:
-        """Get the total number of issues in a project.
-
-        Args:
-            project_key: The key of the Jira project to count issues from
-
-        Returns:
-            The total number of issues in the project
-
-        Raises:
-            JiraResourceNotFoundError: If the project is not found
-            JiraApiError: If the API request fails
-
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            # Use JQL to count issues in the project - surround with quotes to handle reserved words
-            jql = f'project="{project_key}"'
-
-            # Using fields="key" and expand='' minimizes data transfer
-            issues = self.jira.search_issues(
-                jql,
-                maxResults=1,
-                fields="key",
-                expand="",
-            )
-
-            # Get total from the response
-            return issues.total
-        except Exception as e:
-            error_msg = f"Failed to get issue count for project {project_key}: {e!s}"
-            logger.exception(error_msg)
-            if "project does not exist" in str(e).lower() or "project not found" in str(e).lower():
-                msg = f"Project {project_key} not found"
-                raise JiraResourceNotFoundError(msg) from e
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.search.get_issue_count``."""
+        return self.search.get_issue_count(project_key)
 
     def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
         """Get the watchers for a specific Jira issue.
@@ -632,129 +598,12 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_all_statuses(self) -> list[dict[str, Any]]:
-        """Get all statuses from Jira.
-
-        Returns:
-            List of status dictionaries with id, name, and category information
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            # Method 1: Use sample issues to extract statuses
-            statuses: list[dict[str, Any]] = []
-            issues = self.jira.search_issues("order by created DESC", maxResults=50)
-            logger.debug("Retrieving statuses from %s sample issues", len(issues))
-
-            # Extract unique statuses from these issues
-            for issue in issues:
-                if hasattr(issue.fields, "status"):
-                    status = issue.fields.status
-                    status_dict = {
-                        "id": status.id,
-                        "name": status.name,
-                        "description": getattr(status, "description", ""),
-                        "statusCategory": {
-                            "id": getattr(
-                                getattr(status, "statusCategory", None),
-                                "id",
-                                None,
-                            ),
-                            "key": getattr(
-                                getattr(status, "statusCategory", None),
-                                "key",
-                                None,
-                            ),
-                            "name": getattr(
-                                getattr(status, "statusCategory", None),
-                                "name",
-                                None,
-                            ),
-                            "colorName": getattr(
-                                getattr(status, "statusCategory", None),
-                                "colorName",
-                                None,
-                            ),
-                        },
-                    }
-
-                    # Check if status is already in list
-                    if not any(s.get("id") == status.id for s in statuses):
-                        statuses.append(status_dict)
-
-            # If we found statuses from sample issues, return them
-            if statuses:
-                logger.info("Retrieved %s statuses from sample issues", len(statuses))
-                return statuses
-
-            # Method 2: Use the status_categories endpoint
-            path = "/rest/api/2/statuscategory"
-            response = self._make_request(path)
-            if not response or response.status_code != HTTP_OK:
-                msg = f"Failed to get status categories: HTTP {response.status_code if response else 'No response'}"
-                raise JiraApiError(
-                    msg,
-                )
-
-            categories = response.json()
-            logger.debug("Retrieved %s status categories from API", len(categories))
-
-            # Use the status endpoint
-            path = "/rest/api/2/status"
-            response = self._make_request(path)
-            if not response or response.status_code != HTTP_OK:
-                msg = f"Failed to get statuses: HTTP {response.status_code if response else 'No response'}"
-                raise JiraApiError(
-                    msg,
-                )
-
-            statuses = response.json()
-            logger.info("Retrieved %s statuses from Jira API", len(statuses))
-
-            return statuses
-
-        except Exception as e:
-            error_msg = f"Failed to get statuses: {e!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.search.get_all_statuses``."""
+        return self.search.get_all_statuses()
 
     def get_priorities(self) -> list[dict[str, Any]]:
-        """Get all priorities from Jira.
-
-        Returns:
-            List of priority dictionaries with id, name, and status
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            # jira client has priorities() helper in many versions
-            priorities = self.jira.priorities()
-            result = [
-                {
-                    "id": getattr(p, "id", None),
-                    "name": getattr(p, "name", None),
-                    "status": getattr(p, "status", None),
-                }
-                for p in priorities
-            ]
-            if not priorities:
-                logger.warning("No priorities found in Jira")
-            return result
-        except Exception as e:
-            error_msg = f"Failed to get priorities: {e!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.search.get_priorities``."""
+        return self.search.get_priorities()
 
     def get_issue_property(self, issue_key: str, property_key: str) -> dict[str, Any] | None:
         """Get an issue property JSON by key. Returns None if missing or on 404.
@@ -834,37 +683,8 @@ class JiraClient:
             raise JiraApiError(error_msg) from None
 
     def get_status_categories(self) -> list[dict[str, Any]]:
-        """Get all status categories from Jira.
-
-        Returns:
-            List of status category dictionaries
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
-        try:
-            # Use the REST API to get all status categories
-            path = "/rest/api/2/statuscategory"
-
-            # Make the request using our generic method
-            response = self._make_request(path)
-            if not response:
-                msg = "Failed to get status categories (request failed)"
-                raise JiraApiError(msg)
-
-            if response.status_code != HTTP_OK:
-                msg = f"Failed to get status categories: HTTP {response.status_code}"
-                raise JiraApiError(msg)
-
-            categories = response.json()
-            logger.info("Retrieved %s status categories from Jira API", len(categories))
-
-            return categories
-        except Exception as e:
-            error_msg = f"Failed to get status categories: {e!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.search.get_status_categories``."""
+        return self.search.get_status_categories()
 
     def _get_field_metadata_via_createmeta(self, field_id: str) -> dict[str, Any]:
         """Get field metadata using the issue/createmeta endpoint.
