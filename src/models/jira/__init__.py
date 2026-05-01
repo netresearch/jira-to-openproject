@@ -10,6 +10,7 @@ from src.models.jira.issue import (
     JiraIssueFields,
     JiraIssueTypeRef,
     JiraPriorityRef,
+    JiraRemoteLinkRef,
     JiraResolutionRef,
     JiraSecurityLevelRef,
     JiraStatusRef,
@@ -17,12 +18,18 @@ from src.models.jira.issue import (
     JiraVotesRef,
 )
 from src.models.jira.priority import JiraPriority
-from src.models.jira.project import JiraProject, JiraProjectCategoryRef
+from src.models.jira.project import (
+    JiraComponentLead,
+    JiraProject,
+    JiraProjectCategoryRef,
+    JiraProjectComponent,
+)
 from src.models.jira.user import JiraUser
 
 __all__ = [
     "JiraAttachment",
     "JiraComment",
+    "JiraComponentLead",
     "JiraComponentRef",
     "JiraIssue",
     "JiraIssueFields",
@@ -31,6 +38,8 @@ __all__ = [
     "JiraPriorityRef",
     "JiraProject",
     "JiraProjectCategoryRef",
+    "JiraProjectComponent",
+    "JiraRemoteLinkRef",
     "JiraResolutionRef",
     "JiraSecurityLevelRef",
     "JiraStatusRef",

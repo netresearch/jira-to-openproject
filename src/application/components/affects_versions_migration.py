@@ -10,7 +10,8 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
+from src.models.jira import JiraIssueFields
 
 AFFECTS_VERSIONS_CF_NAME = "Affects Versions"
 
@@ -38,6 +39,13 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
+        """Extract Jira ``versions`` (Affects Versions) per issue mapped to a WP.
+
+        We parse at the boundary: each issue from the Jira client is normalised
+        through :meth:`JiraIssueFields.from_issue_any` so the rest of the
+        pipeline reads ``fields.affects_versions`` as a typed list of
+        :class:`JiraVersionRef`.
+        """
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map]
         if not keys:
@@ -46,16 +54,10 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         versions_by_key: dict[str, list[str]] = {}
         for k, issue in issues.items():
             try:
-                fields = getattr(issue, "fields", None)
-                vers = getattr(fields, "versions", None)
-                if isinstance(vers, list) and vers:
-                    names = []
-                    for v in vers:
-                        name = getattr(v, "name", None)
-                        if name and isinstance(name, str) and name.strip():
-                            names.append(name.strip())
-                    if names:
-                        versions_by_key[k] = names
+                fields = JiraIssueFields.from_issue_any(issue)
+                names = [v.name.strip() for v in fields.affects_versions if v.name and v.name.strip()]
+                if names:
+                    versions_by_key[k] = names
             except Exception:
                 continue
         return ComponentResult(success=True, data={"versions": versions_by_key})
@@ -86,14 +88,19 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         for jira_key, text in text_by_key.items():
             if not text:
                 continue
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                # Corrupt or unsupported wp_map shape — skip silently to
+                # preserve the pre-typed call-site behaviour.
+                continue
+            wp_id = int(entry.openproject_id)
             # Track project for selective enablement
-            project_id = entry.get("openproject_project_id")
-            if project_id:
-                projects_with_values.add(int(project_id))
+            if entry.openproject_project_id is not None:
+                projects_with_values.add(int(entry.openproject_project_id))
             try:
                 val = escape_ruby_single_quoted(text)
                 script = (

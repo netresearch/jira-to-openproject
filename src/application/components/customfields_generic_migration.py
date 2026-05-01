@@ -2,6 +2,25 @@
 
 Relies on existing custom field mapping (name/type) and ensures missing CFs
 are created, then sets values on corresponding work packages.
+
+Note on the dict access patterns kept here
+------------------------------------------
+This component intentionally retains a couple of structural dict reads
+that other Phase 7 migrations have replaced with typed models:
+
+* The Jira side iterates ``dir(fields)`` for dynamic ``customfield_*``
+  attributes. These vary per tenant and are not modelled by
+  :class:`JiraIssueFields` — a typed wrapper would have to fall back to
+  attribute access on the raw fields object anyway, so we keep the
+  direct ``getattr`` here.
+* ``cf_mapping`` is the persisted CF-name/type table produced by the
+  ``custom_field`` migration. It is a plain mapping of metadata, not a
+  polymorphic ``int|dict`` ladder — typing it would not eliminate any
+  ``isinstance`` branches at this call site.
+
+The work-package mapping dict, on the other hand, IS the polymorphic
+shape Phase 7 set out to retire — it is normalised through
+:class:`WorkPackageMappingEntry.from_legacy` below.
 """
 
 from __future__ import annotations
@@ -13,7 +32,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 
 @register_entity_types("customfields_generic")
@@ -60,17 +79,25 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
         values_by_wp: dict[int, list[tuple[str, str]]] = {}
         wp_to_project: dict[int, int] = {}  # Track project ID for each WP
         for jira_key, issue in issues.items():
+            # Walk raw ``fields`` for dynamic ``customfield_*`` attributes —
+            # the per-tenant set of CFs is not modelled by JiraIssueFields,
+            # so attribute access on the underlying object is correct here.
             fields = getattr(issue, "fields", None)
             if not fields:
                 continue
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                # Corrupt or unsupported wp_map shape — skip silently to
+                # preserve the pre-typed call-site behaviour.
+                continue
+            wp_id = int(entry.openproject_id)
             # Track project ID for selective enablement
-            project_id = entry.get("openproject_project_id")
-            if project_id:
-                wp_to_project[wp_id] = int(project_id)
+            if entry.openproject_project_id is not None:
+                wp_to_project[wp_id] = int(entry.openproject_project_id)
 
             # Iterate over fields attributes beginning with customfield_
             for attr in dir(fields):

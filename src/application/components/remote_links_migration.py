@@ -6,13 +6,12 @@ This avoids CF proliferation and presents links inline for users.
 
 from __future__ import annotations
 
-from typing import Any
-
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
+from src.models.jira import JiraIssueFields
 
 SECTION_TITLE = "Remote Links"
 
@@ -23,39 +22,22 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     @staticmethod
-    def _extract_links_from_fields(fields: Any) -> list[tuple[str, str]]:
-        links: list[tuple[str, str]] = []
-        if not fields:
-            return links
-        # Prefer dedicated property if present
-        candidates = []
-        for name in ("remotelinks", "remote_links", "webLinks", "weblinks", "issuelinks"):
-            if hasattr(fields, name):
-                candidates = getattr(fields, name) or []
-                break
-        try:
-            for item in candidates or []:
-                # Common shapes: dicts with 'object': {'url','title'} or direct {'url','title'}
-                obj = None
-                if isinstance(item, dict):
-                    obj = item.get("object", item)
-                else:
-                    obj = getattr(item, "object", item)
-                url = None
-                title = None
-                if isinstance(obj, dict):
-                    url = obj.get("url")
-                    title = obj.get("title") or obj.get("summary")
-                else:
-                    url = getattr(obj, "url", None)
-                    title = getattr(obj, "title", None) or getattr(obj, "summary", None)
-                if isinstance(url, str) and url.startswith(("http://", "https://")):
-                    if not isinstance(title, str) or not title.strip():
-                        title = url
-                    links.append((title.strip(), url.strip()))
-        except Exception:
-            return links
-        return links
+    def _extract_links_from_fields(fields: JiraIssueFields) -> list[tuple[str, str]]:
+        """Return ``(title, url)`` pairs from a typed :class:`JiraIssueFields`.
+
+        ``fields.remote_links`` already holds the boundary-flattened
+        :class:`JiraRemoteLinkRef` payloads — we only need to drop entries
+        with a missing/non-http URL and fill in a sensible title fallback.
+        """
+        pairs: list[tuple[str, str]] = []
+        for ref in fields.remote_links:
+            url = ref.url
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                continue
+            url = url.strip()
+            title = ref.title.strip() if isinstance(ref.title, str) and ref.title.strip() else url
+            pairs.append((title, url))
+        return pairs
 
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
@@ -66,7 +48,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         links_by_key: dict[str, list[tuple[str, str]]] = {}
         for k, issue in issues.items():
             try:
-                fields = getattr(issue, "fields", None)
+                fields = JiraIssueFields.from_issue_any(issue)
                 pairs = self._extract_links_from_fields(fields)
                 if pairs:
                     links_by_key[k] = pairs
@@ -100,10 +82,16 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         # Collect all sections for bulk update
         sections_to_upsert: list[dict] = []
         for jira_key, md in md_by_key.items():
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                # Corrupt or unsupported wp_map shape — skip silently to
+                # preserve the pre-typed call-site behaviour.
+                continue
+            wp_id = int(entry.openproject_id)
             sections_to_upsert.append(
                 {
                     "work_package_id": wp_id,

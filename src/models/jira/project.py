@@ -15,9 +15,114 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.domain.ids import JiraProjectKey
+
+
+class JiraComponentLead(BaseModel):
+    """Reference to the user who leads a Jira project component.
+
+    The Jira REST shape is ``{"name": str, "key": str, "displayName": str,
+    "emailAddress": str, "accountId": str}``. We model only the identifier
+    fields the migration uses for user-mapping lookup.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    name: str | None = None
+    """Server/DC login (``name``)."""
+
+    key: str | None = None
+    """Server/DC user key — sometimes used in place of ``name``."""
+
+    account_id: str | None = Field(default=None, alias="accountId")
+    """Cloud ``accountId`` for the lead, when present."""
+
+    email_address: str | None = Field(default=None, alias="emailAddress")
+    """Lead's email — used as a last-resort key for user-mapping lookup."""
+
+    display_name: str | None = Field(default=None, alias="displayName")
+
+    @classmethod
+    def from_any(cls, raw: Any) -> JiraComponentLead | None:
+        """Build from a dict, SDK-like object, plain string, or ``None``.
+
+        Returns ``None`` when ``raw`` is ``None`` or carries no usable
+        identifier — callers iterate components and skip those.
+
+        Plain strings are treated as a ``name`` hint to preserve
+        compatibility with legacy lead values produced by older
+        migration cache formats.
+        """
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            stripped = raw.strip()
+            if not stripped:
+                return None
+            return cls.model_validate({"name": stripped})
+        if isinstance(raw, dict):
+            data = raw
+        else:
+            data = {
+                "name": getattr(raw, "name", None),
+                "key": getattr(raw, "key", None),
+                "accountId": getattr(raw, "accountId", None),
+                "emailAddress": getattr(raw, "emailAddress", None),
+                "displayName": getattr(raw, "displayName", None),
+            }
+        instance = cls.model_validate(data)
+        # Honor the docstring's "no usable identifier" contract — return
+        # None rather than an empty lead so callers can skip cleanly.
+        if not (
+            instance.name or instance.key or instance.account_id or instance.email_address or instance.display_name
+        ):
+            return None
+        return instance
+
+
+class JiraProjectComponent(BaseModel):
+    """A Jira project component as returned by ``get_project_components``.
+
+    The migration uses this only to look up the component's display
+    ``name`` and its (optional) ``lead`` user. Everything else the REST
+    shape carries (``id``, ``description``, assigneeType, …) is ignored
+    by ``extra="ignore"``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    id: str | None = None
+    name: str | None = None
+    lead: JiraComponentLead | None = None
+    """Direct ``lead`` field — Cloud REST shape."""
+    component_lead: JiraComponentLead | None = Field(default=None, alias="componentLead")
+    """Server/DC alias for the same data."""
+
+    @classmethod
+    def from_any(cls, raw: Any) -> JiraProjectComponent:
+        """Build from either a dict or an SDK-like object."""
+        if isinstance(raw, dict):
+            payload = dict(raw)
+            # The REST shape stores the lead block as a dict — coerce it.
+            for lead_key in ("lead", "componentLead"):
+                if lead_key in payload:
+                    payload[lead_key] = JiraComponentLead.from_any(payload[lead_key])
+            return cls.model_validate(payload)
+        return cls.model_validate(
+            {
+                "id": getattr(raw, "id", None),
+                "name": getattr(raw, "name", None),
+                "lead": JiraComponentLead.from_any(getattr(raw, "lead", None)),
+                "componentLead": JiraComponentLead.from_any(getattr(raw, "componentLead", None)),
+            },
+        )
+
+    @property
+    def effective_lead(self) -> JiraComponentLead | None:
+        """Return ``lead`` if set, else ``componentLead``."""
+        return self.lead or self.component_lead
 
 
 class JiraProjectCategoryRef(BaseModel):
@@ -138,4 +243,9 @@ class JiraProject(BaseModel):
         )
 
 
-__all__ = ["JiraProject", "JiraProjectCategoryRef"]
+__all__ = [
+    "JiraComponentLead",
+    "JiraProject",
+    "JiraProjectCategoryRef",
+    "JiraProjectComponent",
+]

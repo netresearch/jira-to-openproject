@@ -13,23 +13,14 @@ from typing import Any
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
+from src.models.jira import JiraIssueFields
 
 
 @register_entity_types("native_tags")
 class NativeTagsMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
-
-    @staticmethod
-    def _coerce_labels(fields: Any) -> list[str]:
-        if not fields:
-            return []
-        labels = getattr(fields, "labels", None)
-        try:
-            return [v.strip() for v in labels or [] if isinstance(v, str) and v.strip()]
-        except Exception:
-            return []
 
     @staticmethod
     def _name_to_color_hex(name: str) -> str:
@@ -42,6 +33,11 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         return f"#{r:02x}{g:02x}{b:02x}"
 
     def _extract(self) -> ComponentResult:
+        """Extract Jira labels per issue mapped to a WP.
+
+        Boundary parse via :meth:`JiraIssueFields.from_issue_any` gives us
+        a typed ``list[str]`` for labels — no more attribute walking.
+        """
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map]
         if not keys:
@@ -50,8 +46,8 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         by_key: dict[str, list[str]] = {}
         for k, issue in issues.items():
             try:
-                fields = getattr(issue, "fields", None)
-                labels = self._coerce_labels(fields)
+                fields = JiraIssueFields.from_issue_any(issue)
+                labels = [v.strip() for v in fields.labels if v and v.strip()]
                 if labels:
                     by_key[k] = sorted(set(labels))
             except Exception:
@@ -64,10 +60,16 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         wp_map = self.mappings.get_mapping("work_package") or {}
         updates: list[dict[str, Any]] = []
         for jira_key, names in by_key.items():
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                # Corrupt or unsupported wp_map shape — skip silently to
+                # preserve the pre-typed call-site behaviour.
+                continue
+            wp_id = int(entry.openproject_id)
             tag_defs = [{"name": n, "color": self._name_to_color_hex(n)} for n in names]
             updates.append({"work_package_id": wp_id, "tags": tag_defs})
         return ComponentResult(success=True, data={"updates": updates})

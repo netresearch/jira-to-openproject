@@ -421,3 +421,97 @@ def test_from_jira_obj_votes_non_int_count_normalises_to_none() -> None:
 
     assert issue.fields.votes is not None
     assert issue.fields.votes.votes is None
+
+
+def test_from_jira_obj_affects_versions_via_versions_attr() -> None:
+    """SDK exposes affectsVersions as ``fields.versions`` — adapter must alias it."""
+    sdk_fields = SimpleNamespace(
+        versions=[
+            SimpleNamespace(id="100", name="1.0"),
+            SimpleNamespace(id="101", name="1.1"),
+        ],
+    )
+    obj = SimpleNamespace(id="1", key="ABC-1", fields=sdk_fields)
+
+    issue = JiraIssue.from_jira_obj(obj)
+
+    assert len(issue.fields.affects_versions) == 2
+    assert issue.fields.affects_versions[0].name == "1.0"
+    assert issue.fields.affects_versions[1].name == "1.1"
+
+
+def test_from_dict_affects_versions_via_versions_key() -> None:
+    """REST/cache shape uses ``versions`` key — model accepts via alias."""
+    raw = {
+        "key": "ABC-1",
+        "id": "1",
+        "fields": {
+            "versions": [
+                {"id": "100", "name": "1.0"},
+                {"id": "101", "name": "1.1"},
+            ],
+        },
+    }
+
+    issue = JiraIssue.from_dict(raw)
+
+    assert len(issue.fields.affects_versions) == 2
+    assert issue.fields.affects_versions[0].name == "1.0"
+
+
+def test_from_jira_obj_remote_links_synonym_attrs() -> None:
+    """remote_links is populated from any of the SDK's synonym attrs."""
+    sdk_fields = SimpleNamespace(
+        weblinks=[
+            SimpleNamespace(url="https://example.com/a", title="A"),
+        ],
+    )
+    obj = SimpleNamespace(id="1", key="ABC-1", fields=sdk_fields)
+
+    issue = JiraIssue.from_jira_obj(obj)
+
+    assert len(issue.fields.remote_links) == 1
+    assert issue.fields.remote_links[0].url == "https://example.com/a"
+    assert issue.fields.remote_links[0].title == "A"
+
+
+def test_from_dict_remote_links_canonical_key() -> None:
+    """The dict-shape path consumes the canonical ``remote_links`` key.
+
+    Synonym attribute walking (``remotelinks``/``webLinks``/…) only
+    runs on the SDK path via ``_jira_fields_payload`` — the dict path
+    expects the cache-canonical shape produced by ``from_jira_obj``.
+    """
+    raw = {
+        "key": "ABC-1",
+        "id": "1",
+        "fields": {
+            "remote_links": [
+                {"url": "https://example.com/x", "title": "X"},
+                {"url": "https://example.com/y", "title": "Y"},
+            ],
+        },
+    }
+
+    issue = JiraIssue.from_dict(raw)
+
+    assert len(issue.fields.remote_links) == 2
+    assert issue.fields.remote_links[0].url == "https://example.com/x"
+    assert issue.fields.remote_links[1].url == "https://example.com/y"
+
+
+def test_from_jira_obj_remote_links_nested_object_unwrap() -> None:
+    """SDK-path: entries nested under ``object`` get unwrapped by the synonym walk."""
+    sdk_fields = SimpleNamespace(
+        remotelinks=[
+            SimpleNamespace(object=SimpleNamespace(url="https://example.com/x", title="X")),
+            SimpleNamespace(url="https://example.com/y", title="Y"),
+        ],
+    )
+    obj = SimpleNamespace(id="1", key="ABC-1", fields=sdk_fields)
+
+    issue = JiraIssue.from_jira_obj(obj)
+
+    assert len(issue.fields.remote_links) == 2
+    assert issue.fields.remote_links[0].url == "https://example.com/x"
+    assert issue.fields.remote_links[1].url == "https://example.com/y"
