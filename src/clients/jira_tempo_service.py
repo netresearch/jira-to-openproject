@@ -55,8 +55,12 @@ class JiraTempoService:
     def get_tempo_accounts(self, *, expand: bool = False) -> list[dict[str, Any]]:
         """Retrieve all Tempo accounts."""
         path = "/rest/tempo-accounts/1/account"
+        # The pre-extraction code accepted ``expand`` as a parameter but
+        # always sent ``expand=true`` to the Tempo API regardless of
+        # the caller's value. Honour the parameter so callers who pass
+        # ``expand=False`` actually get the cheaper, slimmer response.
         params = {
-            "expand": "true",
+            "expand": "true" if expand else "false",
             "skipArchived": "false",
         }
 
@@ -513,10 +517,23 @@ class JiraTempoService:
                             date_to=date_to,
                         )
 
-                        # Filter by user if specified
+                        # Filter by user if specified. The enhanced
+                        # worklog shape produced by
+                        # ``get_tempo_all_work_logs_for_project`` only
+                        # populates ``author.username`` /
+                        # ``author.display_name`` / ``author.account_id``
+                        # — there is no ``author.key``. Match against
+                        # any of the populated identifiers so callers
+                        # can pass either a username or an accountId.
                         if user_key:
                             project_work_logs = [
-                                log for log in project_work_logs if log.get("author", {}).get("key") == user_key
+                                log
+                                for log in project_work_logs
+                                if user_key
+                                in (
+                                    log.get("author", {}).get("username"),
+                                    log.get("author", {}).get("account_id"),
+                                )
                             ]
 
                         all_time_entries.extend(project_work_logs)
@@ -546,27 +563,46 @@ class JiraTempoService:
                     date_to=date_to,
                 )
 
-            # Enhance entries with migration metadata
+            # Enhance entries with migration metadata. The upstream
+            # ``get_tempo_all_work_logs_for_project`` /
+            # ``get_tempo_user_work_logs`` / ``get_tempo_work_logs``
+            # methods all return the same snake_case-keyed enhanced
+            # shape (``tempo_worklog_id``, ``jira_worklog_id``,
+            # ``issue_key``, ``time_spent_seconds``, ``date_started``,
+            # ...). The pre-extraction code mistakenly reached for
+            # camelCase keys (``worklogId``, ``issue.projectKey``,
+            # ``timeSpentSeconds``, ``dateStarted``) which never
+            # existed on these dicts, so ``_migration_metadata`` was
+            # mostly ``None`` and the ``timeSpent`` / ``started``
+            # alias branches never fired. Match the actual keys.
             enhanced_entries = []
             for entry in all_time_entries:
                 enhanced_entry = entry.copy()
+
+                # Project key isn't carried on the enhanced entry, but
+                # the issue key encodes it (Jira project keys are the
+                # prefix before the first ``-``).
+                issue_key = entry.get("issue_key") or ""
+                project_key_from_issue = issue_key.split("-", 1)[0] if "-" in issue_key else None
 
                 # Add migration-specific metadata
                 enhanced_entry["_migration_metadata"] = {
                     "source_type": "tempo",
                     "extraction_timestamp": datetime.now(tz=UTC).isoformat(),
                     "tempo_worklog_id": entry.get("tempo_worklog_id"),
-                    "jira_worklog_id": entry.get("worklogId"),
-                    "issue_key": entry.get("issue", {}).get("key"),
-                    "project_key": entry.get("issue", {}).get("projectKey"),
+                    "jira_worklog_id": entry.get("jira_worklog_id"),
+                    "issue_key": issue_key or None,
+                    "project_key": project_key_from_issue,
                 }
 
-                # Ensure consistent field naming for migration
-                if "timeSpentSeconds" in entry:
-                    enhanced_entry["timeSpent"] = entry["timeSpentSeconds"]
+                # Ensure consistent field naming for migration. Map
+                # snake_case → migration aliases (``timeSpent``,
+                # ``started``) that downstream consumers expect.
+                if "time_spent_seconds" in entry:
+                    enhanced_entry["timeSpent"] = entry["time_spent_seconds"]
 
-                if "dateStarted" in entry:
-                    enhanced_entry["started"] = entry["dateStarted"]
+                if "date_started" in entry:
+                    enhanced_entry["started"] = entry["date_started"]
                 elif "started" not in entry and "created" in entry:
                     enhanced_entry["started"] = entry["created"]
 
