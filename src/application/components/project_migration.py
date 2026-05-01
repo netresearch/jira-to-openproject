@@ -363,9 +363,11 @@ class ProjectMigration(BaseMigration):
 
         try:
             project = JiraProject.from_jira_obj(detail, browse_url=browse_url)
-        except (ValidationError, TypeError) as exc:
+        except (ValidationError, TypeError, AttributeError) as exc:
             # Boundary parse failure must not block enrichment: log and
-            # fall back to legacy raw-dict reads below.
+            # fall back to legacy raw-dict reads below. ``AttributeError``
+            # covers the rare case where ``detail.raw`` is non-mapping —
+            # ``from_jira_obj`` calls ``.get(...)`` on it internally.
             logger.debug(
                 "JiraProject.from_jira_obj failed for %s: %s",
                 jira_key,
