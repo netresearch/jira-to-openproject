@@ -94,7 +94,15 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract Jira story points per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map]
+        # Production wp_map is keyed by str(jira_id) (numeric) outer with
+        # the human-readable ``jira_key`` stored inside. Prefer the inner
+        # ``jira_key`` so we feed _merge_batch_issues the human-readable
+        # form it expects; fall back to the outer key for legacy or test
+        # fixtures that key by jira_key directly.
+        keys: list[str] = []
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            keys.append(str(inner_jira_key or outer_key))
         if not keys:
             return ComponentResult(success=True, data={"sp": {}})
 
@@ -131,17 +139,25 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         failed = 0
         projects_with_values: set[int] = set()
 
+        # Build a fast jira_key → typed-entry lookup once. We walk
+        # ``wp_map.items()`` and use the inner ``jira_key`` (production
+        # layout: outer key is numeric jira_id, inner ``jira_key`` is the
+        # human-readable form) so subsequent lookups work regardless of
+        # which key shape the on-disk file uses.
+        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            key_for_legacy = str(inner_jira_key or outer_key)
+            try:
+                entries_by_jira_key[key_for_legacy] = WorkPackageMappingEntry.from_legacy(key_for_legacy, raw_entry)
+            except ValueError:
+                continue
+
         for jira_key, text in text_by_key.items():
             if text is None or text == "0":
                 continue
-            raw_entry = wp_map.get(jira_key)
-            if raw_entry is None:
-                continue
-            try:
-                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-            except ValueError:
-                # Corrupt or unsupported wp_map shape — skip silently to
-                # preserve the pre-typed call-site behaviour.
+            entry = entries_by_jira_key.get(jira_key)
+            if entry is None:
                 continue
             wp_id = int(entry.openproject_id)
             # Track project for selective enablement

@@ -58,41 +58,66 @@ class WatcherMigration(BaseMigration):
         raise ValueError(msg)
 
     def _resolve_wp_id(self, jira_key: str) -> int | None:
+        # Production wp_map is keyed by str(jira_id) (numeric) outer with
+        # the human-readable ``jira_key`` stored in the inner dict. Walk
+        # values and match on the inner ``jira_key`` so callers can pass
+        # either the numeric id or the human-readable key.
         wp_map = self.mappings.get_mapping("work_package") or {}
-        raw_entry = wp_map.get(jira_key)
-        if raw_entry is None:
-            return None
-        try:
-            entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-        except ValueError:
-            return None
-        return int(entry.openproject_id)
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            candidate = inner_jira_key or str(outer_key)
+            if candidate != jira_key:
+                continue
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(candidate, raw_entry)
+            except ValueError:
+                return None
+            return int(entry.openproject_id)
+        return None
 
-    def _resolve_user_id(self, jira_username: str | None) -> int | None:
-        if not jira_username:
-            return None
+    def _resolve_user_id(self, watcher: JiraWatcher) -> int | None:
+        """Map a typed watcher to an OP user id.
+
+        Probes the user mapping using (in order): ``account_id``,
+        ``name``, ``email_address``, ``display_name`` — matching the
+        pattern used in :class:`AttachmentProvenanceMigration`. Cloud
+        instances primarily key on ``account_id``; Server/DC on ``name``.
+        """
         user_map = self.mappings.get_mapping("user") or {}
-        entry = user_map.get(jira_username)
-        if isinstance(entry, dict):
-            op_id = entry.get("openproject_id")
-            if isinstance(op_id, int):
-                return op_id
-        if isinstance(entry, int):
-            return entry
+        for probe in (
+            watcher.account_id,
+            watcher.name,
+            watcher.email_address,
+            watcher.display_name,
+        ):
+            if not probe:
+                continue
+            entry = user_map.get(probe)
+            if isinstance(entry, dict):
+                op_id = entry.get("openproject_id")
+                if isinstance(op_id, int):
+                    return op_id
+            if isinstance(entry, int):
+                return entry
         return None
 
     def run(self) -> ComponentResult:  # type: ignore[override]
         logger.info("Starting watcher migration...")
         result = ComponentResult(success=True, message="Watcher migration completed", details={})
 
-        # Build Jira keys list from work package mapping. We normalise each
-        # entry through :class:`WorkPackageMappingEntry.from_legacy` so the
-        # ``jira_key``/bare-int polymorphism is collapsed at the boundary.
+        # Build Jira keys list from work package mapping. The on-disk
+        # layout is ``{str(jira_id): {"jira_key": str, "openproject_id":
+        # int, …}}`` — outer key is numeric, inner ``jira_key`` is the
+        # human-readable PROJ-123 form. Read the inner ``jira_key`` for
+        # the typed entry so downstream code uses the human-readable key
+        # rather than the numeric id.
         wp_map = self.mappings.get_mapping("work_package") or {}
         jira_keys: list[str] = []
-        for k, raw_entry in wp_map.items():
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            key_for_legacy = inner_jira_key or str(outer_key)
             try:
-                entry = WorkPackageMappingEntry.from_legacy(str(k), raw_entry)
+                entry = WorkPackageMappingEntry.from_legacy(str(key_for_legacy), raw_entry)
             except ValueError:
                 continue
             jira_keys.append(str(entry.jira_key))
@@ -149,7 +174,7 @@ class WatcherMigration(BaseMigration):
                     if parsed is None:
                         skipped += 1
                         continue
-                    user_id = self._resolve_user_id(parsed.name)
+                    user_id = self._resolve_user_id(parsed)
                     if not user_id:
                         skipped += 1
                         continue
