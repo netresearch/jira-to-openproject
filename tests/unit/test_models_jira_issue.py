@@ -515,3 +515,72 @@ def test_from_jira_obj_remote_links_nested_object_unwrap() -> None:
     assert len(issue.fields.remote_links) == 2
     assert issue.fields.remote_links[0].url == "https://example.com/x"
     assert issue.fields.remote_links[1].url == "https://example.com/y"
+
+
+def test_attachment_carries_author_and_created_from_jira_obj() -> None:
+    """SDK-shape attachments expose ``author``/``created`` for provenance."""
+    author_obj = SimpleNamespace(
+        accountId="557058:author",
+        name="alice",
+        displayName="Alice",
+        emailAddress="alice@example.com",
+        active=True,
+    )
+    att_obj = SimpleNamespace(
+        id="9001",
+        filename="upload.pdf",
+        size=1024,
+        url="https://example.com/upload.pdf",
+        author=author_obj,
+        created="2026-04-01T10:00:00.000+0000",
+    )
+    sdk_fields = SimpleNamespace(
+        summary="Hello",
+        description=None,
+        status=None,
+        priority=None,
+        issuetype=None,
+        assignee=None,
+        reporter=None,
+        created=None,
+        updated=None,
+        labels=None,
+        fixVersions=None,
+        components=None,
+        comment=None,
+        attachment=[att_obj],
+    )
+    obj = SimpleNamespace(id="1", key="ABC-1", fields=sdk_fields)
+
+    issue = JiraIssue.from_jira_obj(obj)
+
+    assert len(issue.fields.attachments) == 1
+    att = issue.fields.attachments[0]
+    assert att.filename == "upload.pdf"
+    assert att.created == "2026-04-01T10:00:00.000+0000"
+    assert att.author is not None
+    assert att.author.account_id == "557058:author"
+    assert att.author.name == "alice"
+
+
+def test_attachment_dict_author_uses_from_dict_path() -> None:
+    """Dict-shaped attachment authors honour camelCase aliases via from_dict."""
+    raw = {
+        "key": "ABC-1",
+        "id": "1",
+        "fields": {
+            "attachments": [
+                {
+                    "filename": "upload.pdf",
+                    "created": "2026-04-01T10:00:00.000+0000",
+                    "author": {"accountId": "557058:author", "displayName": "Alice"},
+                },
+            ],
+        },
+    }
+    issue = JiraIssue.from_dict(raw)
+    assert len(issue.fields.attachments) == 1
+    att = issue.fields.attachments[0]
+    assert att.author is not None
+    assert att.author.account_id == "557058:author"
+    assert att.author.display_name == "Alice"

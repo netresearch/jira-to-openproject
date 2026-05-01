@@ -2,6 +2,15 @@
 
 Source: Jira add-on 'Simple Tasklists' (lightweight inline tasks, not Jira subtasks).
 Default behavior: render as Markdown checklist in a marked section of WP description.
+
+Note on dict access patterns kept here
+--------------------------------------
+The ``payload`` returned by ``jira_client.get_issue_property`` carries
+the raw Simple Tasklists add-on shape — a tenant-specific JSON blob
+whose contents are defined by the add-on (and vary by add-on version
+and configuration). It is not a Jira-modelled value, so we keep direct
+dict access on it. The polymorphic work-package mapping is normalised
+through :class:`WorkPackageMappingEntry.from_legacy`.
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 
 @register_entity_types("simpletasks")
@@ -51,12 +60,15 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
         """Extract checklist data for all migrated issues using work_package mapping."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         extracted: dict[str, Any] = {}
-        for jira_key, entry in wp_map.items():
+        for jira_key, raw_entry in wp_map.items():
             k = str(jira_key)
-            if isinstance(entry, dict) and entry.get("openproject_id"):
-                prop = self.jira_client.get_issue_property(k, self.property_key)
-                if prop:
-                    extracted[k] = prop
+            try:
+                WorkPackageMappingEntry.from_legacy(k, raw_entry)
+            except ValueError:
+                continue
+            prop = self.jira_client.get_issue_property(k, self.property_key)
+            if prop:
+                extracted[k] = prop
         return ComponentResult(success=True, data={"extracted": extracted})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
@@ -109,17 +121,22 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
         for jira_key, md in md_map.items():
             if not md:
                 continue
-            entry = wp_map.get(jira_key)
-            if isinstance(entry, dict) and entry.get("openproject_id"):
-                wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
-                try:
-                    if self.op_client.set_checklist_section(wp_id, md):
-                        updated += 1
-                    else:
-                        failed += 1
-                except Exception:
-                    logger.exception("Failed to set checklist for %s", jira_key)
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
+                continue
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                continue
+            wp_id = int(entry.openproject_id)
+            try:
+                if self.op_client.set_checklist_section(wp_id, md):
+                    updated += 1
+                else:
                     failed += 1
+            except Exception:
+                logger.exception("Failed to set checklist for %s", jira_key)
+                failed += 1
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 

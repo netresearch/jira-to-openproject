@@ -8,6 +8,18 @@ Detection strategy:
 - Fallback to common custom field key `fields.customfield_10016`
 - As last resort, scan `fields` attributes for a numeric value where the
   attribute name contains both 'story' and 'point' (case-insensitive)
+
+Note on dict access patterns kept here
+--------------------------------------
+The story-points field is a tenant-specific Jira custom field whose
+attribute name varies per instance (``storyPoints``,
+``customfield_10016``, or any ``customfield_*`` whose name contains
+"story" and "point"). :class:`JiraIssueFields` does not model these
+dynamic attributes, so the boundary parse stays as direct ``getattr``
+on the raw fields object — same rationale as the
+``customfields_generic_migration`` carry-over from phase 7b. The
+work-package mapping ladder, on the other hand, is normalised through
+:class:`WorkPackageMappingEntry.from_legacy`.
 """
 
 from __future__ import annotations
@@ -18,7 +30,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 STORY_POINTS_CF_NAME = "Story Points"
 
@@ -122,14 +134,19 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         for jira_key, text in text_by_key.items():
             if text is None or text == "0":
                 continue
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                # Corrupt or unsupported wp_map shape — skip silently to
+                # preserve the pre-typed call-site behaviour.
+                continue
+            wp_id = int(entry.openproject_id)
             # Track project for selective enablement
-            project_id = entry.get("openproject_project_id")
-            if project_id:
-                projects_with_values.add(int(project_id))
+            if entry.openproject_project_id is not None:
+                projects_with_values.add(int(entry.openproject_project_id))
             try:
                 val = escape_ruby_single_quoted(str(text))
                 set_script = (

@@ -1,4 +1,20 @@
-"""Watcher migration: add Jira watchers as OpenProject watchers idempotently."""
+"""Watcher migration: add Jira watchers as OpenProject watchers idempotently.
+
+Note on dict access patterns kept here
+--------------------------------------
+The ``user`` mapping is a flat dict keyed by Jira identifier (login,
+accountId, …) whose values are typically dicts with an
+``openproject_id`` field but may legacy-fall back to bare ints. There
+is no dedicated typed user-mapping model yet (it is its own
+boundary), so ``_resolve_user_id`` keeps its narrow ``isinstance``
+ladder; the work-package side, however, is normalised through
+:class:`WorkPackageMappingEntry.from_legacy`.
+
+The Jira watchers list returned by
+:meth:`JiraClient.get_issue_watchers` is parsed at the boundary into
+:class:`JiraWatcher` instances so the per-row ``isinstance(w, dict)``
+ladder disappears from this file.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +24,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, JiraWatcher, WorkPackageMappingEntry
 
 
 @register_entity_types("watchers")
@@ -43,14 +59,14 @@ class WatcherMigration(BaseMigration):
 
     def _resolve_wp_id(self, jira_key: str) -> int | None:
         wp_map = self.mappings.get_mapping("work_package") or {}
-        entry = wp_map.get(jira_key)
-        if isinstance(entry, int):
-            return entry
-        if isinstance(entry, dict):
-            op_id = entry.get("openproject_id")
-            if isinstance(op_id, int):
-                return op_id
-        return None
+        raw_entry = wp_map.get(jira_key)
+        if raw_entry is None:
+            return None
+        try:
+            entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+        except ValueError:
+            return None
+        return int(entry.openproject_id)
 
     def _resolve_user_id(self, jira_username: str | None) -> int | None:
         if not jira_username:
@@ -69,10 +85,17 @@ class WatcherMigration(BaseMigration):
         logger.info("Starting watcher migration...")
         result = ComponentResult(success=True, message="Watcher migration completed", details={})
 
-        # Build Jira keys list from work package mapping
+        # Build Jira keys list from work package mapping. We normalise each
+        # entry through :class:`WorkPackageMappingEntry.from_legacy` so the
+        # ``jira_key``/bare-int polymorphism is collapsed at the boundary.
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [(v.get("jira_key", k) if isinstance(v, dict) else k) for k, v in wp_map.items()]
-        jira_keys = [str(k) for k in jira_keys if k]
+        jira_keys: list[str] = []
+        for k, raw_entry in wp_map.items():
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(str(k), raw_entry)
+            except ValueError:
+                continue
+            jira_keys.append(str(entry.jira_key))
         if not jira_keys:
             logger.info("No work package mappings; skipping watcher migration")
             return result
@@ -122,8 +145,11 @@ class WatcherMigration(BaseMigration):
 
             for w in watchers or []:
                 try:
-                    username = w.get("name") if isinstance(w, dict) else getattr(w, "name", None)
-                    user_id = self._resolve_user_id(username)
+                    parsed = JiraWatcher.from_any(w)
+                    if parsed is None:
+                        skipped += 1
+                        continue
+                    user_id = self._resolve_user_id(parsed.name)
                     if not user_id:
                         skipped += 1
                         continue

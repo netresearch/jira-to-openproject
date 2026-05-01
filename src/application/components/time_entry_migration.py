@@ -4,6 +4,17 @@
 This component reads migrated work packages from the mapping file and then
 invokes the `TimeEntryMigrator` to migrate Jira work logs (and optional Tempo
 entries) into OpenProject time entries.
+
+Note on dict access patterns kept here
+--------------------------------------
+The bulk of this component delegates to
+:class:`src.utils.time_entry_migrator.TimeEntryMigrator`, which owns
+the worklog/Tempo wire shapes (``id``/``started``/``timeSpentSeconds``
+/``author`` plus tenant-specific Tempo metadata). That helper has its
+own boundary; rewiring it is out of scope for phase 7c. The only
+polymorphic ladder this file used to carry was the work-package
+mapping read in :meth:`_load_migrated_work_packages`, which is now
+normalised through :class:`WorkPackageMappingEntry.from_legacy`.
 """
 
 from __future__ import annotations
@@ -18,7 +29,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 from src.utils.time_entry_migrator import TimeEntryMigrator
 
 
@@ -84,23 +95,36 @@ class TimeEntryMigration(BaseMigration):
             str(p).upper().strip() for p in (config.jira_config.get("projects") or []) if str(p).strip()
         ]
 
+        # Note: ``work_package_mapping.json`` is keyed by ``str(jira_id)``
+        # (numeric Jira id) at the outer level, while the inner record
+        # carries the human-readable ``jira_key`` (e.g. "PROJ-123"). We
+        # build a typed :class:`WorkPackageMappingEntry` from the inner
+        # ``jira_key`` so the rest of this file flows through validated
+        # types without inverting that on-disk layout.
         migrated: list[dict[str, Any]] = []
-        for entry in raw.values():
-            jira_key = entry.get("jira_key")
-            wp_id = entry.get("openproject_id")
-            if jira_key and wp_id:
-                if allowed_projects:
-                    key_u = str(jira_key).upper()
-                    if not any(key_u.startswith(f"{proj}-") for proj in allowed_projects):
-                        continue
-                migrated.append(
-                    {
-                        "jira_key": jira_key,
-                        "work_package_id": wp_id,
-                        # Optional project id if present in mapping
-                        "project_id": entry.get("openproject_project_id"),
-                    },
-                )
+        for raw_entry in raw.values():
+            inner_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            if not inner_key:
+                continue
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(str(inner_key), raw_entry)
+            except ValueError:
+                continue
+            jira_key = str(entry.jira_key)
+            if allowed_projects:
+                key_u = jira_key.upper()
+                if not any(key_u.startswith(f"{proj}-") for proj in allowed_projects):
+                    continue
+            migrated.append(
+                {
+                    "jira_key": jira_key,
+                    "work_package_id": int(entry.openproject_id),
+                    # Optional project id if present in mapping
+                    "project_id": (
+                        int(entry.openproject_project_id) if entry.openproject_project_id is not None else None
+                    ),
+                },
+            )
 
         logger.info(
             "Loaded %d migrated work packages%s",
