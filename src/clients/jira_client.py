@@ -238,13 +238,15 @@ class JiraClient:
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
-        # Service composition (Phase 3a/3b of ADR-002 — see ADR for the
+        # Service composition (Phase 3a/3b/3c of ADR-002 — see ADR for the
         # decomposition plan).
+        from src.clients.jira_agile_service import JiraAgileService
         from src.clients.jira_project_service import JiraProjectService
         from src.clients.jira_workflow_service import JiraWorkflowService
 
         self.projects = JiraProjectService(self)
         self.workflows = JiraWorkflowService(self)
+        self.agile = JiraAgileService(self)
 
         # Connect to Jira
         self._connect()
@@ -1822,127 +1824,16 @@ class JiraClient:
     # ---------------------------------------------------------------------- #
 
     def get_boards(self) -> list[dict[str, Any]]:
-        """Return Jira Software boards (Scrum/Kanban)."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        url = f"{self.base_url}/rest/agile/1.0/board"
-        logger.info("Fetching Jira boards")
-
-        try:
-            start_at = 0
-            max_results = 50
-            boards: list[dict[str, Any]] = []
-
-            while True:
-                params = {"startAt": start_at, "maxResults": max_results}
-                response = self.jira._session.get(
-                    url,
-                    params=params,
-                )
-                response.raise_for_status()
-                payload = response.json()
-                values = payload.get("values") if isinstance(payload, dict) else None
-                batch = values if isinstance(values, list) else []
-                boards.extend(batch)
-
-                is_last = payload.get("isLast", False) if isinstance(payload, dict) else True
-                if is_last or not batch:
-                    break
-                start_at += max_results
-
-            logger.info("Retrieved %s Jira boards", len(boards))
-            return boards
-        except Exception as exc:
-            error_msg = f"Failed to fetch Jira boards: {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.agile.get_boards``."""
+        return self.agile.get_boards()
 
     def get_board_configuration(self, board_id: int) -> dict[str, Any]:
-        """Return configuration details for a Jira Software board."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/configuration"
-        logger.debug("Fetching board configuration for %s", board_id)
-
-        try:
-            response = self.jira._session.get(url)
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                msg = "Unexpected board configuration payload"
-                raise ValueError(msg)
-            return payload
-        except Exception as exc:
-            error_msg = f"Failed to fetch Jira board configuration ({board_id}): {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.agile.get_board_configuration``."""
+        return self.agile.get_board_configuration(board_id)
 
     def get_board_sprints(self, board_id: int) -> list[dict[str, Any]]:
-        """Return sprints associated with a Jira Software board."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint"
-        logger.debug("Fetching sprints for board %s", board_id)
-
-        try:
-            start_at = 0
-            max_results = 50
-            sprints: list[dict[str, Any]] = []
-
-            while True:
-                params = {
-                    "startAt": start_at,
-                    "maxResults": max_results,
-                    "state": "future,active,closed",
-                }
-                try:
-                    response = self.jira._session.get(
-                        url,
-                        params=params,
-                    )
-                    response.raise_for_status()
-                except JiraApiError as exc:
-                    message = str(exc)
-                    if "doesn't support sprints" in message:
-                        logger.debug(
-                            "Board %s does not support sprints; skipping sprint extraction",
-                            board_id,
-                        )
-                        return []
-                    raise
-                except exceptions.HTTPError as exc:
-                    status = getattr(exc.response, "status_code", None)
-                    if status == HTTP_BAD_REQUEST_MIN and exc.response is not None:
-                        text = exc.response.text or ""
-                        if "doesn't support sprints" in text:
-                            logger.debug(
-                                "Board %s does not support sprints; skipping sprint extraction",
-                                board_id,
-                            )
-                            return []
-                    raise
-                payload = response.json()
-                values = payload.get("values") if isinstance(payload, dict) else None
-                batch = values if isinstance(values, list) else []
-                sprints.extend(batch)
-
-                is_last = payload.get("isLast", False) if isinstance(payload, dict) else True
-                if is_last or not batch:
-                    break
-                start_at += max_results
-
-            logger.debug("Board %s has %s sprints", board_id, len(sprints))
-            return sprints
-        except Exception as exc:
-            error_msg = f"Failed to fetch sprints for board {board_id}: {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.agile.get_board_sprints``."""
+        return self.agile.get_board_sprints(board_id)
 
     # ---------------------------------------------------------------------- #
     # Reporting helpers (filters & dashboards)                               #
