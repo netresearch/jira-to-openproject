@@ -13,7 +13,7 @@ there is no Ruby-script escaping to worry about.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
@@ -21,12 +21,10 @@ from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
     JiraCaptchaError,
+    JiraClient,
     JiraConnectionError,
 )
 from src.utils.performance_optimizer import cached
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
 
 
 class JiraProjectService:

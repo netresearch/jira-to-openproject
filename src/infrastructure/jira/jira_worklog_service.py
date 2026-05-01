@@ -15,17 +15,15 @@ worry about.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
     HTTP_OK,
     JiraApiError,
+    JiraClient,
     JiraResourceNotFoundError,
 )
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
 
 
 class JiraWorklogService:

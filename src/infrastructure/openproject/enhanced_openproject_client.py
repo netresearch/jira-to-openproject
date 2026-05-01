@@ -12,11 +12,9 @@ import os
 import pathlib
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Iterable
+from typing import Any
 
 import requests
 

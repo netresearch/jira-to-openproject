@@ -6,17 +6,11 @@ comma-separated version names from Jira `versions` (distinct from `fixVersions`)
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
-from src.models import ComponentResult
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
-
 from src.config import logger
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
+from src.models import ComponentResult
 
 AFFECTS_VERSIONS_CF_NAME = "Affects Versions"
 

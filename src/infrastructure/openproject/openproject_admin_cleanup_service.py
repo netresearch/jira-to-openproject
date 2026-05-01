@@ -41,12 +41,8 @@ it was extracted in Phase 2a/2b) — no further move needed.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from src.infrastructure.exceptions import QueryExecutionError
-
-if TYPE_CHECKING:
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectAdminCleanupService:

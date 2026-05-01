@@ -14,17 +14,15 @@ import re
 import uuid
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from urllib.parse import quote
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.display import ProgressTracker
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, MigrationError
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 @register_entity_types("users", "user_accounts")

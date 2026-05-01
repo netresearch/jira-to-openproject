@@ -50,13 +50,11 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src import config
 from src.infrastructure.exceptions import QueryExecutionError
-
-if TYPE_CHECKING:
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectBulkCreateService:

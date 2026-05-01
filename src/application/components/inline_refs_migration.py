@@ -9,14 +9,10 @@ A minimal Rails script is used to, per work package:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 @register_entity_types("inline_refs")

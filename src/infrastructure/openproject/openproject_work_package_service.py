@@ -49,14 +49,11 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterator
+from typing import Any
 
 from src.infrastructure.exceptions import QueryExecutionError
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectWorkPackageService:

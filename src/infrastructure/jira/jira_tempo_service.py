@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
@@ -29,13 +29,11 @@ from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
     JiraCaptchaError,
+    JiraClient,
     JiraConnectionError,
     JiraResourceNotFoundError,
 )
 from src.utils.timezone import UTC
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
 
 
 class JiraTempoService:

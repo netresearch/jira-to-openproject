@@ -40,7 +40,7 @@ import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src import config
 from src.infrastructure.exceptions import JsonParseError, QueryExecutionError
@@ -55,9 +55,7 @@ from src.infrastructure.openproject.rails_console_client import (
 # ``openproject_client``.
 BATCH_SIZE_DEFAULT: int = 50
 SAFE_OFFSET_LIMIT: int = 5000
-
-if TYPE_CHECKING:
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectRailsRunnerService:

@@ -32,17 +32,15 @@ import json
 import os
 import shlex
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src import config
 from src.infrastructure.exceptions import (
     QueryExecutionError,
     RecordNotFoundError,
 )
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.idempotency_decorators import batch_idempotent
-
-if TYPE_CHECKING:
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectProjectService:

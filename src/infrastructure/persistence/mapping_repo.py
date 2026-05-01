@@ -30,13 +30,11 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 _module_logger = logging.getLogger(__name__)
 

@@ -7,16 +7,13 @@ with direction-safe mapping and idempotent creation via client helpers.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.models import ComponentResult
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
-
 from src.config import logger
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.models import ComponentResult
 
 
 @register_entity_types("relations", "issue_links")

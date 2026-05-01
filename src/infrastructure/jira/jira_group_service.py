@@ -13,18 +13,16 @@ Ruby-script escaping to worry about.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.infrastructure.jira.jira_client import (
     HTTP_OK,
     JiraApiError,
     JiraAuthenticationError,
     JiraCaptchaError,
+    JiraClient,
     JiraConnectionError,
 )
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
 
 
 class JiraGroupService:

@@ -6,15 +6,11 @@ Jira `fields.votes.votes` count for mapped issues.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 VOTES_CF_NAME = "Votes"
 
