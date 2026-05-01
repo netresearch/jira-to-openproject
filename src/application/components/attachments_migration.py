@@ -44,6 +44,11 @@ from src.models import ComponentResult, WorkPackageMappingEntry
 
 @register_entity_types("attachments")
 class AttachmentsMigration(BaseMigration):  # noqa: D101
+    # Cache for the wp_map → jira_key lookup. Built lazily on first use
+    # by :meth:`_wp_lookup_by_jira_key`; reset to ``None`` whenever the
+    # migration runs against a fresh mappings instance.
+    _wp_lookup_cache: dict[str, int] | None
+
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
         # Attachment directory
@@ -53,6 +58,44 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             ap = None
         self.attachment_dir: Path = Path(ap or (Path(self.data_dir) / "attachments"))
         self.attachment_dir.mkdir(parents=True, exist_ok=True)
+        self._wp_lookup_cache = None
+
+    def _wp_lookup_by_jira_key(self) -> dict[str, int]:
+        """Return a cached ``jira_key → openproject_id`` lookup.
+
+        Walks the ``work_package`` mapping once and normalises each row
+        through :meth:`WorkPackageMappingEntry.from_legacy`. Production
+        ``wp_map`` is keyed by ``str(jira_id)`` outer with the
+        human-readable ``jira_key`` stored inside; legacy/test fixtures
+        sometimes key directly by ``jira_key``. Resolution rules:
+
+        * dict shape with inner ``jira_key`` → use the inner key.
+        * dict shape without inner ``jira_key`` → fall back to outer
+          (covers test fixtures keyed by ``jira_key``).
+        * bare ``int`` shape → SKIP. Legacy bare-int rows do not carry
+          a recoverable ``jira_key``; treating the numeric outer key
+          as a Jira issue key would produce invalid downstream queries
+          like ``key in (10001, …)``.
+
+        Callers receive a copy so accidental mutation cannot poison
+        the cache.
+        """
+        if self._wp_lookup_cache is None:
+            wp_map = self.mappings.get_mapping("work_package") or {}
+            lookup: dict[str, int] = {}
+            for outer_key, raw_entry in wp_map.items():
+                if not isinstance(raw_entry, dict):
+                    # Bare-int legacy rows have no recoverable Jira key.
+                    continue
+                inner_jira_key = raw_entry.get("jira_key")
+                jira_key = str(inner_jira_key or outer_key)
+                try:
+                    entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+                except ValueError:
+                    continue
+                lookup[jira_key] = int(entry.openproject_id)
+            self._wp_lookup_cache = lookup
+        return dict(self._wp_lookup_cache)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for transformation.
@@ -185,22 +228,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         if not att_by_key:
             return ComponentResult(success=True, data={"ops": []})
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
-
-        # Build a Jira-key → wp-id lookup that absorbs both layouts:
-        # production keys ``wp_map`` by ``str(jira_id)`` with the
-        # human-readable ``jira_key`` stored inside the value, while
-        # legacy/test fixtures key directly by Jira issue key. Inner
-        # ``jira_key`` wins; outer key is the fallback for legacy data.
-        key_to_wp_id: dict[str, int] = {}
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            jira_key = str(inner_jira_key or outer_key)
-            try:
-                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-            except ValueError:
-                continue
-            key_to_wp_id[jira_key] = int(entry.openproject_id)
+        key_to_wp_id = self._wp_lookup_by_jira_key()
 
         ops: list[dict[str, Any]] = []
         seen_digests: set[str] = set()
@@ -392,13 +420,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
     def _process_batch_end_to_end(
         self,
         jira_keys: list[str],
-        wp_map: dict[str, Any],
     ) -> tuple[int, int, dict[str, dict[str, int]]]:
         """Process a batch of issues: extract, download, upload, attach.
 
         Args:
             jira_keys: List of Jira issue keys to process
-            wp_map: Work package mapping dict
 
         Returns:
             Tuple of (updated_count, failed_count, attachment_mapping)
@@ -411,18 +437,8 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         if not att_by_key:
             return 0, 0, {}
 
-        # Build reverse lookup: jira_key -> openproject_id for O(1) access.
-        # Funnel through ``WorkPackageMappingEntry.from_legacy`` so the
-        # ``dict | int`` polymorphism is normalised in one place.
-        key_to_wp: dict[str, int] = {}
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            jira_key = str(inner_jira_key or outer_key)
-            try:
-                typed_entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-            except ValueError:
-                continue
-            key_to_wp[jira_key] = int(typed_entry.openproject_id)
+        # Single normalisation source — see ``_wp_lookup_by_jira_key``.
+        key_to_wp = self._wp_lookup_by_jira_key()
 
         # Download attachments and prepare ops
         ops: list[dict[str, Any]] = []
@@ -489,27 +505,16 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         """Execute attachment migration pipeline - memory efficient per-project."""
         self.logger.info("Starting attachment migration (memory-efficient mode)")
 
-        # Get work package mapping
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        if not wp_map:
+        # Build the canonical Jira-key → wp-id lookup once, then group
+        # the resolved Jira keys by project for batch-friendly processing.
+        # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
+        key_to_wp_id = self._wp_lookup_by_jira_key()
+        if not key_to_wp_id:
             self.logger.warning("No work package mapping found - skipping attachment migration")
             return ComponentResult(success=True, updated=0, message="No work packages to process")
 
-        # Group jira keys by project for efficient processing. Walk the
-        # raw map (production: outer = ``str(jira_id)``, inner =
-        # ``{"jira_key": ...}``) and prefer the inner ``jira_key``;
-        # ``WorkPackageMappingEntry.from_legacy`` validates the row and
-        # makes the dict/int polymorphism the responsibility of a single
-        # boundary parser. Rows that don't normalise are skipped, just
-        # like the legacy ``isinstance(entry, dict)`` guard did.
         by_project: dict[str, list[str]] = {}
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            jira_key = str(inner_jira_key or outer_key)
-            try:
-                WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-            except ValueError:
-                continue
+        for jira_key in key_to_wp_id:
             project_key = self._issue_project_key(jira_key)
             if project_key not in by_project:
                 by_project[project_key] = []
@@ -540,7 +545,6 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 try:
                     updated, failed, mapping = self._process_batch_end_to_end(
                         batch_keys,
-                        wp_map,
                     )
                     total_updated += updated
                     total_failed += failed
