@@ -59,7 +59,7 @@ RUN apt-get update \
         tmux \
     && rm -rf /var/lib/apt/lists/*
 # docker.io intentionally omitted - uses SSH-based remote Docker client
-# See src/clients/docker_client.py for remote Docker operations via SSH
+# See src/infrastructure/openproject/docker_client.py for remote Docker operations via SSH
 
 RUN useradd -m -u 1000 appuser
 

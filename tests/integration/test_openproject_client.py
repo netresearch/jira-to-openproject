@@ -17,10 +17,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.clients.docker_client import DockerClient
-from src.clients.openproject_client import FileTransferError, OpenProjectClient
-from src.clients.rails_console_client import CommandExecutionError, RailsConsoleClient
-from src.clients.ssh_client import SSHClient
+from src.infrastructure.openproject.docker_client import DockerClient
+from src.infrastructure.openproject.openproject_client import FileTransferError, OpenProjectClient
+from src.infrastructure.openproject.rails_console_client import CommandExecutionError, RailsConsoleClient
+from src.infrastructure.openproject.ssh_client import SSHClient
 
 
 class TestOpenProjectClient(unittest.TestCase):
@@ -36,14 +36,14 @@ class TestOpenProjectClient(unittest.TestCase):
 
         # Create patchers for all client dependencies
         # 1. SSHClient patcher
-        self.ssh_client_patcher = patch("src.clients.openproject_client.SSHClient")
+        self.ssh_client_patcher = patch("src.infrastructure.openproject.openproject_client.SSHClient")
         self.mock_ssh_client_class = self.ssh_client_patcher.start()
         self.mock_ssh_client = MagicMock(spec=SSHClient)
         self.mock_ssh_client_class.return_value = self.mock_ssh_client
 
         # 2. DockerClient patcher
         self.docker_client_patcher = patch(
-            "src.clients.openproject_client.DockerClient",
+            "src.infrastructure.openproject.openproject_client.DockerClient",
         )
         self.mock_docker_client_class = self.docker_client_patcher.start()
         self.mock_docker_client = MagicMock(spec=DockerClient)
@@ -55,14 +55,14 @@ class TestOpenProjectClient(unittest.TestCase):
 
         # 3. RailsConsoleClient patcher
         self.rails_client_patcher = patch(
-            "src.clients.openproject_client.RailsConsoleClient",
+            "src.infrastructure.openproject.openproject_client.RailsConsoleClient",
         )
         self.mock_rails_client_class = self.rails_client_patcher.start()
         self.mock_rails_client = MagicMock(spec=RailsConsoleClient)
         self.mock_rails_client_class.return_value = self.mock_rails_client
 
         # Mock config module
-        self.config_patcher = patch("src.clients.openproject_client.config")
+        self.config_patcher = patch("src.infrastructure.openproject.openproject_client.config")
         self.mock_config = self.config_patcher.start()
         self.mock_config.openproject_config = {
             "container": "test_container",
@@ -74,14 +74,14 @@ class TestOpenProjectClient(unittest.TestCase):
         self.mock_config.logger = MagicMock()
 
         # Mock FileManager
-        self.file_manager_patcher = patch("src.clients.openproject_client.FileManager")
+        self.file_manager_patcher = patch("src.infrastructure.openproject.openproject_client.FileManager")
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.data_dir = self.temp_dir
         self.mock_file_manager_class.return_value = self.mock_file_manager
 
         # Mock os functions
-        self.os_patcher = patch("src.clients.openproject_client.os")
+        self.os_patcher = patch("src.infrastructure.openproject.openproject_client.os")
         self.mock_os = self.os_patcher.start()
         self.mock_os.path.exists.return_value = True
         self.mock_os.path.basename.side_effect = os.path.basename  # Use real basename
@@ -170,7 +170,7 @@ class TestOpenProjectClient(unittest.TestCase):
         # ``OpenProjectFileTransferService.create_script_file`` (Phase 2d of
         # ADR-002 moved the implementation there), so the os.urandom call now
         # resolves through the service module's ``os`` import.
-        with patch("src.clients.openproject_file_transfer_service.os.urandom", return_value=b"abcd"):
+        with patch("src.infrastructure.openproject.openproject_file_transfer_service.os.urandom", return_value=b"abcd"):
             # Mock Path.open to return a mock file
             mock_file = MagicMock()
             mock_file.__enter__.return_value = mock_file
@@ -329,7 +329,9 @@ class TestOpenProjectClient(unittest.TestCase):
         # ``OpenProjectRailsRunnerService.is_connected`` (Phase 2e of ADR-002
         # moved the implementation there), so the secrets call now resolves
         # through the service module's ``secrets`` import.
-        with patch("src.clients.openproject_rails_runner_service.secrets.token_hex", return_value="abcdef"):
+        with patch(
+            "src.infrastructure.openproject.openproject_rails_runner_service.secrets.token_hex", return_value="abcdef"
+        ):
             # Configure mock for successful validation
             self.mock_rails_client.execute.side_effect = None  # Clear any previous side effects
             self.mock_rails_client.execute.return_value = "OPENPROJECT_CONNECTION_TEST_abcdef"

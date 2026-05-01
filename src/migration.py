@@ -57,12 +57,12 @@ from src.application.components.work_package_content_migration import WorkPackag
 from src.application.components.work_package_migration import WorkPackageMigration
 from src.application.components.work_package_skeleton_migration import WorkPackageSkeletonMigration
 from src.application.components.workflow_migration import WorkflowMigration
-from src.clients.docker_client import DockerClient
-from src.clients.health_check_client import HealthCheckClient
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.clients.ssh_client import SSHClient
+from src.infrastructure.health_check_client import HealthCheckClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.docker_client import DockerClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
+from src.infrastructure.openproject.ssh_client import SSHClient
 from src.models import ComponentResult, MigrationResult
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler

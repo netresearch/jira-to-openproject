@@ -49,8 +49,8 @@ Prerequisites: Python 3.14+, [uv](https://docs.astral.sh/uv/), Docker (for conta
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full layer breakdown. Short form:
 
 ```
-Jira API ─▶ src/clients/jira_client.py ─┐
-                                        ├─▶ src/migrations/*.py (ETL) ─▶ src/clients/openproject_client.py ─▶ OpenProject API / Rails console
+Jira API ─▶ src/infrastructure/jira/jira_client.py ─┐
+                                        ├─▶ src/migrations/*.py (ETL) ─▶ src/infrastructure/openproject/openproject_client.py ─▶ OpenProject API / Rails console
 Tempo API ─▶ src/clients/tempo_client.py ┘
 ```
 
@@ -70,7 +70,7 @@ Golden sample: `tests/unit/test_config_loader_security_enhanced.py`. New migrati
 ## File Map
 ```
 src/               → Core Python package (clients, migrations, mappings, models, utils)
-src/clients/       → Jira/OpenProject/SSH/Docker/RailsConsole adapters
+src/infrastructure/ → Jira/OpenProject/SSH/Docker/RailsConsole adapters (jira/, openproject/)
 src/migrations/    → 41 extract→map→load migration modules
 src/dashboard/     → FastAPI admin dashboard (Vue + Chart.js + WebSocket)
 src/ruby/          → Ruby template scripts for Rails console execution
@@ -87,7 +87,7 @@ var/               → Runtime data, logs, caches, checkpoints (gitignored)
 | For | Reference | Key patterns |
 |-----|-----------|-------------|
 | Migration module | `src/migrations/work_package_migration.py` | Chunked extract/map/load, retries, diagnostics |
-| Client adapter | `src/clients/openproject_client.py` | Rails console exec, structured logging, validation |
+| Client adapter | `src/infrastructure/openproject/openproject_client.py` | Rails console exec, structured logging, validation |
 | Unit test | `tests/unit/test_config_loader_security_enhanced.py` | Strict assertions, environment isolation |
 | Utility | `src/utils/enhanced_timestamp_migrator.py` | Timestamp mapping, timezone handling |
 

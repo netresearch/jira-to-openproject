@@ -10,9 +10,9 @@ from typing import Any
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.custom_field_migration import CustomFieldMigration
-from src.clients.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import console
+from src.infrastructure.jira.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, MigrationError
 
 # Default OpenProject relation types

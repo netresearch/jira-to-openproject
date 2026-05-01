@@ -22,8 +22,8 @@ from typing import Any, Literal, Self, TypedDict
 import requests
 
 from src import config
-from src.clients.jira_client import JiraApiError, JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraApiError, JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
 
 # =============================================================================

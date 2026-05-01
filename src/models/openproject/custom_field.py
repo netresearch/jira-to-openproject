@@ -1,8 +1,8 @@
 """Pydantic v2 model for OpenProject custom field payloads.
 
 The shape modelled here matches the ``CustomField.as_json`` dump produced
-by :mod:`src.clients.openproject_custom_field_service` and the helpers in
-:mod:`src.clients.openproject_work_package_custom_field_service`. Only the
+by :mod:`src.infrastructure.openproject.openproject_custom_field_service` and the helpers in
+:mod:`src.infrastructure.openproject.openproject_work_package_custom_field_service`. Only the
 fields the migration actually relies on are modelled — the Rails
 ``CustomField`` record has many more attributes that we don't need to type
 yet.

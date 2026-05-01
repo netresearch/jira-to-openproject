@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class FakeRailsConsoleClient:

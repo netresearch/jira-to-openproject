@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.application.components.tempo_account_migration import TempoAccountMigration
-from src.clients.openproject_client import OpenProjectError
+from src.infrastructure.openproject.openproject_client import OpenProjectError
 
 
 class TestTempoAccountMigrationRefactored(unittest.TestCase):

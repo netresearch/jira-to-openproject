@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from src.clients.rails_console_client import (
+from src.infrastructure.openproject.rails_console_client import (
     CommandExecutionError,
     ConsoleNotReadyError,
     RailsConsoleClient,
@@ -33,11 +33,11 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create patchers
-        self.subprocess_patcher = patch("src.clients.rails_console_client.subprocess")
+        self.subprocess_patcher = patch("src.infrastructure.openproject.rails_console_client.subprocess")
         self.mock_subprocess = self.subprocess_patcher.start()
 
         # Mock shutil.which to return "tmux" for consistent assertions
-        self.shutil_patcher = patch("src.clients.rails_console_client.shutil.which")
+        self.shutil_patcher = patch("src.infrastructure.openproject.rails_console_client.shutil.which")
         self.mock_shutil_which = self.shutil_patcher.start()
         self.mock_shutil_which.return_value = "tmux"
 
@@ -51,10 +51,10 @@ class TestRailsConsoleClient(unittest.TestCase):
         self.mock_subprocess.SubprocessError = subprocess.SubprocessError
         self.mock_subprocess.CalledProcessError = subprocess.CalledProcessError
 
-        self.logger_patcher = patch("src.clients.rails_console_client.logger")
+        self.logger_patcher = patch("src.infrastructure.openproject.rails_console_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
-        self.time_patcher = patch("src.clients.rails_console_client.time")
+        self.time_patcher = patch("src.infrastructure.openproject.rails_console_client.time")
         self.mock_time = self.time_patcher.start()
         # Make time.time() return incrementing values
         self.mock_time.time.side_effect = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -67,7 +67,7 @@ class TestRailsConsoleClient(unittest.TestCase):
 
         # File manager mock
         self.file_manager_patcher = patch(
-            "src.clients.rails_console_client.FileManager",
+            "src.infrastructure.openproject.rails_console_client.FileManager",
         )
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()

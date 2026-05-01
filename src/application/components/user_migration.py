@@ -23,8 +23,8 @@ from src.display import ProgressTracker
 from src.models import ComponentResult, MigrationError
 
 if TYPE_CHECKING:
-    from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 @register_entity_types("users", "user_accounts")

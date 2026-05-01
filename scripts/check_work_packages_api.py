@@ -2,10 +2,13 @@
 """Check if the 10 test work packages exist using a simpler Rails console approach."""
 
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/sme/p/j2o/src")
+# Imports use the ``src.infrastructure...`` package path, so the project
+# root (parent of ``src/``) must be on sys.path, not ``src/`` itself.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 def check_work_packages():

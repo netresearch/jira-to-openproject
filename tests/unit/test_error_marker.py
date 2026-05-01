@@ -7,7 +7,7 @@ an ``ERROR_MARKER`` literal appearing in user output and a real Ruby error —
 is verified without any external infrastructure.
 """
 
-from src.clients.rails_console_client import RailsConsoleClient
+from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 
 # tests/unit/* is auto-marked `unit` by the conftest fixture; no pytestmark needed.
 

@@ -39,19 +39,19 @@ if "jira" not in sys.modules:
     sys.modules["jira"] = jira_module
     sys.modules["jira.exceptions"] = exceptions_module
 
-from src.clients.openproject_client import (
+from src.infrastructure.openproject.openproject_client import (
     FileTransferError,
     JsonParseError,
     OpenProjectClient,
     QueryExecutionError,
 )
-from src.clients.rails_console_client import RubyError
+from src.infrastructure.openproject.rails_console_client import RubyError
 
 
 @pytest.fixture
 def mock_config():
     """Fixture to mock the config module for OpenProjectClient."""
-    with patch("src.clients.openproject_client.config") as mock_conf:
+    with patch("src.infrastructure.openproject.openproject_client.config") as mock_conf:
         mock_conf.openproject_config = {
             "container": "test_container",
             "server": "test_host",
@@ -104,9 +104,9 @@ class TestOpenProjectClientInitialization:
         assert op_client.docker_client is mock_clients["docker_client"]
         assert op_client.rails_client is mock_clients["rails_client"]
 
-    @patch("src.clients.openproject_client.SSHClient")
-    @patch("src.clients.openproject_client.DockerClient")
-    @patch("src.clients.openproject_client.RailsConsoleClient")
+    @patch("src.infrastructure.openproject.openproject_client.SSHClient")
+    @patch("src.infrastructure.openproject.openproject_client.DockerClient")
+    @patch("src.infrastructure.openproject.openproject_client.RailsConsoleClient")
     def test_init_creates_clients_if_not_provided(
         self,
         MockRailsClient,
@@ -259,7 +259,7 @@ open-project(prod)>
 """
         import pytest as _pytest
 
-        from src.clients.openproject_client import QueryExecutionError
+        from src.infrastructure.openproject.openproject_client import QueryExecutionError
 
         with _pytest.raises(QueryExecutionError):
             op_client._check_console_output_for_errors(severe_output, context="execute_large_query_to_json_file")

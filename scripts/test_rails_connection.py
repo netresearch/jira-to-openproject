@@ -15,7 +15,7 @@ from typing import Any
 from dotenv import load_dotenv
 from rich.console import Console
 
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 console = Console()
 

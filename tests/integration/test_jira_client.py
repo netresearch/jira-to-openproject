@@ -13,7 +13,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-from src.clients.jira_client import (
+from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
     JiraClient,

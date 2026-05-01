@@ -127,7 +127,8 @@ exclude = ['^build/', '^dist/', '^\\.venv/', '^tests/', '^scripts/']
 # still catching name/import issues.
 [[tool.mypy.overrides]]
 module = [
-    "src.clients.*",
+    "src.infrastructure.jira.*",
+    "src.infrastructure.openproject.*",
     "src.application.components.*",
     "src.utils.*",
     "src.migration",

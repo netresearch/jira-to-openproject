@@ -154,8 +154,8 @@ class TestProjectMigration(unittest.TestCase):
             # Verify the right method was called
             jira_client.get_projects.assert_called_once()
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     @patch("src.application.components.project_migration.config.get_path")
     @patch("src.application.components.project_migration.config.migration_config")
     @patch("os.path.exists")
@@ -190,8 +190,8 @@ class TestProjectMigration(unittest.TestCase):
             assert mock_op_instance.get_projects.call_count == 1
             assert mock_save_to_json.call_count == 1
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     @patch("src.application.components.project_migration.config.get_path")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
@@ -264,8 +264,8 @@ class TestProjectMigration(unittest.TestCase):
         # Should log a debug about missing account mapping
         assert any("No account mapping found for project UNKNOWN" in msg for msg in cm.output)
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     def test_get_existing_project_details_security_injection_prevention(
         self,
         mock_op_client: MagicMock,
@@ -336,8 +336,8 @@ class TestProjectMigration(unittest.TestCase):
                 # Reset mock for next iteration
                 mock_op_instance.reset_mock()
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     def test_get_existing_project_details_input_validation(
         self,
         mock_op_client: MagicMock,
@@ -367,8 +367,8 @@ class TestProjectMigration(unittest.TestCase):
                 # Should raise ValueError with appropriate message
                 assert "Identifier must be a string" in str(cm.value)
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     def test_get_existing_project_details_special_characters(
         self,
         mock_op_client: MagicMock,
@@ -431,8 +431,8 @@ class TestProjectMigration(unittest.TestCase):
                 # Reset mock for next iteration
                 mock_op_instance.reset_mock()
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     def test_get_existing_project_details_query_failure_handling(
         self,
         mock_op_client: MagicMock,
@@ -482,8 +482,8 @@ class TestProjectMigration(unittest.TestCase):
                 mock_op_instance.reset_mock()
                 mock_op_instance.execute_query_to_json_file.side_effect = None
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     def test_get_existing_project_details_empty_identifier_handling(
         self,
         mock_op_client: MagicMock,

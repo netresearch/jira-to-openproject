@@ -18,15 +18,15 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.clients.enhanced_openproject_client import EnhancedOpenProjectClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.enhanced_openproject_client import EnhancedOpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.performance_optimizer import PerformanceOptimizer
 
 
 class TestEnhancedOpenProjectClientInitialization:
     """Test EnhancedOpenProjectClient initialization and configuration."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_enhanced_client_initialization(self, mock_session) -> None:
         """Test enhanced client initialization with performance optimizer."""
         client = EnhancedOpenProjectClient(
@@ -51,7 +51,7 @@ class TestEnhancedOpenProjectClientInitialization:
         assert client.parallel_workers == 6
         assert client.performance_optimizer.rate_limiter.current_rate == 8.0
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_enhanced_client_default_values(self, mock_session) -> None:
         """Test enhanced client initialization with default values."""
         client = EnhancedOpenProjectClient(
@@ -71,7 +71,7 @@ class TestEnhancedOpenProjectClientInitialization:
 class TestBatchCreateWorkPackages:
     """Test batch_create_work_packages functionality."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_batch_create_empty_list(self, mock_session) -> None:
         """Test batch create with empty work packages list."""
         client = EnhancedOpenProjectClient(
@@ -89,7 +89,7 @@ class TestBatchCreateWorkPackages:
         }
         assert result == expected
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch.object(EnhancedOpenProjectClient, "_create_temp_work_packages_file")
     @patch.object(EnhancedOpenProjectClient, "_execute_optimized_batch_creation")
     def test_batch_create_success(
@@ -130,7 +130,7 @@ class TestBatchCreateWorkPackages:
         mock_execute.assert_called_once_with(mock_temp_file)
         mock_temp_file.unlink.assert_called_once()
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch.object(EnhancedOpenProjectClient, "_create_temp_work_packages_file")
     @patch.object(EnhancedOpenProjectClient, "_execute_optimized_batch_creation")
     def test_batch_create_with_errors(
@@ -170,7 +170,7 @@ class TestBatchCreateWorkPackages:
         assert result["stats"]["failed"] == 1
         assert len(result["errors"]) == 1
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch.object(EnhancedOpenProjectClient, "_create_temp_work_packages_file")
     @patch.object(EnhancedOpenProjectClient, "_execute_optimized_batch_creation")
     def test_batch_create_exception_handling(
@@ -207,7 +207,7 @@ class TestBatchCreateWorkPackages:
 class TestCreateTempWorkPackagesFile:
     """Test _create_temp_work_packages_file method."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch("tempfile.NamedTemporaryFile")
     def test_create_temp_file(self, mock_temp_file, mock_session) -> None:
         """Test temporary file creation for work packages."""
@@ -244,7 +244,7 @@ class TestCreateTempWorkPackagesFile:
 class TestExecuteOptimizedBatchCreation:
     """Test _execute_optimized_batch_creation method."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch("subprocess.run")
     def test_execute_batch_creation_success(
         self,
@@ -284,7 +284,7 @@ class TestExecuteOptimizedBatchCreation:
         assert "rails" in call_args[0]
         assert "runner" in call_args
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch("subprocess.run")
     def test_execute_batch_creation_failure(
         self,
@@ -312,7 +312,7 @@ class TestExecuteOptimizedBatchCreation:
         assert "Rails script failed" in str(exc_info.value)
         assert "Rails error" in str(exc_info.value)
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch("subprocess.run")
     def test_execute_batch_creation_invalid_json(
         self,
@@ -343,7 +343,7 @@ class TestExecuteOptimizedBatchCreation:
 class TestBulkGetWorkPackages:
     """Test bulk_get_work_packages functionality."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_bulk_get_empty_list(self, mock_session) -> None:
         """Test bulk get with empty work package IDs list."""
         client = EnhancedOpenProjectClient(
@@ -355,8 +355,8 @@ class TestBulkGetWorkPackages:
         result = client.bulk_get_work_packages([])
         assert result == {}
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
-    @patch("src.clients.enhanced_openproject_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.ThreadPoolExecutor")
     def test_bulk_get_success(self, mock_executor_class, mock_session) -> None:
         """Test successful bulk work package retrieval."""
         # Mock executor
@@ -376,7 +376,7 @@ class TestBulkGetWorkPackages:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_openproject_client.as_completed",
+            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
             return_value=[mock_future1, mock_future2],
         ):
             client = EnhancedOpenProjectClient(
@@ -391,8 +391,8 @@ class TestBulkGetWorkPackages:
             assert results[1] == wp1
             assert results[2] == wp2
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
-    @patch("src.clients.enhanced_openproject_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.ThreadPoolExecutor")
     def test_bulk_get_partial_failure(self, mock_executor_class, mock_session) -> None:
         """Test bulk get with partial failures."""
         # Mock executor
@@ -411,7 +411,7 @@ class TestBulkGetWorkPackages:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_openproject_client.as_completed",
+            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
             return_value=[mock_future1, mock_future2],
         ):
             client = EnhancedOpenProjectClient(
@@ -430,7 +430,7 @@ class TestBulkGetWorkPackages:
 class TestGetWorkPackageSafe:
     """Test _get_work_package_safe internal method."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_get_work_package_safe_success(self, mock_session) -> None:
         """Test successful safe work package retrieval."""
         # Mock response
@@ -455,7 +455,7 @@ class TestGetWorkPackageSafe:
         assert result == wp_data
         mock_session_instance.get.assert_called_once()
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_get_work_package_safe_not_found(self, mock_session) -> None:
         """Test safe work package retrieval with 404 error."""
         # Mock 404 response
@@ -477,7 +477,7 @@ class TestGetWorkPackageSafe:
 
         assert result is None
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_get_work_package_safe_network_error(self, mock_session) -> None:
         """Test safe work package retrieval with network error."""
         # Mock network error
@@ -500,7 +500,7 @@ class TestGetWorkPackageSafe:
 class TestCachedOperations:
     """Test cached operations integration."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_cached_priorities_get(self, mock_session) -> None:
         """Test cached priorities retrieval."""
         # Mock priorities data
@@ -532,7 +532,7 @@ class TestCachedOperations:
         # Should only make one API call due to caching
         assert mock_session_instance.get.call_count == 1
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_cached_types_get(self, mock_session) -> None:
         """Test cached types retrieval."""
         mock_types = [{"id": 1, "name": "Task"}, {"id": 2, "name": "Bug"}]
@@ -564,7 +564,7 @@ class TestCachedOperations:
 class TestBulkUpdateWorkPackages:
     """Test bulk_update_work_packages functionality."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch.object(EnhancedOpenProjectClient, "_create_temp_updates_file")
     @patch.object(EnhancedOpenProjectClient, "_execute_optimized_bulk_update")
     def test_bulk_update_success(
@@ -606,7 +606,7 @@ class TestBulkUpdateWorkPackages:
 class TestPerformanceIntegration:
     """Test performance optimization integration."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_performance_optimizer_integration(self, mock_session) -> None:
         """Test performance optimizer integration in enhanced client."""
         client = EnhancedOpenProjectClient(
@@ -622,7 +622,7 @@ class TestPerformanceIntegration:
         assert client.performance_optimizer.cache.max_size == 200
         assert client.performance_optimizer.rate_limiter.current_rate == 3.0
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_rate_limiting_integration(self, mock_session) -> None:
         """Test rate limiting integration in batch operations."""
         client = EnhancedOpenProjectClient(
@@ -645,7 +645,7 @@ class TestPerformanceIntegration:
 class TestBackwardsCompatibility:
     """Test backwards compatibility with base OpenProjectClient."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_base_methods_available(self, mock_session) -> None:
         """Test that base OpenProjectClient methods are still available."""
         client = EnhancedOpenProjectClient(
@@ -662,7 +662,7 @@ class TestBackwardsCompatibility:
         assert hasattr(client, "create_work_package")
         assert hasattr(client, "update_work_package")
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_enhanced_methods_added(self, mock_session) -> None:
         """Test that enhanced methods are added."""
         client = EnhancedOpenProjectClient(
@@ -682,7 +682,7 @@ class TestBackwardsCompatibility:
 class TestErrorHandlingAndResilience:
     """Test error handling and resilience features."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_network_error_handling(self, mock_session) -> None:
         """Test handling of network errors."""
         mock_session_instance = Mock()
@@ -700,7 +700,7 @@ class TestErrorHandlingAndResilience:
         result = client._get_work_package_safe(1)
         assert result is None
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_api_error_handling(self, mock_session) -> None:
         """Test handling of API errors."""
         mock_response = Mock()
@@ -721,8 +721,8 @@ class TestErrorHandlingAndResilience:
         result = client._get_work_package_safe(1)
         assert result is None
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
-    @patch("src.clients.enhanced_openproject_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.ThreadPoolExecutor")
     def test_partial_bulk_failure_handling(
         self,
         mock_executor_class,
@@ -744,7 +744,7 @@ class TestErrorHandlingAndResilience:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_openproject_client.as_completed",
+            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
             return_value=[mock_future1, mock_future2],
         ):
             client = EnhancedOpenProjectClient(
@@ -765,7 +765,7 @@ class TestErrorHandlingAndResilience:
 class TestOptimizedRailsOperations:
     """Test optimized Rails script operations."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     def test_rails_script_generation(self, mock_session) -> None:
         """Test Rails script generation for batch operations."""
         client = EnhancedOpenProjectClient(
@@ -782,7 +782,7 @@ class TestOptimizedRailsOperations:
         if hasattr(client, "_generate_bulk_creation_script"):
             assert callable(client._generate_bulk_creation_script)
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch("subprocess.run")
     def test_rails_script_execution_timeout(
         self,
@@ -810,7 +810,7 @@ class TestOptimizedRailsOperations:
 class TestMemoryEfficiencyAndScalability:
     """Test memory efficiency and scalability features."""
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch.object(EnhancedOpenProjectClient, "_create_temp_work_packages_file")
     @patch.object(EnhancedOpenProjectClient, "_execute_optimized_batch_creation")
     def test_large_batch_handling(
@@ -850,8 +850,8 @@ class TestMemoryEfficiencyAndScalability:
         # Verify temp file cleanup
         mock_temp_file.unlink.assert_called_once()
 
-    @patch("src.clients.enhanced_openproject_client.requests.Session")
-    @patch("src.clients.enhanced_openproject_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
+    @patch("src.infrastructure.openproject.enhanced_openproject_client.ThreadPoolExecutor")
     def test_bulk_operation_scalability(
         self,
         mock_executor_class,
@@ -876,7 +876,7 @@ class TestMemoryEfficiencyAndScalability:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_openproject_client.as_completed",
+            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
             return_value=mock_futures,
         ):
             client = EnhancedOpenProjectClient(

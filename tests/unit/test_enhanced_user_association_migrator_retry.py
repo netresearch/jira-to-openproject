@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from src.clients.jira_client import (
+from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
     JiraConnectionError,

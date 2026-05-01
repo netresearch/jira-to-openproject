@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.clients.jira_client import (
+from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
     JiraCaptchaError,
@@ -28,7 +28,7 @@ class TestJiraClient(unittest.TestCase):
     def setUp(self) -> None:
         """Set up the test environment."""
         # Patch the config module
-        self.config_patcher = patch("src.clients.jira_client.config")
+        self.config_patcher = patch("src.infrastructure.jira.jira_client.config")
         self.mock_config = self.config_patcher.start()
 
         # Mock the config values
@@ -62,7 +62,7 @@ class TestJiraClient(unittest.TestCase):
         self.mock_jira_class = MagicMock(return_value=self.mock_jira)
         fake_jira_module = types.SimpleNamespace(JIRA=self.mock_jira_class)
         self.jira_patcher = patch(
-            "src.clients.jira_client._import_real_jira_module",
+            "src.infrastructure.jira.jira_client._import_real_jira_module",
             return_value=fake_jira_module,
         )
         self.jira_patcher.start()

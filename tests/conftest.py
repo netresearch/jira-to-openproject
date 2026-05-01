@@ -48,11 +48,11 @@ from tests.utils.mock_factory import (
 # Import real client classes when available; fall back to simple stubs to keep
 # unit tests runnable without optional third-party deps (e.g., jira library)
 try:  # pragma: no cover - exercised via import path, not logic
-    from src.clients.docker_client import DockerClient
-    from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
-    from src.clients.rails_console_client import RailsConsoleClient
-    from src.clients.ssh_client import SSHClient
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.docker_client import DockerClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+    from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
+    from src.infrastructure.openproject.ssh_client import SSHClient
 except ModuleNotFoundError:  # lightweight stubs for unit-only runs
 
     class DockerClient:  # type: ignore[no-redef]
@@ -570,27 +570,27 @@ def configure_external_clients_mocking(pytestconfig: Config) -> Generator[None]:
     try:
         if not live_jira:
             mp.setattr(
-                "src.clients.jira_client.JiraClient",
+                "src.infrastructure.jira.jira_client.JiraClient",
                 lambda *args, **kwargs: create_mock_jira_client(),
             )
         if not live_op:
             mp.setattr(
-                "src.clients.openproject_client.OpenProjectClient",
+                "src.infrastructure.openproject.openproject_client.OpenProjectClient",
                 lambda *args, **kwargs: create_mock_openproject_client(),
             )
         if not live_rails:
             mp.setattr(
-                "src.clients.rails_console_client.RailsConsoleClient",
+                "src.infrastructure.openproject.rails_console_client.RailsConsoleClient",
                 lambda *args, **kwargs: create_mock_rails_client(),
             )
         if not live_docker:
             mp.setattr(
-                "src.clients.docker_client.DockerClient",
+                "src.infrastructure.openproject.docker_client.DockerClient",
                 lambda *args, **kwargs: create_mock_docker_client(),
             )
         if not live_ssh:
             mp.setattr(
-                "src.clients.ssh_client.SSHClient",
+                "src.infrastructure.openproject.ssh_client.SSHClient",
                 lambda *args, **kwargs: create_mock_ssh_client(),
             )
 
@@ -663,7 +663,7 @@ class MonkeypatchHelpers:
             return_value: Instance to return when class is instantiated
 
         Example:
-            helpers.mock_class_return_value(monkeypatch, "src.clients.jira_client", "JiraClient", mock_jira_instance)
+            helpers.mock_class_return_value(monkeypatch, "src.infrastructure.jira.jira_client", "JiraClient", mock_jira_instance)
 
         """
         mock_class = MagicMock(return_value=return_value)

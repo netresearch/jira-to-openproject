@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
 from src.domain.repositories import MappingRepository
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.persistence.mapping_repo import JsonFileMappingRepository
 from src.models import ComponentResult
 

@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.clients.openproject_provenance_service import OpenProjectProvenanceService
+from src.infrastructure.openproject.openproject_provenance_service import OpenProjectProvenanceService
 
 
 @pytest.fixture

@@ -6,8 +6,8 @@ import sys
 sys.path.insert(0, "/home/sme/p/j2o")
 
 from src.application.components.work_package_migration import WorkPackageMigration
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 print("=" * 80)
 print("SIMPLE TEST: NRS-182 Only")

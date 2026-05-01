@@ -1,7 +1,7 @@
 """Pydantic v2 model for OpenProject user payloads.
 
 The shape modelled here matches what
-:mod:`src.clients.openproject_user_service` returns and what
+:mod:`src.infrastructure.openproject.openproject_user_service` returns and what
 :mod:`src.utils.enhanced_user_association_migrator` consumes — a flat dict
 with ``login``, ``mail``, ``firstname``/``lastname`` and friends. The
 ``email`` alias accommodates the small number of code paths that still

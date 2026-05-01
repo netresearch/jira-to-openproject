@@ -208,14 +208,18 @@ dev-test: ## Run tests locally for fast development feedback (recommended for da
 container-test: ## Run tests inside the Docker test profile (full dependency stack)
 	@# Create var directories on host (volume mount overwrites container /app)
 	@mkdir -p var/backups var/data var/debug var/exports var/logs var/output var/output_test var/results var/temp var/run var/snapshots var/snapshots/current var/snapshots/archive
-	docker compose --profile test build test
-	docker compose --profile test run --rm test python -m pytest -m "unit and not slow" $(TEST_OPTS)
+	@# Run the container as the host user so it can write to mounted var/.
+	@# Without this, host-mkdir'd dirs are owned by the host UID (e.g. 1001
+	@# on GitHub Actions runners) but the container's appuser is UID 1000,
+	@# and logging.FileHandler at import time fails with PermissionError.
+	DOCKER_UID=$$(id -u) DOCKER_GID=$$(id -g) docker compose --profile test build test
+	DOCKER_UID=$$(id -u) DOCKER_GID=$$(id -g) docker compose --profile test run --rm test python -m pytest -m "unit and not slow" $(TEST_OPTS)
 
 container-test-integration: ## Run integration tests inside Docker mocks (slower)
 	@# Create var directories on host (volume mount overwrites container /app)
 	@mkdir -p var/backups var/data var/debug var/exports var/logs var/output var/output_test var/results var/temp var/run var/snapshots var/snapshots/current var/snapshots/archive
-	docker compose --profile test build test
-	docker compose --profile test run --rm test bash -lc 'python -m pytest -m "integration and not slow" $(TEST_OPTS); status=$$?; if [ $$status -ne 0 ] && [ $$status -ne 5 ]; then exit $$status; fi'
+	DOCKER_UID=$$(id -u) DOCKER_GID=$$(id -g) docker compose --profile test build test
+	DOCKER_UID=$$(id -u) DOCKER_GID=$$(id -g) docker compose --profile test run --rm test bash -lc 'python -m pytest -m "integration and not slow" $(TEST_OPTS); status=$$?; if [ $$status -ne 0 ] && [ $$status -ne 5 ]; then exit $$status; fi'
 
 dev-test-fast: ## Run fast tests locally for immediate feedback (unit tests only)
 	python -m pytest -m "not slow and not integration and not end_to_end" -n auto $(TEST_OPTS)

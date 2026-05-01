@@ -1,0 +1,767 @@
+"""Jira API client for the migration project.
+
+Provides a clean, exception-based interface for Jira resource access.
+Enhanced with performance optimizations including batch operations,
+caching, and parallel processing.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any
+
+from requests import Response
+
+if TYPE_CHECKING:
+    from jira.exceptions import JIRAError as AtlassianJIRAError
+
+    from jira import JIRA, Issue
+else:
+    # At runtime, avoid importing jira to prevent stub issues
+    AtlassianJIRAError = Exception  # type: ignore[misc,assignment]
+from src import config
+from src.display import configure_logging
+from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
+from src.utils.performance_optimizer import (
+    PerformanceOptimizer,
+)
+from src.utils.rate_limiter import create_jira_rate_limiter
+
+HTTP_OK = 200
+HTTP_BAD_REQUEST_MIN = 400
+HTTP_NOT_FOUND = 404
+
+try:
+    from src.config import logger
+except Exception:
+    logger = configure_logging("INFO", None)
+
+
+class JiraError(Exception):
+    """Base exception for all Jira client errors."""
+
+
+class JiraConnectionError(JiraError):
+    """Error when connection to Jira server fails."""
+
+
+class JiraAuthenticationError(JiraError):
+    """Error when authentication to Jira fails."""
+
+
+class JiraApiError(JiraError):
+    """Error when Jira API returns an error response."""
+
+
+class JiraResourceNotFoundError(JiraError):
+    """Error when a requested Jira resource is not found."""
+
+
+class JiraCaptchaError(JiraError):
+    """Error when Jira requires CAPTCHA resolution."""
+
+
+def _import_real_jira_module() -> Any:
+    """Import the real ``jira`` module even if a local test stub shadows it.
+
+    Extracted as a module-level helper so tests can patch it when they need
+    to inject a fake ``JIRA`` class.
+    """
+    try:
+        import importlib
+        import importlib.util
+        import site
+        import sys
+        from pathlib import Path as _Path
+
+        # If a shadow stub is loaded from this repo, purge it. The stub lives
+        # at <repo-root>/jira/__init__.py — locate that path relative to this
+        # source file rather than hard-coding an absolute developer path.
+        repo_root = _Path(__file__).resolve().parents[2]
+        local_stub_init = repo_root / "jira" / "__init__.py"
+        if "jira" in sys.modules:
+            mod = sys.modules["jira"]
+            mod_file = getattr(mod, "__file__", "") or ""
+            if mod_file:
+                try:
+                    is_local_stub = _Path(mod_file).resolve() == local_stub_init.resolve()
+                except OSError:
+                    is_local_stub = False
+                if is_local_stub:
+                    # Remove stub and any submodules to force a clean import
+                    for key in list(sys.modules.keys()):
+                        if key == "jira" or key.startswith("jira."):
+                            sys.modules.pop(key, None)
+
+        # Prefer virtualenv site-packages path. site.getsitepackages() can
+        # raise AttributeError on bare/embedded interpreters; OSError covers
+        # the rare case where the path lookup itself fails.
+        candidates: list[_Path] = []
+        try:
+            candidates.extend(_Path(p) for p in site.getsitepackages())
+        except AttributeError, OSError:
+            pass
+        try:
+            usp = site.getusersitepackages()
+            if usp:
+                candidates.append(_Path(usp))
+        except AttributeError, OSError:
+            pass
+
+        for base in candidates:
+            jira_init = base / "jira" / "__init__.py"
+            if jira_init.exists():
+                # Load the real package under the canonical name 'jira'
+                spec = importlib.util.spec_from_file_location("jira", str(jira_init))
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    sys.modules["jira"] = mod  # ensure relative imports resolve to this package
+                    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                    if hasattr(mod, "JIRA"):
+                        return mod
+
+        # Fallback: regular import (may still hit stub if unresolved)
+        return importlib.import_module("jira")
+    except ImportError, ModuleNotFoundError, AttributeError, OSError:
+        # ImportError / ModuleNotFoundError: jira package missing or corrupt.
+        # AttributeError: site module missing expected accessors.
+        # OSError: filesystem error walking site-packages.
+        # In every case, fall back to the standard import path; that either
+        # succeeds or raises ImportError, which the caller already expects.
+        import importlib
+
+        return importlib.import_module("jira")
+
+
+class JiraClient:
+    """Jira client for API interactions.
+
+    Provides a clean, exception-based interface for interacting with the Jira API,
+    including project/issue operations and Tempo plugin integration.
+
+    Instead of returning empty lists or None on failure, methods will raise appropriate
+    exceptions that can be caught and handled by the caller.
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        """Initialize the Jira client with proper exception handling and performance optimizations."""
+        # Get connection details from config
+        self.jira_url: str = config.jira_config.get("url", "")
+        self.jira_username: str = config.jira_config.get("username", "")
+        self.jira_token: str = config.jira_config.get("api_token", "")
+        self.verify_ssl: bool = config.jira_config.get("verify_ssl", True)
+
+        # Validate required configuration
+        if not self.jira_url:
+            msg = "Jira URL is required"
+            raise ValueError(msg)
+        if not self.jira_token:
+            msg = "Jira API token is required"
+            raise ValueError(msg)
+
+        # ScriptRunner configuration
+        self.scriptrunner_enabled = config.jira_config.get("scriptrunner", {}).get(
+            "enabled",
+            False,
+        )
+        self.scriptrunner_custom_field_options_endpoint = config.jira_config.get(
+            "scriptrunner",
+            {},
+        ).get(
+            "custom_field_options_endpoint",
+            "",
+        )
+
+        # Initialize client
+        self.jira: JIRA | None = None
+
+        # Initialize rate limiter
+        self.rate_limiter = create_jira_rate_limiter()
+        self.request_count = 0
+        self.period_start = time.time()
+        self.base_url = self.jira_url.rstrip("/")
+
+        # Cache fields
+        self.project_cache: list[dict[str, Any]] | None = None
+        self.issue_type_cache: list[dict[str, Any]] | None = None
+        self.field_options_cache: dict[str, Any] = {}
+
+        # ===== PERFORMANCE OPTIMIZER SETUP =====
+        # Validate performance configuration parameters using SecurityValidator
+        try:
+            cache_size = SecurityValidator.validate_numeric_parameter(
+                "cache_size",
+                kwargs.get("cache_size", 2000),
+            )
+            cache_ttl = SecurityValidator.validate_numeric_parameter(
+                "cache_ttl",
+                kwargs.get("cache_ttl", 1800),
+            )
+            batch_size = SecurityValidator.validate_numeric_parameter(
+                "batch_size",
+                kwargs.get("batch_size", 100),
+            )
+            max_workers = SecurityValidator.validate_numeric_parameter(
+                "max_workers",
+                kwargs.get("max_workers", 15),
+            )
+            rate_limit = SecurityValidator.validate_numeric_parameter(
+                "rate_limit_per_sec",
+                kwargs.get("rate_limit", 15.0),
+            )
+
+            # Validate resource allocation to prevent system overload
+            SecurityValidator.validate_resource_allocation(
+                batch_size,
+                max_workers,
+                2048,
+            )  # 2GB memory limit
+
+        except ConfigurationValidationError:
+            logger.exception("JiraClient configuration validation failed")
+            raise
+
+        # Initialize performance optimizer with validated parameters
+        self.performance_optimizer = PerformanceOptimizer(
+            cache_size=cache_size,
+            cache_ttl=cache_ttl,
+            batch_size=batch_size,
+            max_workers=max_workers,
+            rate_limit=rate_limit,
+        )
+
+        self.batch_size = batch_size
+        self.parallel_workers = max_workers
+
+        # Service composition (Phases 3a–3j of ADR-002 — see ADR for the
+        # decomposition plan).
+        from src.infrastructure.jira.jira_agile_service import JiraAgileService
+        from src.infrastructure.jira.jira_field_service import JiraFieldService
+        from src.infrastructure.jira.jira_group_service import JiraGroupService
+        from src.infrastructure.jira.jira_issue_service import JiraIssueService
+        from src.infrastructure.jira.jira_project_service import JiraProjectService
+        from src.infrastructure.jira.jira_reporting_service import JiraReportingService
+        from src.infrastructure.jira.jira_search_service import JiraSearchService
+        from src.infrastructure.jira.jira_tempo_service import JiraTempoService
+        from src.infrastructure.jira.jira_user_service import JiraUserService
+        from src.infrastructure.jira.jira_workflow_service import JiraWorkflowService
+        from src.infrastructure.jira.jira_worklog_service import JiraWorklogService
+
+        self.projects = JiraProjectService(self)
+        self.workflows = JiraWorkflowService(self)
+        self.agile = JiraAgileService(self)
+        self.users = JiraUserService(self)
+        self.worklogs = JiraWorklogService(self)
+        self.tempo = JiraTempoService(self)
+        self.groups = JiraGroupService(self)
+        self.reporting = JiraReportingService(self)
+        self.search = JiraSearchService(self)
+        self.fields = JiraFieldService(self)
+        self.issues = JiraIssueService(self)
+
+        # Connect to Jira
+        self._connect()
+        self._patch_jira_client()
+
+    def _connect(self) -> None:
+        """Connect to the Jira API.
+
+        Raises:
+            JiraConnectionError: If connection to Jira server fails
+            JiraAuthenticationError: If authentication fails
+
+        """
+        connection_errors = []
+
+        jira_mod = _import_real_jira_module()
+
+        # Try to connect using token auth (Jira Cloud and Server PAT)
+        try:
+            logger.info("Attempting to connect to Jira using token authentication")
+            self.jira = jira_mod.JIRA(
+                server=self.jira_url,
+                token_auth=self.jira_token,
+                options={"verify": self.verify_ssl},
+            )
+            server_info = self.jira.server_info()
+            logger.success(
+                "Successfully connected to Jira server: %s (%s)",
+                server_info.get("baseUrl"),
+                server_info.get("version"),
+            )
+            # Explicit auth verification: /rest/api/2/myself must be 200 for valid PAT
+            try:
+                resp = self.jira._session.get(f"{self.base_url}/rest/api/2/myself")
+                if resp.status_code != HTTP_OK:
+                    logger.error(
+                        "Auth verification failed on /myself: HTTP %s, headers=%s",
+                        resp.status_code,
+                        {k: v for k, v in resp.headers.items() if k.lower() in ("www-authenticate", "x-ausername")},
+                    )
+                    auth_msg = f"/myself auth check failed with HTTP {resp.status_code}"
+                    raise JiraAuthenticationError(auth_msg)
+                logger.info("Auth verification successful on /myself")
+            except JiraAuthenticationError:
+                raise
+            except Exception as e:
+                logger.warning("Auth verification error on /myself: %s", e)
+            return
+        except Exception as e:
+            error_msg = f"Token authentication failed: {e!s}"
+            logger.warning(error_msg)
+            connection_errors.append(error_msg)
+
+        # Try basic authentication
+        try:
+            self.jira = jira_mod.JIRA(
+                server=self.jira_url,
+                basic_auth=(self.jira_username, self.jira_token),
+                options={"verify": self.verify_ssl},
+            )
+            self._patch_jira_client()
+            logger.debug(
+                "Successfully connected using basic authentication",
+            )
+            return
+        except Exception as e2:
+            error_msg = f"Basic authentication failed: {e2!s}"
+            logger.warning(error_msg)
+            connection_errors.append(error_msg)
+
+        # If all methods failed, raise exception with details
+        error_details = "; ".join(connection_errors)
+        logger.error(
+            "All authentication methods failed for Jira connection to %s",
+            self.jira_url,
+        )
+        msg = f"Failed to authenticate with Jira: {error_details}"
+        raise JiraAuthenticationError(msg) from None
+
+    def get_projects(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.projects.get_projects``."""
+        return self.projects.get_projects()
+
+    def get_issue_types(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.projects.get_issue_types``."""
+        return self.projects.get_issue_types()
+
+    def get_all_issues_for_project(
+        self,
+        project_key: str,
+        *,
+        expand_changelog: bool = True,
+    ) -> list[Issue]:
+        """Thin delegator over ``self.issues.get_all_issues_for_project``."""
+        return self.issues.get_all_issues_for_project(
+            project_key,
+            expand_changelog=expand_changelog,
+        )
+
+    def get_issue_details(self, issue_key: str) -> dict[str, Any]:
+        """Thin delegator over ``self.issues.get_issue_details``."""
+        return self.issues.get_issue_details(issue_key)
+
+    def get_users(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.users.get_users``."""
+        return self.users.get_users()
+
+    def get_user_info(self, user_key: str) -> dict[str, Any] | None:
+        """Thin delegator over ``self.users.get_user_info``."""
+        return self.users.get_user_info(user_key)
+
+    def download_user_avatar(self, avatar_url: str) -> tuple[bytes, str] | None:
+        """Thin delegator over ``self.users.download_user_avatar``."""
+        return self.users.download_user_avatar(avatar_url)
+
+    def get_groups(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.groups.get_groups``."""
+        return self.groups.get_groups()
+
+    def get_group_members(self, group_name: str) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.groups.get_group_members``."""
+        return self.groups.get_group_members(group_name)
+
+    def get_project_roles(self, project_key: str) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.projects.get_project_roles``."""
+        return self.projects.get_project_roles(project_key)
+
+    def get_project_permission_scheme(self, project_key: str) -> dict[str, Any]:
+        """Thin delegator over ``self.projects.get_project_permission_scheme``."""
+        return self.projects.get_project_permission_scheme(project_key)
+
+    def get_issue_count(self, project_key: str) -> int:
+        """Thin delegator over ``self.search.get_issue_count``."""
+        return self.search.get_issue_count(project_key)
+
+    def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.issues.get_issue_watchers``."""
+        return self.issues.get_issue_watchers(issue_key)
+
+    def get_all_statuses(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.search.get_all_statuses``."""
+        return self.search.get_all_statuses()
+
+    def get_priorities(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.search.get_priorities``."""
+        return self.search.get_priorities()
+
+    def get_issue_property(self, issue_key: str, property_key: str) -> dict[str, Any] | None:
+        """Thin delegator over ``self.fields.get_issue_property``."""
+        return self.fields.get_issue_property(issue_key, property_key)
+
+    def _handle_response(self, response: Response) -> None:
+        """Check response for CAPTCHA challenge and raise appropriate exception if found.
+
+        Args:
+            response: The HTTP response to check
+
+        Raises:
+            JiraCaptchaError: If a CAPTCHA challenge is detected
+
+        """
+        # Check for CAPTCHA challenge header
+        if "X-Authentication-Denied-Reason" in response.headers:
+            header_value = response.headers["X-Authentication-Denied-Reason"]
+            if "CAPTCHA_CHALLENGE" in header_value:
+                # Extract login URL if present
+                login_url = self.jira_url + "/login.jsp"  # Default
+                if "; login-url=" in header_value:
+                    login_url = header_value.split("; login-url=")[1].strip()
+
+                error_msg = (
+                    f"CAPTCHA challenge detected. Please open {login_url} in your web "
+                    f"browser, log in to resolve the CAPTCHA, and then restart the application"
+                )
+                logger.error("CAPTCHA challenge detected from Jira!")
+                logger.error(
+                    "Please open %s in your web browser and log in to resolve the CAPTCHA challenge",
+                    login_url,
+                )
+                logger.debug("Jira client request count: %s", self.request_count)
+
+                raise JiraCaptchaError(error_msg)
+
+        # Check for other error responses
+        if response.status_code >= HTTP_BAD_REQUEST_MIN:
+            error_msg = f"HTTP Error {response.status_code}: {response.reason}"
+            try:
+                error_json = response.json()
+                if "errorMessages" in error_json:
+                    error_msg = f"{error_msg} - {', '.join(error_json['errorMessages'])}"
+                elif "errors" in error_json:
+                    error_msg = f"{error_msg} - {error_json['errors']}"
+            except Exception:
+                pass
+
+            if response.status_code == HTTP_NOT_FOUND:
+                raise JiraResourceNotFoundError(error_msg) from None
+            if response.status_code in {401, 403}:
+                raise JiraAuthenticationError(error_msg) from None
+            raise JiraApiError(error_msg) from None
+
+    def get_status_categories(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.search.get_status_categories``."""
+        return self.search.get_status_categories()
+
+    def get_field_metadata(self, field_id: str) -> dict[str, Any]:
+        """Thin delegator over ``self.fields.get_field_metadata``."""
+        return self.fields.get_field_metadata(field_id)
+
+    def get_custom_fields(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.fields.get_custom_fields``."""
+        return self.fields.get_custom_fields()
+
+    def _patch_jira_client(self) -> None:
+        """Patch the JIRA client to catch CAPTCHA challenges.
+
+        This adds CAPTCHA detection to all API requests made through the JIRA library.
+        """
+        if not self.jira:
+            msg = "Cannot patch JIRA client: No active connection"
+            raise JiraConnectionError(msg)
+
+        # Store original _session.request method
+        original_request = self.jira._session.request
+
+        # Create patched method that checks for CAPTCHA
+        def patched_request(method: str, url: str, **kwargs: object) -> Response:
+            try:
+                self.request_count += 1
+                # dump requestcount
+                logger.debug("Jira client request count: %s", self.request_count)
+                response = original_request(method, url, **kwargs)
+
+                # Check for CAPTCHA or other errors
+                self._handle_response(response)
+
+                return response
+            except (
+                JiraCaptchaError,
+                JiraAuthenticationError,
+                JiraResourceNotFoundError,
+            ):
+                raise  # Re-raise specific exceptions
+            except Exception as e:
+                msg = f"Error during API request to {url}: {e!s}"
+                raise JiraApiError(msg) from e
+
+        # Replace the method with our patched version
+        self.jira._session.request = patched_request
+        logger.debug("JIRA client patched to handle errors and CAPTCHA challenges")
+
+    def _make_request(
+        self,
+        path: str,
+        method: str = "GET",
+        content_type: str = "application/json",
+        **kwargs: object,
+    ) -> Response:
+        """Make API requests with proper error handling and CAPTCHA detection.
+
+        Args:
+            path: API path relative to base_url
+            method: HTTP method (GET, POST, etc.)
+            content_type: Content type for request headers
+            **kwargs: Additional arguments to pass to jira._session.request
+
+        Returns:
+            Response object if successful
+
+        Raises:
+            JiraConnectionError: If client is not initialized or connection fails
+            JiraApiError: If the API request fails
+            JiraCaptchaError: If a CAPTCHA challenge is detected
+
+        """
+        if not self.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        # Construct full URL
+        url = f"{self.base_url}{path}"
+
+        # Add content headers if requested
+        headers = {}
+        if content_type:
+            headers.update(
+                {
+                    "Content-Type": content_type,
+                    "Accept": content_type,
+                },
+            )
+
+        # Add any headers passed in kwargs
+        if "headers" in kwargs:
+            headers.update(kwargs.pop("headers"))
+
+        try:
+            return self.jira._session.request(method, url, headers=headers, **kwargs)
+
+            # If we got here, we've passed the CAPTCHA check in patched_request
+        except (
+            JiraCaptchaError,
+            JiraAuthenticationError,
+            JiraResourceNotFoundError,
+            JiraApiError,
+        ):
+            raise  # Re-raise specific exceptions
+        except Exception as e:
+            msg = f"Error during API request to {url}: {e!s}"
+            raise JiraConnectionError(msg) from e
+
+    # Tempo API methods
+    def get_tempo_accounts(self, *, expand: bool = False) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_accounts``."""
+        return self.tempo.get_tempo_accounts(expand=expand)
+
+    def get_tempo_customers(self) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_customers``."""
+        return self.tempo.get_tempo_customers()
+
+    def get_tempo_account_links_for_project(
+        self,
+        project_id: int,
+    ) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_account_links_for_project``."""
+        return self.tempo.get_tempo_account_links_for_project(project_id)
+
+    def get_issue_link_types(self) -> list[dict[str, Any]]:
+        """Delegate to ``self.worklogs.get_issue_link_types``."""
+        return self.worklogs.get_issue_link_types()
+
+    def get_work_logs_for_issue(self, issue_key: str) -> list[dict[str, Any]]:
+        """Delegate to ``self.worklogs.get_work_logs_for_issue``."""
+        return self.worklogs.get_work_logs_for_issue(issue_key)
+
+    def get_all_work_logs_for_project(
+        self,
+        project_key: str,
+        *,
+        include_empty: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Delegate to ``self.worklogs.get_all_work_logs_for_project``."""
+        return self.worklogs.get_all_work_logs_for_project(
+            project_key,
+            include_empty=include_empty,
+        )
+
+    def get_work_log_details(self, issue_key: str, work_log_id: str) -> dict[str, Any]:
+        """Delegate to ``self.worklogs.get_work_log_details``."""
+        return self.worklogs.get_work_log_details(issue_key, work_log_id)
+
+    def get_tempo_work_logs(
+        self,
+        issue_key: str | None = None,
+        project_key: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        user_key: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_work_logs``."""
+        return self.tempo.get_tempo_work_logs(
+            issue_key=issue_key,
+            project_key=project_key,
+            date_from=date_from,
+            date_to=date_to,
+            user_key=user_key,
+            limit=limit,
+        )
+
+    def get_tempo_work_attributes(self) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_work_attributes``."""
+        return self.tempo.get_tempo_work_attributes()
+
+    # ---------------------------------------------------------------------- #
+    # Workflow configuration helpers                                        #
+    # ---------------------------------------------------------------------- #
+
+    def get_workflow_schemes(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.workflows.get_workflow_schemes``."""
+        return self.workflows.get_workflow_schemes()
+
+    def get_workflow_transitions(self, workflow_name: str) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.workflows.get_workflow_transitions``."""
+        return self.workflows.get_workflow_transitions(workflow_name)
+
+    def get_workflow_statuses(self, workflow_name: str) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.workflows.get_workflow_statuses``."""
+        return self.workflows.get_workflow_statuses(workflow_name)
+
+    # ---------------------------------------------------------------------- #
+    # Jira Software (Agile) helpers                                         #
+    # ---------------------------------------------------------------------- #
+
+    def get_boards(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.agile.get_boards``."""
+        return self.agile.get_boards()
+
+    def get_board_configuration(self, board_id: int) -> dict[str, Any]:
+        """Thin delegator over ``self.agile.get_board_configuration``."""
+        return self.agile.get_board_configuration(board_id)
+
+    def get_board_sprints(self, board_id: int) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.agile.get_board_sprints``."""
+        return self.agile.get_board_sprints(board_id)
+
+    # ---------------------------------------------------------------------- #
+    # Reporting helpers (filters & dashboards)                               #
+    # ---------------------------------------------------------------------- #
+
+    def get_filters(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.reporting.get_filters``."""
+        return self.reporting.get_filters()
+
+    def get_dashboards(self) -> list[dict[str, Any]]:
+        """Thin delegator over ``self.reporting.get_dashboards``."""
+        return self.reporting.get_dashboards()
+
+    def get_dashboard_details(self, dashboard_id: int) -> dict[str, Any]:
+        """Thin delegator over ``self.reporting.get_dashboard_details``."""
+        return self.reporting.get_dashboard_details(dashboard_id)
+
+    def get_tempo_all_work_logs_for_project(
+        self,
+        project_key: str,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_all_work_logs_for_project``."""
+        return self.tempo.get_tempo_all_work_logs_for_project(
+            project_key,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    def get_tempo_work_log_by_id(self, tempo_worklog_id: str) -> dict[str, Any]:
+        """Delegate to ``self.tempo.get_tempo_work_log_by_id``."""
+        return self.tempo.get_tempo_work_log_by_id(tempo_worklog_id)
+
+    def get_tempo_user_work_logs(
+        self,
+        user_key: str,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_user_work_logs``."""
+        return self.tempo.get_tempo_user_work_logs(
+            user_key,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+    def get_tempo_time_entries(
+        self,
+        project_keys: list[str] | None = None,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        user_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Delegate to ``self.tempo.get_tempo_time_entries``."""
+        return self.tempo.get_tempo_time_entries(
+            project_keys,
+            date_from=date_from,
+            date_to=date_to,
+            user_key=user_key,
+        )
+
+    # ===== ENHANCED PERFORMANCE FEATURES =====
+
+    def get_performance_stats(self) -> dict[str, Any]:
+        """Get comprehensive performance statistics."""
+        return self.performance_optimizer.get_comprehensive_stats()
+
+    # ===== BATCH OPERATIONS =====
+
+    def batch_get_issues(self, issue_keys: list[str]) -> dict[str, Issue]:
+        """Thin delegator over ``self.issues.batch_get_issues``."""
+        return self.issues.batch_get_issues(issue_keys)
+
+    def batch_get_projects(self, project_keys: list[str]) -> dict[str, dict]:
+        """Thin delegator over ``self.projects.batch_get_projects``."""
+        return self.projects.batch_get_projects(project_keys)
+
+    def stream_all_issues_for_project(
+        self,
+        project_key: str,
+        fields: str | None = None,
+        batch_size: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Thin delegator over ``self.issues.stream_all_issues_for_project``."""
+        return self.issues.stream_all_issues_for_project(
+            project_key,
+            fields=fields,
+            batch_size=batch_size,
+        )
+
+    def batch_get_users_by_keys(self, user_keys: list[str]) -> dict[str, dict]:
+        """Thin delegator over ``self.users.batch_get_users_by_keys``."""
+        return self.users.batch_get_users_by_keys(user_keys)
+
+    def get_project_metadata_enhanced(self, project_key: str) -> dict[str, Any]:
+        """Thin delegator over ``self.projects.get_project_metadata_enhanced``."""
+        return self.projects.get_project_metadata_enhanced(project_key)

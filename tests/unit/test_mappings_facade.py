@@ -429,7 +429,7 @@ class TestBaseMigrationInjection:
         we always pass explicit dummies and never want the real
         constructors firing. The fixture asserts that path is taken.
         """
-        # ``BaseMigration`` does ``from src.clients... import JiraClient/
+        # ``BaseMigration`` does ``from src.infrastructure... import JiraClient/
         # OpenProjectClient`` so the local binding is what
         # ``self.jira_client = jira_client or JiraClient()`` resolves.
         # Patching the source modules wouldn't intercept those calls;

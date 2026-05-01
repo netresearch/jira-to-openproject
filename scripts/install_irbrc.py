@@ -17,9 +17,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.clients.docker_client import DockerClient
-from src.clients.ssh_client import SSHClient
 from src.config import logger, openproject_config
+from src.infrastructure.openproject.docker_client import DockerClient
+from src.infrastructure.openproject.ssh_client import SSHClient
 
 
 def main() -> int:

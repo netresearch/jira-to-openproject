@@ -147,8 +147,8 @@ class TestUserMigration(unittest.TestCase):
         assert len(result) == 2
         assert migration.op_users == self.op_users
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     @patch("src.application.components.user_migration.config.get_path")
     @patch("src.application.components.user_migration.ProgressTracker")
     @patch("os.path.exists")

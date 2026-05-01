@@ -3,7 +3,7 @@
 The shape modelled here matches the dict consumed by
 ``WorkPackageMigration`` create/update calls and produced by the Rails
 ``WorkPackage`` enumeration in
-:mod:`src.clients.openproject_work_package_service`. We model the
+:mod:`src.infrastructure.openproject.openproject_work_package_service`. We model the
 attribute-style payload (``project_id``, ``type_id`` …) rather than the
 ``_links``-shaped HAL form; the service layer translates between the two.
 """

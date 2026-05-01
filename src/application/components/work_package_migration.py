@@ -32,10 +32,10 @@ import requests
 from jira import Issue
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.config import logger
 from src.display import ProgressTracker
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 from src.utils import data_handler
 from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
@@ -1695,7 +1695,7 @@ class WorkPackageMigration(BaseMigration):
         try:
             self.jira_client.jira.project(project_key)
         except Exception as e:
-            from src.clients.jira_client import JiraResourceNotFoundError
+            from src.infrastructure.jira.jira_client import JiraResourceNotFoundError
 
             msg = f"Project '{project_key}' not found: {e!s}"
             raise JiraResourceNotFoundError(msg) from e
@@ -1847,7 +1847,7 @@ class WorkPackageMigration(BaseMigration):
             try:
                 self.jira_client.jira.project(project_key)
             except Exception as e:
-                from src.clients.jira_client import JiraResourceNotFoundError
+                from src.infrastructure.jira.jira_client import JiraResourceNotFoundError
 
                 msg = f"Project '{project_key}' not found: {e!s}"
                 raise JiraResourceNotFoundError(msg) from e
@@ -1985,7 +1985,7 @@ class WorkPackageMigration(BaseMigration):
             except Exception as e:
                 error_msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {e!s}"
                 logger.exception(error_msg)
-                from src.clients.jira_client import JiraApiError
+                from src.infrastructure.jira.jira_client import JiraApiError
 
                 raise JiraApiError(error_msg) from e
         return None

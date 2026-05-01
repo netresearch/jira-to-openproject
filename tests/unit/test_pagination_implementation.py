@@ -94,7 +94,7 @@ class TestPaginationImplementation:
             "Project not found",
         )
 
-        from src.clients.jira_client import JiraResourceNotFoundError
+        from src.infrastructure.jira.jira_client import JiraResourceNotFoundError
 
         with pytest.raises(JiraResourceNotFoundError):
             list(self.migration.iter_project_issues("INVALID"))

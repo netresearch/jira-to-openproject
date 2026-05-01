@@ -3,7 +3,7 @@
 
 from dotenv import load_dotenv
 
-from src.clients.jira_client import JiraClient
+from src.infrastructure.jira.jira_client import JiraClient
 
 load_dotenv()
 

@@ -1,7 +1,7 @@
 """Pydantic v2 model for Jira project payloads.
 
 The shape modelled here matches the dict produced by
-``JiraProjectService.get_projects`` (see :mod:`src.clients.jira_project_service`).
+``JiraProjectService.get_projects`` (see :mod:`src.infrastructure.jira.jira_project_service`).
 That dict is the one persisted to the JSON cache *and* the one consumed by
 the migration layer, so it is the right boundary for our Pydantic model.
 

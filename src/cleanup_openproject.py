@@ -9,8 +9,8 @@ import sys
 from typing import TYPE_CHECKING, TypeVar
 
 from src import config
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -5,9 +5,9 @@ import logging
 
 from dotenv import load_dotenv
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.config_loader import ConfigLoader
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 def setup_logging() -> None:

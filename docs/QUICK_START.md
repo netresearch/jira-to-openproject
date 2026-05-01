@@ -224,10 +224,10 @@ j2o/
 - `src/migration.py` - Migration orchestration
 
 **Client Layer** (see [CLIENT_API.md](CLIENT_API.md)):
-- `src/clients/ssh_client.py` - SSH foundation
-- `src/clients/docker_client.py` - Container operations
-- `src/clients/rails_console_client.py` - Rails console interaction
-- `src/clients/openproject_client.py` - High-level orchestration
+- `src/infrastructure/openproject/ssh_client.py` - SSH foundation
+- `src/infrastructure/openproject/docker_client.py` - Container operations
+- `src/infrastructure/openproject/rails_console_client.py` - Rails console interaction
+- `src/infrastructure/openproject/openproject_client.py` - High-level orchestration
 
 **Base Classes**:
 - `src/migrations/base_migration.py` - Abstract migration base class

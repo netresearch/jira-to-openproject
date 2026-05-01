@@ -71,7 +71,7 @@ class JiraUser(BaseModel):
         The SDK exposes its fields via attribute access. We normalise the
         ``timeZone``/``timezone`` discrepancy here, and tolerate a missing
         ``active`` flag (defaulting to ``True`` to match the SDK behaviour
-        we observed in :mod:`src.clients.jira_user_service`).
+        we observed in :mod:`src.infrastructure.jira.jira_user_service`).
         """
         avatar_urls_attr = getattr(obj, "avatarUrls", None)
         avatar_urls: dict[str, str] | None

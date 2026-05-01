@@ -19,7 +19,7 @@ import sys
 import json
 import os
 sys.path.insert(0, '/home/sme/p/j2o')
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 try:
     op = OpenProjectClient()
@@ -74,7 +74,7 @@ python3 -c "
 import sys
 import json
 sys.path.insert(0, '/home/sme/p/j2o')
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 try:
     op = OpenProjectClient()

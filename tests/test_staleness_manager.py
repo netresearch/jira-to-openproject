@@ -10,8 +10,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.clients.jira_client import JiraApiError, JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraApiError, JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.staleness_manager import (
     CacheEntry,
     FallbackStrategy,

@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-from src.clients.docker_client import DockerClient
+from src.infrastructure.openproject.docker_client import DockerClient
 
 
 class TestDockerClient(unittest.TestCase):
@@ -27,16 +27,16 @@ class TestDockerClient(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create patchers
-        self.ssh_client_patcher = patch("src.clients.docker_client.SSHClient")
+        self.ssh_client_patcher = patch("src.infrastructure.openproject.docker_client.SSHClient")
         self.mock_ssh_client_class = self.ssh_client_patcher.start()
         self.mock_ssh_client = MagicMock()
         self.mock_ssh_client_class.return_value = self.mock_ssh_client
 
-        self.logger_patcher = patch("src.clients.docker_client.logger")
+        self.logger_patcher = patch("src.infrastructure.openproject.docker_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
         # File manager mock
-        self.file_manager_patcher = patch("src.clients.docker_client.FileManager")
+        self.file_manager_patcher = patch("src.infrastructure.openproject.docker_client.FileManager")
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.generate_unique_id.return_value = "test_unique_id"

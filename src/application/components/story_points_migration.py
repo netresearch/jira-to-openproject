@@ -15,13 +15,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.clients.openproject_client import escape_ruby_single_quoted
 from src.config import logger
+from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
 from src.models import ComponentResult
 
 if TYPE_CHECKING:
-    from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 STORY_POINTS_CF_NAME = "Story Points"
 
