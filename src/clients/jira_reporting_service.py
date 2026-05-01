@@ -66,22 +66,24 @@ class JiraReportingService:
                 return fav_payload if isinstance(fav_payload, list) else []
 
             def _extract_status_from_error(exc: BaseException | None) -> int | None:
+                # Walk the cause chain looking for an HTTP status. Try
+                # ``status_code`` directly on the exception (set by
+                # ``AtlassianJIRAError``), then fall back to the
+                # response-attached ``status_code`` (set by
+                # ``HTTPError`` and friends). The previous shape had a
+                # second copy of the response-status lookup nested
+                # inside the ``AtlassianJIRAError`` branch — dead code
+                # because the same lookup always ran one block down.
                 current: BaseException | None = exc
                 while current:
-                    if isinstance(current, AtlassianJIRAError):
-                        status = getattr(current, "status_code", None)
-                        if status is not None:
-                            return int(status)
-                        response = getattr(current, "response", None)
-                        if response is not None:
-                            status = getattr(response, "status_code", None)
-                            if status is not None:
-                                return int(status)
+                    direct_status = getattr(current, "status_code", None)
+                    if direct_status is not None:
+                        return int(direct_status)
                     response = getattr(current, "response", None)
                     if response is not None:
-                        status = getattr(response, "status_code", None)
-                        if status is not None:
-                            return int(status)
+                        response_status = getattr(response, "status_code", None)
+                        if response_status is not None:
+                            return int(response_status)
                     current = getattr(current, "__cause__", None)
                 return None
 
@@ -91,7 +93,10 @@ class JiraReportingService:
                     params={"startAt": 0, "maxResults": 1000},
                 )
             except JiraApiError as exc:
-                status = _extract_status_from_error(exc) or _extract_status_from_error(exc.__cause__)
+                # ``_extract_status_from_error`` already walks the
+                # ``__cause__`` chain, so a single call covers both
+                # the immediate exception and any wrapped HTTP error.
+                status = _extract_status_from_error(exc)
                 if status in (404, 405):
                     self._logger.warning(
                         "Filter search endpoint (status %s) not available; falling back to favourites list",
@@ -111,30 +116,19 @@ class JiraReportingService:
                 exceptions.HTTPError,
                 AtlassianJIRAError,
             ) as exc:
-                status = None
-                if isinstance(exc, exceptions.HTTPError):
-                    status = getattr(exc.response, "status_code", None)
-                else:
-                    status = getattr(exc, "status_code", None) or getattr(
-                        getattr(exc, "response", None),
-                        "status_code",
-                        None,
-                    )
-
+                # Reuse the helper instead of re-implementing the
+                # status lookup with isinstance branches. Note: the
+                # ``except JiraApiError`` block that followed this
+                # one was unreachable — at runtime
+                # ``AtlassianJIRAError`` is set to ``Exception``
+                # (see the ``TYPE_CHECKING`` else-branch in
+                # ``jira_client``), so this clause already swallows
+                # ``JiraApiError``. Removed it.
+                status = _extract_status_from_error(exc)
                 if status in (404, 405):
                     self._logger.warning(
                         "Filter search endpoint (status %s) not available; falling back to favourites list",
                         status,
-                    )
-                    filters = _fetch_favourites()
-                else:
-                    raise
-            except JiraApiError as exc:
-                message = str(exc)
-                if "HTTP 404" in message or "HTTP 405" in message:
-                    self._logger.warning(
-                        "Filter search endpoint not available (%s); falling back to favourites list",
-                        message,
                     )
                     filters = _fetch_favourites()
                 else:
