@@ -1,5 +1,53 @@
-"""Project migration module for Jira to OpenProject migration.
+r"""Project migration module for Jira to OpenProject migration.
+
 Handles the migration of projects and their hierarchies from Jira to OpenProject.
+
+Phase 7j notes
+--------------
+This migration is the **canonical write side of the** ``project_mapping``
+**namespace**, analogous to ``user_migration`` for ``user_mapping``
+(see Phase 7i). Many downstream components consume ``project_mapping``
+via ``config.mappings.get_mapping("project")`` and rely on its on-disk
+shape -- ``dict[str, dict]`` keyed by the Jira project key with the
+documented payload (``jira_key``, ``jira_name``, ``openproject_id``,
+``openproject_identifier``, ``openproject_name``, ``created_new``,
+``failed`` / ``error``, ``jira_lead``, ``jira_lead_display``,
+``jira_project_type``, ``jira_project_category``,
+``jira_project_category_id``, ``jira_project_url``,
+``jira_project_avatar_url``, ``has_tempo_account``, ``matched_existing``,
+``matched_by``, ``restored_from_op``, ``provenance_wp_id``, ``dry_run``).
+That shape is a contract with downstream readers and is **deliberately
+preserved unchanged** here.
+
+What Phase 7j does change is the **boundary parse** of incoming Jira
+project payloads in :meth:`_populate_additional_metadata` and
+:meth:`_extract_jira_lead`. The raw ``jira.Project`` SDK object is now
+validated through :class:`JiraProject.from_jira_obj`, which folds in
+``raw.projectCategory`` / ``raw.avatarUrls`` / ``raw.lead`` /
+``raw.description`` / ``raw.archived`` / ``raw.projectTypeKey`` into a
+typed :class:`JiraProject`. Where the Jira SDK exposes a ``lead`` block,
+we parse it via :class:`JiraComponentLead.from_any` so we have the full
+canonical user identifiers (``account_id`` / ``name`` / ``key`` /
+``email_address`` / ``display_name``) on hand.
+
+This migration carries no ``wp_map`` ladder hits (project_migration does
+not consume the work_package mapping at all), so the
+:class:`WorkPackageMappingEntry` / bare-int-skip pattern from earlier
+Phase 7 batches does not apply -- a survey via
+``grep -c "wp_map\|get_mapping(\"work_package\""`` returns zero.
+
+The user_mapping consumer here is :meth:`_lookup_op_user_id`, used to
+resolve a Jira project lead (a single login string) to an OpenProject
+user id when assigning the project admin role. Because the call sites
+only ever carry a single login string from
+:meth:`_extract_jira_lead`, the canonical multi-identifier probe order
+(``account_id`` -> ``name`` -> ``key`` -> ``email_address`` ->
+``display_name``) does not have richer probes to run -- the lookup is
+already a single-string match against the user mapping with a
+case-insensitive fallback. Plumbing the typed lead all the way through
+to the lookup would require widening the public ``_extract_jira_lead``
+return tuple, which is exercised by tests via mocking; that change is
+deferred to keep this PR a pure refactor.
 """
 
 from __future__ import annotations
@@ -9,6 +57,8 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+
+from pydantic import ValidationError
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
@@ -20,7 +70,7 @@ from src.infrastructure.openproject.openproject_client import (
     escape_ruby_single_quoted,
 )
 from src.mappings.mappings import Mappings
-from src.models import ComponentResult
+from src.models import ComponentResult, JiraComponentLead, JiraProject
 
 # Constants for filenames
 JIRA_PROJECTS_FILE = "jira_projects.json"
@@ -278,6 +328,19 @@ class ProjectMigration(BaseMigration):
             return None
 
     def _populate_additional_metadata(self, jira_project: dict[str, Any]) -> None:
+        """Enrich ``jira_project`` (in place) with metadata from the Jira SDK.
+
+        Phase 7j: parse the SDK ``jira.Project`` instance at the boundary
+        via :class:`JiraProject.from_jira_obj` so the typed projection
+        drives the field reads. The ``raw_detail`` dict is still consulted
+        for ``avatarUrls`` (full size-keyed map) because :class:`JiraProject`
+        only exposes the single best ``avatar_url``, and downstream callers
+        rely on the legacy ``jira_project["avatar_urls"]`` dict shape.
+
+        On parse failure we fall back to the legacy raw-dict reads so the
+        SDK quirks that motivated this method in the first place keep
+        working without bringing the migration down.
+        """
         if not jira_project:
             return
 
@@ -293,35 +356,81 @@ class ProjectMigration(BaseMigration):
             return
 
         raw_detail = getattr(detail, "raw", {}) or {}
+        if not isinstance(raw_detail, dict):
+            raw_detail = {}
 
-        if "project_type_key" not in jira_project and raw_detail.get("projectTypeKey"):
+        browse_url = f"{self.jira_client.base_url}/browse/{jira_key}"
+
+        try:
+            project = JiraProject.from_jira_obj(detail, browse_url=browse_url)
+        except (ValidationError, TypeError, AttributeError) as exc:
+            # Boundary parse failure must not block enrichment: log and
+            # fall back to legacy raw-dict reads below. ``AttributeError``
+            # covers the rare case where ``detail.raw`` is non-mapping —
+            # ``from_jira_obj`` calls ``.get(...)`` on it internally.
+            logger.debug(
+                "JiraProject.from_jira_obj failed for %s: %s",
+                jira_key,
+                exc,
+            )
+            project = None
+
+        if project is not None and "project_type_key" not in jira_project and project.project_type_key:
+            jira_project["project_type_key"] = project.project_type_key
+        elif "project_type_key" not in jira_project and raw_detail.get("projectTypeKey"):
             jira_project["project_type_key"] = raw_detail.get("projectTypeKey")
 
-        if "description" not in jira_project and raw_detail.get("description") is not None:
+        if project is not None and "description" not in jira_project and project.description:
+            jira_project["description"] = project.description
+        elif "description" not in jira_project and raw_detail.get("description") is not None:
             jira_project["description"] = raw_detail.get("description") or ""
 
         if "project_category" not in jira_project or "project_category_name" not in jira_project:
+            # JiraProject.project_category is a typed JiraProjectCategoryRef
+            # but the legacy on-disk shape stores the raw dict from the
+            # Jira REST payload. Preserve the raw dict shape for consumers.
             category = raw_detail.get("projectCategory") or {}
             if isinstance(category, dict):
                 jira_project["project_category"] = category
-                jira_project["project_category_name"] = category.get("name")
-                jira_project["project_category_id"] = category.get("id")
+                if project is not None and project.project_category is not None:
+                    jira_project["project_category_name"] = project.project_category.name
+                    jira_project["project_category_id"] = project.project_category.id
+                else:
+                    jira_project["project_category_name"] = category.get("name")
+                    jira_project["project_category_id"] = category.get("id")
 
         if "avatar_urls" not in jira_project or "avatar_url" not in jira_project:
+            # JiraProject only exposes ``avatar_url`` (best single URL);
+            # we still mirror the full ``avatarUrls`` size-keyed dict for
+            # downstream consumers that read ``jira_project["avatar_urls"]``.
             avatar_urls = raw_detail.get("avatarUrls") or {}
             if isinstance(avatar_urls, dict):
                 jira_project["avatar_urls"] = avatar_urls
                 if "avatar_url" not in jira_project:
-                    for size_key in ("128x128", "64x64", "48x48", "32x32", "24x24", "16x16"):
-                        candidate = avatar_urls.get(size_key)
-                        if candidate:
-                            jira_project["avatar_url"] = str(candidate)
-                            break
+                    if project is not None and project.avatar_url:
+                        jira_project["avatar_url"] = project.avatar_url
+                    else:
+                        for size_key in ("128x128", "64x64", "48x48", "32x32", "24x24", "16x16"):
+                            candidate = avatar_urls.get(size_key)
+                            if candidate:
+                                jira_project["avatar_url"] = str(candidate)
+                                break
 
         if "browse_url" not in jira_project:
-            jira_project["browse_url"] = f"{self.jira_client.base_url}/browse/{jira_key}"
+            jira_project["browse_url"] = (
+                project.browse_url if project is not None and project.browse_url else browse_url
+            )
 
     def _extract_jira_lead(self, jira_project: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Return the project's ``(lead_login, lead_display)`` tuple.
+
+        Phase 7j: when the cache dict already carries both ``lead`` and
+        ``lead_display`` we honour them directly (legacy fast path). When
+        we need to consult the SDK ``jira.Project`` detail, we route the
+        ``lead`` block through :class:`JiraComponentLead.from_any` so the
+        field reads land in a typed model rather than scattered ``getattr``
+        calls. The return tuple is unchanged.
+        """
         lead_name = jira_project.get("lead")
         lead_display = jira_project.get("lead_display")
 
@@ -334,14 +443,26 @@ class ProjectMigration(BaseMigration):
             return None, None
 
         try:
-            lead = getattr(detail, "lead", None)
-            if not lead:
-                return None, None
-            login = getattr(lead, "name", None) or getattr(lead, "key", None)
-            display = getattr(lead, "displayName", None)
-            return (str(login) if login else None, str(display) if display else None)
-        except Exception:
+            lead = JiraComponentLead.from_any(getattr(detail, "lead", None))
+        except (ValidationError, TypeError) as exc:
+            logger.debug(
+                "JiraComponentLead.from_any failed for project lead %s: %s",
+                jira_key,
+                exc,
+            )
             return None, None
+
+        if lead is None:
+            return None, None
+
+        # The ProjectMigration legacy probe uses ``name`` first then ``key``;
+        # we honour that order to preserve observable behaviour.
+        login = lead.name or lead.key
+        display = lead.display_name
+        return (
+            str(login) if login else None,
+            str(display) if display else None,
+        )
 
     def _determine_project_modules(self, jira_project: dict[str, Any]) -> list[str]:
         modules = set(DEFAULT_PROJECT_MODULES)
