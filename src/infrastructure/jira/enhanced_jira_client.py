@@ -1,7 +1,18 @@
-"""Enhanced Jira client with advanced features for migration operations."""
+"""Enhanced Jira client with advanced features for migration operations.
+
+.. deprecated::
+    Phase 8b of ADR-002 replaced this inheritance-based extension with composable
+    decorators in :mod:`src.infrastructure.jira.decorators`. New code should
+    compose ``CachingDecorator``, ``BatchOperationsDecorator``,
+    ``StreamingDecorator`` and ``PerformanceMonitoringDecorator`` over a base
+    :class:`JiraClient` instead of subclassing. This module is retained only as
+    a stable surface for the existing test suite and will be removed once those
+    tests migrate to the decorator API.
+"""
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any
@@ -18,7 +29,11 @@ logger = configure_logging("INFO", None)
 
 
 class EnhancedJiraClient(JiraClient):
-    """Enhanced Jira client with additional migration-specific features."""
+    """Enhanced Jira client with additional migration-specific features.
+
+    .. deprecated::
+        Use composable decorators from :mod:`src.infrastructure.jira.decorators`.
+    """
 
     def __init__(self, **kwargs: object) -> None:
         """Initialize the enhanced Jira client.
@@ -26,6 +41,13 @@ class EnhancedJiraClient(JiraClient):
         Leverages the base JiraClient initialization (validation, performance optimizer,
         rate limiter). Adds a requests session for cached GET endpoints used by tests.
         """
+        warnings.warn(
+            "EnhancedJiraClient is deprecated; compose decorators from "
+            "src.infrastructure.jira.decorators over a JiraClient instead. "
+            "See ADR-002 Phase 8b.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(**kwargs)
         # HTTP session for cached endpoints (tests will monkeypatch this)
         self.session: requests.Session = requests.Session()

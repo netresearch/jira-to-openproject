@@ -3,6 +3,14 @@
 This client adds file-based Ruby command execution for large commands/results,
 and parallelized HTTP helpers for bulk operations. Direct Rails console parsing
 is reserved for small results; batch operations use temp files and subprocess.
+
+.. deprecated::
+    Phase 8b of ADR-002 replaced this inheritance-based extension with composable
+    decorators in :mod:`src.infrastructure.openproject.decorators`. New code
+    should compose ``CachingDecorator``, ``ParallelReadsDecorator``,
+    ``FileBasedBatchWritesDecorator`` and ``PerformanceMonitoringDecorator``
+    over a base :class:`OpenProjectClient` instead of subclassing. This module
+    is retained only as a stable surface for the existing test suite.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ import os
 import pathlib
 import subprocess
 import tempfile
+import warnings
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -25,13 +34,25 @@ logger = configure_logging("INFO", None)
 
 
 class EnhancedOpenProjectClient(OpenProjectClient):
-    """Enhanced OpenProject client with additional migration-specific features."""
+    """Enhanced OpenProject client with additional migration-specific features.
+
+    .. deprecated::
+        Use composable decorators from
+        :mod:`src.infrastructure.openproject.decorators`.
+    """
 
     class ExecutionError(Exception):
         """Execution error for Rails runner operations."""
 
     def __init__(self, **kwargs: object) -> None:
         """Initialize the enhanced OpenProject client."""
+        warnings.warn(
+            "EnhancedOpenProjectClient is deprecated; compose decorators from "
+            "src.infrastructure.openproject.decorators over an OpenProjectClient "
+            "instead. See ADR-002 Phase 8b.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # In unit tests, avoid real SSH/docker/rails dependencies by injecting no-ops
         if os.environ.get("PYTEST_CURRENT_TEST"):
             kwargs.setdefault("ssh_client", _NoopSSHClient())
