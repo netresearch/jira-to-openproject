@@ -46,13 +46,22 @@ class JiraComponentLead(BaseModel):
 
     @classmethod
     def from_any(cls, raw: Any) -> JiraComponentLead | None:
-        """Build from either a dict, an SDK-like object, or ``None``.
+        """Build from a dict, SDK-like object, plain string, or ``None``.
 
         Returns ``None`` when ``raw`` is ``None`` or carries no usable
         identifier — callers iterate components and skip those.
+
+        Plain strings are treated as a ``name`` hint to preserve
+        compatibility with legacy lead values produced by older
+        migration cache formats.
         """
         if raw is None:
             return None
+        if isinstance(raw, str):
+            stripped = raw.strip()
+            if not stripped:
+                return None
+            return cls.model_validate({"name": stripped})
         if isinstance(raw, dict):
             data = raw
         else:
@@ -63,7 +72,14 @@ class JiraComponentLead(BaseModel):
                 "emailAddress": getattr(raw, "emailAddress", None),
                 "displayName": getattr(raw, "displayName", None),
             }
-        return cls.model_validate(data)
+        instance = cls.model_validate(data)
+        # Honor the docstring's "no usable identifier" contract — return
+        # None rather than an empty lead so callers can skip cleanly.
+        if not (
+            instance.name or instance.key or instance.account_id or instance.email_address or instance.display_name
+        ):
+            return None
+        return instance
 
 
 class JiraProjectComponent(BaseModel):
