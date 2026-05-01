@@ -1,6 +1,26 @@
 """Account migration module for Jira to OpenProject migration.
 
 Handles the migration of Tempo timesheet accounts as custom fields in OpenProject.
+
+Phase 7g notes
+--------------
+This migration is **orthogonal to the Phase 7 typed wp_map pipeline**.
+It owns its own ``account_mapping`` namespace (Tempo account id →
+OpenProject project + custom-field metadata) and does not consume the
+``work_package`` mapping. There are therefore no ``wp_map`` ladders,
+no :class:`WorkPackageMappingEntry` normalisation sites, and no Jira
+issue / user payloads to parse through :class:`JiraIssueFields` /
+:class:`JiraUser` here. The two ``isinstance(...)`` branches that
+remain operate on Ruby script return values from
+:meth:`OpenProjectClient.execute_query` (``int | str`` for the custom
+field id, ``dict | str`` for the activation result) — those are SDK
+boundary shapes, not mapping rows, so the Phase 7 typed-pipeline
+helpers do not apply. The migration is documented as out-of-scope for
+the typed mapping conversion and left otherwise untouched.
+
+(Cf. ``tempo_account_migration`` in this same package, which is a
+*different* migration handling Tempo Companies → OpenProject
+top-level projects; that one has its own module.)
 """
 
 from __future__ import annotations
