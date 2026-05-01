@@ -1,4 +1,13 @@
-"""Migrate Jira components to OpenProject Categories and assign to work packages."""
+"""Migrate Jira components to OpenProject Categories and assign to work packages.
+
+Phase 7d converts the work-package side of this migration to the typed
+pipeline: issues are parsed at the boundary via
+:meth:`JiraIssueFields.from_issue_any`, and the legacy ``wp_map``
+``dict | int`` ladder is normalised through
+:meth:`WorkPackageMappingEntry.from_legacy`. The ``project`` mapping
+ladder uses a separate, unrelated polymorphic shape and is intentionally
+left as-is — phase 7 targets the ``wp_map`` polymorphism only.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +17,8 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
+from src.models.jira import JiraIssueFields
 
 
 @register_entity_types("components")
@@ -40,9 +50,20 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
-        """Collect component names per Jira project from migrated issues."""
+        """Collect component names per Jira project from migrated issues.
+
+        Issues are normalised through :meth:`JiraIssueFields.from_issue_any`
+        so the rest of the pipeline reads ``fields.components`` as a typed
+        list of :class:`JiraComponentRef`.
+        """
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map]
+        # Production wp_map is keyed by str(jira_id) (numeric) outer with
+        # the human-readable ``jira_key`` stored inside. Prefer the inner
+        # ``jira_key``; fall back to the outer key for legacy/test layouts.
+        jira_keys: list[str] = []
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            jira_keys.append(str(inner_jira_key or outer_key))
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"by_project": {}})
 
@@ -52,20 +73,13 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         for key, issue in issues.items():
             pj = self._issue_project_key(key)
             try:
-                fields = getattr(issue, "fields", None)
-                comps = getattr(fields, "components", None)
-                if not isinstance(comps, list) or not comps:
-                    continue
-                for c in comps:
-                    name = None
-                    if isinstance(c, dict):
-                        name = c.get("name")
-                    else:
-                        name = getattr(c, "name", None)
-                    if name and isinstance(name, str) and name.strip():
-                        by_project.setdefault(pj, set()).add(name.strip())
+                fields = JiraIssueFields.from_issue_any(issue)
             except Exception:
                 continue
+            for comp in fields.components:
+                name = comp.name
+                if name and name.strip():
+                    by_project.setdefault(pj, set()).add(name.strip())
 
         materialized = {k: sorted(v) for k, v in by_project.items() if v}
         # Cache issues for reuse in _load() to avoid second Jira API call
@@ -175,58 +189,69 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         wp_map = self.mappings.get_mapping("work_package") or {}
         proj_map = self.mappings.get_mapping("project") or {}
 
-        # Use cached issues from extract phase to avoid second Jira API call
+        # Use cached issues from extract phase to avoid second Jira API call.
+        # Cache keys match the ``jira_key`` form used during ``_extract``
+        # (inner ``jira_key`` when present, outer key otherwise).
         issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            jira_keys = [str(k) for k in wp_map]
-            issues = self._merge_batch_issues(jira_keys)
+            fallback_keys: list[str] = []
+            for outer_key, raw_entry in wp_map.items():
+                inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+                fallback_keys.append(str(inner_jira_key or outer_key))
+            issues = self._merge_batch_issues(fallback_keys)
 
         updates: list[dict[str, Any]] = []
         failed = 0
-        for key, wp_entry in wp_map.items():
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            jira_key = str(inner_jira_key or outer_key)
             try:
-                wp_id = None
-                if isinstance(wp_entry, dict):
-                    wp_id = wp_entry.get("openproject_id")
-                elif isinstance(wp_entry, int):
-                    wp_id = wp_entry
-                if not wp_id:
-                    continue
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                continue
+            wp_id = int(entry.openproject_id)
 
-                issue = issues.get(key)
-                if not issue:
-                    continue
-                fields = getattr(issue, "fields", None)
-                comps = getattr(fields, "components", None)
-                if not isinstance(comps, list) or not comps:
-                    continue
-                # Choose first component name deterministically
-                first = comps[0]
-                name = None
-                if isinstance(first, dict):
-                    name = first.get("name")
-                else:
-                    name = getattr(first, "name", None)
-                if not name:
-                    continue
-
-                jproj = self._issue_project_key(key)
-                proj_entry = proj_map.get(jproj)
-                op_pid = None
-                if isinstance(proj_entry, dict):
-                    op_pid = proj_entry.get("openproject_id")
-                elif isinstance(proj_entry, int):
-                    op_pid = proj_entry
-                if not op_pid:
-                    continue
-
-                cat_id = category_map.get(str(int(op_pid)), {}).get(str(name))
-                if not cat_id:
-                    continue
-                updates.append({"id": int(wp_id), "category_id": int(cat_id)})
+            issue = issues.get(jira_key)
+            if not issue:
+                continue
+            try:
+                fields = JiraIssueFields.from_issue_any(issue)
             except Exception:
                 failed += 1
+                continue
+            if not fields.components:
+                continue
+            # Choose first component name deterministically
+            name = fields.components[0].name
+            if not name:
+                continue
+
+            # ``project`` mapping uses an unrelated polymorphic shape
+            # (dict/int) that is not the wp_map polymorphism; phase 7
+            # targets ``wp_map`` only, so leave the ladder in place.
+            jproj = self._issue_project_key(jira_key)
+            proj_entry = proj_map.get(jproj)
+            op_pid: int | None = None
+            if isinstance(proj_entry, dict):
+                pid_val = proj_entry.get("openproject_id")
+                if pid_val is not None:
+                    try:
+                        op_pid = int(pid_val)
+                    except (
+                        TypeError,
+                        ValueError,
+                    ):
+                        op_pid = None
+            elif isinstance(proj_entry, int):
+                op_pid = proj_entry
+            if not op_pid:
+                continue
+
+            cat_id = category_map.get(str(op_pid), {}).get(str(name))
+            if not cat_id:
+                continue
+            updates.append({"id": wp_id, "category_id": int(cat_id)})
 
         if not updates:
             return ComponentResult(success=failed == 0, updated=0, failed=failed)

@@ -1,4 +1,17 @@
-"""Migrate Jira Software boards and sprints into OpenProject equivalents."""
+"""Migrate Jira Software boards and sprints into OpenProject equivalents.
+
+Phase 7d note
+-------------
+This migration is intentionally left structurally unchanged in the
+typed-pipeline sweep. It does not consume the ``work_package`` mapping
+(no ``wp_map`` polymorphic ladder to retire here), and the Jira-side
+input is uniform REST dicts whose keys are well-defined — there is no
+polymorphic ladder of the kind phase 7 targets. The ``project`` mapping
+``isinstance(..., dict)`` check is for an unrelated polymorphic shape
+and is left as-is. Modelling boards/sprints as Pydantic types would be
+mostly cosmetic at this site, so it is deferred until a downstream
+caller benefits.
+"""
 
 from __future__ import annotations
 

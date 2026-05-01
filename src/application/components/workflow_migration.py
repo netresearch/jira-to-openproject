@@ -1,4 +1,15 @@
-"""Workflow migration: aligns Jira workflows with OpenProject transitions."""
+"""Workflow migration: aligns Jira workflows with OpenProject transitions.
+
+Phase 7d note
+-------------
+This migration is intentionally left unchanged in the typed-pipeline
+sweep. It does not consume the ``work_package`` mapping (so there is no
+``wp_map`` polymorphic ladder to retire here), and the structures it
+*does* touch — ``status_mapping`` and ``issue_type_mapping`` — use their
+own dict-of-dict shapes that are unrelated to ADR-002 phase 3/7. Phase 7
+targets the ``wp_map`` ladder specifically; retyping the workflow status
+maps is deferred.
+"""
 
 from __future__ import annotations
 

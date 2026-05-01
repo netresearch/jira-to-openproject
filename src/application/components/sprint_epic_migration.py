@@ -5,6 +5,20 @@ Approach:
   on child WPs when the Epic issue exists in the mapping (first-class mapping).
 - Sprint: ensure CF "Sprint" (text) and store sprint name(s) as comma-separated
   text (fallback when no native sprint entity is modeled in OP).
+
+Phase 7d notes
+--------------
+Both ``Sprint`` and ``Epic Link`` are tenant-specific Jira custom fields
+exposed under instance-dependent attribute names (``customfield_10008``,
+``customfield_10020``, ``epicLink``, ``Sprints`` …). They are *not*
+modelled by :class:`JiraIssueFields`, so the boundary parse for these
+fields stays as defensive ``getattr``/dict probing — same rationale as
+``story_points_migration`` and ``customfields_generic_migration``. What
+this phase does change: the polymorphic ``wp_map`` (``dict | int``)
+ladder is normalised through
+:meth:`WorkPackageMappingEntry.from_legacy`. The
+``sprint`` mapping uses a separate dict-of-dict shape that is not the
+``wp_map`` polymorphism and is left as-is.
 """
 
 from __future__ import annotations
@@ -16,7 +30,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 SPRINT_CF_NAME = "Sprint"
 
@@ -121,7 +135,13 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                     "cf_available": False,
                 },
             )
-        keys = [str(k) for k in wp_map]
+        # Production wp_map is keyed by str(jira_id) (numeric) outer with
+        # the human-readable ``jira_key`` stored inside. Prefer the inner
+        # ``jira_key``; fall back to the outer key for legacy/test layouts.
+        keys: list[str] = []
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            keys.append(str(inner_jira_key or outer_key))
         if not keys:
             return ComponentResult(success=True, data={"sprint": {}, "epic": []})
 
@@ -175,21 +195,30 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
             if uniq:
                 sprint_text[key] = ", ".join(uniq)
 
-        # Resolve epic links into child/parent OP IDs
+        # Resolve epic links into child/parent OP IDs. Build a typed
+        # jira_key → entry index once so the inner-vs-outer key shape is
+        # handled in a single place.
         wp_map = self.mappings.get_mapping("work_package") or {}
+        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            jira_key_for_entry = str(inner_jira_key or outer_key)
+            try:
+                entries_by_jira_key[jira_key_for_entry] = WorkPackageMappingEntry.from_legacy(
+                    jira_key_for_entry,
+                    raw_entry,
+                )
+            except ValueError:
+                continue
+
         parent_links: list[dict[str, int]] = []
         for child_key, epic_key in epic_pairs:
-            child_entry = wp_map.get(child_key) if isinstance(wp_map, dict) else None
-            parent_entry = wp_map.get(epic_key) if isinstance(wp_map, dict) else None
-            if not (
-                isinstance(child_entry, dict)
-                and isinstance(parent_entry, dict)
-                and child_entry.get("openproject_id")
-                and parent_entry.get("openproject_id")
-            ):
+            child_entry = entries_by_jira_key.get(child_key)
+            parent_entry = entries_by_jira_key.get(epic_key)
+            if child_entry is None or parent_entry is None:
                 continue
-            child_id = int(child_entry["openproject_id"])  # type: ignore[arg-type]
-            parent_id = int(parent_entry["openproject_id"])  # type: ignore[arg-type]
+            child_id = int(child_entry.openproject_id)
+            parent_id = int(parent_entry.openproject_id)
             if child_id == parent_id:
                 continue
             parent_links.append({"id": child_id, "parent_id": parent_id})
@@ -205,6 +234,17 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
         failed = 0
 
         wp_map = self.mappings.get_mapping("work_package") or {}
+        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            jira_key_for_entry = str(inner_jira_key or outer_key)
+            try:
+                entries_by_jira_key[jira_key_for_entry] = WorkPackageMappingEntry.from_legacy(
+                    jira_key_for_entry,
+                    raw_entry,
+                )
+            except ValueError:
+                continue
 
         # Apply parent links in batch chunks
         try:
@@ -217,12 +257,14 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
             logger.exception("Failed to apply parent links in batch")
             failed += len(parent_links)
 
-        # Assign versions (sprints) when mappings exist
+        # Assign versions (sprints) when mappings exist. The ``sprint``
+        # mapping uses an unrelated dict-of-dict shape (not the wp_map
+        # polymorphism), so it is left as-is.
         sprint_mapping = config.mappings.get_mapping("sprint") or {}
         version_updates: list[dict[str, Any]] = []
         for jira_key, text in sprint_text.items():
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            entry = entries_by_jira_key.get(jira_key)
+            if entry is None:
                 continue
             sprint_names = [
                 item.strip() for item in str(text or "").split(",") if item and isinstance(item, str) and item.strip()
@@ -238,7 +280,7 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
                     continue
                 version_updates.append(
                     {
-                        "id": int(entry["openproject_id"]),  # type: ignore[arg-type]
+                        "id": int(entry.openproject_id),
                         "version_id": version_id,
                     },
                 )
@@ -276,14 +318,13 @@ class SprintEpicMigration(BaseMigration):  # noqa: D101
 
         projects_with_values: set[int] = set()
         for jira_key, text in sprint_text.items():
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            entry = entries_by_jira_key.get(jira_key)
+            if entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            wp_id = int(entry.openproject_id)
             # Track project for selective enablement
-            project_id = entry.get("openproject_project_id")
-            if project_id:
-                projects_with_values.add(int(project_id))
+            if entry.openproject_project_id is not None:
+                projects_with_values.add(int(entry.openproject_project_id))
             try:
                 val = escape_ruby_single_quoted(str(text))
                 script = (
