@@ -28,19 +28,15 @@ unchanged.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from src.infrastructure.exceptions import (
     QueryExecutionError,
     RecordNotFoundError,
 )
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.idempotency_decorators import batch_idempotent
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
-
 
 # Cache TTL: 5 minutes. Single definition (was previously duplicated on
 # the client until Phase 2j; the client copy was unused after the move).

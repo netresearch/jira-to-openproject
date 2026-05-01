@@ -33,19 +33,16 @@ work unchanged.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.infrastructure.exceptions import (
     JsonParseError,
     QueryExecutionError,
     RecordNotFoundError,
 )
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.rails_console_client import RubyError
 from src.utils.idempotency_decorators import batch_idempotent
-
-if TYPE_CHECKING:
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
-
 
 # Sample size used when building log labels for batch operations
 # ("Batch fetch User records [1, 2, 3, ...]"); kept here rather than

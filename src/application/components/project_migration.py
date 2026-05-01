@@ -8,21 +8,19 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
 from src.infrastructure.exceptions import QueryExecutionError
+from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import (
     OpenProjectClient,
     escape_ruby_single_quoted,
 )
 from src.mappings.mappings import Mappings
 from src.models import ComponentResult
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
 
 # Constants for filenames
 JIRA_PROJECTS_FILE = "jira_projects.json"

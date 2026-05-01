@@ -21,11 +21,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 _module_logger = logging.getLogger(__name__)
 

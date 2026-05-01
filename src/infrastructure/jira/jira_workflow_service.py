@@ -13,7 +13,7 @@ no Ruby-script escaping to worry about.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from urllib.parse import quote
 
 from requests import exceptions
@@ -22,11 +22,9 @@ from src import config
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
     JiraApiError,
+    JiraClient,
     JiraConnectionError,
 )
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
 
 
 class JiraWorkflowService:

@@ -7,17 +7,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.infrastructure.jira.jira_client import JiraApiError, JiraAuthenticationError
+from src.infrastructure.jira.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.models import ComponentResult, MigrationError
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 # Constants for filenames
 ACCOUNT_MAPPING_FILE = "account_mapping.json"

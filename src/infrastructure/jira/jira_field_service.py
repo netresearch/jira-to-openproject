@@ -13,17 +13,15 @@ go through the ``jira`` SDK or the client's ``_make_request`` helper
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.infrastructure.jira.jira_client import (
     HTTP_OK,
     JiraApiError,
+    JiraClient,
     JiraConnectionError,
     JiraResourceNotFoundError,
 )
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
 
 
 class JiraFieldService:

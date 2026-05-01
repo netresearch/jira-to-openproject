@@ -40,12 +40,10 @@ from __future__ import annotations
 
 import json
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.infrastructure.exceptions import QueryExecutionError, RecordNotFoundError
-
-if TYPE_CHECKING:
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectCustomFieldService:

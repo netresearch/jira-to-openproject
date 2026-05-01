@@ -11,15 +11,13 @@ Maps to OpenProject attributes:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 HOURS_PER_DAY = 8
 DAYS_PER_WEEK = 5

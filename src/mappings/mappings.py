@@ -29,16 +29,13 @@ The legacy proxy stays in place; this PR only adds the seam.
 
 from __future__ import annotations
 
+from collections.abc import Mapping as MappingABC
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
 from src.config import get_path, logger
+from src.domain.repositories import MappingRepository
 from src.infrastructure.persistence.mapping_repo import JsonFileMappingRepository
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping as MappingABC
-
-    from src.domain.repositories import MappingRepository
 
 
 class Mappings:

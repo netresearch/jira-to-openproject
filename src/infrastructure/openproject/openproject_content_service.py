@@ -24,10 +24,9 @@ keeps thin delegators for the same method names so existing call sites
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectContentService:

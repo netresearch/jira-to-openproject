@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from rich.console import Console
 
@@ -25,6 +25,7 @@ from src.application.components.affects_versions_migration import AffectsVersion
 from src.application.components.agile_board_migration import AgileBoardMigration
 from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
 from src.application.components.attachments_migration import AttachmentsMigration
+from src.application.components.base_migration import BaseMigration
 from src.application.components.category_defaults_migration import CategoryDefaultsMigration
 from src.application.components.company_migration import CompanyMigration
 from src.application.components.components_migration import ComponentsMigration
@@ -66,9 +67,6 @@ from src.infrastructure.openproject.ssh_client import SSHClient
 from src.models import ComponentResult, MigrationResult
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
-
-if TYPE_CHECKING:
-    from src.application.components.base_migration import BaseMigration
 
 console = Console()
 
@@ -133,7 +131,6 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "admin_schemes",
     "reporting",
 ]
-
 
 PREDEFINED_PROFILES: dict[str, list[ComponentName]] = {
     "full": DEFAULT_COMPONENT_SEQUENCE.copy(),

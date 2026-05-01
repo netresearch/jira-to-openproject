@@ -11,17 +11,15 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 from src.utils.time_entry_migrator import TimeEntryMigrator
-
-if TYPE_CHECKING:
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 @register_entity_types("time_entries", "work_logs")

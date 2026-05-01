@@ -6,17 +6,15 @@ WorkPackage custom field named "Labels" storing a comma-separated list.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
+from src.domain.repositories import MappingRepository
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 from src.models.jira import JiraIssueFields
-
-if TYPE_CHECKING:
-    from src.domain.repositories import MappingRepository
-    from src.infrastructure.jira.jira_client import JiraClient
-    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 LABELS_CF_NAME = "Labels"
 

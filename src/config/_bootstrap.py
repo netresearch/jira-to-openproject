@@ -20,12 +20,8 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
-from src.display import configure_logging
-
-if TYPE_CHECKING:
-    from src.display import ExtendedLogger
+from src.display import ExtendedLogger, configure_logging
 
 # Module-level idempotency flag. Once bootstrap has run, repeat calls are
 # no-ops regardless of which side effects they request.

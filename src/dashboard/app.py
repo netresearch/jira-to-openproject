@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from uuid import uuid4
 
 import psutil
@@ -26,9 +26,7 @@ from pydantic import BaseModel, Field
 
 from src.config import bootstrap
 from src.config import logger as _migration_logger
-
-if TYPE_CHECKING:
-    from src.display import ExtendedLogger
+from src.display import ExtendedLogger
 
 # No migration component imports needed for dashboard
 
