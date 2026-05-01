@@ -113,6 +113,9 @@ async def run_mock_migration(components: Iterable[str]) -> None:
 
 
 def main() -> None:
+    # Phase 6a (ADR-002): explicit bootstrap of var/ dirs and logging.
+    config.bootstrap()
+
     parser = argparse.ArgumentParser(description="Run mock migration components with in-memory mappings")
     parser.add_argument(
         "--components",

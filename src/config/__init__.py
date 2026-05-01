@@ -1,22 +1,41 @@
 """Configuration module for the Jira to OpenProject migration.
 
-Provides a centralized configuration interface using ConfigLoader.
+Provides a centralized configuration interface using ``ConfigLoader``.
+
+Phase 6a of ADR-002: this module is **inert at import time**. It computes
+path constants, registers extended-logger level names, and exposes
+``Settings``-style accessors — but does not touch the filesystem, attach
+``FileHandler`` instances, or rotate log files. Those side effects live
+in :mod:`src.config._bootstrap` and are triggered explicitly by CLI
+entry points via :func:`bootstrap`.
+
+Rationale: import-time ``logging.FileHandler`` failed with
+``PermissionError`` on container UID mismatches, making the package
+un-importable in some CI environments. Phase 6a removes the root cause.
+
+The ``_MappingsProxy`` shim and ``get_mappings()`` lazy initializer remain
+unchanged — tests rely on ``monkeypatch.setattr(cfg, "mappings", ...)``
+to replace the proxy without touching the underlying singleton. Per
+ADR-002, this proxy is removed in Phase 7.
 """
+
+from __future__ import annotations
 
 import logging
 import threading
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from src.config_loader import ConfigLoader
-from src.display import configure_logging
 from src.type_definitions import Config, ConfigValue, DirType, LogLevel, SectionName
 
 if TYPE_CHECKING:
+    from src.display import ExtendedLogger
     from src.mappings.mappings import Mappings
 
 # Import error recovery specific config
+# Re-export bootstrap so callers can do ``from src.config import bootstrap``.
+from ._bootstrap import bootstrap, is_bootstrapped, reset_bootstrap_state
 from .error_recovery_config import ErrorRecoveryConfig, load_error_recovery_config
 
 # Create a singleton instance of ConfigLoader
@@ -28,11 +47,12 @@ openproject_config = _config_loader.get_openproject_config()
 migration_config = _config_loader.get_migration_config()
 _cli_args: dict[str, Any] = {}
 
-# Set up the var directory structure
+# Set up the var directory structure (pure path computation — no I/O).
 root_dir = Path(__file__).parent.parent.parent
 var_dir = root_dir / "var"
 
-# Define all var directories
+# Define all var directories. Path objects are values, not side effects;
+# directories are created by ``bootstrap()``, not at import.
 var_dirs: dict[DirType, Path] = {
     "root": var_dir,
     "backups": var_dir / "backups",
@@ -46,68 +66,74 @@ var_dirs: dict[DirType, Path] = {
     "temp": var_dir / "temp",
 }
 
-# Create all var directories
-created_dirs = []
-for dir_path in var_dirs.values():
-    # Check if directory already exists
-    dir_existed = dir_path.exists()
-
-    # Create if needed
-    dir_path.mkdir(parents=True, exist_ok=True)
-
-    # Store appropriate message
-    if not dir_existed:
-        created_dirs.append(f"Created directory: {dir_path}")
-    else:
-        created_dirs.append(f"Using existing directory: {dir_path}")
-
-# Set up logging with rich
+# Logging level used by ``bootstrap()`` to configure handlers. Read here
+# so the constant is available to callers that want to introspect it
+# without bootstrapping.
 LOG_LEVEL: LogLevel = migration_config.get("log_level", "DEBUG")  # type: ignore[assignment]
 
-# Always keep a stable, aggregate log as before
-latest_log_file = var_dirs["logs"] / "migration.log"
-logger = configure_logging(LOG_LEVEL, latest_log_file)
 
-# Additionally, attach a per-run log file handler for easier analysis/rotation
-try:
-    _timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
-    per_run_log_file = var_dirs["logs"] / f"migration_{_timestamp}.log"
+# ---------------------------------------------------------------------------
+# Custom log level registration (no I/O)
+# ---------------------------------------------------------------------------
+# The migration codebase uses ``logger.success(...)`` and ``logger.notice(...)``
+# extensively. These extended methods are normally installed by
+# ``configure_logging`` — but that function also attaches handlers, which is
+# a side effect we want to defer to ``bootstrap()``. To keep
+# ``from src.config import logger`` honest (callers can use
+# ``logger.success`` immediately), we register *only* the level names and
+# methods at import time. Handler attachment still waits for ``bootstrap()``.
+# This is pure in-memory state — no filesystem access, no
+# ``logging.basicConfig`` call.
 
-    _file_formatter = logging.Formatter(
-        "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
-    )
-    _file_handler = logging.FileHandler(per_run_log_file)
-    _file_handler.setFormatter(_file_formatter)
-    _file_handler.setLevel(getattr(logging, str(LOG_LEVEL).upper(), logging.INFO))
-    logging.getLogger().addHandler(_file_handler)
-    logger.info("Per-run log file: %s", per_run_log_file)
+logging.addLevelName(25, "SUCCESS")
+logging.addLevelName(21, "NOTICE")
 
-    # Simple retention: keep only the most recent N per-run log files
-    retention_count = int(migration_config.get("log_retention_count", 20))
-    if retention_count > 0:
-        per_run_logs = sorted(var_dirs["logs"].glob("migration_*.log"))
-        if len(per_run_logs) > retention_count:
-            to_delete = per_run_logs[: len(per_run_logs) - retention_count]
-            pruned = 0
-            for old_log in to_delete:
-                try:
-                    old_log.unlink()
-                    pruned += 1
-                except OSError:
-                    logger.debug("Failed to remove old per-run log: %s", old_log)
-            if pruned:
-                logger.info(
-                    "Per-run log rotation: kept %d, pruned %d",
-                    retention_count,
-                    pruned,
-                )
-except OSError:
-    # Do not fail initialization if per-run handler cannot be attached
-    logger.exception("Failed to attach per-run log handler")
 
-# Now log the directory creation messages
-for message in created_dirs:
-    logger.debug(message)
+def _success(
+    self: logging.Logger,
+    message: str,
+    *args: object,
+    **kwargs: object,
+) -> None:
+    """Bound ``Logger.success`` method — INFO < SUCCESS < WARNING."""
+    if self.isEnabledFor(25):
+        existing_extra = kwargs.get("extra")
+        extra_mapping: dict[str, object] = {}
+        if isinstance(existing_extra, dict):
+            extra_mapping.update(existing_extra)  # type: ignore[arg-type]
+        extra_mapping["markup"] = True
+        self._log(25, f"[success]{message}[/]", args, extra=extra_mapping, stacklevel=2)
+
+
+def _notice(
+    self: logging.Logger,
+    message: str,
+    *args: object,
+    **kwargs: object,
+) -> None:
+    """Bound ``Logger.notice`` method — DEBUG < NOTICE < INFO."""
+    if self.isEnabledFor(21):
+        existing_extra = kwargs.get("extra")
+        extra_mapping: dict[str, object] = {}
+        if isinstance(existing_extra, dict):
+            extra_mapping.update(existing_extra)  # type: ignore[arg-type]
+        extra_mapping["markup"] = True
+        self._log(21, message, args, extra=extra_mapping, stacklevel=2)
+
+
+# Attach to the Logger class so every logger gets the extended methods.
+# Idempotent — re-assigning the same function on re-import is a no-op.
+logging.Logger.success = _success  # type: ignore[attr-defined,assignment]
+logging.Logger.notice = _notice  # type: ignore[attr-defined,assignment]
+
+
+# Logger is configured lazily by ``bootstrap()``. Until then, it is a plain
+# Python logger with no file handler — output goes to the root logger's
+# default handlers (typically stderr). This avoids import-time
+# ``PermissionError`` when the log file is not writable (e.g., container
+# UID mismatch in CI).
+logger: ExtendedLogger = cast("ExtendedLogger", logging.getLogger("migration"))
+
 
 # Export logger for use by other modules
 __all__ = [
@@ -116,19 +142,21 @@ __all__ = [
     "USER_CREATION_BATCH_SIZE",
     "USER_CREATION_TIMEOUT",
     "ErrorRecoveryConfig",
+    "bootstrap",
     "ensure_subdir",
     "get_config",
     "get_mappings",
     "get_path",
     "get_value",
+    "is_bootstrapped",
     "jira_config",
     "load_error_recovery_config",
     "logger",
     "mappings",
     "migration_config",
     "openproject_config",
+    "reset_bootstrap_state",
     "reset_mappings",
-    "update_from_cli_args",
     "update_from_cli_args",
     "validate_config",
     "var_dirs",
