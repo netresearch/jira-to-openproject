@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, mock_open, patch
 
-from src.migrations.issue_type_migration import IssueTypeMigration
+from src.application.components.issue_type_migration import IssueTypeMigration
 
 
 class TestIssueTypeMigration(unittest.TestCase):
@@ -119,8 +119,8 @@ class TestIssueTypeMigration(unittest.TestCase):
 
         return file_mock
 
-    @patch("src.migrations.issue_type_migration.config.get_path")
-    @patch("src.migrations.issue_type_migration.config.migration_config")
+    @patch("src.application.components.issue_type_migration.config.get_path")
+    @patch("src.application.components.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_jira_issue_types(
@@ -153,8 +153,8 @@ class TestIssueTypeMigration(unittest.TestCase):
         assert len(result) > 0
         assert all(isinstance(item, dict) for item in result)
 
-    @patch("src.migrations.issue_type_migration.config.get_path")
-    @patch("src.migrations.issue_type_migration.config.migration_config")
+    @patch("src.application.components.issue_type_migration.config.get_path")
+    @patch("src.application.components.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_extract_openproject_work_package_types(
@@ -186,8 +186,8 @@ class TestIssueTypeMigration(unittest.TestCase):
         assert len(result) > 0
         assert all(isinstance(item, dict) for item in result)
 
-    @patch("src.migrations.issue_type_migration.config.get_path")
-    @patch("src.migrations.issue_type_migration.config.migration_config")
+    @patch("src.application.components.issue_type_migration.config.get_path")
+    @patch("src.application.components.issue_type_migration.config.migration_config")
     def test_migrate_issue_types_via_rails(
         self,
         mock_migration_config: MagicMock,
@@ -240,8 +240,8 @@ class TestIssueTypeMigration(unittest.TestCase):
         assert migration.issue_type_mapping["Epic"]["matched_by"] == "created"
         mock_op_instance.bulk_create_records.assert_called_once()
 
-    @patch("src.migrations.issue_type_migration.config.get_path")
-    @patch("src.migrations.issue_type_migration.config.migration_config")
+    @patch("src.application.components.issue_type_migration.config.get_path")
+    @patch("src.application.components.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_analyze_issue_type_mapping(
@@ -295,8 +295,8 @@ class TestIssueTypeMigration(unittest.TestCase):
             assert "message" in result
             assert "work package types need creation" in result["message"]
 
-    @patch("src.migrations.issue_type_migration.config.get_path")
-    @patch("src.migrations.issue_type_migration.config.migration_config")
+    @patch("src.application.components.issue_type_migration.config.get_path")
+    @patch("src.application.components.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_update_mapping_file(
@@ -343,8 +343,8 @@ class TestIssueTypeMigration(unittest.TestCase):
         assert migration.issue_type_mapping["Bug"]["openproject_id"] == 2
         assert migration.issue_type_mapping["Task"]["openproject_id"] == 1
 
-    @patch("src.migrations.issue_type_migration.config.get_path")
-    @patch("src.migrations.issue_type_migration.config.migration_config")
+    @patch("src.application.components.issue_type_migration.config.get_path")
+    @patch("src.application.components.issue_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
     def test_create_issue_type_mapping(

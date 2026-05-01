@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from src.application.components.status_migration import StatusMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.migrations.status_migration import StatusMigration
 
 
 class TestStatusMigration(unittest.TestCase):
@@ -181,7 +181,7 @@ class TestStatusMigration(unittest.TestCase):
 
         # The current implementation persists via config.mappings.set_mapping
         # rather than a direct ``_save_to_json`` call.
-        with patch("src.migrations.status_migration.config.mappings") as mock_mappings:
+        with patch("src.application.components.status_migration.config.mappings") as mock_mappings:
             mapping = self.status_migration.create_status_mapping()
 
             mock_mappings.set_mapping.assert_called_once()

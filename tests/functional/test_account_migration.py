@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from src.migrations.account_migration import AccountMigration
+from src.application.components.account_migration import AccountMigration
 
 
 class TestAccountMigration(unittest.TestCase):
@@ -92,8 +92,8 @@ class TestAccountMigration(unittest.TestCase):
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
-    @patch("src.migrations.account_migration.config.get_path")
-    @patch("src.migrations.account_migration.Path.exists")
+    @patch("src.application.components.account_migration.config.get_path")
+    @patch("src.application.components.account_migration.Path.exists")
     @patch("pathlib.Path.open", new_callable=mock_open)
     def test_extract_tempo_accounts(
         self,
@@ -118,10 +118,10 @@ class TestAccountMigration(unittest.TestCase):
         # Mock _save_to_json to avoid actually writing to file
         with (
             patch(
-                "src.migrations.account_migration.BaseMigration._save_to_json",
+                "src.application.components.account_migration.BaseMigration._save_to_json",
             ) as mock_save,
             patch(
-                "src.migrations.account_migration.BaseMigration._load_from_json",
+                "src.application.components.account_migration.BaseMigration._load_from_json",
             ) as mock_load,
         ):
             # Return empty list for tempo_accounts.json, empty dict for others
@@ -151,7 +151,7 @@ class TestAccountMigration(unittest.TestCase):
             assert len(result) == 2
             assert migration.tempo_accounts == self.tempo_accounts
 
-    @patch("src.migrations.account_migration.config.get_path")
+    @patch("src.application.components.account_migration.config.get_path")
     @patch("os.path.exists")
     @patch("pathlib.Path.open", new_callable=mock_open, read_data="[]")
     def test_extract_openproject_projects(
@@ -184,8 +184,8 @@ class TestAccountMigration(unittest.TestCase):
 
     @patch("src.clients.jira_client.JiraClient")
     @patch("src.clients.openproject_client.OpenProjectClient")
-    @patch("src.migrations.account_migration.config.get_path")
-    @patch("src.migrations.account_migration.config.migration_config")
+    @patch("src.application.components.account_migration.config.get_path")
+    @patch("src.application.components.account_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("pathlib.Path.open", new_callable=mock_open)
     def test_create_account_mapping(
@@ -251,7 +251,7 @@ class TestAccountMigration(unittest.TestCase):
         # This avoids the complex mocking needed for this test after our refactoring
         # The actual functionality is tested in real migrations
 
-    @patch("src.migrations.account_migration.Mappings")
+    @patch("src.application.components.account_migration.Mappings")
     def test_migrate_accounts(self, mock_mappings: MagicMock) -> None:
         """Test migrating accounts."""
         # Simply make the test pass for now since it's non-critical

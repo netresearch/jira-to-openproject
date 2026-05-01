@@ -434,7 +434,7 @@ class TestBaseMigrationInjection:
         # ``self.jira_client = jira_client or JiraClient()`` resolves.
         # Patching the source modules wouldn't intercept those calls;
         # patch the symbols on ``base_migration`` itself.
-        from src.migrations import base_migration as bm_mod
+        from src.application.components import base_migration as bm_mod
 
         def _boom(*_a: object, **_k: object) -> None:
             msg = "real client constructed in unit test"
@@ -454,7 +454,7 @@ class TestBaseMigrationInjection:
         longer need ``monkeypatch.setattr(cfg, "mappings", DummyMappings())``
         to wire mapping data into a migration.
         """
-        from src.migrations.priority_migration import PriorityMigration
+        from src.application.components.priority_migration import PriorityMigration
 
         fake = FakeMappingRepository(
             initial={
@@ -487,7 +487,7 @@ class TestBaseMigrationInjection:
         _quiet_clients: None,
     ) -> None:
         """``LabelsMigration`` exposes the same seam."""
-        from src.migrations.labels_migration import LabelsMigration
+        from src.application.components.labels_migration import LabelsMigration
 
         fake = FakeMappingRepository(
             initial={"work_package_mapping": {"J1": {"openproject_id": 99}}},
@@ -520,7 +520,7 @@ class TestBaseMigrationInjection:
         is the safety net described in the phase-4b plan.
         """
         from src import config as cfg
-        from src.migrations.priority_migration import PriorityMigration
+        from src.application.components.priority_migration import PriorityMigration
 
         # Redirect ``data_dir`` to a temp tree so the fall-back JSON
         # adapter writes nowhere interesting.

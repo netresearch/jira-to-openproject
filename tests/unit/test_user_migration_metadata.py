@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.migrations.user_migration import UserMigration
+from src.application.components.user_migration import UserMigration
 
 pytestmark = pytest.mark.unit
 

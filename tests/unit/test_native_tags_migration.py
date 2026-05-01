@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.native_tags_migration import NativeTagsMigration
+from src.application.components.native_tags_migration import NativeTagsMigration
 
 
 class DummyFields:

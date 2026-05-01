@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.security_levels_migration import (
+from src.application.components.security_levels_migration import (
     SECURITY_LEVEL_CF_NAME,
     SecurityLevelsMigration,
 )

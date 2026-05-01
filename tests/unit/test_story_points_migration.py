@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.story_points_migration import STORY_POINTS_CF_NAME, StoryPointsMigration
+from src.application.components.story_points_migration import STORY_POINTS_CF_NAME, StoryPointsMigration
 
 
 class DummyFields:

@@ -29,12 +29,12 @@ def test_choose_default_type_id_uses_first_available(monkeypatch):
     import sys
 
     # Bypass heavy base_migration import by injecting minimal module for the test
-    sys.modules.setdefault("src.migrations.base_migration", types.ModuleType("base_migration"))
-    bm = sys.modules["src.migrations.base_migration"]
+    sys.modules.setdefault("src.application.components.base_migration", types.ModuleType("base_migration"))
+    bm = sys.modules["src.application.components.base_migration"]
     bm.BaseMigration = object
     bm.register_entity_types = lambda *a, **k: lambda cls: cls
 
-    from src.migrations import wp_defaults as wpm
+    from src.application.components import wp_defaults as wpm
 
     op = _StubOPClient(types=[5, 7, 9])
     assert wpm.choose_default_type_id(op) == 5
@@ -43,12 +43,12 @@ def test_choose_default_type_id_uses_first_available(monkeypatch):
 def test_apply_required_defaults_sets_missing_fields(monkeypatch):
     import sys
 
-    sys.modules.setdefault("src.migrations.base_migration", types.ModuleType("base_migration"))
-    bm = sys.modules["src.migrations.base_migration"]
+    sys.modules.setdefault("src.application.components.base_migration", types.ModuleType("base_migration"))
+    bm = sys.modules["src.application.components.base_migration"]
     bm.BaseMigration = object
     bm.register_entity_types = lambda *a, **k: lambda cls: cls
 
-    from src.migrations import wp_defaults as wpm
+    from src.application.components import wp_defaults as wpm
 
     op = _StubOPClient(types=[11, 22], statuses=[101, 202], priorities=[301, 302], admins=[401])
 

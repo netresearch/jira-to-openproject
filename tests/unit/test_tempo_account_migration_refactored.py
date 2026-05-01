@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.application.components.tempo_account_migration import TempoAccountMigration
 from src.clients.openproject_client import OpenProjectError
-from src.migrations.tempo_account_migration import TempoAccountMigration
 
 
 class TestTempoAccountMigrationRefactored(unittest.TestCase):
@@ -87,7 +87,7 @@ class TestTempoAccountMigrationRefactored(unittest.TestCase):
         ):
             self.migration.create_company_in_openproject(tempo_account)
 
-    @patch("src.migrations.tempo_account_migration.config")
+    @patch("src.application.components.tempo_account_migration.config")
     def test_create_company_dry_run_mode(self, mock_config) -> None:
         """Test company creation in dry run mode returns placeholder."""
         # Setup

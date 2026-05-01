@@ -19,7 +19,7 @@ src/
 ├── display.py               # Utilities for displaying progress and information (using Rich library)
 ├── mappings/                # Logic related to mapping entities between systems
 │   └── mappings.py          # Helper functions/classes for loading and applying mapping files
-├── migrations/              # Core migration logic for each data type (component)
+├── application/components/  # Core migration logic for each data type (component)
 │   ├── __init__.py
 │   ├── base_migration.py    # Abstract base class for all migration components
 │   ├── account_migration.py # Migrates Tempo Accounts (Jira plugin data to OP custom field)
@@ -50,8 +50,8 @@ src/
 * **`src/clients/docker_client.py:DockerClient`:** Manages Docker container operations, including file transfers and command execution.
 * **`src/clients/ssh_client.py:SSHClient`:** Handles SSH connections and command execution on remote servers.
 * **`src/utils/file_manager.py:FileManager`:** Centralizes file operations, including creation, tracking, and cleanup.
-* **`src/migrations/base_migration.py:BaseMigration`:** Abstract base class defining the interface for all migration components (`run`, `_extract`, `_map`, `_load`, `_test`).
-* **`src/migrations/*_migration.py`:** Concrete implementations of `BaseMigration` for each specific data type (e.g., `UserMigration`, `ProjectMigration`). Each handles the Extract-Map-Load process for its component.
+* **`src/application/components/base_migration.py:BaseMigration`:** Abstract base class defining the interface for all migration components (`run`, `_extract`, `_map`, `_load`, `_test`).
+* **`src/application/components/*_migration.py`:** Concrete implementations of `BaseMigration` for each specific data type (e.g., `UserMigration`, `ProjectMigration`). Each handles the Extract-Map-Load process for its component.
 * **`src/display.py`:** Contains functions for user-friendly console output using the `rich` library (e.g., progress bars, tables, formatted logs).
 * **`src/mappings/mappings.py`:** Helper functions for loading, saving, and applying mapping files (`var/data/*_mapping.json`).
 * **`src/models/mapping.py`:** Dataclasses or structures used for storing mapping information.

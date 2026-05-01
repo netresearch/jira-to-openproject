@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.migrations.base_migration import (
+from src.application.components.base_migration import (
     BaseMigration,
     EntityTypeRegistry,
     register_entity_types,
@@ -34,7 +34,7 @@ def clean_registry():
 @pytest.fixture
 def mock_logger():
     """Mock logger for testing warning behavior."""
-    with patch("src.migrations.base_migration.logging.getLogger") as mock_get_logger:
+    with patch("src.application.components.base_migration.logging.getLogger") as mock_get_logger:
         mock_logger_instance = Mock()
         mock_get_logger.return_value = mock_logger_instance
         yield mock_logger_instance

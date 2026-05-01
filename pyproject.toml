@@ -128,7 +128,7 @@ exclude = ['^build/', '^dist/', '^\\.venv/', '^tests/', '^scripts/']
 [[tool.mypy.overrides]]
 module = [
     "src.clients.*",
-    "src.migrations.*",
+    "src.application.components.*",
     "src.utils.*",
     "src.migration",
     "src.main",

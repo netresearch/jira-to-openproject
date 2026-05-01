@@ -16,7 +16,7 @@ except ImportError, AttributeError:  # pragma: no cover - fallback when jira pac
         pass
 
 
-from src.migrations.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_migration import WorkPackageMigration
 
 
 class TestPaginationImplementation:
@@ -47,7 +47,7 @@ class TestPaginationImplementation:
             return mock_issue
 
         # Mock the global config to set batch_size
-        with patch("src.migrations.work_package_migration.config") as mock_config:
+        with patch("src.application.components.work_package_migration.config") as mock_config:
             mock_config.migration_config = {"batch_size": 50}
 
             # Mock the _fetch_issues_with_retry to return proper list responses
@@ -150,7 +150,7 @@ class TestPaginationImplementation:
         ]
 
         # Mock the global config to set batch_size
-        with patch("src.migrations.work_package_migration.config") as mock_config:
+        with patch("src.application.components.work_package_migration.config") as mock_config:
             mock_config.migration_config = {"batch_size": 50}
             mock_config.jira_project_filter = None
 
@@ -177,7 +177,7 @@ class TestPaginationImplementation:
             return mock_issue
 
         # Mock the global config to set batch_size
-        with patch("src.migrations.work_package_migration.config") as mock_config:
+        with patch("src.application.components.work_package_migration.config") as mock_config:
             mock_config.migration_config = {"batch_size": 50}
 
             with patch.object(self.migration, "_fetch_issues_with_retry") as mock_fetch:

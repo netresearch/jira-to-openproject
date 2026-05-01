@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.application.components.base_migration import BaseMigration
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
-from src.migrations.base_migration import BaseMigration
 from src.models import ComponentResult
 from src.utils.change_detector import ChangeDetector
 
@@ -23,15 +23,15 @@ def _mock_client_classes(monkeypatch: pytest.MonkeyPatch):
 
     # Patch the classes in base_migration module to return our mocks
     monkeypatch.setattr(
-        "src.migrations.base_migration.JiraClient",
+        "src.application.components.base_migration.JiraClient",
         lambda *args, **kwargs: mock_jira,
     )
     monkeypatch.setattr(
-        "src.migrations.base_migration.OpenProjectClient",
+        "src.application.components.base_migration.OpenProjectClient",
         lambda *args, **kwargs: mock_op,
     )
     monkeypatch.setattr(
-        "src.migrations.base_migration.ChangeDetector",
+        "src.application.components.base_migration.ChangeDetector",
         lambda *args, **kwargs: mock_change_detector,
     )
 
@@ -54,19 +54,19 @@ class TestBaseMigration:
 
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "JiraClient",
             mock_jira_instance,
         )
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "OpenProjectClient",
             mock_op_instance,
         )
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "ChangeDetector",
             mock_change_detector_instance,
         )
@@ -94,13 +94,13 @@ class TestBaseMigration:
 
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "OpenProjectClient",
             mock_op_instance,
         )
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "ChangeDetector",
             mock_change_detector_instance,
         )
@@ -127,13 +127,13 @@ class TestBaseMigration:
 
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "JiraClient",
             mock_jira_instance,
         )
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "ChangeDetector",
             mock_change_detector_instance,
         )
@@ -160,13 +160,13 @@ class TestBaseMigration:
 
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "JiraClient",
             mock_jira_instance,
         )
         monkeypatch_helpers.mock_class_return_value(
             monkeypatch,
-            "src.migrations.base_migration",
+            "src.application.components.base_migration",
             "OpenProjectClient",
             mock_op_instance,
         )

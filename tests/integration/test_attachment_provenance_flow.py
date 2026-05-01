@@ -171,8 +171,8 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for tests
     )
     sys.modules["tenacity"] = tenacity_stub
 
-from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
-from src.migrations.attachments_migration import AttachmentsMigration
+from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.application.components.attachments_migration import AttachmentsMigration
 
 pytestmark = pytest.mark.integration
 

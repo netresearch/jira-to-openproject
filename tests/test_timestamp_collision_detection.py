@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """Unit tests for timestamp collision detection and resolution."""
 
-import sys
 from datetime import datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
-sys.path.insert(0, "/home/sme/p/j2o/src")
-
-from migrations.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_migration import WorkPackageMigration
 
 
 class TestTimestampCollisionDetection:

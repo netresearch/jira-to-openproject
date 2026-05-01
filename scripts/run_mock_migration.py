@@ -99,7 +99,7 @@ async def run_mock_migration(components: Iterable[str]) -> None:
     config._mappings = FixtureMappings()  # type: ignore[attr-defined]
 
     with patch(
-        "src.migrations.attachments_migration.AttachmentsMigration._download_attachment",
+        "src.application.components.attachments_migration.AttachmentsMigration._download_attachment",
         lambda self, url, dest: dest.write_bytes(b"mock attachment content") or dest,
     ):
         result = await run_migration(

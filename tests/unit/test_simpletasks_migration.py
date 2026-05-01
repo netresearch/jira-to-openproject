@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.simpletasks_migration import SimpleTasksMigration
+from src.application.components.simpletasks_migration import SimpleTasksMigration
 
 
 class DummyJira:

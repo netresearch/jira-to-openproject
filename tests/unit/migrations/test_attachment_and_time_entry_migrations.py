@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.migrations.attachment_provenance_migration import AttachmentProvenanceMigration
-from src.migrations.attachments_migration import AttachmentsMigration
-from src.migrations.time_entry_migration import TimeEntryMigration
+from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.application.components.attachments_migration import AttachmentsMigration
+from src.application.components.time_entry_migration import TimeEntryMigration
 
 
 class DummyMappings:
@@ -36,7 +36,7 @@ def configure_config(module, monkeypatch, tmp_path, mapping_data, extra_config=N
 
 
 def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapping_data):
-    from src.migrations import attachments_migration as module
+    from src.application.components import attachments_migration as module
 
     configure_config(
         module,
@@ -89,7 +89,7 @@ def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapp
 
 
 def test_attachment_provenance_updates_metadata(tmp_path, monkeypatch, dummy_mapping_data):
-    from src.migrations import attachment_provenance_migration as module
+    from src.application.components import attachment_provenance_migration as module
 
     configure_config(module, monkeypatch, tmp_path, dummy_mapping_data)
 
@@ -122,7 +122,7 @@ def test_attachment_provenance_updates_metadata(tmp_path, monkeypatch, dummy_map
 
 
 def test_time_entry_zero_created_guard(monkeypatch, tmp_path):
-    from src.migrations import time_entry_migration as module
+    from src.application.components import time_entry_migration as module
 
     configure_config(module, monkeypatch, tmp_path, {"work_package": {}}, extra_config={})
 

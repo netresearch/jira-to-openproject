@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.priority_migration import PriorityMigration
+from src.application.components.priority_migration import PriorityMigration
 
 
 class DummyJira:

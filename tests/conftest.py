@@ -722,11 +722,11 @@ class MonkeypatchHelpers:
 
         # Mock various config patterns found in tests
         config_patterns = [
-            "src.migrations.base_migration.config.migration_config.get",
-            "src.migrations.user_migration.config.migration_config.get",
-            "src.migrations.project_migration.config.migration_config.get",
-            "src.migrations.issue_type_migration.config.migration_config.get",
-            "src.migrations.workflow_migration.config.migration_config.get",
+            "src.application.components.base_migration.config.migration_config.get",
+            "src.application.components.user_migration.config.migration_config.get",
+            "src.application.components.project_migration.config.migration_config.get",
+            "src.application.components.issue_type_migration.config.migration_config.get",
+            "src.application.components.workflow_migration.config.migration_config.get",
         ]
 
         for pattern in config_patterns:
@@ -775,7 +775,7 @@ def project_migration(mock_jira_client, mock_op_client):
         ProjectMigration: A ProjectMigration instance with mocked clients
 
     """
-    from src.migrations.project_migration import ProjectMigration
+    from src.application.components.project_migration import ProjectMigration
 
     return ProjectMigration(mock_jira_client, mock_op_client)
 

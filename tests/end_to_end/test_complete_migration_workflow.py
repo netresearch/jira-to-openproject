@@ -681,7 +681,7 @@ class TestCompleteMigrationWorkflow:
                         adjusted_config,
                     ),
                     patch(
-                        "src.migrations.attachments_migration.AttachmentsMigration._download_attachment",
+                        "src.application.components.attachments_migration.AttachmentsMigration._download_attachment",
                         side_effect=lambda self, url, dest_path: dest_path.write_bytes(b"stub") or dest_path,
                     ),
                 ):
@@ -832,7 +832,7 @@ class TestCompleteMigrationWorkflow:
                     },
                 ),
                 patch(
-                    "src.migrations.user_migration.UserMigration.run",
+                    "src.application.components.user_migration.UserMigration.run",
                     return_value=ComponentResult(
                         success=True,
                         message="stubbed user migration",
@@ -936,7 +936,7 @@ class TestCompleteMigrationWorkflow:
                 # orthogonal to dry-run behaviour. Short-circuit it to a
                 # success result so the orchestration can be validated.
                 patch(
-                    "src.migrations.user_migration.UserMigration.run",
+                    "src.application.components.user_migration.UserMigration.run",
                     return_value=ComponentResult(
                         success=True,
                         message="stubbed user migration (dry-run)",
@@ -1147,7 +1147,7 @@ class TestCompleteMigrationWorkflow:
                 # Short-circuit them to a success result so the test can
                 # exercise the end-to-end orchestration timing assertion.
                 patch(
-                    "src.migrations.user_migration.UserMigration.run",
+                    "src.application.components.user_migration.UserMigration.run",
                     return_value=ComponentResult(
                         success=True,
                         message="stubbed user migration",
@@ -1155,7 +1155,7 @@ class TestCompleteMigrationWorkflow:
                     ),
                 ),
                 patch(
-                    "src.migrations.work_package_migration.WorkPackageMigration.run",
+                    "src.application.components.work_package_migration.WorkPackageMigration.run",
                     return_value=ComponentResult(
                         success=True,
                         message="stubbed work package migration",
@@ -1287,7 +1287,7 @@ class TestCompleteMigrationWorkflow:
                 # heavy migrations; the dependency-order assertion below only
                 # needs each component to complete successfully.
                 patch(
-                    "src.migrations.user_migration.UserMigration.run",
+                    "src.application.components.user_migration.UserMigration.run",
                     return_value=ComponentResult(
                         success=True,
                         message="stubbed user migration",
@@ -1295,7 +1295,7 @@ class TestCompleteMigrationWorkflow:
                     ),
                 ),
                 patch(
-                    "src.migrations.work_package_migration.WorkPackageMigration.run",
+                    "src.application.components.work_package_migration.WorkPackageMigration.run",
                     return_value=ComponentResult(
                         success=True,
                         message="stubbed work package migration",

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.migrations.relation_migration import RelationMigration
+from src.application.components.relation_migration import RelationMigration
 
 
 class DummyOpClient:

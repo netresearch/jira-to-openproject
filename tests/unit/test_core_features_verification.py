@@ -54,7 +54,7 @@ class TestJ2O2MarkdownConversion:
 
     def test_markdown_converter_used_in_work_package_migration(self):
         """Verify MarkdownConverter is instantiated and used in WorkPackageMigration."""
-        from src.migrations.work_package_migration import WorkPackageMigration
+        from src.application.components.work_package_migration import WorkPackageMigration
 
         # Create mocked clients
         jira_client = Mock()
@@ -73,7 +73,9 @@ class TestJ2O2MarkdownConversion:
 
     def test_markdown_converter_integration_in_source(self):
         """Verify markdown_converter.convert() is called in work package creation."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Verify markdown converter is imported
@@ -91,7 +93,7 @@ class TestJ2O3TimeEntryMigration:
 
     def test_time_entry_migration_exists(self):
         """Verify TimeEntryMigration class exists and is importable."""
-        from src.migrations.time_entry_migration import TimeEntryMigration
+        from src.application.components.time_entry_migration import TimeEntryMigration
 
         assert TimeEntryMigration is not None
 
@@ -104,7 +106,7 @@ class TestJ2O3TimeEntryMigration:
 
     def test_time_entry_migration_has_run_method(self):
         """Verify TimeEntryMigration implements run() method."""
-        from src.migrations.time_entry_migration import TimeEntryMigration
+        from src.application.components.time_entry_migration import TimeEntryMigration
 
         jira_client = Mock()
         op_client = Mock()
@@ -139,7 +141,7 @@ class TestJ2O5PaginationProcessing:
 
     def test_work_package_migration_has_pagination(self):
         """Verify WorkPackageMigration implements pagination."""
-        from src.migrations.work_package_migration import WorkPackageMigration
+        from src.application.components.work_package_migration import WorkPackageMigration
 
         jira_client = Mock()
         op_client = Mock()
@@ -153,7 +155,9 @@ class TestJ2O5PaginationProcessing:
 
     def test_pagination_uses_start_at_max_results(self):
         """Verify pagination implementation uses startAt/maxResults parameters."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Verify pagination parameters are used
@@ -165,7 +169,9 @@ class TestJ2O5PaginationProcessing:
 
     def test_pagination_supports_configurable_batch_size(self):
         """Verify batch_size is configurable via config."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Verify batch_size is read from config
@@ -174,7 +180,9 @@ class TestJ2O5PaginationProcessing:
 
     def test_iter_project_issues_is_generator(self):
         """Verify iter_project_issues returns an iterator for memory efficiency."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Check for iterator/generator pattern in the method
@@ -188,7 +196,9 @@ class TestJ2O1MetadataPreservation:
 
     def test_work_package_migration_extracts_custom_fields(self):
         """Verify custom fields are extracted from Jira issues."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Verify custom field extraction logic
@@ -197,7 +207,9 @@ class TestJ2O1MetadataPreservation:
 
     def test_j2o_provenance_fields_created(self):
         """Verify J2O provenance custom fields are created."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Verify J2O provenance fields are defined
@@ -207,7 +219,9 @@ class TestJ2O1MetadataPreservation:
 
     def test_user_associations_preserved(self):
         """Verify user associations (assignee, reporter, watchers) are preserved."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Verify user association logic
@@ -217,7 +231,7 @@ class TestJ2O1MetadataPreservation:
 
     def test_enhanced_user_association_migrator_used(self):
         """Verify EnhancedUserAssociationMigrator is used for user mapping."""
-        from src.migrations.work_package_migration import WorkPackageMigration
+        from src.application.components.work_package_migration import WorkPackageMigration
 
         jira_client = Mock()
         op_client = Mock()
@@ -231,7 +245,7 @@ class TestJ2O1MetadataPreservation:
 
     def test_enhanced_timestamp_migrator_used(self):
         """Verify EnhancedTimestampMigrator is used for timestamp preservation."""
-        from src.migrations.work_package_migration import WorkPackageMigration
+        from src.application.components.work_package_migration import WorkPackageMigration
 
         jira_client = Mock()
         op_client = Mock()
@@ -245,7 +259,7 @@ class TestJ2O1MetadataPreservation:
 
     def test_enhanced_audit_trail_migrator_used(self):
         """Verify EnhancedAuditTrailMigrator is used for comments/history."""
-        from src.migrations.work_package_migration import WorkPackageMigration
+        from src.application.components.work_package_migration import WorkPackageMigration
 
         jira_client = Mock()
         op_client = Mock()
@@ -259,7 +273,9 @@ class TestJ2O1MetadataPreservation:
 
     def test_metadata_completeness(self):
         """Verify comprehensive metadata fields are extracted."""
-        wp_migration_file = Path(__file__).parent.parent.parent / "src" / "migrations" / "work_package_migration.py"
+        wp_migration_file = (
+            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
+        )
         wp_source = wp_migration_file.read_text()
 
         # Verify core metadata fields are handled

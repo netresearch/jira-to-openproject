@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from src import config
-from src.migrations.work_package_migration import WorkPackageMigration
+from src.application.components.work_package_migration import WorkPackageMigration
 
 pytestmark = pytest.mark.unit
 

@@ -1,6 +1,6 @@
 import pytest
 
-from src.migrations.components_migration import ComponentsMigration
+from src.application.components.components_migration import ComponentsMigration
 
 
 class DummyComp:

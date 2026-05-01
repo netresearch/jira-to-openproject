@@ -70,11 +70,11 @@ def main() -> None:
 
     root_dir = Path(__file__).parent.parent
 
-    # Define directories to search
+    # Define directories to search. ``src/`` already covers
+    # ``src/application/components/`` so we don't need a redundant entry.
     dirs_to_search = [
-        root_dir / "src" / "migrations",
-        root_dir / "tests",
         root_dir / "src",
+        root_dir / "tests",
     ]
 
     # Find all Python files and update them

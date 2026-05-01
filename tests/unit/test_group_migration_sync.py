@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.migrations.group_migration import GroupMigration
+from src.application.components.group_migration import GroupMigration
 
 pytestmark = pytest.mark.unit
 
@@ -38,8 +38,8 @@ def _migration(mappings: DummyMappings, monkeypatch) -> GroupMigration:
     migration.group_mapping = {}
     migration.data_dir = None
 
-    monkeypatch.setattr("src.migrations.group_migration.config.mappings", mappings)
-    monkeypatch.setattr("src.migrations.group_migration.config.get_mappings", lambda: mappings)
+    monkeypatch.setattr("src.application.components.group_migration.config.mappings", mappings)
+    monkeypatch.setattr("src.application.components.group_migration.config.get_mappings", lambda: mappings)
     return migration
 
 
