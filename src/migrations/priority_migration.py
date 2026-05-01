@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from src.migrations.base_migration import BaseMigration, register_entity_types
-from src.models import ComponentResult
+from src.models import ComponentResult, JiraPriority
+from src.models.jira import JiraIssueFields
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -51,17 +52,25 @@ class PriorityMigration(BaseMigration):
         return self._run_etl_pipeline("Priorities")
 
     def _extract(self) -> ComponentResult:
-        """Extract Jira priorities (names and order)."""
+        """Extract Jira priorities (names and order).
+
+        We parse at the boundary: each raw dict returned from
+        ``get_priorities`` is validated into a :class:`JiraPriority`
+        instance so the rest of the pipeline can rely on attribute access
+        rather than ``dict.get`` lookups.
+        """
         try:
-            priorities = self.jira_client.get_priorities()  # expected: list of {name, id}
+            raw_priorities = self.jira_client.get_priorities()  # expected: list of {name, id}
         except Exception:
             logger.exception("Failed to extract Jira priorities")
-            priorities = []
+            raw_priorities = []
+
+        priorities: list[JiraPriority] = [JiraPriority.from_dict(p) for p in raw_priorities if p]
         return ComponentResult(success=True, extracted=len(priorities), data={"priorities": priorities})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Map Jira priority names to OP IssuePriority records, create missing."""
-        priorities = (extracted.data or {}).get("priorities", []) if extracted.data else []
+        priorities: list[JiraPriority] = (extracted.data or {}).get("priorities", []) if extracted.data else []
         created = 0
         mapping: dict[str, int] = {}
 
@@ -70,7 +79,7 @@ class PriorityMigration(BaseMigration):
         name_to_id = {p.get("name"): int(p.get("id")) for p in existing if p and p.get("id")}
 
         for pr in priorities:
-            name = (pr or {}).get("name")
+            name = pr.name
             if not name:
                 continue
             op_id = name_to_id.get(name)
@@ -125,9 +134,8 @@ class PriorityMigration(BaseMigration):
                 issue = iss_map.get(key)
                 if not issue:
                     continue
-                fields = getattr(issue, "fields", None)
-                pr = getattr(fields, "priority", None)
-                pr_name = getattr(pr, "name", None)
+                fields = JiraIssueFields.from_issue_any(issue)
+                pr_name = fields.priority.name if fields.priority else None
                 if not pr_name:
                     continue
                 pr_id = mapping.get(pr_name)

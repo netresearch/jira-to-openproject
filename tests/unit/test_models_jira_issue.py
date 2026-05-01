@@ -226,3 +226,129 @@ def test_from_jira_obj_missing_assignee_and_reporter_default_to_none() -> None:
     assert issue.fields.components == []
     assert issue.fields.comments == []
     assert issue.fields.attachments == []
+
+
+# ── JiraIssueFields direct constructors ──────────────────────────────────
+
+
+def test_jira_issue_fields_from_dict_happy_path() -> None:
+    """``JiraIssueFields.from_dict`` accepts the raw ``fields`` block alone."""
+    raw = _nested_dict_shape()["fields"]
+    assert isinstance(raw, dict)
+
+    fields = JiraIssueFields.from_dict(raw)
+
+    assert fields.summary == "Hello"
+    assert fields.priority is not None
+    assert fields.priority.name == "Medium"
+    assert fields.labels == ["bug", "urgent"]
+    assert len(fields.fix_versions) == 1
+    assert fields.fix_versions[0].name == "v1.0"
+
+
+def test_jira_issue_fields_from_dict_none_returns_empty() -> None:
+    fields = JiraIssueFields.from_dict(None)
+
+    assert fields.summary is None
+    assert fields.labels == []
+    assert fields.fix_versions == []
+
+
+def test_jira_issue_fields_from_jira_obj_happy_path() -> None:
+    """The classmethod accepts an SDK ``fields`` block directly — without
+    a surrounding ``issue`` object — which is what the migration layer
+    relies on when it only has a stand-in ``DummyIssue`` carrying fields
+    but no ``key``/``id``.
+    """
+    sdk_fields = SimpleNamespace(
+        summary="Hi",
+        priority=SimpleNamespace(id="3", name="Medium"),
+        labels=["a", "b"],
+        fixVersions=[SimpleNamespace(id="1", name="v1.0")],
+    )
+
+    fields = JiraIssueFields.from_jira_obj(sdk_fields)
+
+    assert fields.summary == "Hi"
+    assert fields.priority is not None
+    assert fields.priority.name == "Medium"
+    assert fields.labels == ["a", "b"]
+    assert len(fields.fix_versions) == 1
+    assert fields.fix_versions[0].name == "v1.0"
+
+
+def test_jira_issue_fields_from_jira_obj_none_returns_empty() -> None:
+    fields = JiraIssueFields.from_jira_obj(None)
+
+    assert fields.summary is None
+    assert fields.labels == []
+    assert fields.fix_versions == []
+
+
+# ── JiraIssueFields.from_issue_any ───────────────────────────────────────
+
+
+def test_from_issue_any_accepts_sdk_issue_with_fields() -> None:
+    """SDK shape: an issue object with a ``fields`` attribute."""
+    sdk_fields = SimpleNamespace(labels=["bug"], priority=SimpleNamespace(name="High"))
+    issue = SimpleNamespace(key="ABC-1", id="1", fields=sdk_fields)
+
+    fields = JiraIssueFields.from_issue_any(issue)
+
+    assert fields.labels == ["bug"]
+    assert fields.priority is not None
+    assert fields.priority.name == "High"
+
+
+def test_from_issue_any_accepts_test_dummy_without_key_or_id() -> None:
+    """Test-only fixtures often skip ``key``/``id``; we still want fields back."""
+    sdk_fields = SimpleNamespace(
+        labels=["x", "y"],
+        fixVersions=[SimpleNamespace(name="v1")],
+    )
+    dummy = SimpleNamespace(fields=sdk_fields)
+
+    fields = JiraIssueFields.from_issue_any(dummy)
+
+    assert fields.labels == ["x", "y"]
+    assert [v.name for v in fields.fix_versions] == ["v1"]
+
+
+def test_from_issue_any_accepts_nested_dict_shape() -> None:
+    """Cache-restored REST shape: ``{"key": ..., "fields": {...}}``."""
+    issue = {
+        "key": "ABC-1",
+        "id": "1",
+        "fields": {
+            "labels": ["a"],
+            "priority": {"id": "1", "name": "Low"},
+        },
+    }
+
+    fields = JiraIssueFields.from_issue_any(issue)
+
+    assert fields.labels == ["a"]
+    assert fields.priority is not None
+    assert fields.priority.name == "Low"
+
+
+def test_from_issue_any_accepts_flattened_dict_shape() -> None:
+    """``get_issue_details`` produces a flattened dict — fields hoisted to top."""
+    issue = {
+        "key": "ABC-1",
+        "id": "1",
+        "labels": ["flat"],
+        "fixVersions": [{"name": "v2"}],
+    }
+
+    fields = JiraIssueFields.from_issue_any(issue)
+
+    assert fields.labels == ["flat"]
+    assert [v.name for v in fields.fix_versions] == ["v2"]
+
+
+def test_from_issue_any_none_returns_empty() -> None:
+    fields = JiraIssueFields.from_issue_any(None)
+
+    assert fields.labels == []
+    assert fields.priority is None

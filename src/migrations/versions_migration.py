@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
+from src.models.jira import JiraIssueFields
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -49,7 +50,14 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
-        """Extract fixVersion names per Jira project from known work package issues."""
+        """Extract fixVersion names per Jira project from known work package issues.
+
+        Issues come back from :meth:`_merge_batch_issues` in either the
+        SDK shape (attribute access on ``issue.fields.fixVersions``) or
+        the cached dict shape. :meth:`JiraIssueFields.from_issue_any`
+        normalises both, giving us a typed list of
+        :class:`JiraVersionRef` to iterate.
+        """
         wp_map = self.mappings.get_mapping("work_package") or {}
         jira_keys = [str(k) for k in wp_map]
         if not jira_keys:
@@ -61,17 +69,12 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         for key, issue in issues.items():
             pj = self._issue_project_key(key)
             try:
-                fields = getattr(issue, "fields", None)
-                fxs = getattr(fields, "fixVersions", None)
-                if not isinstance(fxs, list) or not fxs:
+                fields = JiraIssueFields.from_issue_any(issue)
+                if not fields.fix_versions:
                     continue
-                for v in fxs:
-                    name = None
-                    if isinstance(v, dict):
-                        name = v.get("name")
-                    else:
-                        name = getattr(v, "name", None)
-                    if name and isinstance(name, str) and name.strip():
+                for ref in fields.fix_versions:
+                    name = ref.name
+                    if name and name.strip():
                         by_project.setdefault(pj, set()).add(name.strip())
             except Exception:
                 continue
@@ -206,17 +209,11 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 issue = issues.get(key)
                 if not issue:
                     continue
-                fields = getattr(issue, "fields", None)
-                fxs = getattr(fields, "fixVersions", None)
-                if not isinstance(fxs, list) or not fxs:
+                fields = JiraIssueFields.from_issue_any(issue)
+                if not fields.fix_versions:
                     continue
-                # Choose first fixVersion name deterministically
-                first = fxs[0]
-                name = None
-                if isinstance(first, dict):
-                    name = first.get("name")
-                else:
-                    name = getattr(first, "name", None)
+                # Choose first fixVersion name deterministically.
+                name = fields.fix_versions[0].name
                 if not name:
                     continue
 
