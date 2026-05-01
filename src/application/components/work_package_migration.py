@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from pydantic import ValidationError
 
 from jira import Issue
 from src import config
@@ -36,7 +37,7 @@ from src.config import logger
 from src.display import ProgressTracker
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 from src.utils import data_handler
 from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
@@ -353,14 +354,25 @@ class WorkPackageMigration(BaseMigration):
                 if jira_account_id:
                     account_id_mapping[jira_account_id] = user_info
 
-        # For work package mapping, we need to load the existing mapping if available
-        work_package_mapping = {}
+        # For work package mapping, we need to load the existing mapping if available.
+        # The on-disk wp_map is keyed by ``str(jira_id)`` outer with the human-readable
+        # ``jira_key`` stored inside; older fixtures sometimes key directly by
+        # ``jira_key``. Normalise via :class:`WorkPackageMappingEntry.from_legacy` so
+        # we tolerate both shapes and skip bare-int rows (which carry no recoverable
+        # ``jira_key``) — the markdown converter only needs ``jira_key → op_id``.
+        work_package_mapping: dict[str, int] = {}
         if hasattr(self, "work_package_mapping") and self.work_package_mapping:
-            work_package_mapping = {
-                entry.get("jira_key", ""): entry.get("openproject_id", "")
-                for entry in self.work_package_mapping.values()
-                if entry.get("jira_key") and entry.get("openproject_id")
-            }
+            for outer_key, raw_entry in self.work_package_mapping.items():
+                if not isinstance(raw_entry, dict):
+                    # Bare-int legacy rows have no recoverable jira_key.
+                    continue
+                inner_jira_key = raw_entry.get("jira_key")
+                jira_key = str(inner_jira_key or outer_key)
+                try:
+                    typed_entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+                except ValidationError, ValueError, TypeError, AttributeError:
+                    continue
+                work_package_mapping[jira_key] = int(typed_entry.openproject_id)
 
         # Update the markdown converter with new mappings (including attachment mapping)
         self.markdown_converter = MarkdownConverter(
@@ -369,6 +381,71 @@ class WorkPackageMigration(BaseMigration):
             account_id_mapping=account_id_mapping,
             attachment_mapping=self.attachment_mapping,
         )
+
+    # Default fallback user id used when a journal author cannot be resolved
+    # from the user mapping. See ``_resolve_journal_author_id`` (BUG #32).
+    _BUG32_FALLBACK_USER_ID = 148941
+
+    # Probe order for resolving Jira changelog/comment authors against
+    # ``self.user_mapping``. Mirrors the multi-key fallback documented in
+    # BUG #32 — the user_mapping is augmented with secondary indices on
+    # ``name`` / ``displayName`` / ``emailAddress`` (and others) so any of
+    # these raw Jira fields will resolve to the same OP user when present.
+    _JOURNAL_AUTHOR_PROBE_KEYS: tuple[str, ...] = ("name", "displayName", "emailAddress")
+
+    def _resolve_journal_author_id(
+        self,
+        author_data: dict[str, Any],
+        jira_key: str,
+        kind: str,
+    ) -> int:
+        """Resolve a journal-entry author to an OpenProject user id.
+
+        Walks ``author_data`` against ``self.user_mapping`` using the
+        canonical probe order in :attr:`_JOURNAL_AUTHOR_PROBE_KEYS` and
+        returns the first matching ``openproject_id``. If no probe key
+        resolves, returns :attr:`_BUG32_FALLBACK_USER_ID` and logs a
+        ``[BUG32]`` warning listing every probe field that was present
+        on ``author_data`` so unresolved authors are diagnosable from
+        production logs.
+
+        Args:
+            author_data: Raw Jira author payload from a comment or
+                changelog entry. Tolerates ``None``/empty inputs by
+                resolving to the fallback user.
+            jira_key: Jira issue key, used purely for log context.
+            kind: Free-form label (``"comment"`` / ``"changelog"``)
+                that distinguishes the warning message between callers.
+
+        Returns:
+            The resolved ``openproject_id`` (int) or the BUG #32
+            fallback user id when the author cannot be resolved.
+
+        """
+        if not isinstance(author_data, dict):
+            author_data = {}
+        for key in self._JOURNAL_AUTHOR_PROBE_KEYS:
+            value = author_data.get(key)
+            if not value:
+                continue
+            user_dict = self.user_mapping.get(value)
+            if not user_dict:
+                continue
+            op_id = user_dict.get("openproject_id")
+            if op_id:
+                self.logger.debug(
+                    f"{jira_key}: Found user via {key}: {value} → {op_id}",
+                )
+                return int(op_id)
+
+        # No probe key resolved — fall back to the BUG #32 admin user.
+        attempted_fields = {k: author_data.get(k) for k in self._JOURNAL_AUTHOR_PROBE_KEYS if k in author_data}
+        fallback_id = self._BUG32_FALLBACK_USER_ID
+        self.logger.warning(
+            f"[BUG32] {jira_key}: User not found in mapping for {kind} (tried: {attempted_fields}), "
+            f"using fallback user {fallback_id}",
+        )
+        return fallback_id
 
     def _track_mentioned_users(self, text: str | None, project_id: int) -> None:
         """Extract mentioned user IDs from text and track them for membership assignment.
@@ -2590,35 +2667,13 @@ class WorkPackageMigration(BaseMigration):
                     entry_timestamp = entry.get("timestamp", "")
 
                     if entry_type == "comment":
-                        # Bug #32 fix: Enhanced user attribution - try multiple fields
+                        # Bug #32 fix: Enhanced user attribution - probe multiple author fields.
                         author_data = entry_data.get("author") or {}
-                        comment_author_id = None
-                        author_name = None
-
-                        # Try multiple fields: name, displayName, emailAddress
-                        for key in ["name", "displayName", "emailAddress"]:
-                            if author_data.get(key):
-                                user_dict = self.user_mapping.get(author_data[key])
-                                if user_dict:
-                                    comment_author_id = user_dict.get("openproject_id")
-                                    if comment_author_id:
-                                        author_name = author_data[key]
-                                        self.logger.debug(
-                                            f"{jira_key}: Found user via {key}: {author_name} → {comment_author_id}",
-                                        )
-                                        break
-
-                        if not comment_author_id:
-                            # Use fallback user (148941)
-                            comment_author_id = 148941
-                            attempted_fields = {
-                                k: author_data.get(k)
-                                for k in ["name", "displayName", "emailAddress"]
-                                if k in author_data
-                            }
-                            self.logger.warning(
-                                f"[BUG32] {jira_key}: User not found in mapping for comment (tried: {attempted_fields}), using fallback user {comment_author_id}",
-                            )
+                        comment_author_id = self._resolve_journal_author_id(
+                            author_data,
+                            jira_key,
+                            "comment",
+                        )
                         raw_comment_body = entry_data.get("body", "")
                         # Convert Jira wiki markup to OpenProject markdown
                         if raw_comment_body and hasattr(self, "markdown_converter") and self.markdown_converter:
@@ -2641,35 +2696,13 @@ class WorkPackageMigration(BaseMigration):
                             f"[BUG23] {jira_key}: Added comment operation, total operations: {len(work_package['_rails_operations'])}",
                         )
                     elif entry_type == "changelog":
-                        # Bug #32 fix: Enhanced user attribution - try multiple fields
+                        # Bug #32 fix: Enhanced user attribution - probe multiple author fields.
                         author_data = entry_data.get("author") or {}
-                        changelog_author_id = None
-                        author_name = None
-
-                        # Try multiple fields: name, displayName, emailAddress
-                        for key in ["name", "displayName", "emailAddress"]:
-                            if author_data.get(key):
-                                user_dict = self.user_mapping.get(author_data[key])
-                                if user_dict:
-                                    changelog_author_id = user_dict.get("openproject_id")
-                                    if changelog_author_id:
-                                        author_name = author_data[key]
-                                        self.logger.debug(
-                                            f"{jira_key}: Found user via {key}: {author_name} → {changelog_author_id}",
-                                        )
-                                        break
-
-                        if not changelog_author_id:
-                            # Use fallback user (148941)
-                            changelog_author_id = 148941
-                            attempted_fields = {
-                                k: author_data.get(k)
-                                for k in ["name", "displayName", "emailAddress"]
-                                if k in author_data
-                            }
-                            self.logger.warning(
-                                f"[BUG32] {jira_key}: User not found in mapping for changelog (tried: {attempted_fields}), using fallback user {changelog_author_id}",
-                            )
+                        changelog_author_id = self._resolve_journal_author_id(
+                            author_data,
+                            jira_key,
+                            "changelog",
+                        )
 
                         # Bug #28 fix: Process field changes as structured data
                         # Bug #16 fix: Also capture unmapped field changes as notes (prevent data loss)
@@ -3978,6 +4011,52 @@ class WorkPackageMigration(BaseMigration):
             msg = f"Error rebuilding custom field mapping from OpenProject: {e}"
             raise RuntimeError(msg) from e
 
+    def _record_created_work_packages(
+        self,
+        created_list: list[dict[str, Any]],
+        meta_slice: list[dict[str, Any]],
+        op_project_id: int,
+    ) -> None:
+        """Record bulk-create results into ``self.work_package_mapping``.
+
+        Walks ``created_list`` (the ``created`` array returned by
+        :meth:`OpenProjectClient.bulk_create_records`) and pairs each row
+        with the metadata that produced it via the ``index`` field. The
+        on-disk mapping shape — ``{str(jira_id): {**meta, "openproject_id":
+        op_id, "openproject_project_id": int(op_project_id)}}`` — is the
+        public contract consumed by 20+ downstream migrations and is
+        preserved verbatim from the four call-sites this helper replaces.
+
+        Args:
+            created_list: ``res["created"]`` from the bulk create call.
+                Each item must carry ``index`` (paired meta position) and
+                ``id`` (the new ``work_packages.id``).
+            meta_slice: The ``work_packages_meta`` list (full or batch
+                slice) the indices refer into.
+            op_project_id: The OpenProject project the work packages
+                belong to. Stored on every recorded row.
+
+        """
+        try:
+            _ = self.work_package_mapping  # ensure attribute exists
+        except AttributeError:
+            self.work_package_mapping = {}
+        for item in created_list:
+            try:
+                idx = item.get("index")
+                op_id = item.get("id")
+                if isinstance(idx, int) and 0 <= idx < len(meta_slice):
+                    meta = meta_slice[idx]
+                    jira_id = meta.get("jira_id")
+                    if jira_id is not None:
+                        self.work_package_mapping[str(jira_id)] = {
+                            **meta,
+                            "openproject_id": op_id,
+                            "openproject_project_id": int(op_project_id),
+                        }
+            except TypeError, AttributeError, ValueError:
+                continue
+
     def _migrate_work_packages(self) -> dict[str, Any]:
         """Simplified migration implementation to unblock execution.
 
@@ -4168,25 +4247,11 @@ class WorkPackageMigration(BaseMigration):
                                 # Always process the created list to build mapping
                                 created_list = res.get("created", [])
                                 if isinstance(created_list, list) and created_list:
-                                    try:
-                                        _ = self.work_package_mapping  # ensure attribute exists
-                                    except Exception:
-                                        self.work_package_mapping = {}
-                                    for item in created_list:
-                                        try:
-                                            idx = item.get("index")
-                                            op_id = item.get("id")
-                                            if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
-                                                meta = work_packages_meta[idx]
-                                                jira_id = meta.get("jira_id")
-                                                if jira_id is not None:
-                                                    self.work_package_mapping[str(jira_id)] = {
-                                                        **meta,
-                                                        "openproject_id": op_id,
-                                                        "openproject_project_id": int(op_project_id),
-                                                    }
-                                        except Exception:
-                                            continue
+                                    self._record_created_work_packages(
+                                        created_list,
+                                        work_packages_meta,
+                                        int(op_project_id),
+                                    )
                                 # Compute created count
                                 c = res.get("created_count") or res.get("total_created")
                                 if c is None:
@@ -4249,25 +4314,11 @@ class WorkPackageMigration(BaseMigration):
                                             if isinstance(sub_res, dict):
                                                 created_list = sub_res.get("created", [])
                                                 if isinstance(created_list, list) and created_list:
-                                                    try:
-                                                        _ = self.work_package_mapping
-                                                    except Exception:
-                                                        self.work_package_mapping = {}
-                                                    for item in created_list:
-                                                        try:
-                                                            idx = item.get("index")
-                                                            op_id = item.get("id")
-                                                            if isinstance(idx, int) and 0 <= idx < len(meta_slice):
-                                                                meta = meta_slice[idx]
-                                                                jira_id = meta.get("jira_id")
-                                                                if jira_id is not None:
-                                                                    self.work_package_mapping[str(jira_id)] = {
-                                                                        **meta,
-                                                                        "openproject_id": op_id,
-                                                                        "openproject_project_id": int(op_project_id),
-                                                                    }
-                                                        except Exception:
-                                                            continue
+                                                    self._record_created_work_packages(
+                                                        created_list,
+                                                        meta_slice,
+                                                        int(op_project_id),
+                                                    )
                                                 c = sub_res.get("created_count") or (
                                                     len(created_list) if isinstance(created_list, list) else 0
                                                 )
@@ -4350,25 +4401,11 @@ class WorkPackageMigration(BaseMigration):
                             # Always process the created list to build mapping
                             created_list = res.get("created", [])
                             if isinstance(created_list, list) and created_list:
-                                try:
-                                    _ = self.work_package_mapping
-                                except Exception:
-                                    self.work_package_mapping = {}
-                                for item in created_list:
-                                    try:
-                                        idx = item.get("index")
-                                        op_id = item.get("id")
-                                        if isinstance(idx, int) and 0 <= idx < len(work_packages_meta):
-                                            meta = work_packages_meta[idx]
-                                            jira_id = meta.get("jira_id")
-                                            if jira_id is not None:
-                                                self.work_package_mapping[str(jira_id)] = {
-                                                    **meta,
-                                                    "openproject_id": op_id,
-                                                    "openproject_project_id": int(op_project_id),
-                                                }
-                                    except Exception:
-                                        continue
+                                self._record_created_work_packages(
+                                    created_list,
+                                    work_packages_meta,
+                                    int(op_project_id),
+                                )
                             # Compute created count
                             c = res.get("created_count") or res.get("total_created")
                             if c is None:
@@ -4419,25 +4456,11 @@ class WorkPackageMigration(BaseMigration):
                                         if isinstance(sub_res, dict):
                                             created_list = sub_res.get("created", [])
                                             if isinstance(created_list, list) and created_list:
-                                                try:
-                                                    _ = self.work_package_mapping
-                                                except Exception:
-                                                    self.work_package_mapping = {}
-                                                for item in created_list:
-                                                    try:
-                                                        idx = item.get("index")
-                                                        op_id = item.get("id")
-                                                        if isinstance(idx, int) and 0 <= idx < len(meta_slice):
-                                                            meta = meta_slice[idx]
-                                                            jira_id = meta.get("jira_id")
-                                                            if jira_id is not None:
-                                                                self.work_package_mapping[str(jira_id)] = {
-                                                                    **meta,
-                                                                    "openproject_id": op_id,
-                                                                    "openproject_project_id": int(op_project_id),
-                                                                }
-                                                    except Exception:
-                                                        continue
+                                                self._record_created_work_packages(
+                                                    created_list,
+                                                    meta_slice,
+                                                    int(op_project_id),
+                                                )
                                             c = sub_res.get("created_count") or (
                                                 len(created_list) if isinstance(created_list, list) else 0
                                             )
