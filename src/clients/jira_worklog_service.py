@@ -18,7 +18,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from src.clients.jira_client import (
-    HTTP_BAD_REQUEST_MIN,
+    HTTP_NOT_FOUND,
     HTTP_OK,
     JiraApiError,
     JiraResourceNotFoundError,
@@ -135,7 +135,8 @@ class JiraWorklogService:
         except Exception as e:
             error_msg = f"Failed to get work logs for issue {issue_key}: {e!s}"
             self._logger.exception(error_msg)
-            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
+            msg_lower = str(e).lower()
+            if "issue does not exist" in msg_lower or "issue not found" in msg_lower:
                 msg = f"Issue {issue_key} not found"
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
@@ -153,9 +154,15 @@ class JiraWorklogService:
                 project_key,
             )
 
-            # Get all issues for the project with worklog field expanded.
-            # ``get_all_issues_for_project`` still lives on the client; it
-            # will move to a future JiraIssueService extraction.
+            # Get all issues for the project. ``get_all_issues_for_project``
+            # uses ``fields=None`` (full payload) and only expands
+            # ``renderedFields`` (and ``changelog`` when requested) — there's
+            # no explicit worklog expansion. We rely on the ``worklog``
+            # field being present in the standard issue payload, then
+            # call ``get_work_logs_for_issue`` for the full per-issue
+            # detail. ``get_all_issues_for_project`` still lives on the
+            # client; it will move to a future JiraIssueService
+            # extraction.
             all_issues = self._client.get_all_issues_for_project(
                 project_key,
                 expand_changelog=False,
@@ -197,10 +204,9 @@ class JiraWorklogService:
                             "Issue %s not found when fetching work logs",
                             issue_key,
                         )
-                        # Record 404 response
                         self._client.rate_limiter.record_response(
                             time.time() - request_start,
-                            HTTP_BAD_REQUEST_MIN + 4,  # 404
+                            HTTP_NOT_FOUND,
                         )
                         continue
                     except JiraApiError as e:
@@ -209,10 +215,18 @@ class JiraWorklogService:
                             issue_key,
                             e,
                         )
-                        # Record error response (assuming 500 for API errors)
+                        # Record an actual 5xx so the rate-limiter's
+                        # server-error backoff kicks in. The
+                        # pre-extraction code wrote
+                        # ``HTTP_BAD_REQUEST_MIN + 5`` (= 405) with
+                        # an inline ``# 500`` comment, but the
+                        # arithmetic was wrong (400 + 5 = 405) and
+                        # ``RateLimiter.record_response`` only flags
+                        # ``status_code >= 500`` as a server error,
+                        # so the backoff path never fired.
                         self._client.rate_limiter.record_response(
                             time.time() - request_start,
-                            HTTP_BAD_REQUEST_MIN + 5,  # 500
+                            500,
                         )
                         continue
 
