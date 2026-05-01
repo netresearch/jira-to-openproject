@@ -80,7 +80,10 @@ class JiraUser(BaseModel):
         else:
             try:
                 avatar_urls = {str(k): str(v) for k, v in dict(avatar_urls_attr).items() if v} or None
-            except TypeError, ValueError:
+            except (
+                TypeError,
+                ValueError,
+            ):
                 avatar_urls = None
 
         return cls.model_validate(
