@@ -326,3 +326,48 @@ class JiraIssueService:
             page_size=effective_batch_size,
         )
         yield from paginator.iter_items()
+
+    # ── watchers ─────────────────────────────────────────────────────────
+
+    def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
+        """Get the watchers for a specific Jira issue.
+
+        Args:
+            issue_key: The key of the issue to get watchers for (e.g., 'PROJECT-123')
+
+        Returns:
+            List of watcher dictionaries
+
+        Raises:
+            JiraResourceNotFoundError: If the issue is not found
+            JiraApiError: If the API request fails
+
+        """
+        if not self._client.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        try:
+            result = self._client.jira.watchers(issue_key)
+
+            if not result:
+                self._logger.debug("No watchers found for issue %s", issue_key)
+                return []
+
+            return [
+                {
+                    "name": getattr(watcher, "name", None),
+                    "accountId": getattr(watcher, "accountId", None),
+                    "displayName": getattr(watcher, "displayName", None),
+                    "emailAddress": getattr(watcher, "emailAddress", None),
+                    "active": getattr(watcher, "active", True),
+                }
+                for watcher in result.watchers
+            ]
+        except Exception as e:
+            error_msg = f"Failed to get watchers for issue {issue_key}: {e!s}"
+            self._logger.exception(error_msg)
+            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
+                msg = f"Issue {issue_key} not found"
+                raise JiraResourceNotFoundError(msg) from e
+            raise JiraApiError(error_msg) from e

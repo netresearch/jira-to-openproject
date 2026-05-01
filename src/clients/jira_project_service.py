@@ -314,3 +314,14 @@ class JiraProjectService:
             error_msg = f"Failed to get enhanced project metadata for {project_key}: {e}"
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
+
+    # ── batch operations ─────────────────────────────────────────────────
+
+    def batch_get_projects(self, project_keys: list[str]) -> dict[str, dict]:
+        """Retrieve multiple projects in batches for optimal performance."""
+        if not project_keys:
+            return {}
+
+        # Get all projects and filter to requested keys
+        all_projects = self.get_projects()
+        return {project["key"]: project for project in all_projects if project["key"] in project_keys}
