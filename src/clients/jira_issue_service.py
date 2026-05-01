@@ -230,19 +230,38 @@ class JiraIssueService:
         """Retrieve multiple issues in batches for optimal performance."""
         if not issue_keys:
             return {}
+        if not self._client.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
 
-        return self._client.performance_optimizer.batch_processor.process_batches(
+        # ``BatchProcessor.process_batches`` returns a ``list`` of
+        # results from each batch — and each batch result is a
+        # ``dict[str, Issue]``. Flatten into a single dict so callers
+        # see the documented return shape (the pre-extraction code
+        # silently returned a ``list[dict]`` typed as ``dict[str,
+        # Issue]``).
+        batch_results: list[dict[str, Issue]] = self._client.performance_optimizer.batch_processor.process_batches(
             issue_keys,
             self._fetch_issues_batch,
         )
+        merged: dict[str, Issue] = {}
+        for batch_result in batch_results:
+            if isinstance(batch_result, dict):
+                merged.update(batch_result)
+        return merged
 
     def _fetch_issues_batch(self, issue_keys: list[str], **kwargs: object) -> dict[str, Issue]:
         """Fetch a batch of issues from Jira API."""
         if not issue_keys:
             return {}
 
-        # Use JQL to fetch multiple issues at once
-        jql = f"key in ({','.join(issue_keys)})"
+        # Quote each key so a key containing a JQL reserved word /
+        # special char (e.g. issue-key collisions with Jira keywords)
+        # doesn't break the query. The pre-extraction code joined
+        # raw keys, which is fine for vanilla Jira issue keys but
+        # fragile for any issue type that allows extended characters.
+        quoted_keys = ",".join(f'"{key}"' for key in issue_keys)
+        jql = f"key in ({quoted_keys})"
 
         try:
             issues = self._client.jira.search_issues(
@@ -267,16 +286,43 @@ class JiraIssueService:
         fields: str | None = None,
         batch_size: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Stream all issues for a project with memory-efficient pagination."""
-        effective_batch_size = batch_size or self._client.batch_size
+        """Stream all issues for a project with memory-efficient pagination.
+
+        The pre-extraction code referenced ``StreamingPaginator`` with
+        kwargs and a method that don't exist on the actual
+        ``src.utils.performance_optimizer.StreamingPaginator``
+        (``__init__`` takes ``fetch_func, page_size, max_pages``;
+        the streaming entry point is ``iter_items``, not
+        ``paginate_jql_search``). This method was therefore broken
+        in production. Rewritten to use the real API: build a
+        ``fetch_func`` closure over the SDK's ``search_issues``
+        and yield through ``iter_items``.
+        """
+        if not self._client.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
+        # Use ``is not None`` so a caller-supplied ``batch_size=0`` is
+        # respected literally (rather than swapped for the default).
+        effective_batch_size = batch_size if batch_size is not None else self._client.batch_size
+
+        # Quote ``project_key`` in JQL so reserved words / special
+        # characters in project keys don't break the query — same
+        # treatment ``get_all_issues_for_project`` uses.
+        jql = f'project = "{project_key}"'
+
+        def _fetch_page(start_at: int, max_results: int, **_kw: object) -> list[Issue]:
+            return list(
+                self._client.jira.search_issues(
+                    jql,
+                    startAt=start_at,
+                    maxResults=max_results,
+                    fields=fields,
+                ),
+            )
 
         paginator = StreamingPaginator(
-            batch_size=effective_batch_size,
-            rate_limiter=self._client.rate_limiter,
+            fetch_func=_fetch_page,
+            page_size=effective_batch_size,
         )
-
-        return paginator.paginate_jql_search(
-            jira_client=self._client.jira,
-            jql=f"project = {project_key}",
-            fields=fields,
-        )
+        yield from paginator.iter_items()
