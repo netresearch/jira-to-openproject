@@ -236,9 +236,10 @@ class JiraClient:
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
-        # Service composition (Phase 3a/3b/3c/3d/3e/3f/3g of ADR-002 — see ADR for the
+        # Service composition (Phases 3a–3j of ADR-002 — see ADR for the
         # decomposition plan).
         from src.clients.jira_agile_service import JiraAgileService
+        from src.clients.jira_field_service import JiraFieldService
         from src.clients.jira_group_service import JiraGroupService
         from src.clients.jira_project_service import JiraProjectService
         from src.clients.jira_reporting_service import JiraReportingService
@@ -257,6 +258,7 @@ class JiraClient:
         self.groups = JiraGroupService(self)
         self.reporting = JiraReportingService(self)
         self.search = JiraSearchService(self)
+        self.fields = JiraFieldService(self)
 
         # Connect to Jira
         self._connect()
@@ -606,31 +608,8 @@ class JiraClient:
         return self.search.get_priorities()
 
     def get_issue_property(self, issue_key: str, property_key: str) -> dict[str, Any] | None:
-        """Get an issue property JSON by key. Returns None if missing or on 404.
-
-        This supports add-ons like Simple Tasklists that store data in properties.
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            # Prefer REST call via underlying session if available
-            base_url = self.config.jira_config.get("url", "") if hasattr(self, "config") else ""
-            if base_url:
-                from urllib.parse import quote
-
-                url = f"{base_url}/rest/api/2/issue/{quote(issue_key)}/properties/{quote(property_key)}"
-                resp = self._session.get(url, timeout=15) if hasattr(self, "_session") else None
-                if resp and resp.status_code == 200:
-                    data = resp.json()
-                    # property payload can be under 'value'
-                    if isinstance(data, dict):
-                        return data.get("value", data)  # type: ignore[return-value]
-                return None
-        except Exception:
-            logger.exception("Failed to fetch issue property: %s %s", issue_key, property_key)
-            return None
+        """Thin delegator over ``self.fields.get_issue_property``."""
+        return self.fields.get_issue_property(issue_key, property_key)
 
     def _handle_response(self, response: Response) -> None:
         """Check response for CAPTCHA challenge and raise appropriate exception if found.
@@ -686,141 +665,13 @@ class JiraClient:
         """Thin delegator over ``self.search.get_status_categories``."""
         return self.search.get_status_categories()
 
-    def _get_field_metadata_via_createmeta(self, field_id: str) -> dict[str, Any]:
-        """Get field metadata using the issue/createmeta endpoint.
-
-        Args:
-            field_id: The ID of the custom field to retrieve metadata for
-
-        Returns:
-            Dictionary containing field metadata
-
-        Raises:
-            JiraResourceNotFoundError: If the field is not found
-            JiraApiError: If the API request fails
-
-        """
-        logger.debug(
-            "Attempting to get field metadata for %s using createmeta endpoint",
-            field_id,
-        )
-
-        try:
-            # We no longer need to check the cache here as it's done in the calling method
-
-            # Get a list of projects
-            projects = self.project_cache or self.get_projects()
-            if not projects:
-                msg = "No projects found to retrieve field metadata"
-                raise JiraApiError(msg)
-
-            # Get a list of issue types
-            issue_types = self.issue_type_cache or self.get_issue_types()
-            if not issue_types:
-                msg = "No issue types found to retrieve field metadata"
-                raise JiraApiError(msg)
-
-            # Try with each project/issue type combination until we find field metadata
-            for project in projects:
-                project_key = project.get("key")
-                for issue_type in issue_types:
-                    issue_type_id = issue_type.get("id")
-
-                    # Use the createmeta endpoint with expansion for fields (query params form)
-                    # API shape (v2): /rest/api/2/issue/createmeta?
-                    #   projectKeys=KEY&issuetypeIds=ID&expand=projects.issuetypes.fields
-                    params = {
-                        "projectKeys": project_key,
-                        "issuetypeIds": issue_type_id,
-                        "expand": "projects.issuetypes.fields",
-                    }
-                    path = "/rest/api/2/issue/createmeta"
-                    logger.debug(
-                        "Trying createmeta for project=%s issuetype=%s (%s)",
-                        project_key,
-                        issue_type_id,
-                        issue_type.get("name"),
-                    )
-
-                    try:
-                        meta_response = self._make_request(path, params=params)
-                    except JiraApiError as e:
-                        logger.debug("createmeta request failed: %s", e)
-                        continue
-
-                    if not meta_response or meta_response.status_code != HTTP_OK:
-                        continue
-
-                    meta_data = meta_response.json() or {}
-                    projects_arr = meta_data.get("projects") or []
-                    if not projects_arr:
-                        continue
-                    issuetypes_arr = (projects_arr[0] or {}).get("issuetypes") or []
-                    if not issuetypes_arr:
-                        continue
-                    fields_map = (issuetypes_arr[0] or {}).get("fields") or {}
-                    if not isinstance(fields_map, dict):
-                        continue
-
-                    # Cache all discovered fields
-                    for fid, fdef in fields_map.items():
-                        self.field_options_cache[fid] = fdef
-
-                    # If this is the field we're looking for, return it immediately
-                    if field_id in fields_map:
-                        return fields_map[field_id]
-
-            # If we've checked all project/issue type combinations and still haven't found it
-            field_data = self.field_options_cache.get(field_id)
-            if field_data:
-                return field_data
-
-            msg = f"Field {field_id} not found in any project/issue type combination"
-            raise JiraResourceNotFoundError(msg)
-
-        except JiraResourceNotFoundError:
-            raise  # Re-raise specific exceptions
-        except Exception as e:
-            error_msg = f"Error getting field metadata via createmeta endpoint: {e!s}"
-            logger.warning(error_msg)
-            raise JiraApiError(error_msg) from e
-
     def get_field_metadata(self, field_id: str) -> dict[str, Any]:
-        """Get field metadata for a specific custom field.
-
-        Args:
-            field_id: The Jira custom field ID (e.g., 'customfield_10001')
-
-        Returns:
-            Dict containing field metadata
-
-        Raises:
-            JiraClientError: If the field cannot be retrieved
-
-        """
-        return self._get_field_metadata_via_createmeta(field_id)
+        """Thin delegator over ``self.fields.get_field_metadata``."""
+        return self.fields.get_field_metadata(field_id)
 
     def get_custom_fields(self) -> list[dict[str, Any]]:
-        """Get all custom fields from Jira.
-
-        Returns:
-            List of custom field dictionaries
-
-        """
-        try:
-            # Use the fields endpoint to get all fields, then filter for custom fields
-            response = self.jira.fields()
-
-            # Filter for custom fields (custom fields typically start with 'customfield_')
-            custom_fields = [field for field in response if field.get("id", "").startswith("customfield_")]
-
-            logger.debug("Retrieved %d custom fields from Jira", len(custom_fields))
-            return custom_fields
-
-        except Exception as e:
-            error_msg = f"Failed to retrieve custom fields: {e}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.fields.get_custom_fields``."""
+        return self.fields.get_custom_fields()
 
     def _patch_jira_client(self) -> None:
         """Patch the JIRA client to catch CAPTCHA challenges.
