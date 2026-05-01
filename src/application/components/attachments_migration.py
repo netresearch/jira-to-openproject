@@ -5,6 +5,25 @@ Flow:
 - Map: download to local attachment path, compute sha256, deduplicate by digest.
 - Load: copy files to container and run a minimal Rails script to attach files
   to the corresponding work packages idempotently (skip if same filename exists).
+
+Phase 7e notes
+--------------
+The polymorphic ``wp_map`` (``dict | int``) ladder used to resolve a Jira
+issue key to an OpenProject work-package id is normalised through
+:meth:`WorkPackageMappingEntry.from_legacy` here. Production ``wp_map``
+is keyed by ``str(jira_id)`` (numeric) outer, with the human-readable
+``jira_key`` stored inside the value; the mapping walk prefers the
+inner ``jira_key`` and falls back to the outer key (matching test
+fixtures that key directly by Jira issue key).
+
+The Jira SDK boundary in :meth:`_extract_batch` is intentionally left
+duck-typed: the legacy reader probes ``attachment.content`` (an SDK
+quirk — the real ``jira.Attachment`` exposes the download URL via
+``url`` while cached/test payloads tend to expose ``content``). The
+canonical :class:`JiraIssueFields.from_issue_any` reader maps
+``att.url`` to ``JiraAttachment.content``, which would change observed
+behaviour against the existing test doubles. Phase 7's scope is the
+``wp_map`` ladder; this SDK probe is deferred.
 """
 
 from __future__ import annotations
@@ -20,7 +39,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 
 @register_entity_types("attachments")
@@ -167,16 +186,27 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=True, data={"ops": []})
 
         wp_map = self.mappings.get_mapping("work_package") or {}
+
+        # Build a Jira-key → wp-id lookup that absorbs both layouts:
+        # production keys ``wp_map`` by ``str(jira_id)`` with the
+        # human-readable ``jira_key`` stored inside the value, while
+        # legacy/test fixtures key directly by Jira issue key. Inner
+        # ``jira_key`` wins; outer key is the fallback for legacy data.
+        key_to_wp_id: dict[str, int] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            jira_key = str(inner_jira_key or outer_key)
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                continue
+            key_to_wp_id[jira_key] = int(entry.openproject_id)
+
         ops: list[dict[str, Any]] = []
         seen_digests: set[str] = set()
 
         for key, items in att_by_key.items():
-            entry = wp_map.get(key)
-            wp_id = None
-            if isinstance(entry, dict):
-                wp_id = entry.get("openproject_id")
-            elif isinstance(entry, int):
-                wp_id = entry
+            wp_id = key_to_wp_id.get(key)
             if not wp_id:
                 continue
 
@@ -381,12 +411,18 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         if not att_by_key:
             return 0, 0, {}
 
-        # Build reverse lookup: jira_key -> openproject_id for O(1) access
-        key_to_wp = {
-            entry.get("jira_key"): entry.get("openproject_id")
-            for entry in wp_map.values()
-            if isinstance(entry, dict) and entry.get("jira_key")
-        }
+        # Build reverse lookup: jira_key -> openproject_id for O(1) access.
+        # Funnel through ``WorkPackageMappingEntry.from_legacy`` so the
+        # ``dict | int`` polymorphism is normalised in one place.
+        key_to_wp: dict[str, int] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            jira_key = str(inner_jira_key or outer_key)
+            try:
+                typed_entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                continue
+            key_to_wp[jira_key] = int(typed_entry.openproject_id)
 
         # Download attachments and prepare ops
         ops: list[dict[str, Any]] = []
@@ -459,15 +495,25 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             self.logger.warning("No work package mapping found - skipping attachment migration")
             return ComponentResult(success=True, updated=0, message="No work packages to process")
 
-        # Group jira keys by project for efficient processing
+        # Group jira keys by project for efficient processing. Walk the
+        # raw map (production: outer = ``str(jira_id)``, inner =
+        # ``{"jira_key": ...}``) and prefer the inner ``jira_key``;
+        # ``WorkPackageMappingEntry.from_legacy`` validates the row and
+        # makes the dict/int polymorphism the responsibility of a single
+        # boundary parser. Rows that don't normalise are skipped, just
+        # like the legacy ``isinstance(entry, dict)`` guard did.
         by_project: dict[str, list[str]] = {}
-        for entry in wp_map.values():
-            if isinstance(entry, dict) and "jira_key" in entry:
-                jira_key = str(entry["jira_key"])
-                project_key = self._issue_project_key(jira_key)
-                if project_key not in by_project:
-                    by_project[project_key] = []
-                by_project[project_key].append(jira_key)
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            jira_key = str(inner_jira_key or outer_key)
+            try:
+                WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                continue
+            project_key = self._issue_project_key(jira_key)
+            if project_key not in by_project:
+                by_project[project_key] = []
+            by_project[project_key].append(jira_key)
 
         total_issues = sum(len(keys) for keys in by_project.values())
         self.logger.info(
