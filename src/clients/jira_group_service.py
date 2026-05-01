@@ -72,7 +72,11 @@ class JiraGroupService:
                     },
                 )
             return normalized
-        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
+        except (
+            JiraCaptchaError,
+            JiraAuthenticationError,
+            JiraConnectionError,
+        ):
             raise
         except Exception as e:
             error_msg = f"Failed to get Jira groups: {e!s}"
@@ -133,7 +137,11 @@ class JiraGroupService:
                 group_name,
             )
             return members
-        except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
+        except (
+            JiraCaptchaError,
+            JiraAuthenticationError,
+            JiraConnectionError,
+        ):
             raise
         except Exception as e:
             error_msg = f"Failed to get Jira group members for {group_name}: {e!s}"
