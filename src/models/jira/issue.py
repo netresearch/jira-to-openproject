@@ -236,9 +236,13 @@ class JiraIssueFields(BaseModel):
 
         ``from_issue_any`` accepts either shape (plus a stand-in test
         dummy that only carries ``.fields``) and returns the typed view
-        that callers actually need. Anything that fails to validate is
-        coerced to an empty :class:`JiraIssueFields` rather than raising,
-        because migrations expect to skip silently on malformed input.
+        that callers actually need. ``None`` short-circuits to an empty
+        :class:`JiraIssueFields`; otherwise the underlying
+        :meth:`from_dict` / :meth:`from_jira_obj` may raise
+        ``pydantic.ValidationError`` on truly malformed input. Callers
+        that want to skip such issues should wrap the call in their own
+        ``try``/``except`` (as the priority/labels/versions migrations
+        do).
         """
         if issue is None:
             return cls()
