@@ -25,6 +25,7 @@ couple to runtime adapter behaviour.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -43,9 +44,21 @@ class JsonFileMappingRepository:
 
     The repository keeps a small in-memory cache: once a mapping has
     been read or written through this instance, subsequent :meth:`get`
-    calls return the cached payload without touching disk. The cache is
-    invalidated on every :meth:`set` (because we just wrote a fresh
-    value) and on construction (cold start).
+    calls return the cached payload without touching disk. Each
+    :meth:`set` updates only the cache entry for the written name —
+    other names retain their cached values. Missing names are NOT
+    cached (so a transient :meth:`get` of an absent mapping does not
+    pollute :meth:`all_names`).
+
+    :meth:`get` and :meth:`set` deep-copy their payloads at the
+    boundary so mutations on a returned dict cannot leak into the
+    cache, and mutations of a dict passed into :meth:`set` after the
+    call cannot leak in either. The cost is acceptable for migration
+    mappings (sizes typically under 100k entries; deepcopy is
+    micro-second per call at that scale) and the alternative —
+    callers that mutate the live cache and silently corrupt later
+    reads — is the kind of subtle bug a Repository pattern exists to
+    prevent.
 
     The cache is **per-instance** — multiple processes or instances
     pointed at the same data directory will not see each other's
@@ -88,16 +101,20 @@ class JsonFileMappingRepository:
         """Return the named mapping, or an empty dict if missing.
 
         Caches the result in-memory; subsequent calls for the same
-        ``name`` return the cached payload without re-reading the file.
-        Missing files and malformed JSON both yield an empty dict; the
-        latter is logged at warning level so operators notice corrupt
-        state without crashing the migration.
+        ``name`` return a fresh deep copy of the cached payload without
+        re-reading the file. Missing names are NOT cached (so they
+        don't pollute :meth:`all_names`); a future :meth:`set` for the
+        same name still works as expected. Malformed JSON is logged at
+        warning level and yields an empty dict without caching.
         """
         if name in self._cache:
-            return self._cache[name]
+            # Deep copy on read: callers can mutate the returned dict
+            # freely without poisoning the cache for the next call.
+            return copy.deepcopy(self._cache[name])
         payload = self._read_from_disk(name)
-        self._cache[name] = payload
-        return payload
+        if payload:
+            self._cache[name] = payload
+        return copy.deepcopy(payload)
 
     def set(self, name: str, data: Mapping[str, Any]) -> None:
         """Persist ``data`` under ``name`` atomically.
@@ -108,10 +125,11 @@ class JsonFileMappingRepository:
         file. The destination's file mode is mirrored on the tempfile
         before the rename so existing permissions survive.
         """
-        # Defensive copy: the in-memory cache must not alias the
-        # caller's payload, otherwise their mutations would silently
-        # affect future ``get`` results.
-        payload: dict[str, Any] = dict(data)
+        # Deep copy: migration mappings are nested dicts (e.g.
+        # ``{"PROJ-1": {"openproject_id": 7, ...}}``). A shallow
+        # ``dict(data)`` would let a caller mutate a nested value
+        # after :meth:`set` and silently corrupt the cached payload.
+        payload: dict[str, Any] = copy.deepcopy(dict(data))
         target = self._path_for(name)
         self._atomic_write_json(target, payload)
         self._cache[name] = payload
@@ -210,7 +228,21 @@ class JsonFileMappingRepository:
         )
         tmp_path = Path(tmp_path_str)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            try:
+                fh = os.fdopen(fd, "w", encoding="utf-8")
+            except Exception:
+                # ``os.fdopen`` failed before we could hand the fd to
+                # the file object's lifecycle — close it explicitly so
+                # the underlying descriptor isn't leaked.
+                try:
+                    os.close(fd)
+                except OSError:
+                    self._logger.warning(
+                        "Failed to close tempfile fd for %s",
+                        tmp_path,
+                    )
+                raise
+            with fh:
                 json.dump(payload, fh, indent=2, sort_keys=True)
                 fh.write("\n")
                 fh.flush()
