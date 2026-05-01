@@ -50,20 +50,25 @@ class JiraFieldService:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
 
+        # The pre-extraction code referenced ``client.config`` and
+        # ``client._session``, neither of which exists on
+        # ``JiraClient`` — the method always returned ``None`` without
+        # ever making a request. Use ``client.base_url`` and route
+        # through the authenticated SDK session at ``client.jira._session``
+        # like the other Tempo / agile methods do.
         try:
-            # Prefer REST call via underlying session if available
-            base_url = client.config.jira_config.get("url", "") if hasattr(client, "config") else ""
-            if base_url:
-                from urllib.parse import quote
+            from urllib.parse import quote
 
-                url = f"{base_url}/rest/api/2/issue/{quote(issue_key)}/properties/{quote(property_key)}"
-                resp = client._session.get(url, timeout=15) if hasattr(client, "_session") else None
-                if resp and resp.status_code == 200:
-                    data = resp.json()
-                    # property payload can be under 'value'
-                    if isinstance(data, dict):
-                        return data.get("value", data)  # type: ignore[return-value]
-                return None
+            url = f"{client.base_url}/rest/api/2/issue/{quote(issue_key)}/properties/{quote(property_key)}"
+            resp = client.jira._session.get(url, timeout=15)
+            if resp.status_code == HTTP_OK:
+                data = resp.json()
+                # Property payload is wrapped — the actual value lives
+                # under the ``value`` key. Fall back to the whole dict
+                # if no ``value`` key for resilience.
+                if isinstance(data, dict):
+                    return data.get("value", data)  # type: ignore[return-value]
+            return None
         except Exception:
             self._logger.exception("Failed to fetch issue property: %s %s", issue_key, property_key)
             return None
@@ -189,8 +194,20 @@ class JiraFieldService:
         Returns:
             List of custom field dictionaries
 
+        Raises:
+            JiraConnectionError: If the Jira client isn't initialized.
+            JiraApiError: If the API request fails.
+
         """
         client = self._client
+        # Match the early-check pattern other service methods use.
+        # Without this, ``client.jira.fields()`` would raise
+        # ``AttributeError`` on a None client and get re-wrapped as
+        # ``JiraApiError`` by the catch-all below.
+        if not client.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             # Use the fields endpoint to get all fields, then filter for custom fields
             response = client.jira.fields()

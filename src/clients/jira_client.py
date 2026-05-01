@@ -236,7 +236,7 @@ class JiraClient:
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
-        # Service composition (Phase 3a/3b/3c/3d/3e/3f/3g of ADR-002 — see ADR for the
+        # Service composition (Phases 3a–3j of ADR-002 — see ADR for the
         # decomposition plan).
         from src.clients.jira_agile_service import JiraAgileService
         from src.clients.jira_field_service import JiraFieldService
