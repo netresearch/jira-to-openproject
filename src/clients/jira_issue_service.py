@@ -357,6 +357,7 @@ class JiraIssueService:
             return [
                 {
                     "name": getattr(watcher, "name", None),
+                    "accountId": getattr(watcher, "accountId", None),
                     "displayName": getattr(watcher, "displayName", None),
                     "emailAddress": getattr(watcher, "emailAddress", None),
                     "active": getattr(watcher, "active", True),
