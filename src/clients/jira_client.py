@@ -242,11 +242,13 @@ class JiraClient:
         # decomposition plan).
         from src.clients.jira_agile_service import JiraAgileService
         from src.clients.jira_project_service import JiraProjectService
+        from src.clients.jira_user_service import JiraUserService
         from src.clients.jira_workflow_service import JiraWorkflowService
 
         self.projects = JiraProjectService(self)
         self.workflows = JiraWorkflowService(self)
         self.agile = JiraAgileService(self)
+        self.users = JiraUserService(self)
 
         # Connect to Jira
         self._connect()
@@ -512,139 +514,16 @@ class JiraClient:
             raise JiraApiError(error_msg) from e
 
     def get_users(self) -> list[dict[str, Any]]:
-        """Get all users from Jira.
-
-        Returns:
-            List of user dictionaries with key, name, display name, email, and active status
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            users = self.jira.search_users(
-                user=".",
-                includeInactive=True,
-                startAt=0,
-                maxResults=1000,
-            )
-
-            logger.info("Retrieved %s users from Jira API", len(users))
-
-            # Convert user objects to dictionaries with provenance metadata
-            enriched_users = []
-            for user in users:
-                avatar_urls = getattr(user, "avatarUrls", None)
-                if avatar_urls:
-                    try:
-                        avatar_urls = {str(k): str(v) for k, v in dict(avatar_urls).items() if v}
-                    except Exception:
-                        avatar_urls = None
-                jira_user = {
-                    "key": getattr(user, "key", None),
-                    "name": getattr(user, "name", None),
-                    "displayName": getattr(user, "displayName", None),
-                    "emailAddress": getattr(user, "emailAddress", ""),
-                    "active": getattr(user, "active", True),
-                    "accountId": getattr(user, "accountId", None),
-                    "timeZone": getattr(user, "timeZone", None) or getattr(user, "timezone", None),
-                    "locale": getattr(user, "locale", None),
-                    "self": getattr(user, "self", None),
-                    "avatarUrls": avatar_urls,
-                }
-                enriched_users.append(jira_user)
-
-            return enriched_users
-
-        except Exception as e:
-            error_msg = f"Failed to get users: {e!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.users.get_users``."""
+        return self.users.get_users()
 
     def get_user_info(self, user_key: str) -> dict[str, Any] | None:
-        """Get information for a specific user by key.
-
-        Args:
-            user_key: The user key (account ID or username) to look up
-
-        Returns:
-            User dictionary with account ID, display name, email, and active status,
-            or None if user not found
-
-        Raises:
-            JiraApiError: If the API request fails
-
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            # Try to get the user by account ID first
-            user = self.jira.user(user_key)
-
-            if user:
-                avatar_urls = getattr(user, "avatarUrls", None)
-                if avatar_urls:
-                    try:
-                        avatar_urls = {str(k): str(v) for k, v in dict(avatar_urls).items() if v}
-                    except Exception:
-                        avatar_urls = None
-
-                return {
-                    "accountId": getattr(user, "accountId", None),
-                    "displayName": getattr(user, "displayName", None),
-                    "emailAddress": getattr(user, "emailAddress", ""),
-                    "active": getattr(user, "active", True),
-                    "key": getattr(user, "key", None),
-                    "name": getattr(user, "name", None),
-                    "timeZone": getattr(user, "timeZone", None) or getattr(user, "timezone", None),
-                    "locale": getattr(user, "locale", None),
-                    "avatarUrls": avatar_urls,
-                }
-
-            return None
-
-        except Exception as e:
-            # Log at debug level for not found cases, exception level for others
-            if "404" in str(e) or "not found" in str(e).lower():
-                logger.debug("User not found: %s", user_key)
-                return None
-            error_msg = f"Failed to get user info for {user_key}: {e!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.users.get_user_info``."""
+        return self.users.get_user_info(user_key)
 
     def download_user_avatar(self, avatar_url: str) -> tuple[bytes, str] | None:
-        """Download a Jira user avatar and return (bytes, content_type)."""
-        if not avatar_url:
-            return None
-
-        session = getattr(self.jira, "_session", None)
-        if session is None:
-            msg = "Jira session not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            response = session.get(avatar_url, stream=True, timeout=30)
-            response.raise_for_status()
-        except Exception as exc:
-            logger.debug("Failed to download avatar %s: %s", avatar_url, exc)
-            return None
-
-        content_type = response.headers.get("Content-Type", "image/png")
-        try:
-            data = response.content
-        finally:
-            response.close()
-
-        if not data:
-            return None
-
-        return data, content_type
+        """Thin delegator over ``self.users.download_user_avatar``."""
+        return self.users.download_user_avatar(avatar_url)
 
     def get_groups(self) -> list[dict[str, Any]]:
         """Retrieve all Jira groups visible to the migration user."""
@@ -2343,15 +2222,8 @@ class JiraClient:
         )
 
     def batch_get_users_by_keys(self, user_keys: list[str]) -> dict[str, dict]:
-        """Retrieve multiple users in batches."""
-        if not user_keys:
-            return {}
-
-        # Get all users and filter to requested keys
-        all_users = self.get_users()
-        user_dict = {user.get("key", user.get("accountId", "")): user for user in all_users}
-
-        return {key: user_dict[key] for key in user_keys if key in user_dict}
+        """Thin delegator over ``self.users.batch_get_users_by_keys``."""
+        return self.users.batch_get_users_by_keys(user_keys)
 
     def get_project_metadata_enhanced(self, project_key: str) -> dict[str, Any]:
         """Thin delegator over ``self.projects.get_project_metadata_enhanced``."""
