@@ -17,7 +17,8 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
+from src.models.jira import JiraIssueFields
 
 RESOLUTION_CF_NAME = "Resolution"
 
@@ -52,9 +53,8 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
         reso_by_key: dict[str, str] = {}
         for k, issue in issues.items():
             try:
-                fields = getattr(issue, "fields", None)
-                res = getattr(fields, "resolution", None)
-                name = getattr(res, "name", None)
+                fields = JiraIssueFields.from_issue_any(issue)
+                name = fields.resolution.name if fields.resolution else None
                 if name:
                     reso_by_key[k] = str(name)
             except Exception:
@@ -75,15 +75,20 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
 
         # Set CF value only - audit trail migration handles resolution history
         for jira_key, res_name in reso_by_key.items():
-            entry = wp_map.get(jira_key)
-            if not (isinstance(entry, dict) and entry.get("openproject_id")):
+            raw_entry = wp_map.get(jira_key)
+            if raw_entry is None:
                 continue
-            wp_id = int(entry["openproject_id"])  # type: ignore[arg-type]
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except ValueError:
+                # Corrupt or unsupported wp_map shape — skip silently to
+                # preserve the pre-typed call-site behaviour.
+                continue
+            wp_id = int(entry.openproject_id)
 
             # Track project ID for selective CF enablement
-            project_id = entry.get("openproject_project_id")
-            if project_id:
-                projects_with_values.add(int(project_id))
+            if entry.openproject_project_id is not None:
+                projects_with_values.add(int(entry.openproject_project_id))
 
             try:
                 # Set CF value - do NOT create separate journal entry

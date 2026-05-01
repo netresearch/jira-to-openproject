@@ -352,3 +352,72 @@ def test_from_issue_any_none_returns_empty() -> None:
 
     assert fields.labels == []
     assert fields.priority is None
+
+
+# ── resolution / security / votes refs ───────────────────────────────────
+
+
+def test_from_dict_resolution_security_and_votes() -> None:
+    """The dict shape carries resolution/security/votes through to typed refs."""
+    raw: dict[str, object] = {
+        "key": "ABC-9",
+        "id": "9",
+        "fields": {
+            "resolution": {"id": "1", "name": "Fixed"},
+            "security": {"id": "2", "name": "Top Secret"},
+            "votes": {"votes": 7},
+        },
+    }
+    issue = JiraIssue.from_dict(raw)
+
+    assert issue.fields.resolution is not None
+    assert issue.fields.resolution.name == "Fixed"
+    assert issue.fields.security is not None
+    assert issue.fields.security.name == "Top Secret"
+    assert issue.fields.votes is not None
+    assert issue.fields.votes.votes == 7
+
+
+def test_from_jira_obj_resolution_security_and_votes() -> None:
+    """The SDK shape adapts resolution/security/votes the same way as status."""
+    sdk_fields = SimpleNamespace(
+        resolution=SimpleNamespace(id="1", name="Done"),
+        security=SimpleNamespace(id="2", name="Internal"),
+        votes=SimpleNamespace(votes=3),
+    )
+    obj = SimpleNamespace(id="42", key="ABC-42", fields=sdk_fields)
+
+    issue = JiraIssue.from_jira_obj(obj)
+
+    assert issue.fields.resolution is not None
+    assert issue.fields.resolution.name == "Done"
+    assert issue.fields.security is not None
+    assert issue.fields.security.name == "Internal"
+    assert issue.fields.votes is not None
+    assert issue.fields.votes.votes == 3
+
+
+def test_from_jira_obj_missing_resolution_security_votes_default_to_none() -> None:
+    sdk_fields = SimpleNamespace(
+        resolution=None,
+        security=None,
+        votes=None,
+    )
+    obj = SimpleNamespace(id="1", key="ABC-1", fields=sdk_fields)
+
+    issue = JiraIssue.from_jira_obj(obj)
+
+    assert issue.fields.resolution is None
+    assert issue.fields.security is None
+    assert issue.fields.votes is None
+
+
+def test_from_jira_obj_votes_non_int_count_normalises_to_none() -> None:
+    """Non-int vote counts (e.g. SDK glitches) collapse to a votes ref with None."""
+    sdk_fields = SimpleNamespace(votes=SimpleNamespace(votes="not-an-int"))
+    obj = SimpleNamespace(id="1", key="ABC-1", fields=sdk_fields)
+
+    issue = JiraIssue.from_jira_obj(obj)
+
+    assert issue.fields.votes is not None
+    assert issue.fields.votes.votes is None

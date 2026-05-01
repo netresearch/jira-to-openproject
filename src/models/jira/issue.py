@@ -26,8 +26,27 @@ from src.models.jira.user import JiraUser
 
 
 def _str_or_none(value: Any) -> str | None:
-    """Coerce a value to ``str`` while preserving ``None``."""
-    return None if value is None else str(value)
+    """Coerce a value to ``str`` while preserving ``None``.
+
+    Returns ``None`` for values that are not already strings or ``str``-able
+    primitives (e.g. :class:`unittest.mock.Mock` auto-vivified attributes).
+    Pydantic would otherwise reject those at validation time and abort the
+    enclosing :func:`_jira_fields_payload` call — which the legacy
+    attribute-walking code never did. We fall back to ``None`` for anything
+    that isn't a string, ``int``, ``float`` or ``bool``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return None
+
+
+def _str_attr(obj: Any, name: str) -> str | None:
+    """Read ``obj.name`` and coerce to a clean ``str`` or ``None``."""
+    return _str_or_none(getattr(obj, name, None))
 
 
 def _jira_ref(value: Any) -> dict[str, Any] | None:
@@ -35,9 +54,45 @@ def _jira_ref(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     return {
-        "id": _str_or_none(getattr(value, "id", None)),
-        "name": _str_or_none(getattr(value, "name", None)),
+        "id": _str_attr(value, "id"),
+        "name": _str_attr(value, "name"),
     }
+
+
+def _safe_iter(value: Any) -> list[Any]:
+    """Return ``value`` as a list if iterable, else an empty list.
+
+    SDK fields normally expose iterable collections (``list``, generator,
+    etc.) for ``comment.comments``, ``attachment``, ``fixVersions`` and
+    ``components``. Mock-based test fixtures, however, auto-vivify these
+    attributes with non-iterable :class:`unittest.mock.Mock` instances —
+    iterating those raises :class:`TypeError`. We tolerate both shapes
+    so the typed pipeline doesn't accidentally crash on test doubles
+    that the legacy attribute-walking code happily ignored.
+    """
+    if value is None:
+        return []
+    try:
+        return list(value)
+    except TypeError:
+        return []
+
+
+def _safe_user(obj: Any) -> JiraUser | None:
+    """Build a :class:`JiraUser` from ``obj`` or return ``None`` on bad shapes.
+
+    Same defensive rationale as :func:`_safe_iter`: Mock-based test
+    fixtures often auto-vivify ``assignee``/``reporter`` to non-string
+    Mocks that fail Pydantic validation. The migration's previous
+    attribute-walking code never tried to construct a user payload from
+    those, so we silently treat them as missing here.
+    """
+    if obj is None:
+        return None
+    try:
+        return JiraUser.from_jira_obj(obj)
+    except Exception:
+        return None
 
 
 def _jira_fields_payload(sdk_fields: Any) -> dict[str, Any]:
@@ -58,50 +113,57 @@ def _jira_fields_payload(sdk_fields: Any) -> dict[str, Any]:
     comment_block = getattr(sdk_fields, "comment", None)
     comments_iter = getattr(comment_block, "comments", None) if comment_block else None
     comments_payload: list[dict[str, Any]] = []
-    if comments_iter:
-        for c in comments_iter:
-            author_obj = getattr(c, "author", None)
-            comments_payload.append(
-                {
-                    "id": _str_or_none(getattr(c, "id", None)),
-                    "body": getattr(c, "body", None),
-                    "author": getattr(author_obj, "displayName", None) if author_obj else None,
-                    "created": getattr(c, "created", None),
-                },
-            )
+    for c in _safe_iter(comments_iter):
+        author_obj = getattr(c, "author", None)
+        comments_payload.append(
+            {
+                "id": _str_or_none(getattr(c, "id", None)),
+                "body": getattr(c, "body", None),
+                "author": getattr(author_obj, "displayName", None) if author_obj else None,
+                "created": getattr(c, "created", None),
+            },
+        )
 
     attachments_iter = getattr(sdk_fields, "attachment", None)
     attachments_payload: list[dict[str, Any]] = []
-    if attachments_iter:
-        for att in attachments_iter:
-            attachments_payload.append(
-                {
-                    "id": _str_or_none(getattr(att, "id", None)),
-                    "filename": getattr(att, "filename", None),
-                    "size": getattr(att, "size", None),
-                    "content": getattr(att, "url", None),
-                },
-            )
+    for att in _safe_iter(attachments_iter):
+        attachments_payload.append(
+            {
+                "id": _str_or_none(getattr(att, "id", None)),
+                "filename": getattr(att, "filename", None),
+                "size": getattr(att, "size", None),
+                "content": getattr(att, "url", None),
+            },
+        )
 
-    labels = list(getattr(sdk_fields, "labels", []) or [])
+    labels = _safe_iter(getattr(sdk_fields, "labels", None))
 
     fix_versions_iter = getattr(sdk_fields, "fixVersions", None)
-    fix_versions_payload = [_jira_ref(v) for v in (fix_versions_iter or []) if v is not None]
+    fix_versions_payload = [_jira_ref(v) for v in _safe_iter(fix_versions_iter) if v is not None]
 
     components_iter = getattr(sdk_fields, "components", None)
-    components_payload = [_jira_ref(c) for c in (components_iter or []) if c is not None]
+    components_payload = [_jira_ref(c) for c in _safe_iter(components_iter) if c is not None]
+
+    votes_obj = getattr(sdk_fields, "votes", None)
+    votes_payload: dict[str, Any] | None = None
+    if votes_obj is not None:
+        votes_count = getattr(votes_obj, "votes", None)
+        votes_payload = {"votes": votes_count if isinstance(votes_count, int) else None}
 
     return {
-        "summary": getattr(sdk_fields, "summary", None),
-        "description": getattr(sdk_fields, "description", None),
+        "summary": _str_attr(sdk_fields, "summary"),
+        "description": _str_attr(sdk_fields, "description"),
         "status": _jira_ref(getattr(sdk_fields, "status", None)),
         "priority": _jira_ref(getattr(sdk_fields, "priority", None)),
         "issuetype": _jira_ref(getattr(sdk_fields, "issuetype", None)),
-        "assignee": JiraUser.from_jira_obj(assignee_obj) if assignee_obj else None,
-        "reporter": JiraUser.from_jira_obj(reporter_obj) if reporter_obj else None,
-        "created": getattr(sdk_fields, "created", None),
-        "updated": getattr(sdk_fields, "updated", None),
-        "labels": [str(label) for label in labels],
+        "resolution": _jira_ref(getattr(sdk_fields, "resolution", None)),
+        "security": _jira_ref(getattr(sdk_fields, "security", None)),
+        "votes": votes_payload,
+        "assignee": _safe_user(assignee_obj),
+        "reporter": _safe_user(reporter_obj),
+        "created": _str_attr(sdk_fields, "created"),
+        "updated": _str_attr(sdk_fields, "updated"),
+        "labels": [str(label) for label in labels if isinstance(label, (str, int, float))],
         "fixVersions": fix_versions_payload,
         "components": components_payload,
         "comments": comments_payload,
@@ -149,6 +211,34 @@ class JiraComponentRef(BaseModel):
     name: str | None = None
 
 
+class JiraResolutionRef(BaseModel):
+    """Reference to a Jira resolution (``id`` + ``name``)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    id: str | None = None
+    name: str | None = None
+
+
+class JiraSecurityLevelRef(BaseModel):
+    """Reference to a Jira issue security level (``id`` + ``name``)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    id: str | None = None
+    name: str | None = None
+
+
+class JiraVotesRef(BaseModel):
+    """Reference to the Jira ``votes`` block on an issue.
+
+    The Jira REST/SDK exposes ``fields.votes`` as an object that carries
+    a ``votes`` integer count (and a ``hasVoted`` flag we don't need for
+    migration). We model the count only.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    votes: int | None = None
+
+
 class JiraComment(BaseModel):
     """A Jira issue comment."""
 
@@ -184,6 +274,9 @@ class JiraIssueFields(BaseModel):
     status: JiraStatusRef | None = None
     priority: JiraPriorityRef | None = None
     issue_type: JiraIssueTypeRef | None = Field(default=None, alias="issuetype")
+    resolution: JiraResolutionRef | None = None
+    security: JiraSecurityLevelRef | None = None
+    votes: JiraVotesRef | None = None
 
     assignee: JiraUser | None = None
     reporter: JiraUser | None = None
@@ -342,6 +435,9 @@ __all__ = [
     "JiraIssueFields",
     "JiraIssueTypeRef",
     "JiraPriorityRef",
+    "JiraResolutionRef",
+    "JiraSecurityLevelRef",
     "JiraStatusRef",
     "JiraVersionRef",
+    "JiraVotesRef",
 ]

@@ -12,7 +12,7 @@ from __future__ import annotations
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 
 @register_entity_types("inline_refs")
@@ -23,12 +23,16 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         wp_ids: list[int] = []
-        for entry in (wp_map or {}).values():
-            if isinstance(entry, dict) and entry.get("openproject_id"):
-                try:
-                    wp_ids.append(int(entry["openproject_id"]))  # type: ignore[arg-type]
-                except Exception:
-                    continue
+        for key, value in (wp_map or {}).items():
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(str(key), value)
+            except ValueError:
+                # Corrupt or unsupported shape — skip silently to preserve the
+                # pre-typed silent-skip behaviour at this call site.
+                continue
+            # ``entry.openproject_id`` is a branded int type (validated by
+            # Pydantic on construction) — no further coercion needed.
+            wp_ids.append(entry.openproject_id)
         return ComponentResult(success=True, data={"work_package_ids": wp_ids})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
