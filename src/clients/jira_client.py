@@ -11,7 +11,7 @@ import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from requests import Response, exceptions
+from requests import Response
 
 if TYPE_CHECKING:
     from jira.exceptions import JIRAError as AtlassianJIRAError
@@ -241,6 +241,7 @@ class JiraClient:
         from src.clients.jira_agile_service import JiraAgileService
         from src.clients.jira_group_service import JiraGroupService
         from src.clients.jira_project_service import JiraProjectService
+        from src.clients.jira_reporting_service import JiraReportingService
         from src.clients.jira_tempo_service import JiraTempoService
         from src.clients.jira_user_service import JiraUserService
         from src.clients.jira_workflow_service import JiraWorkflowService
@@ -253,6 +254,7 @@ class JiraClient:
         self.worklogs = JiraWorklogService(self)
         self.tempo = JiraTempoService(self)
         self.groups = JiraGroupService(self)
+        self.reporting = JiraReportingService(self)
 
         # Connect to Jira
         self._connect()
@@ -1198,146 +1200,16 @@ class JiraClient:
     # ---------------------------------------------------------------------- #
 
     def get_filters(self) -> list[dict[str, Any]]:
-        """Return Jira filters visible to the authenticated user."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        logger.info("Fetching Jira filters")
-        filters: list[dict[str, Any]] = []
-
-        try:
-
-            def _fetch_favourites() -> list[dict[str, Any]]:
-                fav_resp = self.jira._session.get(
-                    f"{self.base_url}/rest/api/2/filter/favourite",
-                )
-                fav_resp.raise_for_status()
-                fav_payload = fav_resp.json()
-                return fav_payload if isinstance(fav_payload, list) else []
-
-            def _extract_status_from_error(exc: BaseException | None) -> int | None:
-                current: BaseException | None = exc
-                while current:
-                    if isinstance(current, AtlassianJIRAError):
-                        status = getattr(current, "status_code", None)
-                        if status is not None:
-                            return int(status)
-                        response = getattr(current, "response", None)
-                        if response is not None:
-                            status = getattr(response, "status_code", None)
-                            if status is not None:
-                                return int(status)
-                    response = getattr(current, "response", None)
-                    if response is not None:
-                        status = getattr(response, "status_code", None)
-                        if status is not None:
-                            return int(status)
-                    current = getattr(current, "__cause__", None)
-                return None
-
-            try:
-                response = self.jira._session.get(
-                    f"{self.base_url}/rest/api/2/filter/search",
-                    params={"startAt": 0, "maxResults": 1000},
-                )
-            except JiraApiError as exc:
-                status = _extract_status_from_error(exc) or _extract_status_from_error(exc.__cause__)
-                if status in (404, 405):
-                    logger.warning(
-                        "Filter search endpoint (status %s) not available; falling back to favourites list",
-                        status,
-                    )
-                    filters = _fetch_favourites()
-                    logger.info("Retrieved %s Jira filters (favourites fallback)", len(filters))
-                    return filters
-                raise
-
-            try:
-                response.raise_for_status()
-                payload = response.json()
-                values = payload.get("values") if isinstance(payload, dict) else None
-                filters = values if isinstance(values, list) else []
-            except (exceptions.HTTPError, AtlassianJIRAError) as exc:
-                status = None
-                if isinstance(exc, exceptions.HTTPError):
-                    status = getattr(exc.response, "status_code", None)
-                else:
-                    status = getattr(exc, "status_code", None) or getattr(
-                        getattr(exc, "response", None),
-                        "status_code",
-                        None,
-                    )
-
-                if status in (404, 405):
-                    logger.warning(
-                        "Filter search endpoint (status %s) not available; falling back to favourites list",
-                        status,
-                    )
-                    filters = _fetch_favourites()
-                else:
-                    raise
-            except JiraApiError as exc:
-                message = str(exc)
-                if "HTTP 404" in message or "HTTP 405" in message:
-                    logger.warning(
-                        "Filter search endpoint not available (%s); falling back to favourites list",
-                        message,
-                    )
-                    filters = _fetch_favourites()
-                else:
-                    raise
-
-            logger.info("Retrieved %s Jira filters", len(filters))
-            return filters
-        except Exception as exc:
-            error_msg = f"Failed to fetch Jira filters: {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.reporting.get_filters``."""
+        return self.reporting.get_filters()
 
     def get_dashboards(self) -> list[dict[str, Any]]:
-        """Return Jira dashboards visible to the authenticated user."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        url = f"{self.base_url}/rest/api/2/dashboard"
-        logger.info("Fetching Jira dashboards")
-
-        try:
-            response = self.jira._session.get(url)
-            response.raise_for_status()
-            payload = response.json()
-            values = payload.get("dashboards") if isinstance(payload, dict) else None
-            dashboards = values if isinstance(values, list) else []
-            logger.info("Retrieved %s Jira dashboards", len(dashboards))
-            return dashboards
-        except Exception as exc:
-            error_msg = f"Failed to fetch Jira dashboards: {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.reporting.get_dashboards``."""
+        return self.reporting.get_dashboards()
 
     def get_dashboard_details(self, dashboard_id: int) -> dict[str, Any]:
-        """Return details for a specific Jira dashboard."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        url = f"{self.base_url}/rest/api/2/dashboard/{dashboard_id}"
-        logger.debug("Fetching dashboard details for %s", dashboard_id)
-
-        try:
-            response = self.jira._session.get(url)
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                msg = "Unexpected dashboard payload"
-                raise ValueError(msg)
-            return payload
-        except Exception as exc:
-            error_msg = f"Failed to fetch dashboard {dashboard_id}: {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.reporting.get_dashboard_details``."""
+        return self.reporting.get_dashboard_details(dashboard_id)
 
     def get_tempo_all_work_logs_for_project(
         self,
