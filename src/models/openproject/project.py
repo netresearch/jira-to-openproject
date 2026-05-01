@@ -1,7 +1,7 @@
 """Pydantic v2 model for OpenProject project payloads.
 
 The shape modelled here matches the dict produced by
-:mod:`src.clients.openproject_project_service` (``get_projects`` and the
+:mod:`src.infrastructure.openproject.openproject_project_service` (``get_projects`` and the
 single-project lookups) and the create/update payload consumed by
 ``ProjectMigration``.
 """

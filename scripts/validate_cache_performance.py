@@ -29,9 +29,9 @@ from src.application.components.base_migration import BaseMigration
 from src.application.components.issue_type_migration import IssueTypeMigration
 from src.application.components.priority_migration import PriorityMigration
 from src.application.components.status_migration import StatusMigration
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 logger = configure_logging("INFO", None)
 

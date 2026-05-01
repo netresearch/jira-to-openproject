@@ -7,7 +7,7 @@ to interact with OpenProject through the Rails console.
 
 from pprint import pprint
 
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 def main() -> None:

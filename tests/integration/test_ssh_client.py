@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.clients.ssh_client import SSHClient, SSHCommandError, SSHFileTransferError
+from src.infrastructure.openproject.ssh_client import SSHClient, SSHCommandError, SSHFileTransferError
 
 
 class TestSSHClient(unittest.TestCase):
@@ -27,10 +27,10 @@ class TestSSHClient(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
         # Create patchers
-        self.subprocess_patcher = patch("src.clients.ssh_client.subprocess")
+        self.subprocess_patcher = patch("src.infrastructure.openproject.ssh_client.subprocess")
         self.mock_subprocess = self.subprocess_patcher.start()
 
-        self.logger_patcher = patch("src.clients.ssh_client.logger")
+        self.logger_patcher = patch("src.infrastructure.openproject.ssh_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
         # Patch pathlib.Path
@@ -59,15 +59,15 @@ class TestSSHClient(unittest.TestCase):
         # Make Path constructor return the same mock for any arguments
         self.mock_path_class.side_effect = lambda *args, **kwargs: self.mock_path_instance
 
-        # Also patch src.clients.ssh_client.Path to return our mock
+        # Also patch src.infrastructure.openproject.ssh_client.Path to return our mock
         self.src_path_patcher = patch(
-            "src.clients.ssh_client.Path",
+            "src.infrastructure.openproject.ssh_client.Path",
             self.mock_path_class,
         )
         self.src_path_patcher.start()
 
         # File manager mock
-        self.file_manager_patcher = patch("src.clients.ssh_client.FileManager")
+        self.file_manager_patcher = patch("src.infrastructure.openproject.ssh_client.FileManager")
         self.mock_file_manager_class = self.file_manager_patcher.start()
         self.mock_file_manager = MagicMock()
         self.mock_file_manager.registry = MagicMock()

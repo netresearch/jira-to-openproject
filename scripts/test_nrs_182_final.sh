@@ -31,7 +31,7 @@ try:
         print(f"   Found NRS-182 → WP #{wp_id}")
 
         # Delete from OpenProject
-        from src.clients.openproject_client import OpenProjectClient
+        from src.infrastructure.openproject.openproject_client import OpenProjectClient
         op = OpenProjectClient()
         try:
             op.delete_work_package(wp_id)
@@ -76,7 +76,7 @@ import json
 import sys
 sys.path.insert(0, '/home/sme/p/j2o')
 
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 mapping_file = "/home/sme/p/j2o/var/data/work_package_mapping.json"
 

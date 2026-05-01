@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, "/home/sme/p/j2o/src")
 
-from clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 def check_work_packages():

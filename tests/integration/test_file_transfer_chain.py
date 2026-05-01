@@ -26,10 +26,10 @@ import unittest
 from pathlib import Path
 from typing import Any, ClassVar
 
-from src.clients.docker_client import DockerClient
-from src.clients.openproject_client import OpenProjectClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.clients.ssh_client import SSHClient
+from src.infrastructure.openproject.docker_client import DockerClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
+from src.infrastructure.openproject.ssh_client import SSHClient
 
 
 # Check if we should run the integration tests

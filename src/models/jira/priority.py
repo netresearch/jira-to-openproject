@@ -1,7 +1,7 @@
 """Pydantic v2 model for Jira priority payloads.
 
 The migration consumes Jira priorities at one well-defined boundary:
-:meth:`src.clients.jira_search_service.JiraSearchService.get_priorities`,
+:meth:`src.infrastructure.jira.jira_search_service.JiraSearchService.get_priorities`,
 which currently returns a ``list[dict[str, Any]]`` of the form::
 
     [{"id": "1", "name": "Critical", "status": "Active"}, …]

@@ -7,7 +7,7 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
-from src.clients.jira_client import (
+from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraAuthenticationError,
     JiraConnectionError,

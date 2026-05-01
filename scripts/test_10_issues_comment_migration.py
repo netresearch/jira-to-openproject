@@ -6,8 +6,8 @@ import sys
 sys.path.insert(0, "/home/sme/p/j2o")
 
 from src.application.components.work_package_migration import WorkPackageMigration
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 print("=" * 80)
 print("COMMENT MIGRATION TEST - 10 NRS Issues")
@@ -37,7 +37,7 @@ else:
 
 # Check existing work packages in OpenProject before migration
 print("\nChecking OpenProject before migration...")
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 op = OpenProjectClient()
 

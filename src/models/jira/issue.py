@@ -5,7 +5,7 @@ The migration code consumes Jira issues from two boundaries:
 * The Jira REST/SDK pipeline — :class:`jira.Issue` instances with nested
   ``fields`` exposing ``status``, ``priority``, ``issuetype`` etc.
 * The cached JSON dict shape produced by
-  :mod:`src.clients.jira_issue_service` (``get_issue_details`` and the
+  :mod:`src.infrastructure.jira.jira_issue_service` (``get_issue_details`` and the
   batch fetchers).
 
 We model the structural minimum the migration actually relies on. Nested

@@ -16,10 +16,10 @@ from zipfile import Path
 
 # Import after path is set
 from src import config
-from src.clients.docker_client import DockerClient
-from src.clients.openproject_client import OpenProjectClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.clients.ssh_client import SSHClient
+from src.infrastructure.openproject.docker_client import DockerClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
+from src.infrastructure.openproject.ssh_client import SSHClient
 
 
 def demo_each_client_independently() -> None:

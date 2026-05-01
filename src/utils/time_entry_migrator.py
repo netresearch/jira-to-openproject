@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models.migration_error import MigrationError
 from src.utils.time_entry_transformer import TimeEntryTransformer
 

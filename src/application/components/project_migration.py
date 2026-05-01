@@ -12,13 +12,17 @@ from typing import TYPE_CHECKING, Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.clients.openproject_client import OpenProjectClient, QueryExecutionError, escape_ruby_single_quoted
 from src.config import logger
+from src.infrastructure.openproject.openproject_client import (
+    OpenProjectClient,
+    QueryExecutionError,
+    escape_ruby_single_quoted,
+)
 from src.mappings.mappings import Mappings
 from src.models import ComponentResult
 
 if TYPE_CHECKING:
-    from src.clients.jira_client import JiraClient
+    from src.infrastructure.jira.jira_client import JiraClient
 
 # Constants for filenames
 JIRA_PROJECTS_FILE = "jira_projects.json"

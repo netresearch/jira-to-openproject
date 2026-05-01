@@ -5,8 +5,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from src.application.components.custom_field_migration import CustomFieldMigration
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class TestCustomFieldMigration(unittest.TestCase):

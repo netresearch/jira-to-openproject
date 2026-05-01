@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from src.clients.jira_client import JiraApiError, JiraConnectionError
+from src.infrastructure.jira.jira_client import JiraApiError, JiraConnectionError
 from src.utils.enhanced_user_association_migrator import EnhancedUserAssociationMigrator
 
 # ARCHITECTURE FIX: Removed duplicate module-level fixtures - using class-level fixtures for better organization

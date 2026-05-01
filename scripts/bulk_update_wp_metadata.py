@@ -23,8 +23,8 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 logger = configure_logging("INFO", None)
 

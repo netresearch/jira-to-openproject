@@ -9,8 +9,8 @@ pytestmark = pytest.mark.integration
 from datetime import datetime
 from unittest.mock import Mock, patch
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
 
 

@@ -13,9 +13,9 @@ from datetime import datetime
 sys.path.insert(0, "/home/sme/p/j2o")
 
 from src.application.components.work_package_migration import WorkPackageMigration
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.config import logger
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 # Test issues - including known problematic ones from Bug #10
 TEST_ISSUES = [

@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING, Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.clients.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
 
 # Import RailsConsolePexpect to handle direct Rails console execution
 from src.display import ProgressTracker
+from src.infrastructure.jira.jira_client import JiraApiError, JiraAuthenticationError, JiraClient
 from src.models import ComponentResult, MigrationError
 
 if TYPE_CHECKING:
-    from src.clients.openproject_client import OpenProjectClient
-    from src.clients.rails_console_client import RailsConsoleClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+    from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 
 # Rich console instance imported from base_migration
 

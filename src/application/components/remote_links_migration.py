@@ -13,8 +13,8 @@ from src.config import logger
 from src.models import ComponentResult
 
 if TYPE_CHECKING:
-    from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 SECTION_TITLE = "Remote Links"
 

@@ -45,7 +45,7 @@
 
 ## Good vs. bad examples
 - Good: `src/application/components/work_package_migration.py` — demonstrates chunked extract/map/load with retries and rich diagnostics.
-- Good: `src/clients/openproject_client.py` — encapsulates Rails console execution with structured logging and input validation.
+- Good: `src/infrastructure/openproject/openproject_client.py` — encapsulates Rails console execution with structured logging and input validation.
 - Caution: `src/cleanup_openproject.py` — legacy direct-deletion script; do not model new migrations on this ad-hoc pattern.
 
 ## When stuck

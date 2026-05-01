@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.clients.jira_client import (
+from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraClient,
     JiraResourceNotFoundError,
@@ -27,7 +27,7 @@ class TestJiraClientWorkLog:
             "verify_ssl": True,
         }
 
-        monkeypatch.setattr("src.clients.jira_client.config", mock_config)
+        monkeypatch.setattr("src.infrastructure.jira.jira_client.config", mock_config)
 
         # Mock the JIRA instance to avoid actual API calls
         mock_jira_instance = Mock()
@@ -46,8 +46,8 @@ class TestJiraClientWorkLog:
         # Set required attributes that __init__ would normally set
         import time
 
-        from src.clients.jira_tempo_service import JiraTempoService
-        from src.clients.jira_worklog_service import JiraWorklogService
+        from src.infrastructure.jira.jira_tempo_service import JiraTempoService
+        from src.infrastructure.jira.jira_worklog_service import JiraWorklogService
         from src.utils.rate_limiter import create_jira_rate_limiter
 
         client.rate_limiter = create_jira_rate_limiter()

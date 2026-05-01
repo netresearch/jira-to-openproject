@@ -90,8 +90,8 @@ class TestAccountMigration(unittest.TestCase):
         # Initialize AccountMigration
         self.account_migration = AccountMigration(MagicMock(), MagicMock())
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     @patch("src.application.components.account_migration.config.get_path")
     @patch("src.application.components.account_migration.Path.exists")
     @patch("pathlib.Path.open", new_callable=mock_open)
@@ -182,8 +182,8 @@ class TestAccountMigration(unittest.TestCase):
         assert len(result) == 2
         assert migration.op_projects == self.op_projects
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     @patch("src.application.components.account_migration.config.get_path")
     @patch("src.application.components.account_migration.config.migration_config")
     @patch("os.path.exists")

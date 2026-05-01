@@ -15,9 +15,9 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class FallbackStrategy(Enum):

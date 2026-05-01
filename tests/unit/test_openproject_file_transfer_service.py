@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
+from src.infrastructure.openproject.openproject_file_transfer_service import OpenProjectFileTransferService
 
 
 @pytest.fixture

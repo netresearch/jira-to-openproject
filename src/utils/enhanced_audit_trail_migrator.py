@@ -13,9 +13,9 @@ This module provides advanced audit trail migration capabilities that:
 from pathlib import Path
 from typing import Any, TypedDict
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.markdown_converter import MarkdownConverter
 
 # Get logger from config

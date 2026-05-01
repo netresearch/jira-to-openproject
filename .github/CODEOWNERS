@@ -6,7 +6,7 @@
 
 # Core migration logic
 /src/migrations/ @CybotTM
-/src/clients/ @CybotTM
+/src/infrastructure/ @CybotTM
 /src/utils/ @CybotTM
 
 # Configuration and infrastructure

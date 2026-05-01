@@ -19,8 +19,8 @@ from typing import Any, TypedDict
 from zoneinfo import ZoneInfo
 
 from src import config
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
 
 

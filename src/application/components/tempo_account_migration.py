@@ -14,9 +14,9 @@ from typing import Any
 
 import requests
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient, OpenProjectError
 from src.config import get_path, jira_config, logger, migration_config
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient, OpenProjectError
 
 config = SimpleNamespace(logger=logger)
 

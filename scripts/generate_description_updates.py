@@ -10,7 +10,7 @@ import sys
 # Add project root to path
 sys.path.insert(0, "/home/sme/p/j2o")
 
-from src.clients.jira_client import JiraClient
+from src.infrastructure.jira.jira_client import JiraClient
 from src.utils.markdown_converter import MarkdownConverter
 
 

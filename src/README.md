@@ -44,11 +44,11 @@ src/
 * **`src/main.py`:** The main entry point for all application functionality.
 * **`src/config_loader.py:ConfigLoader`:** Loads configuration from YAML, `.env`, `.env.local`, and environment variables.
 * **`src/config.py`:** Provides a global access point (`config` object) to the loaded configuration.
-* **`src/clients/jira_client.py:JiraClient`:** Interacts with the Jira API to fetch data.
-* **`src/clients/openproject_client.py:OpenProjectClient`:** Main API for OpenProject operations, providing high-level methods for record management. Creates Ruby script files locally, transfers them to the remote server via SSH, and executes them through the Rails console.
-* **`src/clients/rails_console_client.py:RailsConsoleClient`:** Handles the loading and execution of Ruby scripts in the Rails console via tmux sessions.
-* **`src/clients/docker_client.py:DockerClient`:** Manages Docker container operations, including file transfers and command execution.
-* **`src/clients/ssh_client.py:SSHClient`:** Handles SSH connections and command execution on remote servers.
+* **`src/infrastructure/jira/jira_client.py:JiraClient`:** Interacts with the Jira API to fetch data.
+* **`src/infrastructure/openproject/openproject_client.py:OpenProjectClient`:** Main API for OpenProject operations, providing high-level methods for record management. Creates Ruby script files locally, transfers them to the remote server via SSH, and executes them through the Rails console.
+* **`src/infrastructure/openproject/rails_console_client.py:RailsConsoleClient`:** Handles the loading and execution of Ruby scripts in the Rails console via tmux sessions.
+* **`src/infrastructure/openproject/docker_client.py:DockerClient`:** Manages Docker container operations, including file transfers and command execution.
+* **`src/infrastructure/openproject/ssh_client.py:SSHClient`:** Handles SSH connections and command execution on remote servers.
 * **`src/utils/file_manager.py:FileManager`:** Centralizes file operations, including creation, tracking, and cleanup.
 * **`src/application/components/base_migration.py:BaseMigration`:** Abstract base class defining the interface for all migration components (`run`, `_extract`, `_map`, `_load`, `_test`).
 * **`src/application/components/*_migration.py`:** Concrete implementations of `BaseMigration` for each specific data type (e.g., `UserMigration`, `ProjectMigration`). Each handles the Extract-Map-Load process for its component.

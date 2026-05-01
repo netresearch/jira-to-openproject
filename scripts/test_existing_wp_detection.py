@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, "/home/sme/p/j2o")
 
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 # Initialize client
 print("=" * 80)

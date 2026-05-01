@@ -14,9 +14,9 @@ from src.models import ComponentResult
 from src.models.jira import JiraIssueFields
 
 if TYPE_CHECKING:
-    from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
     from src.domain.repositories import MappingRepository
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 LABELS_CF_NAME = "Labels"
 

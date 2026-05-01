@@ -33,7 +33,7 @@ OpenProjectClient (Orchestration)
 
 Foundation layer for SSH connections and remote command execution.
 
-**Location**: `src/clients/ssh_client.py`
+**Location**: `src/infrastructure/openproject/ssh_client.py`
 
 ### Class: SSHClient
 
@@ -69,7 +69,7 @@ def __init__(
 
 **Example**:
 ```python
-from src.clients.ssh_client import SSHClient
+from src.infrastructure.openproject.ssh_client import SSHClient
 
 client = SSHClient(
     host="openproject.example.com",
@@ -280,7 +280,7 @@ class SSHFileTransferError(Exception):
 
 Container operations layer, uses SSHClient for remote Docker commands.
 
-**Location**: `src/clients/docker_client.py`
+**Location**: `src/infrastructure/openproject/docker_client.py`
 
 ### Class: DockerClient
 
@@ -302,7 +302,7 @@ def __init__(
 
 **Example**:
 ```python
-from src.clients.docker_client import DockerClient
+from src.infrastructure.openproject.docker_client import DockerClient
 
 docker = DockerClient(
     ssh_client=ssh_client,
@@ -391,7 +391,7 @@ docker.copy_file_from_container(
 
 Rails console interaction layer via tmux session.
 
-**Location**: `src/clients/rails_console_client.py`
+**Location**: `src/infrastructure/openproject/rails_console_client.py`
 
 ### Class: RailsConsoleClient
 
@@ -417,7 +417,7 @@ def __init__(
 
 **Example**:
 ```python
-from src.clients.rails_console_client import RailsConsoleClient
+from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 
 rails = RailsConsoleClient(
     ssh_client=ssh_client,
@@ -557,7 +557,7 @@ class RubyError(RailsConsoleError):
 
 High-level orchestration layer coordinating all clients.
 
-**Location**: `src/clients/openproject_client.py`
+**Location**: `src/infrastructure/openproject/openproject_client.py`
 
 ### Class: OpenProjectClient
 
@@ -579,7 +579,7 @@ def __init__(
 
 **Example**:
 ```python
-from src.clients.openproject_client import OpenProjectClient, SSHConnection
+from src.infrastructure.openproject.openproject_client import OpenProjectClient, SSHConnection
 
 conn = SSHConnection(
     host="openproject.example.com",
@@ -723,10 +723,10 @@ class FileTransferError(OpenProjectError):
 ### Basic Client Initialization
 
 ```python
-from src.clients.ssh_client import SSHClient
-from src.clients.docker_client import DockerClient
-from src.clients.rails_console_client import RailsConsoleClient
-from src.clients.openproject_client import OpenProjectClient, SSHConnection
+from src.infrastructure.openproject.ssh_client import SSHClient
+from src.infrastructure.openproject.docker_client import DockerClient
+from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient, SSHConnection
 
 # Method 1: Manual initialization
 ssh_client = SSHClient(host="server", user="admin", key_file="/path/to/key")
@@ -749,7 +749,7 @@ op_client = OpenProjectClient(ssh_connection=conn)
 ### Error Handling Pattern
 
 ```python
-from src.clients.exceptions import SSHCommandError, RailsConsoleError
+from src.infrastructure.exceptions import SSHCommandError, RailsConsoleError
 
 try:
     result = op_client.create_work_packages_batch(work_packages)

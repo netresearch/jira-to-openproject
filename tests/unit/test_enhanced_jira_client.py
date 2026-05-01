@@ -30,8 +30,8 @@ except ImportError, AttributeError:  # pragma: no cover - fallback for newer rel
         pass
 
 
-from src.clients.enhanced_jira_client import EnhancedJiraClient
-from src.clients.jira_client import JiraClient
+from src.infrastructure.jira.enhanced_jira_client import EnhancedJiraClient
+from src.infrastructure.jira.jira_client import JiraClient
 from src.utils.performance_optimizer import PerformanceOptimizer
 
 
@@ -110,7 +110,7 @@ class TestBatchGetIssues:
         results = client.batch_get_issues([])
         assert results == {}
 
-    @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.jira.enhanced_jira_client.ThreadPoolExecutor")
     def test_batch_get_issues_single_batch(
         self,
         mock_executor_class,
@@ -132,7 +132,7 @@ class TestBatchGetIssues:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_jira_client.as_completed",
+            "src.infrastructure.jira.enhanced_jira_client.as_completed",
             return_value=[mock_future],
         ):
             client = EnhancedJiraClient(
@@ -148,7 +148,7 @@ class TestBatchGetIssues:
             assert results["TEST-1"] == mock_issue1
             assert results["TEST-2"] == mock_issue2
 
-    @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.jira.enhanced_jira_client.ThreadPoolExecutor")
     def test_batch_get_issues_multiple_batches(
         self,
         mock_executor_class,
@@ -171,7 +171,7 @@ class TestBatchGetIssues:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_jira_client.as_completed",
+            "src.infrastructure.jira.enhanced_jira_client.as_completed",
             return_value=[mock_future1, mock_future2],
         ):
             client = EnhancedJiraClient(
@@ -188,7 +188,7 @@ class TestBatchGetIssues:
             assert "TEST-2" in results
             assert "TEST-3" in results
 
-    @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.jira.enhanced_jira_client.ThreadPoolExecutor")
     def test_batch_get_issues_error_handling(
         self,
         mock_executor_class,
@@ -205,7 +205,7 @@ class TestBatchGetIssues:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_jira_client.as_completed",
+            "src.infrastructure.jira.enhanced_jira_client.as_completed",
             return_value=[mock_future],
         ):
             client = EnhancedJiraClient(
@@ -317,7 +317,7 @@ class TestBatchGetWorkLogs:
         results = client.batch_get_work_logs([])
         assert results == {}
 
-    @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.jira.enhanced_jira_client.ThreadPoolExecutor")
     def test_batch_get_work_logs_success(self, mock_executor_class) -> None:
         """Test successful batch work logs retrieval."""
         # Mock executor
@@ -337,7 +337,7 @@ class TestBatchGetWorkLogs:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_jira_client.as_completed",
+            "src.infrastructure.jira.enhanced_jira_client.as_completed",
             return_value=[mock_future1, mock_future2],
         ):
             client = EnhancedJiraClient(
@@ -485,7 +485,7 @@ class TestCachedOperations:
 class TestBulkOperations:
     """Test bulk operations functionality."""
 
-    @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.jira.enhanced_jira_client.ThreadPoolExecutor")
     def test_bulk_get_issue_metadata(self, mock_executor_class) -> None:
         """Test bulk issue metadata retrieval."""
         # Mock executor
@@ -505,7 +505,7 @@ class TestBulkOperations:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_jira_client.as_completed",
+            "src.infrastructure.jira.enhanced_jira_client.as_completed",
             return_value=[mock_future1, mock_future2],
         ):
             client = EnhancedJiraClient(
@@ -630,7 +630,7 @@ class TestErrorHandlingAndResilience:
         results = client._fetch_issues_batch(["TEST-1"])
         assert results["TEST-1"] is None
 
-    @patch("src.clients.enhanced_jira_client.ThreadPoolExecutor")
+    @patch("src.infrastructure.jira.enhanced_jira_client.ThreadPoolExecutor")
     def test_partial_batch_failure_handling(
         self,
         mock_executor_class,
@@ -651,7 +651,7 @@ class TestErrorHandlingAndResilience:
 
         # Mock as_completed
         with patch(
-            "src.clients.enhanced_jira_client.as_completed",
+            "src.infrastructure.jira.enhanced_jira_client.as_completed",
             return_value=[mock_future1, mock_future2],
         ):
             client = EnhancedJiraClient(

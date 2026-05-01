@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, "/home/sme/p/j2o/src")
 
-from clients.rails_console_client import RailsConsoleClient
+from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 
 
 def main():

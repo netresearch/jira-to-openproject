@@ -249,8 +249,8 @@ from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
 
 if TYPE_CHECKING:
-    from src.clients.jira_client import JiraClient
-    from src.clients.openproject_client import OpenProjectClient
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 @register_entity_types("workflows")  # Register entity type for change detection

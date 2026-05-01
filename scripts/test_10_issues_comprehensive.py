@@ -154,8 +154,8 @@ def analyze_results():
     try:
         # Use OpenProject client to check
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from src.clients.openproject_client import OpenProjectClient
         from src.config import config
+        from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
         op_client = OpenProjectClient(config=config.openproject_config)
 

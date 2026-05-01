@@ -20,8 +20,8 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.clients.jira_client import JiraClient
 from src.display import configure_logging
+from src.infrastructure.jira.jira_client import JiraClient
 
 logger = configure_logging("INFO", None)
 

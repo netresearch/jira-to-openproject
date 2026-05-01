@@ -35,7 +35,7 @@ try:
         config = yaml.safe_load(f)
 
     # Initialize OpenProject client using the actual server config
-    from src.clients.rails_console_client import RailsConsoleClient
+    from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 
     rails_client = RailsConsoleClient(config["openproject"])
 

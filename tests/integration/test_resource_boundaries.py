@@ -18,8 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 from src.application.components.work_package_migration import WorkPackageMigration
-from src.clients.exceptions import RateLimitError
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.exceptions import RateLimitError
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.migration import Migration
 
 
@@ -61,9 +61,9 @@ class TestRateLimitingBoundaries:
     @pytest.fixture
     def rate_limited_client(self):
         """Create client that simulates rate limiting responses."""
-        with patch("src.clients.openproject_client.SSHClient"):
-            with patch("src.clients.openproject_client.DockerClient"):
-                with patch("src.clients.openproject_client.RailsConsoleClient"):
+        with patch("src.infrastructure.openproject.openproject_client.SSHClient"):
+            with patch("src.infrastructure.openproject.openproject_client.DockerClient"):
+                with patch("src.infrastructure.openproject.openproject_client.RailsConsoleClient"):
                     client = OpenProjectClient(
                         container_name="test-container",
                         ssh_host="test-host",

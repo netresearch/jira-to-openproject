@@ -23,8 +23,8 @@ from zoneinfo import ZoneInfo
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.enhanced_timestamp_migrator import (
     EnhancedTimestampMigrator,
 )

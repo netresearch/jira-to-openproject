@@ -29,7 +29,7 @@ def update_file(file_path: Path, dry_run: bool = False) -> bool:
 
     # Replace import statement
     new_content = import_pattern.sub(
-        "from src.clients.openproject_client import OpenProjectClient",
+        "from src.infrastructure.openproject.openproject_client import OpenProjectClient",
         content,
     )
 

@@ -14,7 +14,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from src.clients.docker_client import DockerClient
+from src.infrastructure.openproject.docker_client import DockerClient
 
 
 class TestDockerClientHardening(unittest.TestCase):
@@ -22,12 +22,12 @@ class TestDockerClientHardening(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up the test environment."""
-        self.ssh_client_patcher = patch("src.clients.docker_client.SSHClient")
+        self.ssh_client_patcher = patch("src.infrastructure.openproject.docker_client.SSHClient")
         self.mock_ssh_client_class = self.ssh_client_patcher.start()
         self.mock_ssh_client = MagicMock()
         self.mock_ssh_client_class.return_value = self.mock_ssh_client
 
-        self.logger_patcher = patch("src.clients.docker_client.logger")
+        self.logger_patcher = patch("src.infrastructure.openproject.docker_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
         # Mock container existence check to pass during initialization
@@ -301,12 +301,12 @@ class TestDockerClientSecurityValidation(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up the test environment."""
-        self.ssh_client_patcher = patch("src.clients.docker_client.SSHClient")
+        self.ssh_client_patcher = patch("src.infrastructure.openproject.docker_client.SSHClient")
         self.mock_ssh_client_class = self.ssh_client_patcher.start()
         self.mock_ssh_client = MagicMock()
         self.mock_ssh_client_class.return_value = self.mock_ssh_client
 
-        self.logger_patcher = patch("src.clients.docker_client.logger")
+        self.logger_patcher = patch("src.infrastructure.openproject.docker_client.logger")
         self.mock_logger = self.logger_patcher.start()
 
         # Mock container existence check to pass during initialization

@@ -372,7 +372,13 @@ class TestCustomFieldProjectEnablement:
         """
         from pathlib import Path
 
-        src_path = Path(__file__).resolve().parents[2] / "src" / "clients" / "openproject_custom_field_service.py"
+        src_path = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "infrastructure"
+            / "openproject"
+            / "openproject_custom_field_service.py"
+        )
         text = src_path.read_text(encoding="utf-8")
 
         method_start = text.find("def ensure_wp_custom_field_id(")

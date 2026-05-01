@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 from src.application.components.company_migration import CompanyMigration
-from src.clients.jira_client import JiraClient
-from src.clients.openproject_client import OpenProjectClient
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class TestCompanyMigration(unittest.TestCase):
@@ -126,8 +126,8 @@ class TestCompanyMigration(unittest.TestCase):
         ):
             Path(self.test_data_dir).rmdir()
 
-    @patch("src.clients.jira_client.JiraClient")
-    @patch("src.clients.openproject_client.OpenProjectClient")
+    @patch("src.infrastructure.jira.jira_client.JiraClient")
+    @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     @patch("src.application.components.company_migration.config.get_path")
     @patch("src.application.components.company_migration.Path.exists")
     @patch("src.application.components.company_migration.data_handler.load_dict")
