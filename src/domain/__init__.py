@@ -21,12 +21,14 @@ from src.domain.ids import (
     OpUserId,
     OpWorkPackageId,
 )
+from src.domain.repositories import MappingRepository
 
 __all__ = [
     "JiraAccountId",
     "JiraIssueKey",
     "JiraProjectKey",
     "JiraUserKey",
+    "MappingRepository",
     "OpCustomFieldId",
     "OpPriorityId",
     "OpProjectId",
