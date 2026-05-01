@@ -10,6 +10,8 @@ from src import config
 from src.clients.jira_client import JiraClient
 from src.clients.openproject_client import OpenProjectClient
 from src.display import configure_logging
+from src.domain.repositories import MappingRepository
+from src.infrastructure.persistence.mapping_repo import JsonFileMappingRepository
 from src.models import ComponentResult
 
 # Import dependencies
@@ -203,12 +205,19 @@ class BaseMigration:
     2. BaseMigration - Uses OpenProjectClient for migrations
     """
 
+    # Class-level annotation for the repository seam. Phase 4b wires this
+    # up alongside ``self.mappings``; later phases will route mapping
+    # access through ``_mapping_repo`` exclusively and retire the proxy.
+    _mapping_repo: MappingRepository
+
     def __init__(
         self,
         jira_client: JiraClient | None = None,
         op_client: OpenProjectClient | None = None,
         change_detector: ChangeDetector | None = None,
         entity_cache: EntityCache | None = None,
+        *,
+        mapping_repo: MappingRepository | None = None,
     ) -> None:
         """Initialize the base migration with common attributes.
 
@@ -218,6 +227,11 @@ class BaseMigration:
             change_detector: Initialized change detector for idempotent operations
             entity_cache: Optional pre-built entity cache; otherwise a fresh one
                 is created.
+            mapping_repo: Optional :class:`MappingRepository` to inject. When
+                provided, the migration reads mappings through this
+                repository directly, bypassing the global ``cfg.mappings``
+                proxy. Tests use this seam to avoid monkey-patching
+                ``cfg.mappings`` (see ADR-002 phase 4b).
 
         """
         # Initialize clients using dependency injection
@@ -245,6 +259,23 @@ class BaseMigration:
         # The _MappingsProxy delegates to get_mappings() in production;
         # tests replace it via monkeypatch.setattr(cfg, "mappings", DummyMappings()).
         self.mappings = config.mappings
+
+        # Repository seam for ADR-002 phase 4b. Order of preference:
+        # 1) explicit ``mapping_repo`` injection (tests, future callers);
+        # 2) the underlying repo on ``self.mappings`` (production path —
+        #    the facade exposes its repo as ``_repo``);
+        # 3) a fresh JSON adapter rooted at ``self.data_dir`` so tests
+        #    that monkeypatch ``cfg.mappings`` with a Dummy lacking
+        #    ``_repo`` still get a working repository.
+        if mapping_repo is not None:
+            self._mapping_repo = mapping_repo
+        else:
+            existing_repo = getattr(self.mappings, "_repo", None)
+            self._mapping_repo = (
+                existing_repo
+                if isinstance(existing_repo, MappingRepository)
+                else JsonFileMappingRepository(self.data_dir)
+            )
 
         self.entity_cache = entity_cache or EntityCache(self.logger)
         self.json_store = JsonStore(self.data_dir, self.logger)

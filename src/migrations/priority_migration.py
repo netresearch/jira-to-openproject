@@ -11,6 +11,7 @@ from src.models.jira import JiraIssueFields
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
     from src.clients.openproject_client import OpenProjectClient
+    from src.domain.repositories import MappingRepository
 
 from src.config import logger
 
@@ -19,8 +20,18 @@ from src.config import logger
 class PriorityMigration(BaseMigration):
     """Migrate priorities and set on work packages."""
 
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
-        super().__init__(jira_client=jira_client, op_client=op_client)
+    def __init__(
+        self,
+        jira_client: JiraClient,
+        op_client: OpenProjectClient,
+        *,
+        mapping_repo: MappingRepository | None = None,
+    ) -> None:
+        super().__init__(
+            jira_client=jira_client,
+            op_client=op_client,
+            mapping_repo=mapping_repo,
+        )
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities from Jira for a specific type.
