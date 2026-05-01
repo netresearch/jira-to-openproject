@@ -72,9 +72,18 @@ class JiraWorkflowService:
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
         except JiraApiError as exc:
-            if "HTTP 405" in str(exc):
+            # ``JiraClient._handle_response`` raises ``JiraApiError`` with
+            # messages like ``"HTTP Error 405: ..."`` (note the word
+            # "Error"), but the patched session in some paths raises
+            # ``"HTTP 405: ..."`` directly. Match both forms so the
+            # per-project fallback fires regardless of which path
+            # produced the exception. Pre-extraction code only checked
+            # the second form, which silently never matched in
+            # production.
+            exc_text = str(exc)
+            if "HTTP Error 405" in exc_text or "HTTP 405" in exc_text:
                 self._logger.warning(
-                    "Workflow scheme endpoint returned 405 (via patched request); using per-project fallback",
+                    "Workflow scheme endpoint returned 405; using per-project fallback",
                 )
                 return self._get_workflow_schemes_per_project()
             raise
