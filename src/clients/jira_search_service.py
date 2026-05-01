@@ -95,76 +95,63 @@ class JiraSearchService:
             raise JiraConnectionError(msg)
 
         try:
-            # Method 1: Use sample issues to extract statuses
+            # Primary: ``/rest/api/2/status`` returns the FULL list of
+            # statuses configured on the instance. The pre-extraction
+            # code used this only as a fallback after sampling 50
+            # recently-created issues — which silently dropped any
+            # status not represented in that sample. Reverse the
+            # priority: hit the canonical endpoint first, fall back
+            # to sampling only when the endpoint is unavailable
+            # (older self-hosted instances without /rest/api/2/status
+            # exposed). Dropped the now-unused
+            # ``/rest/api/2/statuscategory`` call that previously
+            # only contributed to a debug log.
+            try:
+                response = self._client._make_request("/rest/api/2/status")
+            except Exception as primary_err:
+                self._logger.debug(
+                    "Status endpoint unavailable (%s); falling back to sampled issues",
+                    primary_err,
+                )
+                response = None
+
+            if response is not None and response.status_code == HTTP_OK:
+                statuses_payload = response.json()
+                self._logger.info(
+                    "Retrieved %s statuses from Jira /rest/api/2/status",
+                    len(statuses_payload),
+                )
+                return statuses_payload
+
+            # Fallback: extract statuses from a sample of 50 most-recent
+            # issues. Best-effort — a status that no current issue uses
+            # won't appear here.
             statuses: list[dict[str, Any]] = []
             issues = self._client.jira.search_issues("order by created DESC", maxResults=50)
             self._logger.debug("Retrieving statuses from %s sample issues", len(issues))
 
-            # Extract unique statuses from these issues
             for issue in issues:
                 if hasattr(issue.fields, "status"):
                     status = issue.fields.status
+                    category = getattr(status, "statusCategory", None)
                     status_dict = {
                         "id": status.id,
                         "name": status.name,
                         "description": getattr(status, "description", ""),
                         "statusCategory": {
-                            "id": getattr(
-                                getattr(status, "statusCategory", None),
-                                "id",
-                                None,
-                            ),
-                            "key": getattr(
-                                getattr(status, "statusCategory", None),
-                                "key",
-                                None,
-                            ),
-                            "name": getattr(
-                                getattr(status, "statusCategory", None),
-                                "name",
-                                None,
-                            ),
-                            "colorName": getattr(
-                                getattr(status, "statusCategory", None),
-                                "colorName",
-                                None,
-                            ),
+                            "id": getattr(category, "id", None),
+                            "key": getattr(category, "key", None),
+                            "name": getattr(category, "name", None),
+                            "colorName": getattr(category, "colorName", None),
                         },
                     }
-
-                    # Check if status is already in list
                     if not any(s.get("id") == status.id for s in statuses):
                         statuses.append(status_dict)
 
-            # If we found statuses from sample issues, return them
-            if statuses:
-                self._logger.info("Retrieved %s statuses from sample issues", len(statuses))
-                return statuses
-
-            # Method 2: Use the status_categories endpoint
-            path = "/rest/api/2/statuscategory"
-            response = self._client._make_request(path)
-            if not response or response.status_code != HTTP_OK:
-                msg = f"Failed to get status categories: HTTP {response.status_code if response else 'No response'}"
-                raise JiraApiError(
-                    msg,
-                )
-
-            categories = response.json()
-            self._logger.debug("Retrieved %s status categories from API", len(categories))
-
-            # Use the status endpoint
-            path = "/rest/api/2/status"
-            response = self._client._make_request(path)
-            if not response or response.status_code != HTTP_OK:
-                msg = f"Failed to get statuses: HTTP {response.status_code if response else 'No response'}"
-                raise JiraApiError(
-                    msg,
-                )
-
-            statuses = response.json()
-            self._logger.info("Retrieved %s statuses from Jira API", len(statuses))
-
+            self._logger.info(
+                "Retrieved %s statuses from sample issues (fallback)",
+                len(statuses),
+            )
             return statuses
 
         except Exception as e:
@@ -212,9 +199,18 @@ class JiraSearchService:
             List of status category dictionaries
 
         Raises:
-            JiraApiError: If the API request fails
+            JiraConnectionError: If the Jira client isn't initialized.
+            JiraApiError: If the API request fails for any other reason.
 
         """
+        # Match the early-check pattern other service methods use so
+        # connection failures surface as ``JiraConnectionError`` with
+        # the standard message instead of being wrapped as
+        # ``JiraApiError`` by the catch-all below.
+        if not self._client.jira:
+            msg = "Jira client is not initialized"
+            raise JiraConnectionError(msg)
+
         try:
             # Use the REST API to get all status categories
             path = "/rest/api/2/statuscategory"
@@ -233,6 +229,9 @@ class JiraSearchService:
             self._logger.info("Retrieved %s status categories from Jira API", len(categories))
 
             return categories
+        except JiraConnectionError, JiraApiError:
+            # Already the right shape — let it propagate without wrapping.
+            raise
         except Exception as e:
             error_msg = f"Failed to get status categories: {e!s}"
             self._logger.exception(error_msg)
