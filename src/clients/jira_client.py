@@ -11,7 +11,6 @@ import time
 from collections.abc import Iterator
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 from requests import Response, exceptions
 
@@ -239,11 +238,13 @@ class JiraClient:
         self.batch_size = batch_size
         self.parallel_workers = max_workers
 
-        # Service composition (Phase 3a of ADR-002 — see ADR for the
+        # Service composition (Phase 3a/3b of ADR-002 — see ADR for the
         # decomposition plan).
         from src.clients.jira_project_service import JiraProjectService
+        from src.clients.jira_workflow_service import JiraWorkflowService
 
         self.projects = JiraProjectService(self)
+        self.workflows = JiraWorkflowService(self)
 
         # Connect to Jira
         self._connect()
@@ -1805,160 +1806,16 @@ class JiraClient:
     # ---------------------------------------------------------------------- #
 
     def get_workflow_schemes(self) -> list[dict[str, Any]]:
-        """Return configured Jira workflow schemes with issue type mappings."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        url = f"{self.base_url}/rest/api/2/workflowscheme"
-        logger.info("Fetching Jira workflow schemes")
-
-        try:
-            response = self.jira._session.get(url)
-            response.raise_for_status()
-            payload = response.json()
-            values = payload.get("values") if isinstance(payload, dict) else None
-            schemes = values if isinstance(values, list) else []
-            logger.info("Retrieved %s workflow schemes", len(schemes))
-            return schemes
-        except exceptions.HTTPError as exc:
-            status = getattr(exc.response, "status_code", None)
-            if status == 405:
-                logger.warning(
-                    "GET /rest/api/2/workflowscheme unsupported, falling back to per-project workflow inspection",
-                )
-                return self._get_workflow_schemes_per_project()
-            error_msg = f"Failed to fetch workflow schemes: {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
-        except JiraApiError as exc:
-            if "HTTP 405" in str(exc):
-                logger.warning(
-                    "Workflow scheme endpoint returned 405 (via patched request); using per-project fallback",
-                )
-                return self._get_workflow_schemes_per_project()
-            raise
-        except Exception as exc:
-            error_msg = f"Failed to fetch workflow schemes: {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
-
-    def _get_workflow_schemes_per_project(self) -> list[dict[str, Any]]:
-        """Fallback that assembles workflow schemes via project endpoints."""
-        project_keys: list[str] = []
-        try:
-            project_mapping = config.mappings.get_mapping("project") or {}
-            project_keys = [str(key) for key in project_mapping]
-        except Exception:
-            project_keys = []
-
-        if not project_keys:
-            try:
-                projects = self.get_projects()
-                project_keys = [str(p.get("key")) for p in projects if p.get("key")]
-            except Exception:
-                project_keys = []
-
-        schemes_by_id: dict[str, dict[str, Any]] = {}
-        for key in project_keys:
-            if not key:
-                continue
-            try:
-                response = self._make_request(f"/rest/api/2/project/{key}/workflowscheme")
-                if response.status_code == HTTP_NOT_FOUND:
-                    continue
-                response.raise_for_status()
-                payload = response.json() or {}
-            except Exception as exc:
-                logger.debug("Failed to fetch workflow scheme for project %s: %s", key, exc)
-                continue
-
-            scheme = payload.get("workflowScheme") or payload
-            if not isinstance(scheme, dict):
-                continue
-
-            scheme_id = str(scheme.get("id") or scheme.get("name") or key)
-            existing = schemes_by_id.get(scheme_id)
-            if existing:
-                mappings = existing.setdefault("issueTypeMappings", {})
-                if isinstance(mappings, dict):
-                    new_mappings = scheme.get("issueTypeMappings") or {}
-                    if isinstance(new_mappings, dict):
-                        mappings.update(new_mappings)
-                existing.setdefault("projects", set()).add(key)
-            else:
-                entry = dict(scheme)
-                entry["projects"] = {key}
-                schemes_by_id[scheme_id] = entry
-
-        for entry in schemes_by_id.values():
-            projects = entry.get("projects")
-            if isinstance(projects, set):
-                entry["projects"] = sorted(projects)
-
-        logger.info(
-            "Discovered %s workflow schemes via per-project fallback",
-            len(schemes_by_id),
-        )
-        return list(schemes_by_id.values())
+        """Thin delegator over ``self.workflows.get_workflow_schemes``."""
+        return self.workflows.get_workflow_schemes()
 
     def get_workflow_transitions(self, workflow_name: str) -> list[dict[str, Any]]:
-        """Return transitions for a given Jira workflow name."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        safe_name = quote(workflow_name, safe="")
-        url = f"{self.base_url}/rest/api/2/workflow/{safe_name}/transitions"
-        logger.debug("Fetching Jira workflow transitions for '%s'", workflow_name)
-
-        try:
-            response = self.jira._session.get(url)
-            response.raise_for_status()
-            payload = response.json()
-            transitions = payload.get("transitions") if isinstance(payload, dict) else payload
-            if not isinstance(transitions, list):
-                logger.warning("Unexpected workflow transitions payload for %s", workflow_name)
-                return []
-            logger.debug(
-                "Workflow '%s' returned %s transitions",
-                workflow_name,
-                len(transitions),
-            )
-            return transitions
-        except Exception as exc:
-            error_msg = f"Failed to fetch transitions for workflow '{workflow_name}': {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.workflows.get_workflow_transitions``."""
+        return self.workflows.get_workflow_transitions(workflow_name)
 
     def get_workflow_statuses(self, workflow_name: str) -> list[dict[str, Any]]:
-        """Return statuses referenced by a workflow."""
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        safe_name = quote(workflow_name, safe="")
-        url = f"{self.base_url}/rest/api/2/workflow/{safe_name}"
-        logger.debug("Fetching Jira workflow definition for '%s'", workflow_name)
-
-        try:
-            response = self.jira._session.get(url)
-            response.raise_for_status()
-            workflow = response.json()
-            if isinstance(workflow, dict):
-                statuses = workflow.get("statuses")
-                if isinstance(statuses, list):
-                    return statuses
-            logger.warning(
-                "Unexpected workflow status payload for %s (type=%s)",
-                workflow_name,
-                type(workflow).__name__,
-            )
-            return []
-        except Exception as exc:
-            error_msg = f"Failed to fetch workflow definition for '{workflow_name}': {exc!s}"
-            logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+        """Thin delegator over ``self.workflows.get_workflow_statuses``."""
+        return self.workflows.get_workflow_statuses(workflow_name)
 
     # ---------------------------------------------------------------------- #
     # Jira Software (Agile) helpers                                         #
