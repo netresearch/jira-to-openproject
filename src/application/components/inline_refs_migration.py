@@ -30,7 +30,9 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
                 # Corrupt or unsupported shape — skip silently to preserve the
                 # pre-typed silent-skip behaviour at this call site.
                 continue
-            wp_ids.append(int(entry.openproject_id))
+            # ``entry.openproject_id`` is a branded int type (validated by
+            # Pydantic on construction) — no further coercion needed.
+            wp_ids.append(entry.openproject_id)
         return ComponentResult(success=True, data={"work_package_ids": wp_ids})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
