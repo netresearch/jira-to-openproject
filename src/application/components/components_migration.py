@@ -238,7 +238,10 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
                 if pid_val is not None:
                     try:
                         op_pid = int(pid_val)
-                    except TypeError, ValueError:
+                    except (
+                        TypeError,
+                        ValueError,
+                    ):
                         op_pid = None
             elif isinstance(proj_entry, int):
                 op_pid = proj_entry
