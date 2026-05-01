@@ -93,8 +93,14 @@ JSON_DATA
 
         begin
           project = input['project_id'] ? Project.find_by(id: input['project_id'].to_i) : nil
-          user = User.respond_to?(:admin) ? User.admin.first : nil
-          user ||= User.admin.first
+          # Pick an owning user — the previous version had a redundant
+          # ``User.respond_to?(:admin)`` ternary that fell straight
+          # through to an unconditional ``User.admin.first`` on the
+          # next line, defeating the guard. Try the most-specific
+          # source first (``User.admin`` scope when available), then
+          # the column-level filter, then any active user.
+          user = nil
+          user ||= User.admin.first if User.respond_to?(:admin)
           user ||= User.where(admin: true).first
           user ||= User.active.first
 
@@ -103,6 +109,15 @@ JSON_DATA
           else
             query = Query.find_or_initialize_by(name: input['name'], project: project)
             query.user ||= user
+
+            # Apply the description if the model exposes one — older
+            # OpenProject versions don't. ``input['description']`` is
+            # ``nil`` when the caller didn't pass one, in which case
+            # we leave the existing description untouched.
+            description = input['description']
+            if !description.nil? && query.respond_to?(:description=)
+              query.description = description.to_s
+            end
 
             is_public = !!input['is_public']
             if query.respond_to?(:public=)
