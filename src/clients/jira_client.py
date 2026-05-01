@@ -395,48 +395,8 @@ class JiraClient:
         return self.search.get_issue_count(project_key)
 
     def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
-        """Get the watchers for a specific Jira issue.
-
-        Args:
-            issue_key: The key of the issue to get watchers for (e.g., 'PROJECT-123')
-
-        Returns:
-            List of watcher dictionaries
-
-        Raises:
-            JiraResourceNotFoundError: If the issue is not found
-            JiraApiError: If the API request fails
-
-        """
-        if not self.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
-
-        try:
-            # Use the JIRA library's watchers() method
-            result = self.jira.watchers(issue_key)
-
-            if not result:
-                logger.debug("No watchers found for issue %s", issue_key)
-                return []
-
-            # Convert watchers to dictionaries
-            return [
-                {
-                    "name": getattr(watcher, "name", None),
-                    "displayName": getattr(watcher, "displayName", None),
-                    "emailAddress": getattr(watcher, "emailAddress", None),
-                    "active": getattr(watcher, "active", True),
-                }
-                for watcher in result.watchers
-            ]
-        except Exception as e:
-            error_msg = f"Failed to get watchers for issue {issue_key}: {e!s}"
-            logger.exception(error_msg)
-            if "issue does not exist" in str(e).lower() or "issue not found" in str(e).lower():
-                msg = f"Issue {issue_key} not found"
-                raise JiraResourceNotFoundError(msg) from e
-            raise JiraApiError(error_msg) from e
+        """Thin delegator over ``self.issues.get_issue_watchers``."""
+        return self.issues.get_issue_watchers(issue_key)
 
     def get_all_statuses(self) -> list[dict[str, Any]]:
         """Thin delegator over ``self.search.get_all_statuses``."""
@@ -782,13 +742,8 @@ class JiraClient:
         return self.issues.batch_get_issues(issue_keys)
 
     def batch_get_projects(self, project_keys: list[str]) -> dict[str, dict]:
-        """Retrieve multiple projects in batches for optimal performance."""
-        if not project_keys:
-            return {}
-
-        # Get all projects and filter to requested keys
-        all_projects = self.get_projects()
-        return {project["key"]: project for project in all_projects if project["key"] in project_keys}
+        """Thin delegator over ``self.projects.batch_get_projects``."""
+        return self.projects.batch_get_projects(project_keys)
 
     def stream_all_issues_for_project(
         self,
