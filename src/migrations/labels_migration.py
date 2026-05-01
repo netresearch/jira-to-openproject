@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from src.config import logger
 from src.migrations.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult
+from src.models.jira import JiraIssueFields
 
 if TYPE_CHECKING:
     from src.clients.jira_client import JiraClient
@@ -42,17 +43,22 @@ class LabelsMigration(BaseMigration):  # noqa: D101
         raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
-        """Extract Jira labels for all migrated issues."""
+        """Extract Jira labels for all migrated issues.
+
+        We parse at the boundary: each issue returned by the Jira client
+        is normalised through :meth:`JiraIssueFields.from_issue_any` so
+        the rest of the pipeline can read ``fields.labels`` as a typed
+        ``list[str]``.
+        """
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [str(k) for k in wp_map]
         issues = self._merge_batch_issues(keys)
         labels_by_key: dict[str, list[str]] = {}
         for k, issue in issues.items():
             try:
-                fields = getattr(issue, "fields", None)
-                labels = getattr(fields, "labels", None)
-                if isinstance(labels, list) and labels:
-                    labels_by_key[k] = [str(x) for x in labels if isinstance(x, str) and x.strip()]
+                fields = JiraIssueFields.from_issue_any(issue)
+                if fields.labels:
+                    labels_by_key[k] = [label for label in fields.labels if label.strip()]
             except Exception:
                 continue
         return ComponentResult(success=True, data={"labels": labels_by_key})
