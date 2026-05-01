@@ -2,6 +2,45 @@
 """User migration module for Jira to OpenProject migration.
 
 Handles the migration of users and their accounts from Jira to OpenProject.
+
+Phase 7i notes
+--------------
+This migration is the **canonical write side of the** ``user_mapping``
+**namespace**. Every other migration in the suite consumes
+``user_mapping`` (via ``config.mappings.get_mapping("user")``) and
+probes it through the canonical
+``account_id -> name -> key -> email_address -> display_name`` order
+(see ``work_package_skeleton_migration._map_user``,
+``work_package_content_migration._resolve_watcher_user_id``,
+``attachment_provenance_migration._author_identifiers``,
+``category_defaults_migration._resolve_user_id`` and
+``watcher_migration``). The on-disk storage shape -- a ``dict[str, dict]``
+keyed by Jira user key with the documented payload (``jira_key``,
+``jira_name``, ``jira_email``, ``jira_display_name``, ``openproject_id``,
+``openproject_login``, ``openproject_email``, ``matched_by``,
+``j2o_origin_system``, ``j2o_user_id``, ``j2o_user_key``,
+``j2o_external_url``, ``time_zone``, ``locale``, ``avatar_url``) -- is
+a contract with all of those readers and is **deliberately preserved
+unchanged** here.
+
+What Phase 7i does change is the **boundary parse** of incoming Jira
+user payloads in :meth:`_build_user_origin_metadata`. The raw camelCase
+Jira REST shape is now validated through :class:`JiraUser.from_dict`
+(populate_by_name + alias handling for ``accountId`` / ``displayName`` /
+``emailAddress`` / ``timeZone`` / ``avatarUrls``) and the typed fields
+drive the metadata derivation. The original dict fallbacks for
+non-canonical key variants -- lowercase ``timezone`` and capitalised
+``Locale`` -- are kept side-by-side, because :class:`JiraUser` only
+recognises the canonical Jira aliases and we want to preserve observable
+behaviour for unusual upstream sources. The
+:meth:`_ensure_jira_user_details` enrichment still mutates the passed-in
+dict in place so cached entries pick up ``accountId`` / ``timeZone`` /
+``locale`` / ``avatarUrls`` from a follow-up ``GET /user`` round-trip.
+
+This migration carries no ``wp_map`` ladder hits (it does not consume
+the work_package mapping at all), so the
+:class:`WorkPackageMappingEntry.from_legacy` / bare-int-skip pattern
+from earlier Phase 7 batches does not apply.
 """
 
 from __future__ import annotations
@@ -17,12 +56,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from pydantic import ValidationError
+
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.display import ProgressTracker
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult, MigrationError
+from src.models import ComponentResult, JiraUser, MigrationError
 
 
 @register_entity_types("users", "user_accounts")
@@ -803,26 +844,76 @@ class UserMigration(BaseMigration):
                     jira_user[attr] = value
 
     def _build_user_origin_metadata(self, jira_user: dict[str, Any]) -> dict[str, Any]:
+        """Build the J2O origin-metadata payload for a Jira user dict.
+
+        Phase 7i: parse the raw Jira user dict at the boundary via
+        :class:`JiraUser.from_dict`. The pydantic model handles the
+        canonical Jira REST aliases (``accountId``, ``displayName``,
+        ``emailAddress``, ``timeZone``, ``avatarUrls``) and -- because
+        ``populate_by_name`` is enabled -- also accepts the snake_case
+        equivalents (``account_id``, ``display_name``, …). Non-canonical
+        legacy fallbacks (lowercase ``timezone``, capital ``Locale``)
+        are preserved as dict-level fallbacks because :class:`JiraUser`
+        intentionally only knows the canonical Jira aliases.
+
+        Note: :meth:`_ensure_jira_user_details` still mutates the
+        passed-in ``jira_user`` dict in place to enrich missing
+        ``accountId`` / ``timeZone`` / ``locale`` / ``avatarUrls`` from
+        a follow-up ``GET /user`` round-trip; downstream callers (e.g.
+        :meth:`backfill_user_origin_metadata`) rely on that side-effect.
+        """
         self._ensure_jira_user_details(jira_user)
 
+        try:
+            user = JiraUser.from_dict(jira_user)
+        except (ValidationError, TypeError) as exc:
+            # Boundary parse must never bring down user mapping;
+            # fall back to a permissive empty model and lean on the
+            # explicit dict fallbacks below. Log at debug so malformed
+            # upstream payloads are still diagnosable.
+            self.logger.debug(
+                "JiraUser.from_dict failed for upstream user payload: %s",
+                exc,
+            )
+            user = JiraUser()
+
         origin_system = self._get_origin_system_label()
-        account_id = jira_user.get("accountId") or jira_user.get("account_id")
-        jira_key = jira_user.get("key") or jira_user.get("name")
-        user_id = account_id or jira_key or jira_user.get("displayName")
+        # Probe canonical Jira REST keys first (covers Cloud + Server/DC),
+        # then snake_case for parity with legacy in-process payloads. The
+        # dict-side fallbacks are explicit so a JiraUser parse failure
+        # doesn't silently lose any identifier.
+        account_id = user.account_id or jira_user.get("accountId") or jira_user.get("account_id")
+        name_candidate = user.name or jira_user.get("name")
+        key_candidate = user.key or jira_user.get("key")
+        display_name_candidate = user.display_name or jira_user.get("displayName") or jira_user.get("display_name")
+        jira_key = key_candidate or name_candidate
+        # Canonical user_id probe: account_id → name → key → email → display_name
+        # (matches AttachmentProvenanceMigration / WatcherMigration probe order).
+        user_id = (
+            account_id
+            or name_candidate
+            or key_candidate
+            or user.email_address
+            or jira_user.get("emailAddress")
+            or jira_user.get("email")
+            or display_name_candidate
+        )
 
         base_url = self._get_jira_base_url()
         external_url = ""
         if base_url and jira_key:
             if account_id:
                 external_url = f"{base_url}/secure/ViewProfile.jspa?accountId={quote(str(account_id))}"
-            elif jira_user.get("name"):
-                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(jira_user['name']))}"
+            elif name_candidate:
+                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(name_candidate))}"
             else:
                 external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(jira_key))}"
 
-        timezone = jira_user.get("timeZone") or jira_user.get("timezone")
-        locale = jira_user.get("locale") or jira_user.get("Locale")
-        avatar_urls = jira_user.get("avatarUrls") or {}
+        # Probe canonical Jira REST keys first (``timeZone``), then the
+        # non-canonical lowercase/capital legacy fallbacks for parity.
+        timezone = user.time_zone or jira_user.get("timeZone") or jira_user.get("timezone")
+        locale = user.locale or jira_user.get("locale") or jira_user.get("Locale")
+        avatar_urls = user.avatar_urls or jira_user.get("avatarUrls") or {}
 
         avatar_url = ""
         if isinstance(avatar_urls, dict):
