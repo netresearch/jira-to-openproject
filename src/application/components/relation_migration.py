@@ -2,6 +2,18 @@
 
 Minimal first pass: handles standard types (relates, duplicates, blocks, precedes)
 with direction-safe mapping and idempotent creation via client helpers.
+
+Phase 7d notes
+--------------
+The polymorphic ``wp_map`` (``dict | int``) ladder used to resolve a
+Jira issue key to an OpenProject work-package id is normalised through
+:meth:`WorkPackageMappingEntry.from_legacy` here. The Jira issue-link
+parsing keeps its defensive duck-typing because ``issuelinks`` carry
+tenant-specific fields (custom link types, both SDK objects and cache
+dicts) that are not modelled by :class:`JiraIssueFields`. The
+OpenProject-side ``bulk_create_relations`` payload (``from_id``,
+``to_id``, ``relation_type``) is left as plain dicts — that's the API
+surface and out of phase 7's scope.
 """
 
 from __future__ import annotations
@@ -13,7 +25,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, WorkPackageMappingEntry
 
 
 @register_entity_types("relations", "issue_links")
@@ -89,8 +101,16 @@ class RelationMigration(BaseMigration):
         raise ValueError(msg)
 
     def _resolve_wp_id(self, jira_key: str) -> int | None:
-        """Resolve OpenProject WP ID from Jira key via mappings or local map."""
-        wp_map = {}
+        """Resolve OpenProject WP ID from a Jira key via mappings or local map.
+
+        Uses :meth:`WorkPackageMappingEntry.from_legacy` to absorb the
+        legacy polymorphic shape (``int``, ``{"openproject_id": int|str}``).
+        Pydantic's coercion handles numeric strings; the ``from_legacy``
+        layer reraises ``ValidationError`` (a ``ValueError`` subclass)
+        for unparseable inputs, which we treat as "unresolvable" — same
+        behaviour as the pre-typed lookup.
+        """
+        wp_map: dict[str, Any] = {}
         try:
             wp_map = self.mappings.get_mapping("work_package") or {}
         except Exception:
@@ -102,17 +122,26 @@ class RelationMigration(BaseMigration):
             if isinstance(alt, dict):
                 entry = alt.get(jira_key)
 
-        if isinstance(entry, int):
-            return entry
+        if entry is None:
+            self._record_resolve_failure(jira_key, entry)
+            return None
+
+        # Bare numeric strings come from legacy mapping shapes that the
+        # entry model rejects (it only accepts ``int`` / ``dict``). Coerce
+        # them up-front so the typed parse below is the single source of
+        # truth for valid lookups.
         if isinstance(entry, str) and entry.isdigit():
-            return int(entry)
-        if isinstance(entry, dict):
-            op_id = entry.get("openproject_id")
-            if isinstance(op_id, int):
-                return op_id
-            if isinstance(op_id, str) and op_id.isdigit():
-                return int(op_id)
-        # Debug: log first few failures
+            entry = int(entry)
+
+        try:
+            typed = WorkPackageMappingEntry.from_legacy(jira_key, entry)
+        except ValueError:
+            self._record_resolve_failure(jira_key, entry)
+            return None
+        return int(typed.openproject_id)
+
+    def _record_resolve_failure(self, jira_key: str, entry: Any) -> None:
+        """Log the first few ``_resolve_wp_id`` misses for forensics."""
         if not hasattr(self, "_resolve_failures"):
             self._resolve_failures = 0
         self._resolve_failures += 1
@@ -123,7 +152,6 @@ class RelationMigration(BaseMigration):
                 entry,
                 jira_key in (getattr(self, "_wp_key_map", {}) or {}),
             )
-        return None
 
     def _map_type_and_direction(
         self,
