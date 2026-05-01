@@ -56,6 +56,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from pydantic import ValidationError
+
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.display import ProgressTracker
@@ -864,34 +866,53 @@ class UserMigration(BaseMigration):
 
         try:
             user = JiraUser.from_dict(jira_user)
-        except Exception:
+        except (ValidationError, TypeError) as exc:
             # Boundary parse must never bring down user mapping;
-            # fall back to a permissive empty model so the legacy
-            # dict fallbacks below still apply.
+            # fall back to a permissive empty model and lean on the
+            # explicit dict fallbacks below. Log at debug so malformed
+            # upstream payloads are still diagnosable.
+            self.logger.debug(
+                "JiraUser.from_dict failed for upstream user payload: %s",
+                exc,
+            )
             user = JiraUser()
 
         origin_system = self._get_origin_system_label()
-        # ``account_id`` covers both ``accountId`` (alias) and
-        # ``account_id`` (populate_by_name). Keep the lowercase /
-        # snake-case dict fallback for parity with the legacy code.
-        account_id = user.account_id or jira_user.get("account_id")
-        jira_key = user.key or user.name
-        user_id = account_id or jira_key or user.display_name
+        # Probe canonical Jira REST keys first (covers Cloud + Server/DC),
+        # then snake_case for parity with legacy in-process payloads. The
+        # dict-side fallbacks are explicit so a JiraUser parse failure
+        # doesn't silently lose any identifier.
+        account_id = user.account_id or jira_user.get("accountId") or jira_user.get("account_id")
+        name_candidate = user.name or jira_user.get("name")
+        key_candidate = user.key or jira_user.get("key")
+        display_name_candidate = user.display_name or jira_user.get("displayName") or jira_user.get("display_name")
+        jira_key = key_candidate or name_candidate
+        # Canonical user_id probe: account_id → name → key → email → display_name
+        # (matches AttachmentProvenanceMigration / WatcherMigration probe order).
+        user_id = (
+            account_id
+            or name_candidate
+            or key_candidate
+            or user.email_address
+            or jira_user.get("emailAddress")
+            or jira_user.get("email")
+            or display_name_candidate
+        )
 
         base_url = self._get_jira_base_url()
         external_url = ""
         if base_url and jira_key:
             if account_id:
                 external_url = f"{base_url}/secure/ViewProfile.jspa?accountId={quote(str(account_id))}"
-            elif user.name:
-                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(user.name))}"
+            elif name_candidate:
+                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(name_candidate))}"
             else:
                 external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(jira_key))}"
 
-        # JiraUser only recognises the canonical aliases; preserve the
-        # non-canonical lowercase/capital fallbacks as legacy parity.
-        timezone = user.time_zone or jira_user.get("timezone")
-        locale = user.locale or jira_user.get("Locale")
+        # Probe canonical Jira REST keys first (``timeZone``), then the
+        # non-canonical lowercase/capital legacy fallbacks for parity.
+        timezone = user.time_zone or jira_user.get("timeZone") or jira_user.get("timezone")
+        locale = user.locale or jira_user.get("locale") or jira_user.get("Locale")
         avatar_urls = user.avatar_urls or jira_user.get("avatarUrls") or {}
 
         avatar_url = ""

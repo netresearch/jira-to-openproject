@@ -7,25 +7,26 @@ This migration is **orthogonal to the Phase 7 typed wp_map pipeline**.
 It owns its own ``company`` and ``account`` mapping namespaces (Tempo
 company id -> OpenProject project id, Tempo account id -> company id +
 account metadata) and does not consume the ``work_package`` mapping.
-There are therefore no ``wp_map`` ladders, no
-:class:`WorkPackageMappingEntry` normalisation sites, and no Jira issue
-payloads to parse through :class:`JiraIssueFields` here. The only
-Jira-user-shaped object encountered is the optional Tempo
-``company.lead`` field, which the migration only reads for its
-``displayName`` / ``key`` to compose a free-text ``contact_info`` blob
-on the OpenProject project description (see
-:meth:`update_account_metadata` and the embedded Ruby script around
-line 1022); that is a single read site and is not a probe against
-``user_mapping``, so the canonical
-``account_id -> name -> key -> email_address -> display_name``
+There are no ``wp_map`` ladders, no :class:`WorkPackageMappingEntry`
+normalisation sites, and no Jira issue payloads to parse through
+:class:`JiraIssueFields` here. The only Jira-user-shaped object
+encountered is the optional Tempo ``company.lead`` field, read at a
+single site (in :meth:`migrate_customer_metadata` and the embedded
+Ruby script around line 1022) for its ``displayName`` / ``key`` to
+compose a free-text ``contact_info`` blob on the OpenProject project
+description; that is not a probe against ``user_mapping``, so the
+canonical ``account_id -> name -> key -> email_address -> display_name``
 :class:`JiraUser` probe does not apply. The remaining ``isinstance(...)``
-branches operate on Tempo REST envelopes (``tempo_companies`` may load
-as either a list or a dict; ``tempo_accounts`` likewise) and Ruby script
-return values from :meth:`OpenProjectClient.execute_query` (``dict``
-envelopes with ``status`` / ``created`` / ``existing`` / ``id`` keys) --
-those are SDK / boundary shapes, not mapping rows, so the Phase 7
-typed-pipeline helpers do not apply. Documented as out-of-scope and
-otherwise untouched.
+branches guard the Ruby boundary helpers this migration uses:
+:meth:`OpenProjectClient.execute_json_query` (returns parsed JSON
+``Any`` -- typically ``dict`` envelopes with ``status`` / ``created`` /
+``existing`` / ``id`` keys, occasionally ``list`` for bulk lookups) and
+:meth:`OpenProjectClient.bulk_create_records` (returns
+``{created, existing, errors}`` lists). Tempo REST input envelopes
+also come in mixed list/dict shapes (``tempo_companies``,
+``tempo_accounts``). Those are SDK / boundary shapes, not mapping rows,
+so the Phase 7 typed-pipeline helpers do not apply. Documented as
+out-of-scope and otherwise untouched.
 """
 
 import json
