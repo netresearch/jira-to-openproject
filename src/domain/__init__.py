@@ -22,8 +22,17 @@ from src.domain.ids import (
     OpWorkPackageId,
 )
 from src.domain.repositories import MappingRepository
+from src.domain.results import (
+    Failed,
+    Skipped,
+    StepResult,
+    Success,
+    from_component_result,
+    to_component_result,
+)
 
 __all__ = [
+    "Failed",
     "JiraAccountId",
     "JiraIssueKey",
     "JiraProjectKey",
@@ -36,4 +45,9 @@ __all__ = [
     "OpTypeId",
     "OpUserId",
     "OpWorkPackageId",
+    "Skipped",
+    "StepResult",
+    "Success",
+    "from_component_result",
+    "to_component_result",
 ]
