@@ -368,20 +368,16 @@ class WorkPackageSkeletonMigration(BaseMigration):
     def _map_user(self, jira_user: Any) -> int | None:
         """Map a Jira user (SDK object or dict) to an OpenProject user id.
 
-        Phase 7f: parse the SDK user payload at the boundary via
-        :meth:`JiraUser.from_jira_obj` and probe ``user_mapping`` using
-        the canonical multi-identifier order — ``name`` and ``key``
-        first to preserve the legacy lookup priority (Server/DC
-        username-based mapping), then ``account_id`` (Cloud),
-        ``email_address`` and ``display_name`` as additive fallbacks.
-        The ``user_mapping`` value-shape is dict-only by contract from
-        :class:`UserMigration`; the ``isinstance`` guard is kept for
-        defensive parity with sibling migrations
-        (e.g. ``category_defaults_migration._resolve_user_id``).
+        Phase 7f: parse the Jira user payload at the boundary via
+        :class:`JiraUser` and probe ``user_mapping`` using the canonical
+        multi-identifier order — ``account_id`` (Cloud-first per
+        repository convention) → ``name`` → ``key`` → ``email_address``
+        → ``display_name``. Same probe order as
+        :meth:`category_defaults_migration._resolve_user_id`.
 
         Args:
-            jira_user: The Jira user object (from issue.fields.assignee
-                / reporter) or ``None``.
+            jira_user: The Jira user object (from issue.fields.assignee /
+                reporter), a dict (cache shape), or ``None``.
 
         Returns:
             OpenProject user ID or ``None`` if no probe matched.
@@ -390,12 +386,18 @@ class WorkPackageSkeletonMigration(BaseMigration):
         if not jira_user:
             return None
         try:
-            user = JiraUser.from_jira_obj(jira_user)
+            user = JiraUser.from_dict(jira_user) if isinstance(jira_user, dict) else JiraUser.from_jira_obj(jira_user)
         except Exception:
             # Boundary parse must not bring down skeleton creation;
             # fall through with ``None`` like the legacy code did.
             return None
-        for probe in (user.name, user.key, user.account_id, user.email_address, user.display_name):
+        for probe in (
+            user.account_id,
+            user.name,
+            user.key,
+            user.email_address,
+            user.display_name,
+        ):
             if not probe:
                 continue
             user_entry = self.user_mapping.get(probe)
