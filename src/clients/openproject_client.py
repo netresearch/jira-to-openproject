@@ -313,6 +313,7 @@ class OpenProjectClient:
         # OpenProjectClient delegate to the corresponding service.
         from src.clients.openproject_admin_cleanup_service import OpenProjectAdminCleanupService
         from src.clients.openproject_associations_service import OpenProjectAssociationsService
+        from src.clients.openproject_content_service import OpenProjectContentService
         from src.clients.openproject_custom_field_service import OpenProjectCustomFieldService
         from src.clients.openproject_file_transfer_service import OpenProjectFileTransferService
         from src.clients.openproject_issue_priority_service import OpenProjectIssuePriorityService
@@ -352,6 +353,7 @@ class OpenProjectClient:
         self.project_setup = OpenProjectProjectSetupService(self)
         self.admin_cleanup = OpenProjectAdminCleanupService(self)
         self.wp_cf = OpenProjectWorkPackageCustomFieldService(self)
+        self.content = OpenProjectContentService(self)
 
         logger.success(
             "OpenProjectClient initialized for host %s, container %s",
@@ -773,86 +775,17 @@ class OpenProjectClient:
         is_public: bool = True,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Create or update an OpenProject query (saved filter)."""
-        payload = {
-            "name": name,
-            "description": description,
-            "project_id": project_id,
-            "is_public": bool(is_public),
-            "options": options or {},
-        }
+        """Create or update an OpenProject query (saved filter).
 
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        payload_json = json.dumps(payload, ensure_ascii=False)
-        script = f"""
-        require 'json'
-        input = JSON.parse(<<'JSON_DATA')
-{payload_json}
-JSON_DATA
-
-        begin
-          project = input['project_id'] ? Project.find_by(id: input['project_id'].to_i) : nil
-          user = User.respond_to?(:admin) ? User.admin.first : nil
-          user ||= User.admin.first
-          user ||= User.where(admin: true).first
-          user ||= User.active.first
-
-          if user.nil?
-            result = {{ success: false, error: 'no available user to own query' }}
-          else
-            query = Query.find_or_initialize_by(name: input['name'], project: project)
-            query.user ||= user
-
-            is_public = !!input['is_public']
-            if query.respond_to?(:public=)
-              query.public = is_public
-            elsif query.respond_to?(:write_attribute) && query.has_attribute?(:public)
-              query.write_attribute(:public, is_public)
-            end
-
-            filters = input.dig('options', 'filters')
-            query.filters = Array(filters) if filters && query.respond_to?(:filters=)
-
-            columns = input.dig('options', 'columns')
-            query.column_names = Array(columns) if columns && query.respond_to?(:column_names=)
-
-            sort = input.dig('options', 'sort')
-            query.sort_criteria = Array(sort) if sort && query.respond_to?(:sort_criteria=)
-
-            group_by = input.dig('options', 'group_by')
-            query.group_by = group_by if group_by && query.respond_to?(:group_by=)
-
-            hierarchies = input.dig('options', 'show_hierarchies')
-            if !hierarchies.nil? && query.respond_to?(:show_hierarchies=)
-              query.show_hierarchies = hierarchies
-            end
-
-            if query.respond_to?(:include_subprojects=) && query.include_subprojects.nil?
-              query.include_subprojects = false
-            end
-
-            created = query.new_record?
-            changed = query.changed?
-            query.save! if created || changed
-
-            result = {{
-              success: true,
-              id: query.id,
-              created: created,
-              updated: changed || created
-            }}
-          end
-        rescue => e
-          result = {{ success: false, error: e.message }}
-        end
-
-        result
+        Thin delegator over ``self.content.create_or_update_query``.
         """
-
-        result = self.execute_query_to_json_file(script, timeout=120)
-        if isinstance(result, dict):
-            return result
-        return {"success": False, "error": "unexpected response"}
+        return self.content.create_or_update_query(
+            name=name,
+            description=description,
+            project_id=project_id,
+            is_public=is_public,
+            options=options,
+        )
 
     def create_or_update_wiki_page(
         self,
@@ -861,69 +794,15 @@ JSON_DATA
         title: str,
         content: str,
     ) -> dict[str, Any]:
-        """Create or update a Wiki page within a project."""
-        payload = {
-            "project_id": int(project_id),
-            "title": title,
-            "content": content,
-        }
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        payload_json = json.dumps(payload, ensure_ascii=False)
+        """Create or update a Wiki page within a project.
 
-        script = f"""
-        require 'json'
-        input = JSON.parse(<<'JSON_DATA')
-{payload_json}
-JSON_DATA
-
-        project = Project.find_by(id: input['project_id'])
-        unless project
-          return {{ success: false, error: 'project not found' }}.to_json
-        end
-
-        begin
-          wiki = project.wiki || project.create_wiki(start_page: 'Home')
-          page = wiki.pages.where(title: input['title']).first_or_initialize
-          author = User.admin.first || User.active.first || User.first
-          raise 'no available author for wiki content' unless author
-
-          page.wiki ||= wiki if page.respond_to?(:wiki=)
-          page.author ||= author if page.respond_to?(:author=)
-
-          body_text = input['content'].to_s
-
-          if page.respond_to?(:text=)
-            page.text = body_text
-          elsif page.respond_to?(:content=)
-            page.content = body_text
-          else
-            raise 'wiki page entity does not support text assignment'
-          end
-
-          created = page.new_record?
-          changed = page.changed?
-          page.save!
-
-          # Ensure timestamps/ journaling persists author for updates
-          page.touch if !created && changed && page.respond_to?(:touch)
-
-          {{
-            success: true,
-            id: page.id,
-            updated_on: page.updated_at
-          }}
-        rescue => e
-          {{
-            success: false,
-            error: e.message
-          }}
-        end
+        Thin delegator over ``self.content.create_or_update_wiki_page``.
         """
-
-        result = self.execute_query_to_json_file(script, timeout=120)
-        if isinstance(result, dict):
-            return result
-        return {"success": False, "error": "unexpected response"}
+        return self.content.create_or_update_wiki_page(
+            project_id=project_id,
+            title=title,
+            content=content,
+        )
 
     def upsert_project_origin_attributes(
         self,
