@@ -19,6 +19,32 @@ Phase 1 does NOT create:
 
 Usage:
     python -m src.main migrate --components work_packages_skeleton
+
+Phase 7f notes
+--------------
+This migration **builds** the ``work_package`` mapping; it does not
+consume it. There is therefore no ``wp_map`` ``dict | int`` ladder
+to retire here — the ladder phase 7 retires lives on the consumer
+side (priority/labels/components/sprint-epic/relation/attachments
+migrations etc.). Phase 7f introduces typed user resolution at the
+boundary: :meth:`_map_user` parses the SDK user object via
+:meth:`JiraUser.from_jira_obj` and probes ``user_mapping`` with the
+canonical multi-identifier order (``account_id`` → ``name`` →
+``key`` → ``email_address`` → ``display_name``) — same pattern as
+``category_defaults_migration._resolve_user_id``. The work-package
+creation payload (``subject``, ``type_id``, ``status_id``,
+``priority_id``, ``author_id``, ``custom_fields``…) intentionally
+stays as a plain ``dict`` because that is the OpenProject REST/Rails
+wire shape; modelling it as a Pydantic class would only re-serialise
+through the same fields without changing observable behaviour. The
+type/status/priority/project mappings each carry their own legacy
+``dict | int`` shape (orthogonal to ``wp_map``); the existing
+``isinstance`` ladders in :meth:`_get_openproject_type_id`,
+:meth:`_get_openproject_status_id` and
+:meth:`_get_openproject_project_id` already handle both shapes
+defensively and are intentionally left as-is — those mappings are
+written by other migrations and ``WorkPackageMappingEntry.from_legacy``
+does not apply.
 """
 
 from __future__ import annotations
@@ -32,7 +58,7 @@ from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.models import ComponentResult
+from src.models import ComponentResult, JiraUser
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -340,24 +366,43 @@ class WorkPackageSkeletonMigration(BaseMigration):
         return self.priority_mapping.get(priority_name)
 
     def _map_user(self, jira_user: Any) -> int | None:
-        """Map Jira user to OpenProject user ID.
+        """Map a Jira user (SDK object or dict) to an OpenProject user id.
+
+        Phase 7f: parse the Jira user payload at the boundary via
+        :class:`JiraUser` and probe ``user_mapping`` using the canonical
+        multi-identifier order — ``account_id`` (Cloud-first per
+        repository convention) → ``name`` → ``key`` → ``email_address``
+        → ``display_name``. Same probe order as
+        :meth:`category_defaults_migration._resolve_user_id`.
 
         Args:
-            jira_user: The Jira user object (from issue.fields.assignee/reporter)
+            jira_user: The Jira user object (from issue.fields.assignee /
+                reporter), a dict (cache shape), or ``None``.
 
         Returns:
-            OpenProject user ID or None
+            OpenProject user ID or ``None`` if no probe matched.
 
         """
         if not jira_user:
             return None
-        # Try name first (username), then key
-        user_name = getattr(jira_user, "name", None) or getattr(jira_user, "key", None)
-        if not user_name:
+        try:
+            user = JiraUser.from_dict(jira_user) if isinstance(jira_user, dict) else JiraUser.from_jira_obj(jira_user)
+        except Exception:
+            # Boundary parse must not bring down skeleton creation;
+            # fall through with ``None`` like the legacy code did.
             return None
-        user_entry = self.user_mapping.get(user_name)
-        if isinstance(user_entry, dict):
-            return user_entry.get("openproject_id")
+        for probe in (
+            user.account_id,
+            user.name,
+            user.key,
+            user.email_address,
+            user.display_name,
+        ):
+            if not probe:
+                continue
+            user_entry = self.user_mapping.get(probe)
+            if isinstance(user_entry, dict) and user_entry.get("openproject_id"):
+                return int(user_entry["openproject_id"])  # type: ignore[arg-type]
         return None
 
     def _get_j2o_origin_key_cf_id(self) -> int | None:
