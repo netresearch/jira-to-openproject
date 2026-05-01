@@ -187,7 +187,8 @@ def run(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         logger.info(
-            "Dry-run: would normalise %d entries (%d dict, %d int, %d dropped) in %s.",
+            "Dry-run: %d input entries → %d normalised (%d dict-shape, %d int-shape, %d dropped) in %s.",
+            len(raw),
             len(normalized),
             dict_count,
             int_count,
@@ -210,7 +211,8 @@ def run(argv: list[str] | None = None) -> int:
         return 0
 
     logger.info(
-        "Normalized %d entries (%d were already dict-shape, %d were int-shape, %d were dropped)",
+        "Normalized %d input entries → %d kept (%d were already dict-shape, %d were int-shape, %d were dropped)",
+        len(raw),
         len(normalized),
         dict_count,
         int_count,

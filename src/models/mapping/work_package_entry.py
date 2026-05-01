@@ -93,9 +93,13 @@ class WorkPackageMappingEntry(BaseModel):
             )
         if isinstance(value, dict):
             # Allow callers to omit ``jira_key`` from the value because it's
-            # already implicit in the surrounding map; injecting it here
-            # keeps the canonical form complete.
-            payload: dict[str, Any] = {"jira_key": key, **value}
+            # already implicit in the surrounding map. The outer mapping key
+            # is the source of truth — if the inner dict has a conflicting
+            # ``jira_key``, the outer wins (silent overwrite would let
+            # data-corrupted upstream entries flow through unflagged, but
+            # raising here would brick a normalisation script users run on
+            # arbitrary historical data; outer-wins fixes the row in place).
+            payload: dict[str, Any] = {**value, "jira_key": key}
             return cls.model_validate(payload)
         msg = f"Unsupported wp_map entry shape for key {key!r}: {type(value).__name__}"
         raise ValueError(msg)
