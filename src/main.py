@@ -4,13 +4,15 @@ This script provides a unified interface for running both migration
 and export operations from a single command-line tool.
 """
 
+from __future__ import annotations
+
 import argparse
 import atexit
 import os
 import sys
 from pathlib import Path
 
-from src.config import logger, update_from_cli_args
+from src.config import bootstrap, logger, update_from_cli_args
 
 # Import migration functions from the new modules
 """
@@ -132,6 +134,11 @@ def _ensure_singleton_lock(lock_file: Path) -> None:
 
 def main() -> None:
     """Parse arguments and execute the appropriate command."""
+    # Phase 6a (ADR-002): explicit bootstrap of var/ dirs and logging.
+    # Must run before validate_database_configuration() so any DB-related
+    # logging during validation is captured by the per-run log file.
+    bootstrap()
+
     # Validate database configuration early to fail fast
     validate_database_configuration()
 

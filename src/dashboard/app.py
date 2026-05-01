@@ -1,12 +1,14 @@
 """FastAPI web server for real-time migration progress dashboard."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import psutil
@@ -22,18 +24,30 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from src.display import configure_logging
+from src.config import bootstrap
+from src.config import logger as _migration_logger
+
+if TYPE_CHECKING:
+    from src.display import ExtendedLogger
 
 # No migration component imports needed for dashboard
 
-# Configure logger for dashboard
-logger = configure_logging("INFO", None)
+# Phase 6a (ADR-002): the dashboard logger is the same lazy ``migration``
+# logger exposed by ``src.config``. Until ``bootstrap()`` runs (in the
+# FastAPI lifespan), no FileHandler is attached — so importing this
+# module is side-effect-free and safe even when ``var/logs`` is not
+# writable.
+logger: ExtendedLogger = cast("ExtendedLogger", _migration_logger)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Initialize shared resources on startup and clean them up on shutdown."""
     global redis_client  # noqa: PLW0603
+
+    # Phase 6a (ADR-002): bootstrap var/ dirs and logging on app start.
+    # Idempotent — safe even if main.py also called it.
+    bootstrap()
 
     try:
         redis_client = redis.Redis(
