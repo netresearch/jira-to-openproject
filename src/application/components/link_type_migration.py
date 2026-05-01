@@ -1,5 +1,21 @@
 """Link type migration module for Jira to OpenProject migration.
 Handles the migration of link types from Jira to OpenProject relation types.
+
+Phase 7f notes
+--------------
+This migration does **not** consume the ``work_package`` mapping —
+there is no ``wp_map`` ``dict | int`` ladder of the kind phase 7
+retires. Its inputs are flat REST dicts from ``get_issue_link_types``
+(``{id, name, outward, inward}``), and its output is the orthogonal
+``link_type`` mapping of shape ``{jira_id: {"openproject_id": ...,
+"matched_by": ..., "create_custom_field": ..., ...}}`` which is
+already uniformly dict-shaped at every write site
+(``create_link_type_mapping``, ``create_custom_fields_for_link_types``,
+``restore_mapping_from_openproject``). The link-type mapping is its
+own world and ``WorkPackageMappingEntry.from_legacy`` does not apply.
+Modelling Jira link types as Pydantic refs would be cosmetic at this
+site — there is no polymorphism to retire — and is intentionally
+deferred. Behaviour preserved.
 """
 
 import json

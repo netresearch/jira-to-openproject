@@ -7,6 +7,23 @@ Implementation is now complete, including:
 - Status creation in OpenProject via Rails
 - Automated and manual processes documented in docs/status_migration.md
 - Test validation in tests/test_status_migration.py
+
+Phase 7f notes
+--------------
+This migration does **not** consume the ``work_package`` mapping —
+there is no ``wp_map`` ``dict | int`` ladder of the kind phase 7
+retires. Its inputs are flat REST dicts from ``status``/``status
+category`` endpoints, and its output is the orthogonal ``status``
+mapping of shape ``{jira_status_id: {"openproject_id": ...,
+"openproject_name": ...}}`` which is already uniformly dict-shaped at
+every write site (``create_status_mapping``, ``migrate_statuses``,
+``restore_mapping_from_openproject``). The status mapping is its own
+world (similar to the workflow migration's ``status_mapping`` handled
+in phase 7d) and ``WorkPackageMappingEntry.from_legacy`` does not
+apply. Modelling Jira status payloads as :class:`JiraStatusRef` would
+be cosmetic at this site — the payloads are flat ``{id, name,
+statusCategory}`` dicts already — and is intentionally deferred.
+Behaviour preserved.
 """
 
 from __future__ import annotations
