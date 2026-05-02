@@ -67,6 +67,24 @@ def _configure_logging_with_file_handler() -> ExtendedLogger:
     return configure_logging(log_level, latest_log_file)
 
 
+def _resolve_log_level(level: object) -> int:
+    """Resolve a log-level name (including the custom ``NOTICE``/``SUCCESS``) to its numeric value.
+
+    ``getattr(logging, name, INFO)`` does not know about levels registered
+    via :func:`logging.addLevelName` (such as our 21=``NOTICE`` and
+    25=``SUCCESS``) and silently falls back to ``INFO`` for them. That
+    would make the per-run log file less verbose than the console/aggregate
+    handler whenever a custom level is selected. We mirror the
+    name→number mapping used by :func:`src.display.configure_logging`.
+    """
+    name = str(level).upper()
+    if name == "NOTICE":
+        return 21
+    if name == "SUCCESS":
+        return 25
+    return getattr(logging, name, logging.INFO)
+
+
 def _attach_per_run_log_handler(logger: ExtendedLogger) -> None:
     """Attach a per-run timestamped log handler to the root logger.
 
@@ -86,7 +104,7 @@ def _attach_per_run_log_handler(logger: ExtendedLogger) -> None:
         )
         file_handler = logging.FileHandler(per_run_log_file, encoding="utf-8")
         file_handler.setFormatter(file_formatter)
-        file_handler.setLevel(getattr(logging, str(log_level).upper(), logging.INFO))
+        file_handler.setLevel(_resolve_log_level(log_level))
         logging.getLogger().addHandler(file_handler)
         logger.info("Per-run log file: %s", per_run_log_file)
     except OSError:

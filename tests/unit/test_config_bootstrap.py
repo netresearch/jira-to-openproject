@@ -60,7 +60,7 @@ def _reset_logging_guard() -> None:
     """
     display._LOGGING_CONFIGURED = False
     display._LOGGER = None
-    display._LOG_LEVEL_NUM = None  # type: ignore[attr-defined]
+    display._LOG_LEVEL_NUM = None
 
 
 @pytest.fixture(autouse=True)

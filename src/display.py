@@ -158,7 +158,7 @@ def configure_logging(
         file_format = logging.Formatter(
             "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
         )
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setFormatter(file_format)
         file_handler.setLevel(numeric_level)
         handlers.append(file_handler)
