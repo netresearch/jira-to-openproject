@@ -273,8 +273,18 @@ class TestFileBasedBatchWritesDecorator:
     def test_uses_wrapped_execute_script_with_data_when_available(self) -> None:
         # Wrapped client exposes the remote-Rails entrypoint — the decorator
         # must delegate to it instead of falling through to local subprocess.
+        # The real OpenProjectRailsRunnerService.execute_script_with_data
+        # returns a {status, message, data, output} envelope; the decorator
+        # unwraps ``data`` on success.
         stub = _make_op_stub(
-            execute_script_with_data=MagicMock(return_value={"created": [42]}),
+            execute_script_with_data=MagicMock(
+                return_value={
+                    "status": "success",
+                    "message": "ok",
+                    "data": {"created": [42]},
+                    "output": "",
+                },
+            ),
         )
         decorator = FileBasedBatchWritesDecorator(stub)
 
@@ -287,6 +297,44 @@ class TestFileBasedBatchWritesDecorator:
             [{"subject": "x"}],
         )
         run_mock.assert_not_called()
+
+    def test_envelope_with_error_status_raises(self) -> None:
+        # status != "success" must surface as RailsExecutionError, not
+        # silently pass through as the legacy "{created: …}" shape.
+        stub = _make_op_stub(
+            execute_script_with_data=MagicMock(
+                return_value={
+                    "status": "error",
+                    "message": "Type 'invalid' not found",
+                    "data": None,
+                    "output": "",
+                },
+            ),
+        )
+        decorator = FileBasedBatchWritesDecorator(stub)
+
+        with pytest.raises(RailsExecutionError, match="status='error'"):
+            decorator.batch_create_work_packages([{"subject": "x"}])
+
+    def test_envelope_with_list_data_aggregates_to_dict(self) -> None:
+        # Some scripts return a list under data[]; the unwrapper must
+        # coerce to the dict-shape contract callers expect.
+        stub = _make_op_stub(
+            execute_script_with_data=MagicMock(
+                return_value={
+                    "status": "success",
+                    "message": "ok",
+                    "data": [{"id": 1}, {"id": 2}],
+                    "output": "",
+                },
+            ),
+        )
+        decorator = FileBasedBatchWritesDecorator(stub)
+
+        result = decorator.batch_create_work_packages([{"subject": "x"}])
+
+        assert result["created"] == [{"id": 1}, {"id": 2}]
+        assert result["stats"] == {"total": 2, "created": 2, "failed": 0}
 
 
 class TestPerformanceMonitoringDecorator:
