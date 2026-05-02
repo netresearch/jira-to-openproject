@@ -577,8 +577,15 @@ class WorkPackageContentMigration(BaseMigration):
             if not probe:
                 continue
             user_entry = self.user_mapping.get(probe)
-            if isinstance(user_entry, dict) and user_entry.get("openproject_id") is not None:
-                return int(user_entry["openproject_id"])
+            if not isinstance(user_entry, dict):
+                continue
+            raw_id = user_entry.get("openproject_id")
+            if raw_id is None:
+                continue
+            try:
+                return int(raw_id)
+            except (TypeError, ValueError):
+                continue
         return None
 
     def _collect_content_for_issue(
