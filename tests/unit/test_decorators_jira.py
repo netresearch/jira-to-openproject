@@ -112,6 +112,38 @@ class TestCachingDecorator:
         # `base_url` isn't a callable; CachingDecorator should hand back the raw attribute.
         assert decorator.base_url == "https://jira.example/"
 
+    def test_get_project_cached_uses_get_project_metadata_enhanced_fallback(self) -> None:
+        # Real ``JiraClient`` exposes per-key project metadata via
+        # ``get_project_metadata_enhanced``, NOT ``get_projects`` (which takes
+        # no args). The decorator must fall back to the per-key method when no
+        # ``get_project_details`` shim is available.
+        stub = _make_jira_stub(
+            get_project_metadata_enhanced=MagicMock(return_value={"key": "PROJ", "id": "10001"}),
+        )
+        # Strip the optional shim so we exercise the fallback path.
+        if hasattr(stub, "get_project_details"):
+            delattr(stub, "get_project_details")
+        decorator = CachingDecorator(stub)
+
+        first = decorator.get_project_cached("PROJ")
+        second = decorator.get_project_cached("PROJ")
+
+        assert first == second == {"key": "PROJ", "id": "10001"}
+        stub.get_project_metadata_enhanced.assert_called_once_with("PROJ")
+
+    def test_get_project_cached_prefers_get_project_details_shim(self) -> None:
+        stub = _make_jira_stub(
+            get_project_details=MagicMock(return_value={"key": "PROJ", "shim": True}),
+            get_project_metadata_enhanced=MagicMock(),
+        )
+        decorator = CachingDecorator(stub)
+
+        result = decorator.get_project_cached("PROJ")
+
+        assert result == {"key": "PROJ", "shim": True}
+        stub.get_project_details.assert_called_once_with("PROJ")
+        stub.get_project_metadata_enhanced.assert_not_called()
+
 
 class TestBatchOperationsDecorator:
     def test_batch_get_issues_aggregates_across_batches(self) -> None:

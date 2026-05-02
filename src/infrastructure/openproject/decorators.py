@@ -155,13 +155,26 @@ class ParallelReadsDecorator(_BaseOPDecorator):
         return self._session  # type: ignore[return-value]
 
     def _get_work_package_safe(self, wp_id: int) -> dict[str, Any] | None:
-        session = self._get_session()
+        r"""Best-effort single work-package lookup via the wrapped Rails client.
+
+        ``OpenProjectClient`` in this codebase is a Rails-runner-over-SSH/docker
+        adapter — it has no HTTP base URL, so the historical
+        ``EnhancedOpenProjectClient`` placeholder using a relative
+        ``requests.Session.get("/api/v3/work_packages/...")`` could never run
+        outside its mock test fixture (PR #170 review). Route through the
+        wrapped client's ``execute_json_query`` instead, which is the documented
+        path for arbitrary single-record reads.
+        """
+        wrapped = self.wrapped
         try:
-            resp = session.get(f"/api/v3/work_packages/{wp_id}")
-            resp.raise_for_status()
-            return resp.json()
+            result = wrapped.execute_json_query(
+                f"WorkPackage.where(id: {int(wp_id)}).as_json.first"
+            )
         except Exception:
             return None
+        if isinstance(result, dict) and result:
+            return result
+        return None
 
     def bulk_get_work_packages(self, ids: Iterable[int]) -> dict[int, dict[str, Any] | None]:
         """Fetch many work packages in parallel; failed reads map to ``None``."""
@@ -187,31 +200,67 @@ class FileBasedBatchWritesDecorator(_BaseOPDecorator):
     """File-based Rails-runner batch writes for OpenProject.
 
     Wraps batch creates and updates by serializing the payload to a temp JSON
-    file, invoking ``rails runner <script> <path>``, parsing JSON from stdout,
-    and always cleaning up the temp file. Mirrors the existing
-    ``EnhancedOpenProjectClient`` flow.
+    file and routing it through the wrapped client's existing remote Rails
+    execution path (typically SSH+docker; ``OpenProjectClient`` runs Rails
+    inside a remote container, not on the local host). The temp file is
+    always cleaned up.
+
+    The wrapped client is expected to expose an ``execute_script_with_data``
+    method that takes ``(script_template, data_payload)`` — the same contract
+    ``OpenProjectClient`` already implements (see
+    :meth:`OpenProjectClient.execute_script_with_data`).
     """
 
     BATCH_CREATE_SCRIPT = "RunnerScripts::BatchCreateWorkPackages.run"
     BULK_UPDATE_SCRIPT = "RunnerScripts::BulkUpdateWorkPackages.run"
 
     def batch_create_work_packages(self, work_packages: list[dict[str, Any]]) -> dict[str, Any]:
-        """Bulk-create work packages via a temp JSON file + Rails runner."""
+        """Bulk-create work packages through the wrapped client's Rails path."""
         if not work_packages:
             return {"created": [], "errors": [], "stats": {"total": 0, "created": 0, "failed": 0}}
-        return self._run_rails_with_temp_file(work_packages, self.BATCH_CREATE_SCRIPT)
+        return self._run_rails_through_wrapped(work_packages, self.BATCH_CREATE_SCRIPT)
 
     def bulk_update_work_packages(self, updates: list[dict[str, Any]]) -> dict[str, Any]:
-        """Bulk-update work packages via a temp JSON file + Rails runner."""
+        """Bulk-update work packages through the wrapped client's Rails path."""
         if not updates:
             return {"updated": [], "errors": [], "stats": {"total": 0, "updated": 0, "failed": 0}}
-        return self._run_rails_with_temp_file(updates, self.BULK_UPDATE_SCRIPT)
+        return self._run_rails_through_wrapped(updates, self.BULK_UPDATE_SCRIPT)
 
-    def _run_rails_with_temp_file(self, payload: list[dict[str, Any]], script: str) -> dict[str, Any]:
+    def _run_rails_through_wrapped(
+        self,
+        payload: list[dict[str, Any]],
+        script: str,
+    ) -> dict[str, Any]:
+        """Delegate execution to the wrapped client's remote Rails path.
+
+        Falls back to a local-subprocess + temp-file invocation if the
+        wrapped client does not expose ``execute_script_with_data`` (e.g.,
+        a fixture that intentionally bypasses the SSH/docker plumbing).
+        The local fallback preserves test compatibility but is documented
+        as inappropriate for production — production deployments should
+        always wrap a real :class:`OpenProjectClient`.
+        """
+        wrapped = self.wrapped
+        execute_with_data = getattr(wrapped, "execute_script_with_data", None)
+        if callable(execute_with_data):
+            try:
+                result = execute_with_data(script, payload)
+            except Exception as exc:
+                msg = f"Rails script failed via wrapped client: {exc}"
+                raise RailsExecutionError(msg) from exc
+            if isinstance(result, dict):
+                return result
+            try:
+                return json.loads(result) if isinstance(result, str) else dict(result)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                msg = f"Failed to coerce Rails output to dict: {exc}"
+                raise RailsExecutionError(msg) from exc
+
+        # Test-fixture fallback only — no remote execution available.
         temp_path: pathlib.Path | None = None
         try:
             temp_path = self._write_temp_json(payload)
-            return self._exec_rails(script, temp_path)
+            return self._exec_rails_local(script, temp_path)
         finally:
             if temp_path is not None and hasattr(temp_path, "unlink"):
                 try:
@@ -221,13 +270,20 @@ class FileBasedBatchWritesDecorator(_BaseOPDecorator):
 
     @staticmethod
     def _write_temp_json(payload: list[dict[str, Any]]) -> pathlib.Path:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as fh:
             fh.write(json.dumps(payload))
             name = fh.name
         return pathlib.Path(name)
 
     @staticmethod
-    def _exec_rails(script: str, temp_file: pathlib.Path) -> dict[str, Any]:
+    def _exec_rails_local(script: str, temp_file: pathlib.Path) -> dict[str, Any]:
+        """Local-subprocess Rails invocation — test-fixture fallback only.
+
+        Production ``OpenProjectClient`` runs Rails on a remote SSH+docker
+        host; this path exists so test fixtures that wrap a Mock client
+        without ``execute_script_with_data`` still exercise the temp-file
+        cleanup logic. Real deployments should wrap a full client.
+        """
         cmd = ["rails", "runner", script, str(temp_file)]
         try:
             proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
