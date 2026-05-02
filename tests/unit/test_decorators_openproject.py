@@ -152,6 +152,31 @@ class TestParallelReadsDecorator:
 
         assert decorator._get_work_package_safe(42) is None
 
+    def test_safe_fetch_uses_wrapped_execute_json_query(self) -> None:
+        # ``OpenProjectClient`` is Rails-runner-based (no HTTP base url);
+        # ``_get_work_package_safe`` must route through the wrapped client's
+        # documented Rails query API rather than a relative-URL HTTP GET.
+        stub = _make_op_stub(
+            execute_json_query=MagicMock(return_value={"id": 42, "subject": "x"}),
+        )
+        decorator = ParallelReadsDecorator(stub)
+
+        result = decorator._get_work_package_safe(42)
+
+        assert result == {"id": 42, "subject": "x"}
+        stub.execute_json_query.assert_called_once()
+        # Sanity: the script targets the requested id.
+        script = stub.execute_json_query.call_args.args[0]
+        assert "WorkPackage" in script
+        assert "42" in script
+
+    def test_safe_fetch_returns_none_when_wrapped_query_fails(self) -> None:
+        stub = _make_op_stub(
+            execute_json_query=MagicMock(side_effect=RuntimeError("rails down")),
+        )
+        decorator = ParallelReadsDecorator(stub)
+        assert decorator._get_work_package_safe(42) is None
+
 
 class TestFileBasedBatchWritesDecorator:
     def test_batch_create_empty_input_short_circuits(self) -> None:
@@ -244,6 +269,24 @@ class TestFileBasedBatchWritesDecorator:
             decorator.batch_create_work_packages([{"subject": "x"}])
 
         fake_path.unlink.assert_called_once()
+
+    def test_uses_wrapped_execute_script_with_data_when_available(self) -> None:
+        # Wrapped client exposes the remote-Rails entrypoint — the decorator
+        # must delegate to it instead of falling through to local subprocess.
+        stub = _make_op_stub(
+            execute_script_with_data=MagicMock(return_value={"created": [42]}),
+        )
+        decorator = FileBasedBatchWritesDecorator(stub)
+
+        with patch("src.infrastructure.openproject.decorators.subprocess.run") as run_mock:
+            result = decorator.batch_create_work_packages([{"subject": "x"}])
+
+        assert result == {"created": [42]}
+        stub.execute_script_with_data.assert_called_once_with(
+            FileBasedBatchWritesDecorator.BATCH_CREATE_SCRIPT,
+            [{"subject": "x"}],
+        )
+        run_mock.assert_not_called()
 
 
 class TestPerformanceMonitoringDecorator:
