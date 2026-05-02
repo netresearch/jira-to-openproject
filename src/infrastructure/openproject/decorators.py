@@ -27,8 +27,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from typing import Any, Protocol, runtime_checkable
 
-import requests
-
 from src.display import configure_logging
 
 logger = configure_logging("INFO", None)
@@ -128,11 +126,20 @@ class CachingDecorator(_BaseOPDecorator):
 
 
 class ParallelReadsDecorator(_BaseOPDecorator):
-    """Parallel REST reads for bulk work-package fetches.
+    """Parallel single-work-package reads via the wrapped Rails client.
 
-    Mirrors :meth:`EnhancedOpenProjectClient.bulk_get_work_packages` using a
-    REST session against ``/api/v3/work_packages/<id>``. Failed lookups are
-    coerced to ``None`` to keep the result map dense.
+    Mirrors :meth:`EnhancedOpenProjectClient.bulk_get_work_packages` by
+    delegating each lookup to the wrapped client's ``execute_json_query``
+    — the documented Rails-based single-record read path. Failed lookups
+    are coerced to ``None`` to keep the result map dense.
+
+    Concurrency note: ``OpenProjectClient.execute_json_query`` is backed
+    by a single tmux-attached Rails console — concurrent calls would
+    interleave commands and break the JSON-output marker parsing. The
+    decorator therefore serialises ``execute_json_query`` invocations
+    behind a per-instance lock; useful parallelism comes from overlapping
+    network I/O and Rails console latency, not from the parsing path
+    (PR #172 review).
     """
 
     def __init__(self, wrapped: Any, parallel_workers: int | None = None) -> None:
@@ -142,26 +149,38 @@ class ParallelReadsDecorator(_BaseOPDecorator):
             "_parallel_workers",
             int(parallel_workers) if parallel_workers is not None else int(getattr(wrapped, "parallel_workers", 8)),
         )
-        object.__setattr__(self, "_session", None)
+        # Lock around the wrapped Rails console so threaded callers in
+        # ``bulk_get_work_packages`` don't interleave commands.
+        object.__setattr__(self, "_console_lock", Lock())
 
     @property
     def parallel_workers(self) -> int:
         """Configured worker count for parallel reads."""
         return self._parallel_workers
 
-    def _get_session(self) -> requests.Session:
-        if self._session is None:
-            object.__setattr__(self, "_session", requests.Session())
-        return self._session  # type: ignore[return-value]
-
     def _get_work_package_safe(self, wp_id: int) -> dict[str, Any] | None:
-        session = self._get_session()
+        """Best-effort single work-package lookup via the wrapped Rails client.
+
+        ``OpenProjectClient`` in this codebase is a Rails-runner-over-SSH/docker
+        adapter — it has no HTTP base URL, so the historical
+        ``EnhancedOpenProjectClient`` placeholder using a relative
+        ``requests.Session.get`` could never run outside its mock test
+        fixture (PR #170 review). Routes through the wrapped client's
+        ``execute_json_query`` under a shared lock so concurrent threads
+        in :meth:`bulk_get_work_packages` don't interleave commands on
+        the underlying tmux console (PR #172 review).
+        """
+        wrapped = self.wrapped
         try:
-            resp = session.get(f"/api/v3/work_packages/{wp_id}")
-            resp.raise_for_status()
-            return resp.json()
+            with self._console_lock:
+                result = wrapped.execute_json_query(
+                    f"WorkPackage.where(id: {int(wp_id)}).as_json.first",
+                )
         except Exception:
             return None
+        if isinstance(result, dict) and result:
+            return result
+        return None
 
     def bulk_get_work_packages(self, ids: Iterable[int]) -> dict[int, dict[str, Any] | None]:
         """Fetch many work packages in parallel; failed reads map to ``None``."""
@@ -187,31 +206,71 @@ class FileBasedBatchWritesDecorator(_BaseOPDecorator):
     """File-based Rails-runner batch writes for OpenProject.
 
     Wraps batch creates and updates by serializing the payload to a temp JSON
-    file, invoking ``rails runner <script> <path>``, parsing JSON from stdout,
-    and always cleaning up the temp file. Mirrors the existing
-    ``EnhancedOpenProjectClient`` flow.
+    file and routing it through the wrapped client's existing remote Rails
+    execution path (typically SSH+docker; ``OpenProjectClient`` runs Rails
+    inside a remote container, not on the local host). The temp file is
+    always cleaned up.
+
+    The wrapped client is expected to expose an ``execute_script_with_data``
+    method that takes ``(script_template, data_payload)`` — the same contract
+    ``OpenProjectClient`` already implements (see
+    :meth:`OpenProjectClient.execute_script_with_data`).
     """
 
     BATCH_CREATE_SCRIPT = "RunnerScripts::BatchCreateWorkPackages.run"
     BULK_UPDATE_SCRIPT = "RunnerScripts::BulkUpdateWorkPackages.run"
 
     def batch_create_work_packages(self, work_packages: list[dict[str, Any]]) -> dict[str, Any]:
-        """Bulk-create work packages via a temp JSON file + Rails runner."""
+        """Bulk-create work packages through the wrapped client's Rails path."""
         if not work_packages:
             return {"created": [], "errors": [], "stats": {"total": 0, "created": 0, "failed": 0}}
-        return self._run_rails_with_temp_file(work_packages, self.BATCH_CREATE_SCRIPT)
+        return self._run_rails_through_wrapped(work_packages, self.BATCH_CREATE_SCRIPT)
 
     def bulk_update_work_packages(self, updates: list[dict[str, Any]]) -> dict[str, Any]:
-        """Bulk-update work packages via a temp JSON file + Rails runner."""
+        """Bulk-update work packages through the wrapped client's Rails path."""
         if not updates:
             return {"updated": [], "errors": [], "stats": {"total": 0, "updated": 0, "failed": 0}}
-        return self._run_rails_with_temp_file(updates, self.BULK_UPDATE_SCRIPT)
+        return self._run_rails_through_wrapped(updates, self.BULK_UPDATE_SCRIPT)
 
-    def _run_rails_with_temp_file(self, payload: list[dict[str, Any]], script: str) -> dict[str, Any]:
+    def _run_rails_through_wrapped(
+        self,
+        payload: list[dict[str, Any]],
+        script: str,
+    ) -> dict[str, Any]:
+        """Delegate execution to the wrapped client's remote Rails path.
+
+        ``OpenProjectClient.execute_script_with_data`` (via the
+        :class:`OpenProjectRailsRunnerService`) returns an envelope of
+        the shape ``{status, message, data, output}`` rather than the
+        bare ``{created: …}`` payload our callers expect. Unwrap
+        ``data`` on success and raise :class:`RailsExecutionError` on
+        ``status != "success"`` so the decorator's
+        ``batch_create_work_packages`` / ``bulk_update_work_packages``
+        contract matches the legacy ``EnhancedOpenProjectClient``.
+
+        Falls back to a local-subprocess + temp-file invocation if the
+        wrapped client does not expose ``execute_script_with_data``
+        (e.g., a fixture that intentionally bypasses the SSH/docker
+        plumbing). The local fallback preserves test compatibility but
+        is documented as inappropriate for production — production
+        deployments should always wrap a real
+        :class:`OpenProjectClient`.
+        """
+        wrapped = self.wrapped
+        execute_with_data = getattr(wrapped, "execute_script_with_data", None)
+        if callable(execute_with_data):
+            try:
+                envelope = execute_with_data(script, payload)
+            except Exception as exc:
+                msg = f"Rails script failed via wrapped client: {exc}"
+                raise RailsExecutionError(msg) from exc
+            return self._unwrap_envelope(envelope)
+
+        # Test-fixture fallback only — no remote execution available.
         temp_path: pathlib.Path | None = None
         try:
             temp_path = self._write_temp_json(payload)
-            return self._exec_rails(script, temp_path)
+            return self._exec_rails_local(script, temp_path)
         finally:
             if temp_path is not None and hasattr(temp_path, "unlink"):
                 try:
@@ -220,14 +279,50 @@ class FileBasedBatchWritesDecorator(_BaseOPDecorator):
                     logger.debug("Temp file cleanup failed: %s", exc)
 
     @staticmethod
+    def _unwrap_envelope(envelope: Any) -> dict[str, Any]:
+        """Unwrap the ``{status, message, data, output}`` Rails-runner envelope.
+
+        :class:`OpenProjectRailsRunnerService.execute_script_with_data`
+        always returns this envelope (or a string fallback when the
+        runner could not parse JSON). Returns ``data`` as a dict on
+        success; raises :class:`RailsExecutionError` on ``status !=
+        "success"`` or on shape mismatches.
+        """
+        if not isinstance(envelope, dict):
+            msg = f"Expected dict envelope from execute_script_with_data, got {type(envelope).__name__}"
+            raise RailsExecutionError(msg)
+        status = envelope.get("status")
+        if status != "success":
+            message = envelope.get("message") or envelope.get("output") or "<no message>"
+            msg = f"Rails script returned status={status!r}: {message}"
+            raise RailsExecutionError(msg)
+        data = envelope.get("data")
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list):
+            # Some scripts return a list of per-record results; coerce to
+            # the documented dict-shape contract by aggregating into the
+            # ``created``/``failed`` buckets the decorator promises.
+            return {"created": data, "errors": [], "stats": {"total": len(data), "created": len(data), "failed": 0}}
+        msg = f"Expected dict in envelope['data'], got {type(data).__name__}"
+        raise RailsExecutionError(msg)
+
+    @staticmethod
     def _write_temp_json(payload: list[dict[str, Any]]) -> pathlib.Path:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as fh:
             fh.write(json.dumps(payload))
             name = fh.name
         return pathlib.Path(name)
 
     @staticmethod
-    def _exec_rails(script: str, temp_file: pathlib.Path) -> dict[str, Any]:
+    def _exec_rails_local(script: str, temp_file: pathlib.Path) -> dict[str, Any]:
+        """Local-subprocess Rails invocation — test-fixture fallback only.
+
+        Production ``OpenProjectClient`` runs Rails on a remote SSH+docker
+        host; this path exists so test fixtures that wrap a Mock client
+        without ``execute_script_with_data`` still exercise the temp-file
+        cleanup logic. Real deployments should wrap a full client.
+        """
         cmd = ["rails", "runner", script, str(temp_file)]
         try:
             proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
