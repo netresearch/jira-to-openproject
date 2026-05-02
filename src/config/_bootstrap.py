@@ -84,7 +84,7 @@ def _attach_per_run_log_handler(logger: ExtendedLogger) -> None:
         file_formatter = logging.Formatter(
             "%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s",
         )
-        file_handler = logging.FileHandler(per_run_log_file)
+        file_handler = logging.FileHandler(per_run_log_file, encoding="utf-8")
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(getattr(logging, str(log_level).upper(), logging.INFO))
         logging.getLogger().addHandler(file_handler)
