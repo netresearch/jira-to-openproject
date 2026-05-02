@@ -53,6 +53,8 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
@@ -147,7 +149,7 @@ class WorkPackageContentMigration(BaseMigration):
             return False
 
         try:
-            with self.work_package_mapping_file.open("r") as f:
+            with self.work_package_mapping_file.open("r", encoding="utf-8") as f:
                 self.work_package_mapping = json.load(f)
 
             # Build the canonical jira_key → openproject_id lookup by
@@ -563,7 +565,7 @@ class WorkPackageContentMigration(BaseMigration):
             return None
         try:
             user = JiraUser.from_dict(watcher) if isinstance(watcher, dict) else JiraUser.from_jira_obj(watcher)
-        except Exception:
+        except (ValidationError, TypeError, AttributeError):
             return None
         for probe in (
             user.account_id,
@@ -575,7 +577,7 @@ class WorkPackageContentMigration(BaseMigration):
             if not probe:
                 continue
             user_entry = self.user_mapping.get(probe)
-            if isinstance(user_entry, dict) and user_entry.get("openproject_id"):
+            if isinstance(user_entry, dict) and user_entry.get("openproject_id") is not None:
                 return int(user_entry["openproject_id"])
         return None
 
