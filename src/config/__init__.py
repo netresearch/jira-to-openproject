@@ -35,7 +35,9 @@ if TYPE_CHECKING:
 
 # Import error recovery specific config
 # Re-export bootstrap so callers can do ``from src.config import bootstrap``.
-from ._bootstrap import bootstrap, is_bootstrapped, reset_bootstrap_state
+from ._bootstrap import bootstrap
+from ._bootstrap import is_bootstrapped as is_bootstrapped
+from ._bootstrap import reset_bootstrap_state as reset_bootstrap_state
 from .error_recovery_config import ErrorRecoveryConfig, load_error_recovery_config
 
 # Create a singleton instance of ConfigLoader
@@ -66,9 +68,11 @@ var_dirs: dict[DirType, Path] = {
     "temp": var_dir / "temp",
 }
 
-# Logging level used by ``bootstrap()`` to configure handlers. Read here
-# so the constant is available to callers that want to introspect it
-# without bootstrapping.
+# Import-time snapshot of the configured logging level. Exposed so
+# callers can introspect the default without bootstrapping; the actual
+# handler configuration in ``bootstrap()`` reads
+# ``migration_config["log_level"]`` directly so CLI/runtime overrides
+# applied between import and bootstrap are honored.
 LOG_LEVEL: LogLevel = migration_config.get("log_level", "DEBUG")  # type: ignore[assignment]
 
 
@@ -135,7 +139,13 @@ logging.Logger.notice = _notice  # type: ignore[attr-defined,assignment]
 logger: ExtendedLogger = cast("ExtendedLogger", logging.getLogger("migration"))
 
 
-# Export logger for use by other modules
+# ``__all__`` defines the public surface for ``from src.config import *``.
+# ``is_bootstrapped`` and ``reset_bootstrap_state`` are documented as
+# test-only helpers in :mod:`src.config._bootstrap`; we deliberately
+# keep them re-exported on the module (so tests can do
+# ``from src.config import reset_bootstrap_state``) but exclude them
+# from ``__all__`` to discourage production callers from depending on
+# test-only APIs.
 __all__ = [
     "FALLBACK_MAIL_DOMAIN",
     "LOG_LEVEL",
@@ -148,14 +158,12 @@ __all__ = [
     "get_mappings",
     "get_path",
     "get_value",
-    "is_bootstrapped",
     "jira_config",
     "load_error_recovery_config",
     "logger",
     "mappings",
     "migration_config",
     "openproject_config",
-    "reset_bootstrap_state",
     "reset_mappings",
     "update_from_cli_args",
     "validate_config",
