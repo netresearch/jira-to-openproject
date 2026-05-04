@@ -125,11 +125,14 @@ class CachingDecorator(_BaseJiraDecorator):
         wrapped client exposes a ``get_project_details(key)`` shim
         (e.g., a fixture), we honour that first.
         """
-        per_key_lookup = getattr(
-            self._wrapped,
-            "get_project_details",
-            None,
-        ) or self._wrapped.get_project_metadata_enhanced
+        per_key_lookup = (
+            getattr(
+                self._wrapped,
+                "get_project_details",
+                None,
+            )
+            or self._wrapped.get_project_metadata_enhanced
+        )
         return self._cached_call(f"project:{key}", per_key_lookup, key)
 
     def get_statuses_cached(self) -> list[dict[str, Any]]:
