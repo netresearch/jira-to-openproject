@@ -50,10 +50,12 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.infrastructure.exceptions import QueryExecutionError
-from src.infrastructure.openproject.openproject_client import OpenProjectClient
+
+if TYPE_CHECKING:
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
 class OpenProjectWorkPackageService:
