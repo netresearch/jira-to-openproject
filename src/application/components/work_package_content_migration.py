@@ -565,7 +565,7 @@ class WorkPackageContentMigration(BaseMigration):
             return None
         try:
             user = JiraUser.from_dict(watcher) if isinstance(watcher, dict) else JiraUser.from_jira_obj(watcher)
-        except (ValidationError, TypeError, AttributeError):
+        except ValidationError, TypeError, AttributeError:
             return None
         for probe in (
             user.account_id,
@@ -584,7 +584,7 @@ class WorkPackageContentMigration(BaseMigration):
                 continue
             try:
                 return int(raw_id)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
         return None
 
