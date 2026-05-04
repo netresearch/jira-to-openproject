@@ -116,12 +116,24 @@ class CachingDecorator(_BaseJiraDecorator):
                 self._cache.pop(key, None)
 
     def get_project_cached(self, key: str) -> dict[str, Any]:
-        """Cache wrapper around ``get_project_details``-style lookups."""
-        return self._cached_call(
-            f"project:{key}",
-            getattr(self._wrapped, "get_project_details", self._wrapped.get_projects),
-            key,
+        """Cache wrapper around per-key project metadata lookups.
+
+        ``JiraClient.get_projects()`` takes no arguments (it lists every
+        project), so falling back to it with a ``key`` would raise
+        ``TypeError`` (PR #170 review). The real per-key endpoint on the
+        client is :meth:`JiraClient.get_project_metadata_enhanced`; if a
+        wrapped client exposes a ``get_project_details(key)`` shim
+        (e.g., a fixture), we honour that first.
+        """
+        per_key_lookup = (
+            getattr(
+                self._wrapped,
+                "get_project_details",
+                None,
+            )
+            or self._wrapped.get_project_metadata_enhanced
         )
+        return self._cached_call(f"project:{key}", per_key_lookup, key)
 
     def get_statuses_cached(self) -> list[dict[str, Any]]:
         """Cache wrapper around ``get_all_statuses``."""
