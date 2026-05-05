@@ -66,6 +66,55 @@ if TYPE_CHECKING:
     from jira.resources import Issue
 
 
+def _build_provenance_custom_field_entries(
+    jira_issue: Any,
+    cf_ids: dict[str, int],
+    *,
+    jira_base_url: str,
+) -> list[dict[str, Any]]:
+    """Build the list of ``{id, value}`` provenance CF entries for one WP.
+
+    Bug D2: previously only ``J2O Origin Key`` was populated; the other
+    7 ``WorkPackageCustomField`` provenance CFs existed (after the
+    startup bootstrap) but received no value, so audits showed
+    ``populated=0`` for everything but the key.
+
+    Args:
+        jira_issue: The Jira SDK issue (or any object with ``id``,
+            ``key``, ``fields.project.id``, ``fields.project.key``).
+        cf_ids: Mapping ``cf_name -> cf_id`` for whichever provenance CFs
+            actually exist in OP. Missing entries are silently skipped.
+        jira_base_url: Base URL for the Jira instance (for the Origin
+            URL value). Empty string ⇒ no URL emitted.
+
+    Returns:
+        List of ``{"id": <cf_id>, "value": <string>}`` ready to splice
+        into the WP-create payload's ``custom_fields`` list.
+
+    """
+    entries: list[dict[str, Any]] = []
+    fields = getattr(jira_issue, "fields", None)
+    project = getattr(fields, "project", None) if fields is not None else None
+
+    def _add(name: str, value: Any) -> None:
+        cf_id = cf_ids.get(name)
+        if cf_id and value not in (None, ""):
+            entries.append({"id": int(cf_id), "value": str(value)})
+
+    _add("J2O Origin Key", getattr(jira_issue, "key", None))
+    _add("J2O Origin ID", getattr(jira_issue, "id", None))
+    _add("J2O Origin System", "Jira")
+    if jira_base_url and getattr(jira_issue, "key", None):
+        _add(
+            "J2O Origin URL",
+            f"{jira_base_url.rstrip('/')}/browse/{jira_issue.key}",
+        )
+    if project is not None:
+        _add("J2O Project Key", getattr(project, "key", None))
+        _add("J2O Project ID", getattr(project, "id", None))
+    return entries
+
+
 @register_entity_types("work_packages_skeleton")
 class WorkPackageSkeletonMigration(BaseMigration):
     """Phase 1: Create work package skeletons and establish complete mapping.
@@ -405,6 +454,35 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 return int(user_entry["openproject_id"])  # type: ignore[arg-type]
         return None
 
+    def _get_provenance_cf_ids(self) -> dict[str, int]:
+        """Cached lookup of all WP provenance CF ids that exist in OP.
+
+        Bug D2 fix: previously only ``J2O Origin Key`` was looked up. Now
+        we resolve every CF the bootstrap created so
+        ``_build_provenance_custom_field_entries`` can populate them.
+        """
+        cached = getattr(self, "_provenance_cf_ids", None)
+        if isinstance(cached, dict):
+            return cached
+        names = (
+            "J2O Origin Key",
+            "J2O Origin ID",
+            "J2O Origin System",
+            "J2O Origin URL",
+            "J2O Project Key",
+            "J2O Project ID",
+        )
+        ids: dict[str, int] = {}
+        for name in names:
+            try:
+                cf = self.op_client.ensure_custom_field(name=name, field_format="string")
+                if cf and cf.get("id"):
+                    ids[name] = int(cf["id"])
+            except Exception as exc:
+                self.logger.warning("Failed to fetch provenance CF '%s': %s", name, exc)
+        self._provenance_cf_ids = ids
+        return ids
+
     def _get_j2o_origin_key_cf_id(self) -> int | None:
         """Get or create the J2O Origin Key custom field ID (cached)."""
         if self._j2o_origin_key_cf_id is not None:
@@ -501,17 +579,45 @@ class WorkPackageSkeletonMigration(BaseMigration):
             # Include jira_key for result matching (stripped before sending to OP)
             "_jira_key": jira_issue.key,
             "_jira_id": str(jira_issue.id),
-            # Original timestamps from Jira (set via update_columns after save)
-            "created_at": getattr(jira_issue.fields, "created", None),
-            "updated_at": getattr(jira_issue.fields, "updated", None),
+            # Original timestamps from Jira (set via update_columns after
+            # save). Force string — the Jira SDK occasionally returns
+            # ``datetime`` objects for these depending on configuration,
+            # which break ``json.dump`` and silently drop the field
+            # entirely. Stringifying keeps the value flowing into the Ruby
+            # template's ``Time.parse(wp_data['created_at'])``.
+            "created_at": (
+                str(getattr(jira_issue.fields, "created", "")) or None
+            ),
+            "updated_at": (
+                str(getattr(jira_issue.fields, "updated", "")) or None
+            ),
         }
 
         # Add assignee if mapped
         if assigned_to_id:
             payload["assigned_to_id"] = assigned_to_id
 
-        # Add J2O Origin Key custom field
-        if j2o_cf_id:
+        # Provenance custom fields. Bug D2 fix: previously only the
+        # ``J2O Origin Key`` value was written; the other 5 provenance
+        # CFs were created by the startup bootstrap but received no
+        # value. Now we populate every provenance CF that exists in OP.
+        cf_ids = self._get_provenance_cf_ids()
+        jira_base_url = ""
+        try:
+            jira_cfg = getattr(self.jira_client, "jira_config", None) or {}
+            jira_base_url = str(jira_cfg.get("url") or "")
+        except Exception:
+            jira_base_url = ""
+        cf_entries = _build_provenance_custom_field_entries(
+            jira_issue, cf_ids, jira_base_url=jira_base_url,
+        )
+        # Fall back to the legacy single-entry flow when the multi-CF
+        # lookup somehow returned nothing (e.g. an early-call before
+        # bootstrap finished). ``j2o_cf_id`` is still passed in for
+        # exactly this reason.
+        if cf_entries:
+            payload["custom_fields"] = cf_entries
+        elif j2o_cf_id:
             payload["custom_fields"] = [{"id": j2o_cf_id, "value": jira_issue.key}]
 
         return payload
