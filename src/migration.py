@@ -147,16 +147,68 @@ PREDEFINED_PROFILES: dict[str, list[ComponentName]] = {
 }
 
 
-# Helper: strictly detect any error condition in a component result
-def _component_has_errors(result: ComponentResult | None) -> bool:
-    """Return True if the component result contains any errors or failed items.
+def _ensure_provenance_bootstrap(op_client: Any, logger: Any) -> None:
+    """Pre-create the J2O provenance custom fields before any component runs.
 
-    This treats as error when:
+    Without this, only ``J2O Origin Key`` survives via lazy on-demand
+    creation in ``work_package_migration``; the User and TimeEntry
+    provenance CFs are never created at all, breaking time-entry
+    idempotency (Bug C) and round-trip recovery.
+
+    Failures are logged but not fatal — partial provenance is better than
+    no migration.
+    """
+    try:
+        op_client.ensure_origin_custom_fields()
+    except Exception as exc:
+        logger.warning("Failed to ensure provenance custom fields: %s", exc)
+
+
+def _backfill_user_mapping_at_startup(op_client: Any, mappings: Any, logger: Any) -> None:
+    """Back-fill ``openproject_id`` for ``matched_by="none"`` users (Bug A2).
+
+    Runs at migration startup — *before* any component executes — so it
+    happens even when the ``users`` component itself gets skipped by
+    change detection (e.g. ``baseline=current`` so the change-aware
+    runner short-circuits to "no changes"). Without this, downstream
+    WP/TimeEntry author/assignee mapping silently drops every user that
+    the initial probe couldn't match.
+
+    Failures are best-effort — degraded mapping is still better than no
+    migration.
+    """
+    try:
+        from src.application.components.user_migration import (
+            _backfill_unmapped_users_from_op,
+        )
+        user_mapping = mappings.get_mapping("user") or {}
+        if not user_mapping:
+            return
+        n = _backfill_unmapped_users_from_op(user_mapping, op_client, logger)
+        if n:
+            mappings.set_mapping("user", user_mapping)
+    except Exception as exc:
+        logger.warning("User-mapping startup back-fill skipped: %s", exc)
+
+
+# Helper: detect a "real" error condition in a component result.
+#
+# Partial-success policy: a migration that returns ``success=True`` and has
+# *some* successful items is treated as complete-with-warnings even if it
+# also reports failures. The component's ``run()`` had final say on whether
+# its work is done. Only when the component itself signals failure (via
+# ``success=False`` / ``errors``-list / explicit ``error`` / failed status)
+# OR when failures exist with **zero** successes is the component flagged
+# as errored.
+def _component_has_errors(result: ComponentResult | None) -> bool:
+    """Return True iff the component result indicates a real failure.
+
+    Failure conditions:
     - result is None
-    - success is False
-    - errors list is non-empty or 'error' field is set
-    - details.status is 'failed'/'error'
-    - any failed counters are > 0 (failed_count, failed, failed_types, failed_issues)
+    - ``success`` is False
+    - ``errors`` list is non-empty or ``error`` field is set
+    - ``details.status`` is ``"failed"`` / ``"error"`` / ``"errors"``
+    - failed counters > 0 **and no successes** (nothing migrated)
     """
     if result is None:
         return True
@@ -166,24 +218,35 @@ def _component_has_errors(result: ComponentResult | None) -> bool:
         return True
     if getattr(result, "error", None):
         return True
-    # Check details
     details = getattr(result, "details", None) or {}
     if isinstance(details, dict):
         status = str(details.get("status", "")).lower()
         if status in ("failed", "error", "errors"):
             return True
-        if int(details.get("failed_count", 0)) > 0:
+
+    # Use the same robust counter extraction as the summary line — partial
+    # successes (some migrated, some failed) are tolerated here. ``run()``
+    # already returned ``success=True`` so the migration considers its work
+    # complete; failures alongside successes are warnings, not errors. Only
+    # all-failed (failed_count > 0 AND success_count == 0) flips this to a
+    # real failure.
+    success_count, failed_count, _total = _extract_counts(result)
+    if failed_count > 0 and success_count == 0:
+        return True
+    # Catch legacy counters not surfaced via _extract_counts (e.g. a
+    # migration sets only ``failed`` / ``failed_types`` / ``failed_issues``
+    # without any success counter). If we got zero success_count from the
+    # robust extractor and any of these are non-zero, treat as all-failed.
+    if success_count == 0:
+        legacy_failed = (
+            int(getattr(result, "failed", 0) or 0)
+            + int(getattr(result, "failed_types", 0) or 0)
+            + int(getattr(result, "failed_issues", 0) or 0)
+            + int(details.get("failed", 0) or 0 if isinstance(details, dict) else 0)
+        )
+        if legacy_failed > 0:
             return True
-        if int(details.get("failed", 0)) > 0:
-            return True
-    # Check explicit counters on the model
-    if int(getattr(result, "failed_count", 0)) > 0:
-        return True
-    if int(getattr(result, "failed", 0)) > 0:
-        return True
-    if int(getattr(result, "failed_types", 0)) > 0:
-        return True
-    return int(getattr(result, "failed_issues", 0)) > 0
+    return False
 
 
 # Helper: robustly extract success/failed/total counts for summaries
@@ -654,6 +717,18 @@ async def run_migration(
         # Initialize mappings once via config accessor to avoid double loads
         # Accessing any attribute on config.mappings triggers lazy init via proxy
         _ = config.mappings.get_all_mappings()
+
+        # Bootstrap provenance custom fields once. Without this only the
+        # ``J2O Origin Key`` WP CF gets created (lazily, on first WP); the
+        # User and TimeEntry CFs are never created at all, breaking
+        # time-entry idempotency on re-runs (Bug C) and round-trip
+        # recovery from OP without local mapping files.
+        _ensure_provenance_bootstrap(op_client, config.logger)
+
+        # Bug A2: back-fill ``openproject_id`` for legacy ``matched_by="none"``
+        # users. Runs here (not in the user component) so it executes
+        # even when change detection skips the user component entirely.
+        _backfill_user_mapping_at_startup(op_client, config.mappings, config.logger)
 
         config.logger.info("Starting migration process...")
 
