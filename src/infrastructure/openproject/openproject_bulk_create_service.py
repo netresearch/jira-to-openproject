@@ -56,6 +56,13 @@ from src import config
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
+# Default script-load mode for bulk-create scripts. ``console`` ships the
+# generated script as a file and ``load``s it inside the persistent tmux
+# Rails console — avoiding the ~5-10s cold-start of ``bundle exec rails
+# runner`` per batch. Override via ``J2O_SCRIPT_LOAD_MODE=runner`` if the
+# tmux console is unavailable.
+DEFAULT_SCRIPT_LOAD_MODE = "console"
+
 
 class OpenProjectBulkCreateService:
     """Generic mass-create + WP-specific batch creation for ``OpenProjectClient``."""
@@ -63,6 +70,33 @@ class OpenProjectBulkCreateService:
     def __init__(self, client: OpenProjectClient) -> None:
         self._client = client
         self._logger = client.logger
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def _cleanup_container_temps(
+        self,
+        client: OpenProjectClient,
+        paths: tuple[Path, ...],
+    ) -> None:
+        """Best-effort delete of container ``/tmp/...`` files.
+
+        Runs ``rm -f`` as ``root`` so files transferred via ``docker cp``
+        (which preserves the host uid) can be deleted regardless of the
+        container's default user (otherwise ``/tmp``'s sticky bit blocks
+        the delete with ``Operation not permitted``).
+        """
+        for cpath in paths:
+            try:
+                client.docker_client.execute_command(
+                    f"rm -f {shlex.quote(cpath.as_posix())}",
+                    user="root",
+                )
+            except Exception as cleanup_err:
+                self._logger.debug(
+                    "Non-critical: failed to remove container temp %s: %s",
+                    cpath,
+                    cleanup_err,
+                )
 
     # ── generic mass-create ──────────────────────────────────────────────
 
@@ -411,7 +445,7 @@ class OpenProjectBulkCreateService:
             with local_tmp.open("w", encoding="utf-8") as f:
                 f.write(full_script)
             client.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or "runner").lower()
+            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or DEFAULT_SCRIPT_LOAD_MODE).lower()
             allow_runner_fallback = str(os.environ.get("J2O_ALLOW_RUNNER_FALLBACK", "0")).lower() in {"1", "true"}
             if mode == "console":
                 try:
@@ -640,17 +674,10 @@ class OpenProjectBulkCreateService:
         finally:
             # Best-effort cleanup of container temp files. Failures
             # log at debug only so they don't mask the real result.
-            for cpath in (container_json, container_result, container_progress):
-                try:
-                    client.docker_client.execute_command(
-                        f"rm -f {shlex.quote(cpath.as_posix())}",
-                    )
-                except Exception as cleanup_err:
-                    self._logger.debug(
-                        "Non-critical: failed to remove container temp %s: %s",
-                        cpath,
-                        cleanup_err,
-                    )
+            self._cleanup_container_temps(
+                client,
+                (container_json, container_result, container_progress),
+            )
 
     # ── work-package batch wrappers ──────────────────────────────────────
 
@@ -801,11 +828,27 @@ class OpenProjectBulkCreateService:
             if wp.save
               created_count += 1
 
-              # Set original timestamps if provided (using update_columns to bypass callbacks)
-              timestamp_attrs = {{}}
-              timestamp_attrs[:created_at] = Time.parse(wp_data['created_at']) if wp_data['created_at']
-              timestamp_attrs[:updated_at] = Time.parse(wp_data['updated_at']) if wp_data['updated_at']
-              wp.update_columns(timestamp_attrs) if timestamp_attrs.any?
+              # Set original timestamps if provided (using update_columns
+              # to bypass callbacks). Wrapped in its own begin/rescue so
+              # a single bad timestamp doesn't roll the whole WP into the
+              # failure bucket — and so the failure surfaces in results
+              # for diagnosis instead of being silently swallowed.
+              begin
+                timestamp_attrs = {{}}
+                timestamp_attrs[:created_at] = Time.parse(wp_data['created_at']) if wp_data['created_at']
+                timestamp_attrs[:updated_at] = Time.parse(wp_data['updated_at']) if wp_data['updated_at']
+                wp.update_columns(timestamp_attrs) if timestamp_attrs.any?
+              rescue => ts_err
+                results << {{
+                  id: wp.id,
+                  status: 'timestamp_failed',
+                  subject: wp.subject,
+                  error: "timestamp update failed: #{{ts_err.class}}: #{{ts_err.message}}",
+                  raw_created_at: wp_data['created_at'],
+                  raw_updated_at: wp_data['updated_at']
+                }}
+                next
+              end
 
               results << {{ id: wp.id, status: 'created', subject: wp.subject }}
             else
@@ -852,20 +895,10 @@ class OpenProjectBulkCreateService:
                     container_json_path,
                 )
             else:
-                try:
-                    # ``shlex.quote`` is defence-in-depth here — the
-                    # current ``container_json_path`` is hex-only via
-                    # ``uuid.uuid4().hex[:8]``, but quoting matches
-                    # the codebase's standard pattern for ``rm -f``
-                    # commands routed through ``execute_command`` and
-                    # protects against future changes to the path
-                    # source.
-                    client.docker_client.execute_command(
-                        f"rm -f {shlex.quote(container_json_path)}",
-                    )
-                except Exception as cleanup_err:
-                    self._logger.warning(
-                        "Failed to cleanup container temp file %s: %s",
-                        container_json_path,
-                        cleanup_err,
-                    )
+                # Run as root: ``container_json_path`` was uploaded via
+                # ``docker cp`` so it carries the host uid; the container's
+                # default user can't delete it under ``/tmp``'s sticky bit.
+                self._cleanup_container_temps(
+                    client,
+                    (Path(container_json_path),),
+                )
