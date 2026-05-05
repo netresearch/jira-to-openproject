@@ -27,6 +27,79 @@ from src.utils.time_entry_transformer import TimeEntryTransformer
 logger = configure_logging("INFO", None)
 
 
+def _extract_worklog_keys_from_op_entries(
+    entries: list[dict[str, Any]],
+    worklog_cf_id: int,
+) -> set[str]:
+    """Pull the set of ``jira_worklog_key`` values present on existing OP
+    TimeEntries.
+
+    OP's serialized ``custom_field_values`` shape is a list of dicts with
+    ``custom_field_id`` (no ``name`` key), so the dedup loop can't match
+    by CF name. Resolve the CF id once and match by id here.
+
+    Backward-compat: also handles a flat ``jira_worklog_key`` meta
+    passthrough and the legacy ``customFields`` / ``cfs`` payload keys.
+    """
+    keys: set[str] = set()
+    for te in entries:
+        if not isinstance(te, dict):
+            continue
+        # Meta passthrough — older code shapes / per-entry HTTP path
+        meta_key = te.get("jira_worklog_key")
+        if isinstance(meta_key, str) and meta_key:
+            keys.add(meta_key)
+        for k in ("custom_fields", "customFields", "cfs"):
+            vals = te.get(k)
+            if isinstance(vals, list):
+                for item in vals:
+                    if not isinstance(item, dict):
+                        continue
+                    cf_id = item.get("custom_field_id")
+                    try:
+                        cf_id_int = int(cf_id) if cf_id is not None else None
+                    except (TypeError, ValueError):
+                        cf_id_int = None
+                    if cf_id_int == worklog_cf_id:
+                        v = item.get("value")
+                        if isinstance(v, str) and v:
+                            keys.add(v)
+            elif isinstance(vals, dict):
+                # Some old shapes use a cf_id-keyed dict
+                v = vals.get(str(worklog_cf_id)) or vals.get(worklog_cf_id)
+                if isinstance(v, str) and v:
+                    keys.add(v)
+    return keys
+
+
+def _filter_already_migrated_entries(
+    entries: list[dict[str, Any]],
+    existing_keys: set[str],
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop entries whose ``_meta.jira_worklog_key`` is already in OP.
+
+    Without this filter, the batch path of the time-entry migrator
+    happily re-creates every worklog on every run — Bug C: running the
+    migration twice produced 10606 TimeEntries vs 5303 worklogs in
+    Jira.
+
+    Returns ``(kept, skipped_count)``. Entries without a worklog key
+    are kept (we can't dedup them; the surrounding migrator warns).
+    """
+    if not existing_keys:
+        return entries, 0
+    kept: list[dict[str, Any]] = []
+    skipped = 0
+    for e in entries:
+        meta = e.get("_meta") if isinstance(e, dict) else None
+        key = meta.get("jira_worklog_key") if isinstance(meta, dict) else None
+        if isinstance(key, str) and key and key in existing_keys:
+            skipped += 1
+            continue
+        kept.append(e)
+    return kept, skipped
+
+
 class TimeEntryMigrationResult(TypedDict):
     """Type hint for time entry migration results."""
 
@@ -505,30 +578,58 @@ class TimeEntryMigrator:
             "skipped_details": [],
         }
 
-        # Build set of existing external keys to enforce idempotency
+        # Build set of existing external keys to enforce idempotency.
+        # The bulk-create script writes provenance to the canonical CF
+        # ``J2O Origin Worklog Key`` (matches ``ensure_origin_custom_fields``).
+        # OP's serialized ``custom_field_values`` shape carries
+        # ``custom_field_id`` but NOT ``name``, so we resolve the CF id
+        # once and match by id (Bug C2 — earlier code matched by name and
+        # missed every entry).
         existing_keys: set[str] = set()
+        worklog_cf_id: int | None = None
         try:
-            # Query recent time entries and collect provenance CF if present
-            recent = self.op_client.get_time_entries(limit=2000)
-            for te in recent:
-                # Expect a custom field mapping in response in future; be defensive for now
-                cf_value = None
-                # Some adapters may include custom_fields array
-                for k in ("custom_fields", "customFields", "cfs"):
-                    vals = te.get(k) if isinstance(te, dict) else None
-                    if isinstance(vals, dict):
-                        cf_value = cf_value or vals.get("Jira Worklog Key")
-                    elif isinstance(vals, list):
-                        for item in vals:
-                            if isinstance(item, dict) and item.get("name") == "Jira Worklog Key":
-                                cf_value = cf_value or item.get("value")
-                # Fallback: look for meta passthroughs if any
-                cf_value = cf_value or te.get("jira_worklog_key")
-                if isinstance(cf_value, str) and cf_value:
-                    existing_keys.add(cf_value)
-        except Exception:
-            # Non-fatal; continue without snapshot
-            existing_keys = set()
+            cf = self.op_client.ensure_custom_field(
+                name="J2O Origin Worklog Key",
+                field_format="string",
+                cf_type="TimeEntryCustomField",
+            )
+            if isinstance(cf, dict) and cf.get("id"):
+                worklog_cf_id = int(cf["id"])
+        except Exception as cf_err:
+            self.logger.warning("Could not resolve TimeEntry worklog CF id for dedup: %s", cf_err)
+
+        if worklog_cf_id:
+            try:
+                # Query the CustomValue table directly — matches *every*
+                # TimeEntry that already carries a Jira worklog key, no
+                # matter how many TimeEntries are in the database. The
+                # earlier ``get_time_entries(limit=2000)`` only saw the
+                # first 2000 by id, missing recent provenance and
+                # producing duplicates on every re-run (Bug C2).
+                key_query = (
+                    f"CustomValue.where(custom_field_id: {worklog_cf_id}, "
+                    "customized_type: 'TimeEntry').where.not(value: [nil, '']).pluck(:value)"
+                )
+                rows = self.op_client.execute_json_query(key_query, timeout=60)
+                if isinstance(rows, list):
+                    existing_keys = {str(v) for v in rows if isinstance(v, str) and v}
+            except Exception as probe_err:
+                self.logger.debug("Could not snapshot existing worklog keys: %s", probe_err)
+                existing_keys = set()
+
+        # Apply dedup filter BEFORE the batch path takes over. Previously
+        # only the per-entry fallback applied this filter, so re-runs in
+        # batch mode (the default) duplicated every entry.
+        if existing_keys:
+            entries_to_migrate, dedup_skipped = _filter_already_migrated_entries(
+                entries_to_migrate, existing_keys,
+            )
+            if dedup_skipped:
+                self.logger.info(
+                    "Skipping %d already-migrated time entries (provenance match)",
+                    dedup_skipped,
+                )
+                migration_summary["skipped_entries"] += dedup_skipped
 
         if dry_run:
             self.logger.warning("DRY RUN mode - no time entries will be created")
