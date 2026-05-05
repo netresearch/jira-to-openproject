@@ -657,6 +657,62 @@ class IssueTypeMigration(BaseMigration):
         # If we reached here without returning, assume success but couldn't get ID
         return {"status": "success", "name": type_name}
 
+    def _resolve_name_taken_errors(
+        self,
+        errors: list[dict[str, Any]],
+        records: list[dict[str, Any]],
+        existing_types: list[dict[str, Any]],
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Reclaim 'Name has already been taken' bulk-create errors.
+
+        For each error matching that exact Rails validation, look up the
+        existing OP type by case-insensitive name and update every
+        ``self.issue_type_mapping`` entry whose ``openproject_name`` matches
+        — including sub-types that normalized to the same base name —
+        pointing them at the found id.
+
+        Returns ``(resolved_count, unresolved_errors)``. The caller can keep
+        treating ``unresolved_errors`` as failures.
+        """
+        if not errors:
+            return 0, []
+
+        existing_by_name = {
+            (t.get("name") or "").lower(): t.get("id")
+            for t in existing_types
+            if t.get("name") and t.get("id")
+        }
+
+        resolved = 0
+        unresolved: list[dict[str, Any]] = []
+        for err in errors:
+            err_msgs = err.get("errors") or []
+            is_taken = any("Name has already been taken" in str(m) for m in err_msgs)
+            idx = err.get("index")
+            if not is_taken or not isinstance(idx, int) or not (0 <= idx < len(records)):
+                unresolved.append(err)
+                continue
+
+            taken_name = (records[idx].get("name") or "").strip()
+            existing_id = existing_by_name.get(taken_name.lower())
+            if not existing_id:
+                unresolved.append(err)
+                continue
+
+            for mapping in self.issue_type_mapping.values():
+                if mapping.get("openproject_name") == taken_name and mapping.get("openproject_id") is None:
+                    mapping["openproject_id"] = existing_id
+                    mapping["matched_by"] = "found_existing_after_create"
+
+            self.logger.info(
+                "Resolved 'Name has already been taken' for type '%s' -> existing OP id %s",
+                taken_name,
+                existing_id,
+            )
+            resolved += 1
+
+        return resolved, unresolved
+
     def migrate_issue_types_via_rails(self, window: int = 0, pane: int = 0) -> None:
         """Migrate issue types directly via the Rails console using a bulk operation.
 
@@ -783,6 +839,27 @@ class IssueTypeMigration(BaseMigration):
                         if mapping.get("openproject_name") == proposed_name and mapping.get("openproject_id") is None:
                             mapping["openproject_id"] = item.get("id")
                             mapping["matched_by"] = "created"
+
+            # Recover from "Name has already been taken." validation errors by
+            # looking up the existing OP type id. Done before persistence so
+            # the resolved mappings get saved + included in provenance below.
+            if errors:
+                try:
+                    refreshed_existing = self.check_existing_work_package_types()
+                except Exception as fetch_err:
+                    self.logger.warning(
+                        "Could not refresh existing types for taken-name recovery: %s",
+                        fetch_err,
+                    )
+                    refreshed_existing = []
+                resolved, errors = self._resolve_name_taken_errors(
+                    errors, records, refreshed_existing,
+                )
+                if resolved:
+                    self.logger.info(
+                        "Recovered %d 'Name has already been taken' errors via lookup",
+                        resolved,
+                    )
 
             # Persist mappings
             config.mappings.set_mapping("issue_type", self.issue_type_mapping)
