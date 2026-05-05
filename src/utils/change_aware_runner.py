@@ -279,7 +279,15 @@ class ChangeAwareRunner:
             try:
                 return self.migration._get_current_entities_for_type(name)
             except Exception as e:
-                self.logger.exception("Failed to fetch entities for %s", name)
+                # Log at debug only — ``should_skip_migration`` already logs at
+                # WARNING when it catches the wrapped ``MigrationError`` and
+                # falls back to running the migration. The previous
+                # ``logger.exception`` produced a duplicate ERROR-level
+                # traceback per transformation-only component (resolutions,
+                # security_levels, affects_versions, votes_reactions,
+                # time_entries) — those signal "no change detection" by
+                # design, not an actual failure.
+                self.logger.debug("Failed to fetch entities for %s: %s", name, e)
                 msg = f"API call failed for {name}: {e}"
                 raise MigrationError(msg) from e
 
