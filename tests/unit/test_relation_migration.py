@@ -131,3 +131,34 @@ def test_run_creates_with_swap(monkeypatch: pytest.MonkeyPatch, _map_store):
     assert op.created == [(20, 10, "blocks")]
     assert res.details["created"] == 1
     assert res.success
+
+
+def test_run_result_includes_runner_count_keys(_map_store):
+    """The migration runner reports per-component counts via
+    ``details.success_count`` / ``failed_count`` / ``total_count``
+    (see ``base_migration._extract_counts``). Without these keys the
+    summary line shows '0/0 items migrated, 0 failed' even when the
+    migration actually created hundreds of relations — exactly what
+    happened on the live NRS run on 2026-05-04.
+    """
+    op = DummyOpClient()
+    issues = dict([_make_issue("J1", "relates", "outward", "J2")])
+
+    class DummyJira:
+        def batch_get_issues(self, keys):
+            return issues
+
+    rm = RelationMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    res = rm.run()
+
+    # Required keys for the runner to report real numbers
+    assert "success_count" in res.details, res.details
+    assert "failed_count" in res.details
+    assert "total_count" in res.details
+    # And they must agree with the per-flow counters
+    assert res.details["success_count"] == res.details["created"]
+    assert res.details["failed_count"] == res.details["errors"]
+    assert (
+        res.details["total_count"]
+        == res.details["created"] + res.details["skipped"] + res.details["errors"]
+    )
