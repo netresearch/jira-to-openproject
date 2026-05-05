@@ -570,22 +570,28 @@ class HealthCheckClient:
         errors: list[str] = []
 
         try:
+            # Run as root so files transferred via ``docker cp`` (which
+            # carry the host uid) can be counted/deleted regardless of the
+            # container's default user under ``/tmp``'s sticky bit.
+            container = shlex.quote(self.container_name)
+            qpattern = shlex.quote(pattern)
+
             # Count files before
             stdout, _, _ = self.ssh_client.execute_command(
-                f"docker exec {shlex.quote(self.container_name)} sh -c 'find /tmp -name {shlex.quote(pattern)} 2>/dev/null | wc -l'",
+                f"docker exec -u root {container} sh -c 'find /tmp -name {qpattern} 2>/dev/null | wc -l'",
             )
             files_before = int(stdout.strip()) if stdout.strip().isdigit() else 0
 
             # Delete old files
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {shlex.quote(self.container_name)} find /tmp -name {shlex.quote(pattern)} -mmin +{int(max_age_minutes)} -delete 2>&1",
+                f"docker exec -u root {container} find /tmp -name {qpattern} -mmin +{int(max_age_minutes)} -delete 2>&1",
             )
             if rc != 0 and stderr:
                 errors.append(f"Cleanup command failed: {stderr}")
 
             # Count files after
             stdout, _, _ = self.ssh_client.execute_command(
-                f"docker exec {shlex.quote(self.container_name)} sh -c 'find /tmp -name {shlex.quote(pattern)} 2>/dev/null | wc -l'",
+                f"docker exec -u root {container} sh -c 'find /tmp -name {qpattern} 2>/dev/null | wc -l'",
             )
             files_after = int(stdout.strip()) if stdout.strip().isdigit() else 0
 

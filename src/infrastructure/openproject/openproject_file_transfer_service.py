@@ -201,13 +201,15 @@ class OpenProjectFileTransferService:
         * ``files_or_local`` is a ``Path`` and ``remote_path`` is a ``Path`` —
           remove the local file then the remote file.
         """
-        # Mode 1: list of remote filenames
+        # Mode 1: list of remote filenames. Run rm as root: files transferred
+        # via ``docker cp`` carry the host uid, which the container's default
+        # user can't delete under ``/tmp``'s sticky bit.
         if isinstance(files_or_local, (list, tuple)):
             for name in files_or_local:
                 try:
                     remote_file = name if isinstance(name, str) else getattr(name, "name", str(name))
                     cmd = (
-                        f"docker exec {shlex.quote(self._client.container_name)} "
+                        f"docker exec -u root {shlex.quote(self._client.container_name)} "
                         f"rm -f {shlex.quote(f'/tmp/{Path(remote_file).name}')}"
                     )
                     self._client.ssh_client.execute_command(cmd)
@@ -232,8 +234,9 @@ class OpenProjectFileTransferService:
                 # ran on the *host*, so container temp files would never
                 # be cleaned up. Mirror mode 1 above and route through
                 # ``docker exec``.
+                # Run as root for the same reason as mode 1.
                 cmd = (
-                    f"docker exec {shlex.quote(self._client.container_name)} "
+                    f"docker exec -u root {shlex.quote(self._client.container_name)} "
                     f"rm -f {shlex.quote(remote_path.as_posix())}"
                 )
                 self._client.ssh_client.execute_command(cmd)
