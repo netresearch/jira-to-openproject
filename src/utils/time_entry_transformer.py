@@ -85,8 +85,18 @@ class TimeEntryTransformer:
                 or "unknown"
             )
 
-            # Parse time spent (comes as seconds in Jira)
-            time_spent_seconds = work_log.get("timeSpentSeconds", 0)
+            # Parse time spent (seconds). ``jira_worklog_service.extract_work_logs``
+            # produces ``time_spent_seconds`` (snake_case); raw Jira REST
+            # uses ``timeSpentSeconds`` (camelCase). Try both so the
+            # transformer is robust to either upstream shape — the
+            # snake_case path was silently returning 0 in production
+            # before this fix, collapsing every entry to the min-hour
+            # floor (0.01 h).
+            time_spent_seconds = (
+                work_log.get("time_spent_seconds")
+                or work_log.get("timeSpentSeconds")
+                or 0
+            )
             hours = time_spent_seconds / 3600.0
             # Clamp minimum hours to avoid zero-hour entries after rounding
             min_hours = float(config.migration_config.get("min_time_entry_hours", 0.01))
@@ -184,8 +194,16 @@ class TimeEntryTransformer:
             )
             issue_key = tempo_log.get("issue", {}).get("key", "")
 
-            # Parse time spent (Tempo provides in seconds)
-            time_spent_seconds = tempo_log.get("timeSpentSeconds", 0)
+            # Parse time spent (seconds). Same dual-key handling as the
+            # Jira path (``time_spent_seconds`` snake_case vs
+            # ``timeSpentSeconds`` camelCase) so Tempo is symmetrically
+            # safe even though our Tempo extractor currently emits
+            # camelCase.
+            time_spent_seconds = (
+                tempo_log.get("time_spent_seconds")
+                or tempo_log.get("timeSpentSeconds")
+                or 0
+            )
             hours = time_spent_seconds / 3600.0
             min_hours = float(config.migration_config.get("min_time_entry_hours", 0.01))
             final_hours = round(max(hours, min_hours if hours <= 0 or round(hours, 2) <= 0 else hours), 2)
