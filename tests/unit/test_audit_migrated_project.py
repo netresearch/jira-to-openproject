@@ -306,6 +306,49 @@ def test_wp_cf_format_missing_field_treated_as_silent() -> None:
     assert not any("format" in f.lower() for f in failures), failures
 
 
+# --- TE CF value-format validation ------------------------------------------
+# Parallel to the WP CF format check. The dedup-critical
+# ``J2O Origin Worklog Key`` is built from one of two formulas
+# (``<JIRA_KEY>:<id>`` or ``tempo:<id>``) — a regression that corrupts
+# the value silently breaks dedup on re-run.
+
+
+def test_te_cf_format_violation_is_failure() -> None:
+    """One violation must fail with the CF name and the dedup hint."""
+    failures, _warnings = _classify(
+        _baseline_metrics(te_cf_format_violations={"J2O Origin Worklog Key": 2}),
+    )
+    assert any("format" in f.lower() and "J2O Origin Worklog Key" in f and "dedup" in f.lower() for f in failures), (
+        failures
+    )
+
+
+def test_te_cf_format_zero_violations_passes() -> None:
+    failures, _warnings = _classify(
+        _baseline_metrics(te_cf_format_violations={"J2O Origin Worklog Key": 0}),
+    )
+    assert not any("format" in f.lower() and "TimeEntry" in f for f in failures), failures
+
+
+def test_te_cf_format_missing_field_treated_as_silent() -> None:
+    """Missing key = legacy audit run, must NOT fail (zero is healthy)."""
+    metrics = _baseline_metrics()
+    failures, _warnings = _classify(metrics)
+    assert not any("format" in f.lower() and "TimeEntry" in f for f in failures), failures
+
+
+def test_te_cf_format_null_count_does_not_crash() -> None:
+    """A ``None`` count for a CF must collapse to zero, not raise.
+
+    Same contract as ``test_wp_cf_format_null_count_does_not_crash`` —
+    defends against a Ruby schema change emitting JSON ``null``.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(te_cf_format_violations={"J2O Origin Worklog Key": None}),
+    )
+    assert not any("format" in f.lower() and "TimeEntry" in f for f in failures), failures
+
+
 # --- TimeEntry Origin Worklog Key population --------------------------------
 # Per spec, ``J2O Origin Worklog Key`` MUST be populated on every migrated
 # TimeEntry — it's the dedup key on re-runs. Existence-of-the-CF alone is
