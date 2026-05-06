@@ -51,6 +51,7 @@ import logging
 import mimetypes
 import re
 import uuid
+from collections import Counter
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -791,7 +792,14 @@ class UserMigration(BaseMigration):
         avatar_dir.mkdir(parents=True, exist_ok=True)
 
         uploaded = 0
-        skipped = 0
+        # Track *why* each avatar was skipped, mirroring the relation
+        # and watcher migrations (PR #190). The aggregate ``skipped``
+        # in the returned dict is preserved for backward compat; the
+        # ``skip_reasons`` breakdown distinguishes "expected"
+        # (``cached_digest_match`` — idempotent re-run, NOT a real
+        # loss) from "real" failures (download / persist / transfer /
+        # set-API).
+        skip_reasons: Counter[str] = Counter()
 
         for job in jobs:
             jira_key = job["jira_key"]
@@ -800,7 +808,7 @@ class UserMigration(BaseMigration):
 
             download = self.jira_client.download_user_avatar(avatar_url)
             if not download:
-                skipped += 1
+                skip_reasons["download_failed"] += 1
                 continue
 
             data, content_type = download
@@ -814,7 +822,7 @@ class UserMigration(BaseMigration):
                     "Skipping avatar upload for %s (digest match)",
                     jira_key,
                 )
-                skipped += 1
+                skip_reasons["cached_digest_match"] += 1
                 continue
 
             ext = self._guess_avatar_extension(content_type, avatar_url)
@@ -825,7 +833,7 @@ class UserMigration(BaseMigration):
                     handle.write(data)
             except Exception as exc:
                 self.logger.warning("Failed to persist avatar for %s: %s", jira_key, exc)
-                skipped += 1
+                skip_reasons["local_persist_failed"] += 1
                 continue
 
             container_name = f"j2o_avatar_{job['openproject_id']}_{uuid.uuid4().hex}.{ext}"
@@ -834,11 +842,12 @@ class UserMigration(BaseMigration):
                 self.op_client.transfer_file_to_container(local_path, container_path)
             except Exception as exc:
                 self.logger.warning("Failed to copy avatar for %s to container: %s", jira_key, exc)
-                skipped += 1
+                skip_reasons["container_transfer_failed"] += 1
                 with suppress(OSError):
                     local_path.unlink()
                 continue
 
+            api_raised = False
             try:
                 result = self.op_client.set_user_avatar(
                     user_id=job["openproject_id"],
@@ -848,7 +857,8 @@ class UserMigration(BaseMigration):
                 )
             except Exception as exc:
                 self.logger.warning("Failed to set avatar for %s: %s", jira_key, exc)
-                skipped += 1
+                skip_reasons["set_avatar_api_raised"] += 1
+                api_raised = True
                 result = {"success": False}
             finally:
                 try:
@@ -868,11 +878,30 @@ class UserMigration(BaseMigration):
                     "digest": digest,
                     "url": avatar_url,
                 }
-            else:
-                skipped += 1
+            elif not api_raised:
+                # ``api_raised=False`` here means the API call returned
+                # cleanly with ``success=False`` — distinct from the
+                # raised case (already counted above as
+                # ``set_avatar_api_raised``). The pre-#190 code
+                # incremented ``skipped`` in both branches, double-
+                # counting raised calls; the ``api_raised`` guard
+                # corrects that.
+                skip_reasons["set_avatar_api_returned_false"] += 1
+
+        skipped = sum(skip_reasons.values())
+        if skipped:
+            self.logger.info(
+                "Avatar upload skip breakdown (%d total): %s",
+                skipped,
+                dict(skip_reasons),
+            )
 
         self._save_avatar_cache()
-        return {"uploaded": uploaded, "skipped": skipped}
+        return {
+            "uploaded": uploaded,
+            "skipped": skipped,
+            "skip_reasons": dict(skip_reasons),
+        }
 
     def _guess_avatar_extension(self, content_type: str, avatar_url: str) -> str:
         candidate = ""
