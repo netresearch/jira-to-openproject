@@ -216,10 +216,18 @@ def _metric_int(metrics: dict[str, Any], key: str, default: int = 0) -> int:
     ``nil`` / ``null`` (Python sees ``None``). Plain ``int(metrics.get(key, 0))``
     only handles the first — ``int(None)`` raises ``TypeError`` and
     turns a data-quality signal into a hard tool failure with no
-    actionable message. This helper handles both, so every numeric
-    rule below stays robust under Ruby/Python schema skew.
+    actionable message. This helper handles both.
+
+    Note the explicit ``is None`` check rather than the simpler
+    ``metrics.get(key, default) or default``: the latter would collapse
+    a legitimate ``0`` to ``default`` when ``default != 0`` (because
+    ``0 or 5 == 5``). All current callers pass ``default=0`` so the
+    distinction is dormant, but the contract advertised by the
+    signature must hold for any future caller that passes a non-zero
+    default.
     """
-    return int(metrics.get(key, default) or default)
+    value = metrics.get(key)
+    return default if value is None else int(value)
 
 
 def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -285,9 +293,14 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     te_total = _metric_int(metrics, "te_total")
     if te_total > 0:
         distinct = _metric_int(metrics, "te_distinct_hours_count")
-        if distinct == 1 and metrics.get("te_min_hours") == metrics.get("te_max_hours"):
+        te_min_hours = metrics.get("te_min_hours")
+        te_max_hours = metrics.get("te_max_hours")
+        # Explicit not-None guard: ``None == None`` is True in Python,
+        # which would otherwise let an all-keys-missing metrics dict fire
+        # the rule with a meaningless ``hours = None`` message.
+        if distinct == 1 and te_min_hours is not None and te_min_hours == te_max_hours:
             failures.append(
-                f"All {te_total} TimeEntries have hours = {metrics['te_min_hours']} — units"
+                f"All {te_total} TimeEntries have hours = {te_min_hours} — units"
                 " are not being preserved (Bug B indicator)"
             )
         # ``J2O Origin Worklog Key`` MUST be populated on every migrated
