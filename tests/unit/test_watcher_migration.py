@@ -129,6 +129,51 @@ def test_skip_reasons_wp_unmapped(
     assert breakdown.get("wp_unmapped") == 1, breakdown
 
 
+def test_skip_reasons_breakdown_sums_to_total_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """The breakdown's values must sum to the aggregate ``skipped``.
+
+    Mirror of the relation-side ``test_run_skip_reasons_breakdown_sums_to_total_skipped``.
+    Pins the load-bearing invariant: a future refactor that
+    introduces a bare ``skipped += 1`` (bypassing the Counter) or
+    stops adding ``bulk_dedup_or_invalid`` to the breakdown dict
+    would silently desynchronize the breakdown from the aggregate.
+    Multiple buckets fire simultaneously here so the sum-check is
+    actually exercised.
+    """
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            # Two unmapped users on J1, plus a parse-failure-shaped object
+            return [{"name": "alice"}, {"name": "bob"}, {"name": "charlie"}, None]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    # J1 is mapped (will see the unmapped-user + parse-fail buckets fire);
+    # J99 is NOT (will see the wp_unmapped bucket fire).
+    (cache_dir / "jira_issues_cache.json").write_text(
+        '{"J1": {"key": "J1"}, "J99": {"key": "J99"}}',
+    )
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    breakdown = res.details["skip_reasons"]
+
+    # Multiple buckets must have fired (different reasons).
+    assert len([k for k, v in breakdown.items() if v]) >= 2, breakdown
+
+    # Sum of breakdown values must equal the aggregate ``skipped``.
+    assert sum(breakdown.values()) == res.details["skipped"], (
+        breakdown,
+        res.details["skipped"],
+    )
+
+
 def test_skip_reasons_empty_when_all_succeed(
     monkeypatch: pytest.MonkeyPatch,
     _map_store,
