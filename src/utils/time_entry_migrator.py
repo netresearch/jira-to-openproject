@@ -599,13 +599,13 @@ class TimeEntryMigrator:
             self.logger.warning("Could not resolve TimeEntry worklog CF id for dedup: %s", cf_err)
 
         if worklog_cf_id:
+            # Primary probe: query the CustomValue table directly —
+            # matches *every* TimeEntry that already carries a Jira
+            # worklog key, regardless of how many TimeEntries are in
+            # the database. The earlier ``get_time_entries(limit=2000)``
+            # only saw the first 2000 by id, missing recent provenance
+            # and producing duplicates on every re-run (Bug C2).
             try:
-                # Query the CustomValue table directly — matches *every*
-                # TimeEntry that already carries a Jira worklog key, no
-                # matter how many TimeEntries are in the database. The
-                # earlier ``get_time_entries(limit=2000)`` only saw the
-                # first 2000 by id, missing recent provenance and
-                # producing duplicates on every re-run (Bug C2).
                 key_query = (
                     f"CustomValue.where(custom_field_id: {worklog_cf_id}, "
                     "customized_type: 'TimeEntry').where.not(value: [nil, '']).pluck(:value)"
@@ -614,8 +614,24 @@ class TimeEntryMigrator:
                 if isinstance(rows, list):
                     existing_keys = {str(v) for v in rows if isinstance(v, str) and v}
             except Exception as probe_err:
-                self.logger.debug("Could not snapshot existing worklog keys: %s", probe_err)
+                self.logger.debug("Direct CustomValue probe failed, falling back: %s", probe_err)
                 existing_keys = set()
+
+            # Fallback: derive worklog keys from the limited
+            # ``get_time_entries`` snapshot via
+            # ``_extract_worklog_keys_from_op_entries``. This won't see
+            # entries past the 2000-row limit (so re-runs after a huge
+            # backfill may still duplicate at the tail), but is better
+            # than no dedup if the direct probe ever stops working.
+            if not existing_keys:
+                try:
+                    recent = self.op_client.get_time_entries(limit=2000)
+                    existing_keys = _extract_worklog_keys_from_op_entries(
+                        recent, worklog_cf_id,
+                    )
+                except Exception as fb_err:
+                    self.logger.debug("Fallback worklog snapshot failed: %s", fb_err)
+                    existing_keys = set()
 
         # Apply dedup filter BEFORE the batch path takes over. Previously
         # only the per-entry fallback applied this filter, so re-runs in
