@@ -342,6 +342,76 @@ def test_te_worklog_key_missing_field_treated_as_zero() -> None:
     assert any("worklog" in f.lower() for f in failures), failures
 
 
+def test_classify_does_not_crash_when_wp_total_is_null() -> None:
+    """``wp_total`` itself goes through the helper — None must not crash.
+
+    Sibling to the all-other-metrics-null smoke. Setting ``wp_total=None``
+    short-circuits via the ``wp_total == 0`` early-return, so this only
+    exercises the *first* helper call. Without it, a future regression
+    that removes ``_metric_int`` from the wp_total site would slip past
+    the other smoke (which keeps wp_total=100 to exercise downstream).
+    """
+    failures, _warnings = _classify(_baseline_metrics(wp_total=None))
+    assert isinstance(failures, list)
+    assert any("no work packages" in f.lower() for f in failures), failures
+
+
+def test_metric_int_preserves_zero_with_non_zero_default() -> None:
+    """``_metric_int(default=N)`` must return 0 when the value is 0, not N.
+
+    Pins the explicit ``is None`` branch in the helper. A naive
+    ``metrics.get(key, default) or default`` would return ``default``
+    on a legitimate 0 (because ``0 or N == N``), silently masking a
+    "zero is the actual count" signal whenever a caller passes a
+    non-zero default. All current callers use ``default=0``, but the
+    signature advertises non-zero defaults — this test makes sure the
+    body honors that.
+    """
+    from tools.audit_migrated_project import _metric_int
+
+    assert _metric_int({"k": 0}, "k", default=5) == 0
+    assert _metric_int({"k": None}, "k", default=5) == 5
+    assert _metric_int({}, "k", default=5) == 5
+    assert _metric_int({"k": 7}, "k", default=5) == 7
+
+
+def test_classify_does_not_crash_when_all_numeric_metrics_are_null() -> None:
+    """Every numeric metric site must coerce ``None`` to 0 instead of raising.
+
+    Defends against a future Ruby schema change emitting JSON ``null``
+    on any metric (a conditional branch that returns ``nil`` instead of
+    0, a partial-result blob, etc.). Without uniform ``or 0`` coercion,
+    Python ``int(None)`` and arithmetic-with-None crash ``_classify``
+    and turn a data-quality signal into a hard tool failure.
+
+    Smoke test: blanks every numeric site simultaneously and verifies
+    ``_classify`` returns normally. The actual outcome (lots of
+    failures, since 0 < wp_total triggers most rules) is the secondary
+    signal — the primary contract under test is "doesn't raise".
+    """
+    metrics = _baseline_metrics(
+        wp_with_author=None,
+        wp_with_subject=None,
+        wp_with_assignee=None,
+        wp_created_in_last_24h=None,
+        wp_with_type=None,
+        wp_with_status=None,
+        wp_with_priority=None,
+        wp_with_description=None,
+        wp_journal_total=None,
+        wp_watcher_total=None,
+        relation_total=None,
+        te_total=None,
+        te_with_worklog_key=None,
+        te_distinct_hours_count=None,
+        orphaned_relations_from=None,
+        orphaned_relations_to=None,
+        orphaned_watchers=None,
+    )
+    failures, _warnings = _classify(metrics)
+    assert isinstance(failures, list)
+
+
 def test_te_worklog_key_null_value_does_not_crash() -> None:
     """A ``None`` value (e.g. future Ruby branch emits ``nil``) must not raise.
 

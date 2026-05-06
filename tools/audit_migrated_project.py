@@ -207,6 +207,29 @@ end).call
 """
 
 
+def _metric_int(metrics: dict[str, Any], key: str, default: int = 0) -> int:
+    """Read a numeric metric, coercing missing key OR JSON ``null`` to default.
+
+    The audit's Ruby script returns a JSON dict whose values become the
+    Python ``metrics`` dict here. A future Ruby schema can fail this
+    contract two ways: omit a key (Python sees missing) or emit
+    ``nil`` / ``null`` (Python sees ``None``). Plain ``int(metrics.get(key, 0))``
+    only handles the first — ``int(None)`` raises ``TypeError`` and
+    turns a data-quality signal into a hard tool failure with no
+    actionable message. This helper handles both.
+
+    Note the explicit ``is None`` check rather than the simpler
+    ``metrics.get(key, default) or default``: the latter would collapse
+    a legitimate ``0`` to ``default`` when ``default != 0`` (because
+    ``0 or 5 == 5``). All current callers pass ``default=0`` so the
+    distinction is dormant, but the contract advertised by the
+    signature must hold for any future caller that passes a non-zero
+    default.
+    """
+    value = metrics.get(key)
+    return default if value is None else int(value)
+
+
 def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return (failures, warnings) per the migration spec."""
     failures: list[str] = []
@@ -221,31 +244,34 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         failures.append(f"Audit aborted: {error_msg}")
         return failures, warnings
 
-    wp_total = int(metrics.get("wp_total", 0))
+    wp_total = _metric_int(metrics, "wp_total")
     if wp_total == 0:
         failures.append("No work packages found for project (migration likely never ran for it)")
         return failures, warnings
 
     # All WPs must have author + subject
-    if metrics.get("wp_with_author", 0) < wp_total:
-        failures.append(f"WPs missing author_id: {wp_total - metrics['wp_with_author']}/{wp_total}")
-    if metrics.get("wp_with_subject", 0) < wp_total:
-        failures.append(f"WPs missing subject: {wp_total - metrics['wp_with_subject']}/{wp_total}")
+    wp_with_author = _metric_int(metrics, "wp_with_author")
+    if wp_with_author < wp_total:
+        failures.append(f"WPs missing author_id: {wp_total - wp_with_author}/{wp_total}")
+    wp_with_subject = _metric_int(metrics, "wp_with_subject")
+    if wp_with_subject < wp_total:
+        failures.append(f"WPs missing subject: {wp_total - wp_with_subject}/{wp_total}")
 
     # Assignee — coverage signal (was the bug at <1% before fix)
-    assignee_pct = (metrics.get("wp_with_assignee", 0) / wp_total) * 100
+    wp_with_assignee = _metric_int(metrics, "wp_with_assignee")
+    assignee_pct = (wp_with_assignee / wp_total) * 100
     if assignee_pct < 5:
         failures.append(
-            f"Suspiciously low assignee coverage: {metrics['wp_with_assignee']}/{wp_total} = {assignee_pct:.1f}%"
-            " (Bug A indicator)"
+            f"Suspiciously low assignee coverage: {wp_with_assignee}/{wp_total} = {assignee_pct:.1f}% (Bug A indicator)"
         )
 
     # created_at preservation — if >50% of WPs were created in the last 24h,
     # update_columns isn't sticking (Bug E indicator)
-    created_recent_pct = (metrics.get("wp_created_in_last_24h", 0) / wp_total) * 100
+    wp_created_recent = _metric_int(metrics, "wp_created_in_last_24h")
+    created_recent_pct = (wp_created_recent / wp_total) * 100
     if created_recent_pct > 50:
         failures.append(
-            f"{metrics['wp_created_in_last_24h']}/{wp_total} ({created_recent_pct:.0f}%) WPs have"
+            f"{wp_created_recent}/{wp_total} ({created_recent_pct:.0f}%) WPs have"
             " created_at within last 24h — original Jira timestamps not preserved (Bug E indicator)"
         )
 
@@ -264,22 +290,24 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         failures.append(f"TimeEntry provenance CFs missing: {missing_te_cfs} (Bug D indicator)")
 
     # Time entry hours — Bug B indicator
-    te_total = metrics.get("te_total", 0)
+    te_total = _metric_int(metrics, "te_total")
     if te_total > 0:
-        distinct = metrics.get("te_distinct_hours_count", 0)
-        if distinct == 1 and metrics.get("te_min_hours") == metrics.get("te_max_hours"):
+        distinct = _metric_int(metrics, "te_distinct_hours_count")
+        te_min_hours = metrics.get("te_min_hours")
+        te_max_hours = metrics.get("te_max_hours")
+        # Explicit not-None guard: ``None == None`` is True in Python,
+        # which would otherwise let an all-keys-missing metrics dict fire
+        # the rule with a meaningless ``hours = None`` message.
+        if distinct == 1 and te_min_hours is not None and te_min_hours == te_max_hours:
             failures.append(
-                f"All {te_total} TimeEntries have hours = {metrics['te_min_hours']} — units"
+                f"All {te_total} TimeEntries have hours = {te_min_hours} — units"
                 " are not being preserved (Bug B indicator)"
             )
         # ``J2O Origin Worklog Key`` MUST be populated on every migrated
         # TE. Below ``te_total`` means dedup on re-run will silently fail
         # for the unmarked entries (each rerun would create duplicates).
         # Missing key in metrics → 0 → fail loud (Ruby/Python skew guard).
-        # ``or 0`` so a future Ruby branch that emits ``null`` (rather
-        # than 0) doesn't crash ``_classify`` with ``TypeError`` —
-        # matches the contract pinned by PR #178.
-        te_with_wlk = int(metrics.get("te_with_worklog_key", 0) or 0)
+        te_with_wlk = _metric_int(metrics, "te_with_worklog_key")
         if te_with_wlk < te_total:
             failures.append(
                 f"TimeEntry 'J2O Origin Worklog Key' population:"
@@ -296,7 +324,7 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         ("status", "wp_with_status"),
         ("priority", "wp_with_priority"),
     ):
-        populated = int(metrics.get(key, 0))
+        populated = _metric_int(metrics, key)
         if populated < wp_total:
             failures.append(
                 f"WPs missing {label}_id: {wp_total - populated}/{wp_total}"
@@ -306,7 +334,7 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     # Journal count — Rails auto-emits a Journal on WP create/update.
     # If wp_journal_total < wp_total, journaling is broken (or WPs were
     # bulk-inserted in a way that bypassed the Journal hooks).
-    journal_total = int(metrics.get("wp_journal_total", 0))
+    journal_total = _metric_int(metrics, "wp_journal_total")
     if journal_total < wp_total:
         failures.append(
             f"Journal count {journal_total} < wp_total {wp_total} — every WP"
@@ -317,12 +345,12 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     # project legitimately may have neither, but on a project of
     # ``_HEURISTIC_SIZE_THRESHOLD`` WPs or more, zero is suspicious.
     if wp_total >= _HEURISTIC_SIZE_THRESHOLD:
-        if int(metrics.get("relation_total", 0)) == 0:
+        if _metric_int(metrics, "relation_total") == 0:
             warnings.append(
                 f"No relations found across {wp_total} WPs — relation"
                 " migration may have silently skipped (Bug D2 indicator)",
             )
-        if int(metrics.get("wp_watcher_total", 0)) == 0:
+        if _metric_int(metrics, "wp_watcher_total") == 0:
             warnings.append(
                 f"No watchers found across {wp_total} WPs — watcher migration may have silently skipped",
             )
@@ -345,8 +373,8 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     # Ruby script), a missing orphan key must stay silent — zero is the
     # healthy baseline and legacy audit runs without these keys would
     # otherwise wrongly fail. Only fire when we get a positive count.
-    orphan_rel_from = int(metrics.get("orphaned_relations_from", 0))
-    orphan_rel_to = int(metrics.get("orphaned_relations_to", 0))
+    orphan_rel_from = _metric_int(metrics, "orphaned_relations_from")
+    orphan_rel_to = _metric_int(metrics, "orphaned_relations_to")
     orphan_rel_total = orphan_rel_from + orphan_rel_to
     if orphan_rel_total > 0:
         failures.append(
@@ -355,14 +383,14 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             f" to-side dangling: {orphan_rel_to})"
             " — relations reference deleted WPs",
         )
-    orphan_watchers = int(metrics.get("orphaned_watchers", 0))
+    orphan_watchers = _metric_int(metrics, "orphaned_watchers")
     if orphan_watchers > 0:
         failures.append(
             f"{orphan_watchers} orphaned watchers — user_id references a deleted user",
         )
 
     # Description coverage (warning only)
-    desc_pct = (metrics.get("wp_with_description", 0) / wp_total) * 100
+    desc_pct = (_metric_int(metrics, "wp_with_description") / wp_total) * 100
     if desc_pct < 50:
         warnings.append(f"Only {desc_pct:.0f}% of WPs have a description")
 
