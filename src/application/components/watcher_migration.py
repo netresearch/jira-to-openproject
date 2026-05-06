@@ -135,6 +135,16 @@ class WatcherMigration(BaseMigration):
         watchers_to_create: list[dict[str, Any]] = []
         skip_reasons: Counter[str] = Counter()
 
+        # Track DISTINCT unmapped watcher identities. Per the live
+        # TEST audit (2026-05-06) the watcher migration dropped 93%
+        # of watchers; the dominant bucket was ``user_unmapped`` —
+        # Jira users not in the OP user mapping (locked / disabled /
+        # never-synced accounts). The aggregate ``skip_reasons``
+        # count tells the operator HOW MANY watcher rows were
+        # dropped; this set tells them WHICH users to fix. Stored
+        # as a set so a user watching N issues only logs once.
+        unmapped_users: set[str] = set()
+
         # Use cached issues if available, otherwise iterate through keys directly
         issues: dict[str, Any] = {}
         cache_file = self.data_dir / "jira_issues_cache.json"
@@ -188,6 +198,20 @@ class WatcherMigration(BaseMigration):
                         # users, accounts deleted in OP, mapping
                         # not refreshed, etc.).
                         skip_reasons["user_unmapped"] += 1
+                        # Record the distinct identity. Prefer the
+                        # most stable probe (account_id) and fall
+                        # back through the same probe order
+                        # ``_resolve_user_id`` uses, so the logged
+                        # value is the one an operator would search
+                        # the user mapping for.
+                        identity = (
+                            parsed.account_id
+                            or parsed.name
+                            or parsed.email_address
+                            or parsed.display_name
+                            or "<unknown>"
+                        )
+                        unmapped_users.add(str(identity))
                         continue
                     watchers_to_create.append(
                         {
@@ -205,6 +229,22 @@ class WatcherMigration(BaseMigration):
                 "Watcher skip breakdown (%d total, before bulk): %s",
                 skipped,
                 dict(skip_reasons),
+            )
+
+        if unmapped_users:
+            # Log a sample so the migration log is forensically
+            # actionable but doesn't blow up on huge projects. The
+            # full set is returned on ``result.details["unmapped_users"]``
+            # for downstream consumers (audit, dashboards) that want
+            # the exhaustive list.
+            sample = sorted(unmapped_users)[:20]
+            logger.warning(
+                "Watcher migration: %d distinct Jira user(s) not in OP user"
+                " mapping (sample of up to 20: %s).%s Add these to the user"
+                " mapping or create them in OP, then re-run.",
+                len(unmapped_users),
+                sample,
+                "" if len(unmapped_users) <= 20 else f" {len(unmapped_users) - 20} more elided.",
             )
 
         # Bulk create all watchers in single Rails call
@@ -235,6 +275,8 @@ class WatcherMigration(BaseMigration):
                 "created": created,
                 "skipped": skipped + bulk_skipped,
                 "skip_reasons": skip_reasons_with_bulk,
+                "unmapped_users": sorted(unmapped_users),
+                "unmapped_user_count": len(unmapped_users),
                 "errors": errors,
             },
         )
