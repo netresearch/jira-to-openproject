@@ -228,23 +228,172 @@ class UserMigration(BaseMigration):
             MigrationError: If users cannot be extracted from Jira
 
         """
+        # Whether we hit the directory or used the cache, ALWAYS
+        # also run discovery against the issues cache. The previous
+        # arrangement skipped discovery on cache-hit, which made
+        # this fix inert on every re-run (the common case in
+        # production migrations) — caught by the Copilot review of
+        # PR #196.
         if self.jira_users and not force:
             self.logger.info("Using cached Jira users (%s entries)", len(self.jira_users))
-            return self.jira_users
+        else:
+            self.logger.info("Extracting users from Jira...")
+            self.jira_users = self.jira_client.get_users()
+            if not self.jira_users:
+                msg = "Failed to extract users from Jira"
+                raise MigrationError(msg)
+            self.logger.info("Extracted %s users from Jira", len(self.jira_users))
 
-        self.logger.info("Extracting users from Jira...")
-
-        self.jira_users = self.jira_client.get_users()
-
-        if not self.jira_users:
-            msg = "Failed to extract users from Jira"
-            raise MigrationError(msg)
-
-        self.logger.info("Extracted %s users from Jira", len(self.jira_users))
+        # Augment with users discovered from cached issues
+        # (watchers, assignees, reporters, comment authors). Per
+        # the live TEST audit (2026-05-06) and PR #195, the
+        # directory ``get_users()`` call systematically misses
+        # inactive / disabled / never-logged-in accounts that
+        # nonetheless appear as watchers — driving the 93% watcher
+        # loss class. Discovered users get mapped + provisioned
+        # BEFORE watcher_migration tries to resolve them.
+        discovered = self._discover_users_from_cached_issues()
+        if discovered:
+            existing_ids = {self._stable_user_id(u) for u in self.jira_users if self._stable_user_id(u)}
+            added = 0
+            for raw in discovered:
+                stable_id = self._stable_user_id(raw)
+                if not stable_id or stable_id in existing_ids:
+                    continue
+                # CRITICAL: ``create_user_mapping`` skips users
+                # without a ``key`` (line 497 in this file). Watcher
+                # responses don't carry ``key`` — only ``accountId``,
+                # ``name``, etc. Synthesize a ``key`` from the
+                # stable identity so the discovered user actually
+                # makes it through mapping + creation. Without this
+                # fallback the entire discovery pass silently
+                # dropped through.
+                if not raw.get("key"):
+                    raw["key"] = raw.get("accountId") or raw.get("name") or stable_id
+                self.jira_users.append(raw)
+                existing_ids.add(stable_id)
+                added += 1
+            if added:
+                self.logger.info(
+                    "Discovered %d additional users from cached issues (watchers/"
+                    "assignee/reporter/comments) — total now %d",
+                    added,
+                    len(self.jira_users),
+                )
 
         self._save_to_json(self.jira_users, Path("jira_users.json"))
 
         return self.jira_users
+
+    @staticmethod
+    def _stable_user_id(raw: dict[str, Any]) -> str:
+        """Lowercase ``accountId`` or ``name`` — whichever is present.
+
+        Note the camelCase keys: this consumes raw Jira-shaped dicts
+        as they come back from ``get_users()`` and the issue cache,
+        not the ``snake_case`` ``JiraUser`` model. Used as a dedup
+        key when merging discovered users into ``self.jira_users``.
+        Mirrors the probe order of
+        :meth:`watcher_migration._resolve_user_id` so two callers
+        agree on which identity is "the same user".
+        """
+        for key in ("accountId", "name"):
+            value = raw.get(key)
+            if isinstance(value, str) and value:
+                return value.lower()
+        return ""
+
+    def _discover_users_from_cached_issues(self) -> list[dict[str, Any]]:
+        """Harvest user identities from the cached Jira issues file.
+
+        For each issue in ``data_dir / 'jira_issues_cache.json'``,
+        collect raw user dicts from:
+
+        - ``fields.watches.watchers[*]``
+        - ``fields.assignee``
+        - ``fields.reporter``
+        - ``fields.comment.comments[*].author``
+
+        Returns deduped list (by lowercase ``accountId`` or ``name``)
+        of raw dicts. Discovery is best-effort — on cache-read failure
+        it returns an empty list (the directory pass remains the
+        fallback).
+        """
+        import json as _json
+
+        cache_file = self.data_dir / "jira_issues_cache.json"
+        if not cache_file.exists():
+            return []
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                issues = _json.load(f)
+        except (OSError, _json.JSONDecodeError) as exc:
+            # Narrow to realistic failure modes — a refactor bug
+            # (e.g. accidental ``getattr`` typo) should crash loud
+            # instead of being silently classified as "could not
+            # read cache".
+            self.logger.warning(
+                "Could not read jira_issues_cache.json for user discovery: %s",
+                exc,
+            )
+            return []
+
+        if not isinstance(issues, dict):
+            self.logger.warning(
+                "jira_issues_cache.json is not a dict at the top level — skipping user discovery",
+            )
+            return []
+
+        discovered: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        # Track user dicts that had neither ``accountId`` nor
+        # ``name`` — they're silently unmappable by
+        # ``watcher_migration._resolve_user_id`` too (the probe
+        # ladder starts with those two fields), so dropping is
+        # correct, but the COUNT must be visible so a future audit
+        # can quantify the residual loss.
+        dropped_no_identity = 0
+
+        def _add(raw: Any) -> None:
+            nonlocal dropped_no_identity
+            if not isinstance(raw, dict):
+                return
+            stable = self._stable_user_id(raw)
+            if not stable:
+                dropped_no_identity += 1
+                return
+            if stable in seen_ids:
+                return
+            seen_ids.add(stable)
+            discovered.append(raw)
+
+        for issue in issues.values():
+            if not isinstance(issue, dict):
+                continue
+            fields = issue.get("fields") or {}
+            if not isinstance(fields, dict):
+                continue
+            watches = fields.get("watches") or {}
+            if isinstance(watches, dict):
+                for w in watches.get("watchers") or []:
+                    _add(w)
+            _add(fields.get("assignee"))
+            _add(fields.get("reporter"))
+            comment = fields.get("comment") or {}
+            if isinstance(comment, dict):
+                for c in comment.get("comments") or []:
+                    if isinstance(c, dict):
+                        _add(c.get("author"))
+
+        if dropped_no_identity:
+            self.logger.info(
+                "User discovery: %d dict(s) had neither accountId nor name and"
+                " were skipped (unmappable downstream — anonymized accounts /"
+                " pre-7.x Server users / system actors)",
+                dropped_no_identity,
+            )
+
+        return discovered
 
     def extract_openproject_users(self, *, force: bool = False) -> list[dict[str, Any]]:
         """Extract users from OpenProject.
