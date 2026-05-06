@@ -250,6 +250,103 @@ def test_discover_users_top_level_list_not_dict_returns_empty(logger_stub, tmp_p
     assert instance._discover_users_from_cached_issues() == []
 
 
+def test_extract_jira_users_synthesizes_key_for_discovered_users(
+    logger_stub,
+    tmp_path,
+):
+    """Discovered users must have a ``key`` field after the merge.
+
+    Caught by the Copilot review of PR #196:
+    ``create_user_mapping`` line 497 SKIPS any Jira user without
+    ``key``. Watcher responses carry ``accountId`` / ``name`` but
+    NOT ``key``, so without a fallback the discovered users
+    would map nowhere — making the entire discovery pass inert.
+    """
+    import json as _json
+
+    instance = UserMigration.__new__(UserMigration)
+    instance.logger = logger_stub
+    instance.data_dir = tmp_path
+    instance.jira_users = []
+    instance.jira_client = MagicMock()
+    instance.jira_client.get_users.return_value = [
+        {"key": "directory-user", "name": "directory-user"},
+    ]
+    instance._save_to_json = lambda *args, **kwargs: None
+
+    cache_file = tmp_path / "jira_issues_cache.json"
+    cache_file.write_text(
+        _json.dumps(
+            {
+                "PROJ-1": {
+                    "fields": {
+                        "watches": {
+                            "watchers": [
+                                {"accountId": "557058:abc", "displayName": "Cloud User"},
+                                {"name": "server-user"},
+                            ],
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+    result = instance.extract_jira_users()
+
+    # Every user (directory + discovered) has a truthy ``key``.
+    for user in result:
+        assert user.get("key"), f"User missing key after discovery: {user}"
+
+    # Synthesized keys match the stable identity (accountId
+    # preferred over name).
+    keys_by_name = {u.get("name") or u.get("displayName"): u["key"] for u in result}
+    assert keys_by_name["directory-user"] == "directory-user"
+    assert keys_by_name["Cloud User"] == "557058:abc"
+    assert keys_by_name["server-user"] == "server-user"
+
+
+def test_extract_jira_users_runs_discovery_on_cache_hit(logger_stub, tmp_path):
+    """Discovery runs EVEN when ``self.jira_users`` is already populated.
+
+    Caught by the Copilot review of PR #196: the original
+    arrangement returned early on cache-hit and never invoked
+    discovery. On every re-run (common in production), the
+    fix was inert.
+    """
+    import json as _json
+
+    instance = UserMigration.__new__(UserMigration)
+    instance.logger = logger_stub
+    instance.data_dir = tmp_path
+    # Pre-populated (mimics re-run with cached users in memory).
+    instance.jira_users = [{"key": "existing", "name": "existing"}]
+    instance.jira_client = MagicMock()
+    instance._save_to_json = lambda *args, **kwargs: None
+
+    cache_file = tmp_path / "jira_issues_cache.json"
+    cache_file.write_text(
+        _json.dumps(
+            {
+                "PROJ-1": {
+                    "fields": {
+                        "watches": {"watchers": [{"accountId": "discovered-user"}]},
+                    },
+                },
+            },
+        ),
+    )
+
+    result = instance.extract_jira_users()
+
+    # Directory call skipped (cache hit) ...
+    instance.jira_client.get_users.assert_not_called()
+    # ... but discovery ran and added the watcher.
+    keys = {u["key"] for u in result}
+    assert "existing" in keys
+    assert "discovered-user" in keys, f"Discovery did not run on cache-hit: {result}"
+
+
 def test_discover_users_drops_dicts_without_account_or_name(logger_stub, tmp_path):
     """User dicts with only ``displayName`` / ``emailAddress`` are dropped.
 

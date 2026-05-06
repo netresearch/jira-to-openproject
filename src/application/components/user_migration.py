@@ -228,30 +228,30 @@ class UserMigration(BaseMigration):
             MigrationError: If users cannot be extracted from Jira
 
         """
+        # Whether we hit the directory or used the cache, ALWAYS
+        # also run discovery against the issues cache. The previous
+        # arrangement skipped discovery on cache-hit, which made
+        # this fix inert on every re-run (the common case in
+        # production migrations) — caught by the Copilot review of
+        # PR #196.
         if self.jira_users and not force:
             self.logger.info("Using cached Jira users (%s entries)", len(self.jira_users))
-            return self.jira_users
+        else:
+            self.logger.info("Extracting users from Jira...")
+            self.jira_users = self.jira_client.get_users()
+            if not self.jira_users:
+                msg = "Failed to extract users from Jira"
+                raise MigrationError(msg)
+            self.logger.info("Extracted %s users from Jira", len(self.jira_users))
 
-        self.logger.info("Extracting users from Jira...")
-
-        self.jira_users = self.jira_client.get_users()
-
-        if not self.jira_users:
-            msg = "Failed to extract users from Jira"
-            raise MigrationError(msg)
-
-        self.logger.info("Extracted %s users from Jira", len(self.jira_users))
-
-        # Augment the directory list with users discovered from
-        # cached issues (watchers, assignees, reporters, comment
-        # authors). Per the live TEST audit (2026-05-06) and the
-        # recon for PR #195, the directory ``get_users()`` call
-        # systematically misses inactive / disabled / never-logged-in
-        # accounts that nonetheless appear as watchers — driving the
-        # 93% watcher loss class. Adding discovered users here lets
-        # ``create_user_mapping`` map them and ``create_missing_users``
-        # provision OP accounts for them BEFORE watcher_migration
-        # tries to resolve them.
+        # Augment with users discovered from cached issues
+        # (watchers, assignees, reporters, comment authors). Per
+        # the live TEST audit (2026-05-06) and PR #195, the
+        # directory ``get_users()`` call systematically misses
+        # inactive / disabled / never-logged-in accounts that
+        # nonetheless appear as watchers — driving the 93% watcher
+        # loss class. Discovered users get mapped + provisioned
+        # BEFORE watcher_migration tries to resolve them.
         discovered = self._discover_users_from_cached_issues()
         if discovered:
             existing_ids = {self._stable_user_id(u) for u in self.jira_users if self._stable_user_id(u)}
@@ -260,6 +260,16 @@ class UserMigration(BaseMigration):
                 stable_id = self._stable_user_id(raw)
                 if not stable_id or stable_id in existing_ids:
                     continue
+                # CRITICAL: ``create_user_mapping`` skips users
+                # without a ``key`` (line 497 in this file). Watcher
+                # responses don't carry ``key`` — only ``accountId``,
+                # ``name``, etc. Synthesize a ``key`` from the
+                # stable identity so the discovered user actually
+                # makes it through mapping + creation. Without this
+                # fallback the entire discovery pass silently
+                # dropped through.
+                if not raw.get("key"):
+                    raw["key"] = raw.get("accountId") or raw.get("name") or stable_id
                 self.jira_users.append(raw)
                 existing_ids.add(stable_id)
                 added += 1
@@ -277,10 +287,13 @@ class UserMigration(BaseMigration):
 
     @staticmethod
     def _stable_user_id(raw: dict[str, Any]) -> str:
-        """Lowercase ``account_id`` or ``name`` — whichever is present.
+        """Lowercase ``accountId`` or ``name`` — whichever is present.
 
-        Used as a dedup key when merging discovered users into
-        ``self.jira_users``. Mirrors the probe order of
+        Note the camelCase keys: this consumes raw Jira-shaped dicts
+        as they come back from ``get_users()`` and the issue cache,
+        not the ``snake_case`` ``JiraUser`` model. Used as a dedup
+        key when merging discovered users into ``self.jira_users``.
+        Mirrors the probe order of
         :meth:`watcher_migration._resolve_user_id` so two callers
         agree on which identity is "the same user".
         """
