@@ -31,6 +31,7 @@ def _make_service(status_code: int = 404, json_body: Any | None = None) -> JiraW
     def _raise_for_status() -> None:
         if status_code >= 400:
             from requests.exceptions import HTTPError
+
             raise HTTPError(f"{status_code} Error", response=fake_response)
 
     fake_response.raise_for_status.side_effect = _raise_for_status

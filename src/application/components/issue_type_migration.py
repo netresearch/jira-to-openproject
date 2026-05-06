@@ -678,9 +678,7 @@ class IssueTypeMigration(BaseMigration):
             return 0, []
 
         existing_by_name = {
-            (t.get("name") or "").lower(): t.get("id")
-            for t in existing_types
-            if t.get("name") and t.get("id")
+            (t.get("name") or "").lower(): t.get("id") for t in existing_types if t.get("name") and t.get("id")
         }
 
         resolved = 0
@@ -853,7 +851,9 @@ class IssueTypeMigration(BaseMigration):
                     )
                     refreshed_existing = []
                 resolved, errors = self._resolve_name_taken_errors(
-                    errors, records, refreshed_existing,
+                    errors,
+                    records,
+                    refreshed_existing,
                 )
                 if resolved:
                     self.logger.info(

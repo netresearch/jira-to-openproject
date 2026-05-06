@@ -158,7 +158,4 @@ def test_run_result_includes_runner_count_keys(_map_store):
     # And they must agree with the per-flow counters
     assert res.details["success_count"] == res.details["created"]
     assert res.details["failed_count"] == res.details["errors"]
-    assert (
-        res.details["total_count"]
-        == res.details["created"] + res.details["skipped"] + res.details["errors"]
-    )
+    assert res.details["total_count"] == res.details["created"] + res.details["skipped"] + res.details["errors"]

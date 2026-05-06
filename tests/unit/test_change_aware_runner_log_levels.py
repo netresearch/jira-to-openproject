@@ -58,13 +58,9 @@ def test_fetch_does_not_log_at_error_for_value_error(caplog: pytest.LogCaptureFi
             )
 
     error_records = [
-        r
-        for r in caplog.records
-        if r.levelno >= logging.ERROR and "Failed to fetch entities" in r.getMessage()
+        r for r in caplog.records if r.levelno >= logging.ERROR and "Failed to fetch entities" in r.getMessage()
     ]
-    assert error_records == [], (
-        f"Expected no ERROR-level 'Failed to fetch entities' log, got: {error_records}"
-    )
+    assert error_records == [], f"Expected no ERROR-level 'Failed to fetch entities' log, got: {error_records}"
 
 
 def test_fetch_does_not_log_at_error_for_arbitrary_exception(
@@ -88,10 +84,6 @@ def test_fetch_does_not_log_at_error_for_arbitrary_exception(
             )
 
     error_records = [
-        r
-        for r in caplog.records
-        if r.levelno >= logging.ERROR and "Failed to fetch entities" in r.getMessage()
+        r for r in caplog.records if r.levelno >= logging.ERROR and "Failed to fetch entities" in r.getMessage()
     ]
-    assert error_records == [], (
-        f"Expected no ERROR-level 'Failed to fetch entities' log, got: {error_records}"
-    )
+    assert error_records == [], f"Expected no ERROR-level 'Failed to fetch entities' log, got: {error_records}"

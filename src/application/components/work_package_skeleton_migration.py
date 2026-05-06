@@ -657,7 +657,9 @@ class WorkPackageSkeletonMigration(BaseMigration):
         except Exception:
             jira_base_url = ""
         cf_entries = _build_provenance_custom_field_entries(
-            jira_issue, cf_ids, jira_base_url=jira_base_url,
+            jira_issue,
+            cf_ids,
+            jira_base_url=jira_base_url,
         )
         # Fall back to the legacy single-entry flow when the multi-CF
         # lookup somehow returned nothing (e.g. an early-call before

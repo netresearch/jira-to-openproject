@@ -27,10 +27,8 @@ from src.application.components.user_migration import (
 
 def test_writes_openproject_id_back_to_mapping_entry() -> None:
     batch = [
-        {"jira_name": "alice", "jira_email": "alice@x", "openproject_id": None,
-         "matched_by": "none"},
-        {"jira_name": "bob", "jira_email": "bob@x", "openproject_id": None,
-         "matched_by": "none"},
+        {"jira_name": "alice", "jira_email": "alice@x", "openproject_id": None, "matched_by": "none"},
+        {"jira_name": "bob", "jira_email": "bob@x", "openproject_id": None, "matched_by": "none"},
     ]
     meta = [
         {"login": "alice", "mail": "alice@x"},

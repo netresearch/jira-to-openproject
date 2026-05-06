@@ -134,9 +134,7 @@ class RailsConsoleClient:
 
             # Filter out prompts, markers, and Ruby nil/inspects (same set as
             # ``filter_console_output_lines`` uses for normal output extraction).
-            candidates = [
-                ln for ln in lines if ln and not ln.startswith(_CONSOLE_NOISE_PREFIXES)
-            ]
+            candidates = [ln for ln in lines if ln and not ln.startswith(_CONSOLE_NOISE_PREFIXES)]
 
             # Targeted patterns
             key_preds = [

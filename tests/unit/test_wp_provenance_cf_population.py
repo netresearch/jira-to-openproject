@@ -57,9 +57,7 @@ def test_returns_entry_per_known_cf_when_all_have_ids() -> None:
 def test_skips_cfs_with_no_id_in_map() -> None:
     """If a CF wasn't created (id missing), don't emit an entry for it."""
     cf_ids = {"J2O Origin Key": 100}
-    entries = _build_provenance_custom_field_entries(
-        _make_issue(), cf_ids, jira_base_url="https://jira.x"
-    )
+    entries = _build_provenance_custom_field_entries(_make_issue(), cf_ids, jira_base_url="https://jira.x")
     assert len(entries) == 1
     assert entries[0] == {"id": 100, "value": "TEST-1"}
 
@@ -72,9 +70,7 @@ def test_handles_missing_jira_project_attribute() -> None:
         "J2O Project Key": 104,
         "J2O Project ID": 105,
     }
-    entries = _build_provenance_custom_field_entries(
-        issue, cf_ids, jira_base_url="https://j.x"
-    )
+    entries = _build_provenance_custom_field_entries(issue, cf_ids, jira_base_url="https://j.x")
     by_id = {e["id"]: e["value"] for e in entries}
     assert by_id[100] == "X-1"
     # Project Key/ID should be absent since the source field is missing
@@ -85,9 +81,7 @@ def test_handles_missing_jira_project_attribute() -> None:
 def test_handles_empty_base_url() -> None:
     """If the base URL is unset, don't synthesize a broken URL."""
     cf_ids = {"J2O Origin Key": 100, "J2O Origin URL": 103}
-    entries = _build_provenance_custom_field_entries(
-        _make_issue(), cf_ids, jira_base_url=""
-    )
+    entries = _build_provenance_custom_field_entries(_make_issue(), cf_ids, jira_base_url="")
     by_id = {e["id"]: e["value"] for e in entries}
     assert by_id[100] == "TEST-1"
     assert 103 not in by_id  # no URL written when base is unknown
@@ -139,10 +133,7 @@ def test_stringify_optional_timestamp_treats_empty_string_as_none() -> None:
 
 
 def test_stringify_optional_timestamp_passes_string_through() -> None:
-    assert (
-        _stringify_optional_timestamp("2024-01-15T10:30:00.000+0000")
-        == "2024-01-15T10:30:00.000+0000"
-    )
+    assert _stringify_optional_timestamp("2024-01-15T10:30:00.000+0000") == "2024-01-15T10:30:00.000+0000"
 
 
 def test_stringify_optional_timestamp_coerces_non_string() -> None:

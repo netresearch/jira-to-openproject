@@ -48,7 +48,7 @@ def test_cleanup_temp_files_returns_count() -> None:
     hc, fake_ssh = _make_client()
     fake_ssh.execute_command.side_effect = [
         ("3\n", "", 0),  # files_before
-        ("", "", 0),     # delete
+        ("", "", 0),  # delete
         ("0\n", "", 0),  # files_after
     ]
     result = hc.cleanup_temp_files(pattern="j2o_*", max_age_minutes=5)

@@ -58,7 +58,7 @@ def _extract_worklog_keys_from_op_entries(
                     cf_id = item.get("custom_field_id")
                     try:
                         cf_id_int = int(cf_id) if cf_id is not None else None
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         cf_id_int = None
                     if cf_id_int == worklog_cf_id:
                         v = item.get("value")
@@ -627,7 +627,8 @@ class TimeEntryMigrator:
                 try:
                     recent = self.op_client.get_time_entries(limit=2000)
                     existing_keys = _extract_worklog_keys_from_op_entries(
-                        recent, worklog_cf_id,
+                        recent,
+                        worklog_cf_id,
                     )
                 except Exception as fb_err:
                     self.logger.debug("Fallback worklog snapshot failed: %s", fb_err)
@@ -638,7 +639,8 @@ class TimeEntryMigrator:
         # batch mode (the default) duplicated every entry.
         if existing_keys:
             entries_to_migrate, dedup_skipped = _filter_already_migrated_entries(
-                entries_to_migrate, existing_keys,
+                entries_to_migrate,
+                existing_keys,
             )
             if dedup_skipped:
                 self.logger.info(

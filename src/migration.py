@@ -181,6 +181,7 @@ def _backfill_user_mapping_at_startup(op_client: Any, mappings: Any, logger: Any
         from src.application.components.user_migration import (
             _backfill_unmapped_users_from_op,
         )
+
         user_mapping = mappings.get_mapping("user") or {}
         if not user_mapping:
             return

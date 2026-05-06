@@ -58,7 +58,9 @@ def test_resolves_taken_name_by_existing_op_id() -> None:
     existing_types = [{"id": 42, "name": "Documentation"}]
 
     resolved, unresolved = mig._resolve_name_taken_errors(
-        errors, records, existing_types,
+        errors,
+        records,
+        existing_types,
     )
 
     assert resolved == 1
