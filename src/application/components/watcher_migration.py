@@ -18,6 +18,7 @@ ladder disappears from this file.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
@@ -125,9 +126,14 @@ class WatcherMigration(BaseMigration):
             logger.info("No work package mappings; skipping watcher migration")
             return result
 
-        # Collect all watchers for bulk creation
+        # Collect all watchers for bulk creation. Track *why* each
+        # watcher was skipped so a post-run summary can distinguish
+        # "expected loss" (unmapped user / locked-account artifact)
+        # from "real loss" (parse failure, missing WP). Without this
+        # breakdown the audit can only see the aggregate count delta
+        # and operators have to guess which bucket dominates.
         watchers_to_create: list[dict[str, Any]] = []
-        skipped = 0
+        skip_reasons: Counter[str] = Counter()
 
         # Use cached issues if available, otherwise iterate through keys directly
         issues: dict[str, Any] = {}
@@ -149,11 +155,11 @@ class WatcherMigration(BaseMigration):
 
         for key, issue in issues.items():
             if not issue:
-                skipped += 1
+                skip_reasons["empty_issue"] += 1
                 continue
             wp_id = self._resolve_wp_id(str(key))
             if not wp_id:
-                skipped += 1
+                skip_reasons["wp_unmapped"] += 1
                 continue
 
             watchers = []
@@ -172,11 +178,16 @@ class WatcherMigration(BaseMigration):
                 try:
                     parsed = JiraWatcher.from_any(w)
                     if parsed is None:
-                        skipped += 1
+                        skip_reasons["watcher_parse_failed"] += 1
                         continue
                     user_id = self._resolve_user_id(parsed)
                     if not user_id:
-                        skipped += 1
+                        # Biggest bucket in practice — Jira watchers
+                        # whose account_id/name/email/display_name
+                        # never made it into the user mapping (locked
+                        # users, accounts deleted in OP, mapping
+                        # not refreshed, etc.).
+                        skip_reasons["user_unmapped"] += 1
                         continue
                     watchers_to_create.append(
                         {
@@ -185,8 +196,16 @@ class WatcherMigration(BaseMigration):
                         },
                     )
                 except Exception:
-                    skipped += 1
+                    skip_reasons["exception"] += 1
                     continue
+
+        skipped = sum(skip_reasons.values())
+        if skipped:
+            logger.info(
+                "Watcher skip breakdown (%d total, before bulk): %s",
+                skipped,
+                dict(skip_reasons),
+            )
 
         # Bulk create all watchers in single Rails call
         created = 0
@@ -205,7 +224,20 @@ class WatcherMigration(BaseMigration):
                 errors,
             )
 
-        result.details.update({"created": created, "skipped": skipped + bulk_skipped, "errors": errors})
+        # Surface the per-reason breakdown alongside the aggregate
+        # ``skipped`` so a post-migration audit can answer "why" not
+        # just "how many".
+        skip_reasons_with_bulk: dict[str, int] = dict(skip_reasons)
+        if bulk_skipped:
+            skip_reasons_with_bulk["bulk_dedup_or_invalid"] = bulk_skipped
+        result.details.update(
+            {
+                "created": created,
+                "skipped": skipped + bulk_skipped,
+                "skip_reasons": skip_reasons_with_bulk,
+                "errors": errors,
+            },
+        )
         result.success = errors == 0
         result.message = f"Watchers created={created}, skipped={skipped + bulk_skipped}, errors={errors}"
         logger.info(result.message)

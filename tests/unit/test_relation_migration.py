@@ -159,3 +159,98 @@ def test_run_result_includes_runner_count_keys(_map_store):
     assert res.details["success_count"] == res.details["created"]
     assert res.details["failed_count"] == res.details["errors"]
     assert res.details["total_count"] == res.details["created"] + res.details["skipped"] + res.details["errors"]
+
+
+# --- Skip-reason breakdown ---------------------------------------------------
+# Per the live NRS audit (2026-05-06): the relation migration silently
+# dropped ~75% of links with no per-row logging, so an operator
+# couldn't tell "real loss" from "expected cross-project asymmetry".
+# These tests pin a categorized ``skip_reasons`` breakdown surfaced
+# in ``result.details`` so the next live run is diagnosable.
+
+
+def test_run_skip_reasons_target_wp_unmigrated(_map_store):
+    """The biggest bucket in practice — link's other end isn't in WP map."""
+    op = DummyOpClient()
+    # J1 is mapped (id=10), J2 is mapped (id=20), but the link points to
+    # J99 which is NOT in the mapping (mimics cross-project / unmigrated).
+    issues = dict([_make_issue("J1", "relates", "outward", "J99")])
+
+    class DummyJira:
+        def batch_get_issues(self, keys):
+            return issues
+
+    rm = RelationMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    res = rm.run()
+
+    breakdown = res.details["skip_reasons"]
+    assert breakdown.get("target_wp_unmigrated") == 1, breakdown
+    assert res.details["created"] == 0
+
+
+def test_run_skip_reasons_link_type_unmapped(_map_store):
+    """Link of an unknown type maps to ``link_type_unmapped`` bucket."""
+    op = DummyOpClient()
+    # J1→J2 with a Jira link type the migrator's direction_map doesn't
+    # know about (e.g. some custom Netresearch link type).
+    issues = dict([_make_issue("J1", "totally-bogus-link", "outward", "J2")])
+
+    class DummyJira:
+        def batch_get_issues(self, keys):
+            return issues
+
+    rm = RelationMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    res = rm.run()
+
+    breakdown = res.details["skip_reasons"]
+    assert breakdown.get("link_type_unmapped") == 1, breakdown
+    assert res.details["created"] == 0
+
+
+def test_run_skip_reasons_breakdown_sums_to_total_skipped(_map_store):
+    """The breakdown dict's values must sum to the aggregate ``skipped``."""
+    op = DummyOpClient()
+    # 1 unmigrated target + 1 unknown link type + 1 healthy
+    issues = dict(
+        [
+            _make_issue("J1", "relates", "outward", "J99"),  # target unmigrated
+            _make_issue("J2", "totally-bogus-link", "outward", "J1"),  # type unmapped
+        ],
+    )
+
+    class DummyJira:
+        def batch_get_issues(self, keys):
+            return issues
+
+    rm = RelationMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    res = rm.run()
+
+    breakdown = res.details["skip_reasons"]
+    # Total skipped = pre-bulk + bulk_skipped. The Counter from pre-bulk
+    # plus the bulk_dedup_or_invalid bucket must equal the aggregate.
+    assert sum(breakdown.values()) == res.details["skipped"], (
+        breakdown,
+        res.details["skipped"],
+    )
+    assert breakdown.get("target_wp_unmigrated") == 1
+    assert breakdown.get("link_type_unmapped") == 1
+
+
+def test_run_skip_reasons_empty_dict_when_all_succeed(_map_store):
+    """When every relation migrates, the breakdown is empty — no
+    ``skip_reasons`` entries fire.
+    """
+    op = DummyOpClient()
+    issues = dict([_make_issue("J1", "relates", "outward", "J2")])
+
+    class DummyJira:
+        def batch_get_issues(self, keys):
+            return issues
+
+    rm = RelationMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    res = rm.run()
+
+    breakdown = res.details["skip_reasons"]
+    assert breakdown == {}, breakdown
+    assert res.details["created"] == 1
+    assert res.details["skipped"] == 0
