@@ -231,13 +231,20 @@ class WatcherMigration(BaseMigration):
                 dict(skip_reasons),
             )
 
-        if unmapped_users:
+        # Sort the distinct identities once. Both the warning-sample
+        # (first 20) and the ``result.details["unmapped_users"]``
+        # full list use the same sorted view — sorting twice was
+        # avoidable O(n log n) on large projects.
+        sorted_unmapped_users = sorted(unmapped_users)
+
+        if sorted_unmapped_users:
             # Log a sample so the migration log is forensically
             # actionable but doesn't blow up on huge projects. The
-            # full set is returned on ``result.details["unmapped_users"]``
-            # for downstream consumers (audit, dashboards) that want
-            # the exhaustive list.
-            sample = sorted(unmapped_users)[:20]
+            # full sorted list is returned on
+            # ``result.details["unmapped_users"]`` for downstream
+            # consumers (audit, dashboards) that want the exhaustive
+            # list.
+            sample = sorted_unmapped_users[:20]
             logger.warning(
                 "Watcher migration: %d distinct Jira user(s) not in OP user"
                 " mapping (sample of up to 20: %s).%s Add these to the user"
@@ -275,8 +282,8 @@ class WatcherMigration(BaseMigration):
                 "created": created,
                 "skipped": skipped + bulk_skipped,
                 "skip_reasons": skip_reasons_with_bulk,
-                "unmapped_users": sorted(unmapped_users),
-                "unmapped_user_count": len(unmapped_users),
+                "unmapped_users": sorted_unmapped_users,
+                "unmapped_user_count": len(sorted_unmapped_users),
                 "errors": errors,
             },
         )
