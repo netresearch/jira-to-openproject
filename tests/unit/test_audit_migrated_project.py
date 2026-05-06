@@ -1040,6 +1040,56 @@ def test_fetch_jira_relation_count_propagates_none_from_paginator(monkeypatch) -
     assert audit_mod._fetch_jira_relation_count("NRS") is None
 
 
+def test_generated_audit_script_parses_as_ruby() -> None:
+    """The generated Ruby script must pass ``ruby -c`` (parse-only).
+
+    Two distinct regex-slash bugs were caught only by live audit runs
+    in this project — PR #178 (URL pattern) and PR #182/#188 (User
+    Origin System pattern). Both shipped because the unit-test loop
+    runs the patterns through Python's ``re``, which has no ``/.../``
+    literal syntax and therefore never sees the parse-time failure.
+
+    This test closes the loop: generate the full Ruby script
+    (including all interpolated regex literals, hash literals, and
+    block syntax) and pipe it to ``ruby -c`` for a parse-only check.
+    Catches the entire class of "valid in Python, broken in Ruby"
+    bugs before they reach production audits — at the cost of a
+    Ruby interpreter on the test runner.
+
+    Skipped if ``ruby`` isn't on PATH (CI environments without Ruby
+    fall through silently rather than failing). The other regex
+    guards in this file (``_audit_regexes_have_no_unescaped_forward_slash_in_ruby_literal``)
+    catch the slash subset without needing Ruby.
+    """
+    import shutil
+    import subprocess
+
+    ruby = shutil.which("ruby")
+    if ruby is None:
+        import pytest as _pytest
+
+        _pytest.skip("ruby not on PATH — script-syntax check needs a Ruby interpreter")
+
+    from tools.audit_migrated_project import _build_audit_script
+
+    script = _build_audit_script("NRS")
+    proc = subprocess.run(
+        [ruby, "-c", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        "Generated audit script failed Ruby parse-check.\n"
+        f"stdout: {proc.stdout!r}\n"
+        f"stderr: {proc.stderr!r}\n"
+        "First 500 chars of script:\n"
+        f"{script[:500]}"
+    )
+    assert "Syntax OK" in proc.stdout, proc.stdout
+
+
 def test_audit_regexes_have_no_unescaped_forward_slash_in_ruby_literal() -> None:
     """Every audit regex must be safe to embed in a Ruby ``/.../`` literal.
 
