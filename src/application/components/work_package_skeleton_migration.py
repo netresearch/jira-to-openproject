@@ -909,6 +909,69 @@ class WorkPackageSkeletonMigration(BaseMigration):
             end_time = datetime.now(tz=UTC)
             duration_seconds = (end_time - start_time).total_seconds()
 
+            # Post-condition: if any work packages were created, the
+            # mapping file MUST exist on disk. Without it, every
+            # downstream component (attachments, watchers, relations,
+            # …) silently skips with an empty mapping — the canonical
+            # silent-failure pattern that caught us in the live TEST
+            # audit (100% attachment loss; ``_wp_lookup_by_jira_key``
+            # returned ``{}`` because the file wasn't there).
+            #
+            # ``_save_mapping`` swallows save errors with a log line
+            # and returns; checking the file here is the
+            # cross-cutting guard that catches both that swallow path
+            # AND any future bug that ends up with a missing /
+            # empty mapping file. Treat as a hard failure so the
+            # orchestrator surfaces it instead of cascading silent
+            # successes downstream.
+            total_created = int(migration_results.get("total_created") or 0)
+            if total_created > 0:
+                if not self.work_package_mapping_file.exists():
+                    msg = (
+                        f"Work-package mapping file was not persisted at"
+                        f" {self.work_package_mapping_file} despite"
+                        f" {total_created} skeletons being created — downstream"
+                        " migrations (attachments, watchers, relations) will"
+                        " silently skip. Likely cause: ``_save_mapping`` swallowed"
+                        " a write error (disk full, permissions, etc.); check"
+                        " the migration log for the underlying error."
+                    )
+                    self.logger.error(msg)
+                    return ComponentResult(
+                        status="error",
+                        success=False,
+                        error="missing_work_package_mapping_file",
+                        message=msg,
+                        timestamp=end_time.isoformat(),
+                        start_time=start_time.isoformat(),
+                        duration_seconds=duration_seconds,
+                    )
+                # File exists — sanity-check it isn't empty
+                # (zero-byte / ``{}`` would also brick downstream).
+                try:
+                    if self.work_package_mapping_file.stat().st_size <= 2:
+                        msg = (
+                            f"Work-package mapping file at"
+                            f" {self.work_package_mapping_file} is empty / ``{{}}``"
+                            f" despite {total_created} skeletons being created"
+                            " — downstream migrations would silently skip."
+                        )
+                        self.logger.error(msg)
+                        return ComponentResult(
+                            status="error",
+                            success=False,
+                            error="empty_work_package_mapping_file",
+                            message=msg,
+                            timestamp=end_time.isoformat(),
+                            start_time=start_time.isoformat(),
+                            duration_seconds=duration_seconds,
+                        )
+                except OSError as stat_exc:
+                    self.logger.warning(
+                        "Could not stat work-package mapping file: %s",
+                        stat_exc,
+                    )
+
             return ComponentResult(
                 status="success",
                 success=True,
