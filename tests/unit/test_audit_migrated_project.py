@@ -612,6 +612,50 @@ def test_jira_issue_count_missing_field_treated_as_silent() -> None:
     assert not any("jira" in w.lower() for w in warnings), warnings
 
 
+# --- Jira source comparison: attachment count -------------------------------
+# Per spec: attachment count must EXACTLY equal Jira's. Any silent
+# attachment loss (file-too-large, OP backend rejected, transformer bug)
+# would currently slip through every other rule.
+
+
+def test_jira_attachment_count_match_passes() -> None:
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_attachment_count=0, wp_attachment_total=0),
+    )
+    assert not any("attachment" in f.lower() for f in failures), failures
+
+
+def test_jira_attachment_count_mismatch_is_failure() -> None:
+    """Any non-zero delta is a hard failure — exact match required by spec."""
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_attachment_count=42, wp_attachment_total=40),
+    )
+    assert any("attachment" in f.lower() and "42" in f and "40" in f for f in failures), failures
+
+
+def test_jira_attachment_count_zero_jira_with_op_attachments_is_failure() -> None:
+    """OP > Jira = phantom attachments somehow appeared in OP. Real bug."""
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_attachment_count=0, wp_attachment_total=5),
+    )
+    assert any("attachment" in f.lower() for f in failures), failures
+
+
+def test_jira_attachment_count_none_warns_source_unavailable() -> None:
+    _failures, warnings = _classify(_baseline_metrics(jira_attachment_count=None))
+    assert any("attachment" in w.lower() and ("source" in w.lower() or "unavailable" in w.lower()) for w in warnings), (
+        warnings
+    )
+
+
+def test_jira_attachment_count_missing_field_treated_as_silent() -> None:
+    """Missing key = legacy audit run; rule must not fire."""
+    metrics = _baseline_metrics()
+    failures, warnings = _classify(metrics)
+    assert not any("attachment" in f.lower() and "jira" in f.lower() for f in failures), failures
+    assert not any("attachment" in w.lower() and "jira" in w.lower() for w in warnings), warnings
+
+
 # --- Pre-existing rules still hold (regression guard) -------------------------
 
 

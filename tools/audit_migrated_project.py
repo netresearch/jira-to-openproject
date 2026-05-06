@@ -466,6 +466,26 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 f" {wp_total} ({int(jira_count) - wp_total:+d}) — wholesale data loss",
             )
 
+    # Jira source comparison: attachment count. Per spec, attachments
+    # must match exactly — any non-zero delta means silent attachment
+    # loss (file-too-large, backend rejected, transformer bug) or a
+    # phantom OP-side artifact. ``None`` warns ("source unavailable")
+    # without blocking the OP-side report. Missing key = legacy run.
+    if "jira_attachment_count" in metrics:
+        jira_att = metrics["jira_attachment_count"]
+        if jira_att is None:
+            warnings.append(
+                "Jira attachment source comparison unavailable — check skipped",
+            )
+        else:
+            op_att = _metric_int(metrics, "wp_attachment_total")
+            if int(jira_att) != op_att:
+                failures.append(
+                    f"Jira→OP attachment count mismatch: Jira reports {jira_att},"
+                    f" OP has {op_att} ({int(jira_att) - op_att:+d}) — silent"
+                    " attachment loss or phantom OP-side artifacts",
+                )
+
     # WP CF format validation. The Ruby side counts populated values
     # that don't match the expected regex per CF. Missing key = legacy
     # audit run before this branch — silently skip (zero is healthy).
@@ -569,6 +589,69 @@ def _fetch_jira_issue_count(jira_project_key: str) -> int | None:
         return None
 
 
+def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
+    """Best-effort: count total attachments across all issues in the project.
+
+    Paginates ``search_issues(jql='project="X"', fields="attachment")``
+    and sums ``len(issue.fields.attachment)`` across all pages. Same
+    error contract as :func:`_fetch_jira_issue_count`: any failure
+    (no creds, network down, project not found, mid-pagination error,
+    auth, CAPTCHA) collapses to ``None`` so the classifier emits a
+    warning rather than blocking the OP-side report.
+
+    Pagination is required because Jira has no aggregate-attachment
+    JQL. For a 10K-issue project with ``maxResults=100`` this is ~100
+    calls — the Jira client's adaptive rate-limiter handles that
+    gracefully. There is no hard cap; very large projects (>50K
+    issues) may take a minute, which is acceptable for a one-shot
+    post-migration audit.
+
+    The lazy import + broad ``except`` mirror the issue-count helper
+    so the audit module imports cleanly without Jira config — the
+    classifier unit tests rely on this.
+    """
+    try:
+        from src.infrastructure.jira.jira_client import JiraClient
+    except ImportError as exc:
+        sys.stderr.write(
+            f"[audit] Jira attachment comparison skipped — could not import JiraClient: {exc}\n",
+        )
+        return None
+    try:
+        jira = JiraClient()
+        # ``jira.jira`` is the underlying ``python-jira`` JIRA instance
+        # used elsewhere in src/infrastructure/jira/ for paginated
+        # search calls (see jira_search_service.py:64-72).
+        underlying = jira.jira
+        page_size = 100
+        start_at = 0
+        total = 0
+        jql = f'project = "{jira_project_key}"'
+        while True:
+            page = underlying.search_issues(
+                jql,
+                startAt=start_at,
+                maxResults=page_size,
+                fields="attachment",
+                expand="",
+            )
+            if not page:
+                break
+            for issue in page:
+                attachments = getattr(issue.fields, "attachment", None) or []
+                total += len(attachments)
+            if len(page) < page_size:
+                break
+            start_at += page_size
+    except Exception as exc:
+        sys.stderr.write(
+            f"[audit] Jira attachment comparison skipped — {type(exc).__name__}: {exc}\n",
+        )
+        sys.stderr.write(traceback.format_exc())
+        return None
+    return total
+
+
 def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     """Run the audit Ruby expression via the OpenProject client and return parsed metrics."""
     op_client = OpenProjectClient()
@@ -580,6 +663,7 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     # ``None`` and surfaces as a warning in the classifier; the OP-side
     # report is still valid.
     metrics["jira_issue_count"] = _fetch_jira_issue_count(jira_project_key)
+    metrics["jira_attachment_count"] = _fetch_jira_attachment_count(jira_project_key)
     return metrics
 
 
