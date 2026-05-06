@@ -67,3 +67,88 @@ def test_watcher_migration_adds_watchers(
     res = wm.run()
     assert res.success
     assert op.added == [(10, 5)]
+
+
+# --- Skip-reason breakdown ---------------------------------------------------
+# Per the live NRS audit (2026-05-06): the watcher migration silently
+# dropped 58% of watchers with no per-row logging. These tests pin a
+# categorized ``skip_reasons`` breakdown surfaced in
+# ``result.details`` so the next live run is diagnosable.
+
+
+def test_skip_reasons_user_unmapped(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """Most common skip in practice — watcher is a Jira user not in
+    the OP user mapping (locked / disabled / never logged in to OP).
+    """
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            # alice is in the user map (id=5), bob is NOT.
+            return [{"name": "alice"}, {"name": "bob"}]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    (cache_dir / "jira_issues_cache.json").write_text('{"J1": {"key": "J1"}}')
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    breakdown = res.details["skip_reasons"]
+    assert breakdown.get("user_unmapped") == 1, breakdown
+    assert res.details["created"] == 1
+
+
+def test_skip_reasons_wp_unmapped(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """Issue whose key isn't in the WP map → ``wp_unmapped``."""
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            return [{"name": "alice"}]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    # J99 is NOT in the WP mapping; J1 IS (mapped to id=10).
+    (cache_dir / "jira_issues_cache.json").write_text(
+        '{"J1": {"key": "J1"}, "J99": {"key": "J99"}}',
+    )
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    breakdown = res.details["skip_reasons"]
+    assert breakdown.get("wp_unmapped") == 1, breakdown
+
+
+def test_skip_reasons_empty_when_all_succeed(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """All watchers map cleanly → ``skip_reasons`` is empty dict."""
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            return [{"name": "alice"}]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    (cache_dir / "jira_issues_cache.json").write_text('{"J1": {"key": "J1"}}')
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    breakdown = res.details["skip_reasons"]
+    assert breakdown == {}, breakdown
+    assert res.details["created"] == 1
+    assert res.details["skipped"] == 0

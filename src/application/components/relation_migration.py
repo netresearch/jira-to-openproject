@@ -18,6 +18,7 @@ surface and out of phase 7's scope.
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -249,9 +250,15 @@ class RelationMigration(BaseMigration):
             issues = self._merge_batch_issues(jira_keys)
             logger.info("Fetched %d issues from Jira", len(issues))
 
-        # Collect all relations for bulk creation
+        # Collect all relations for bulk creation. Track *why* each
+        # link was skipped so a post-run summary can distinguish
+        # "expected loss" (cross-project link, unmapped link type)
+        # from "real loss" (target WP that should have migrated but
+        # didn't). Without this breakdown the audit can only see the
+        # aggregate count delta and operators have to guess which
+        # bucket dominates.
         relations_to_create: list[dict[str, Any]] = []
-        skipped = 0
+        skip_reasons: Counter[str] = Counter()
 
         logger.info(
             "Processing %d issues for relations, _wp_key_map has %d entries",
@@ -261,12 +268,12 @@ class RelationMigration(BaseMigration):
 
         for key, issue in issues.items():
             if not issue:
-                skipped += 1
+                skip_reasons["empty_issue"] += 1
                 continue
             # Resolve local from_id
             from_id = self._resolve_wp_id(key)
             if not from_id:
-                skipped += 1
+                skip_reasons["unmapped_source_wp"] += 1
                 continue
 
             # Handle both JIRA objects and raw dicts (from cache)
@@ -290,11 +297,11 @@ class RelationMigration(BaseMigration):
                         outward = l.get("outwardIssue")
                         inward = l.get("inwardIssue")
                     else:
-                        skipped += 1
+                        skip_reasons["link_unknown_shape"] += 1
                         continue
 
                     if not lt:
-                        skipped += 1
+                        skip_reasons["link_no_type"] += 1
                         continue
 
                     if outward is not None:
@@ -316,16 +323,20 @@ class RelationMigration(BaseMigration):
                             else None
                         )
                     else:
-                        skipped += 1
+                        skip_reasons["link_no_direction"] += 1
                         continue
 
                     if not target_key:
-                        skipped += 1
+                        skip_reasons["link_no_target_key"] += 1
                         continue
 
                     to_id = self._resolve_wp_id(str(target_key))
                     if not to_id:
-                        skipped += 1
+                        # Biggest bucket in practice — cross-project
+                        # links (target lives in another project not
+                        # being migrated) AND links to issues that
+                        # were in scope but failed migration.
+                        skip_reasons["target_wp_unmigrated"] += 1
                         continue
 
                     # Map type/direction - handle both JIRA objects and dicts
@@ -337,7 +348,7 @@ class RelationMigration(BaseMigration):
                         name = str(lt)
                     mapping = self._map_type_and_direction(name, direction)
                     if not mapping:
-                        skipped += 1
+                        skip_reasons["link_type_unmapped"] += 1
                         continue
                     relation_type, swap = mapping
                     a, b = (from_id, to_id) if not swap else (to_id, from_id)
@@ -351,8 +362,16 @@ class RelationMigration(BaseMigration):
                         },
                     )
                 except Exception:
-                    skipped += 1
+                    skip_reasons["exception"] += 1
                     continue
+
+        skipped = sum(skip_reasons.values())
+        if skipped:
+            logger.info(
+                "Relation skip breakdown (%d total, before bulk): %s",
+                skipped,
+                dict(skip_reasons),
+            )
 
         # Bulk create all relations in single Rails call
         created = 0
@@ -372,10 +391,18 @@ class RelationMigration(BaseMigration):
             )
 
         total_skipped = skipped + bulk_skipped
+        # Surface the per-reason breakdown alongside the aggregate
+        # ``skipped`` so a post-migration audit can answer "why" not
+        # just "how many". ``bulk_skipped`` is included as its own
+        # bucket so the breakdown sums to the total.
+        skip_reasons_with_bulk: dict[str, int] = dict(skip_reasons)
+        if bulk_skipped:
+            skip_reasons_with_bulk["bulk_dedup_or_invalid"] = bulk_skipped
         result.details.update(
             {
                 "created": created,
                 "skipped": total_skipped,
+                "skip_reasons": skip_reasons_with_bulk,
                 "errors": errors,
                 # Counts the migration runner's reporter looks for
                 # (``base_migration._extract_counts``). Without these the
