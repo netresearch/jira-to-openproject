@@ -87,6 +87,14 @@ _REQUIRED_TE_PROVENANCE_CFS: tuple[str, ...] = (
 # A regression that corrupts either form breaks dedup on re-run
 # silently — the existing populated-count check (PR #179) cannot
 # detect a populated-but-malformed value.
+#
+# Note on the ``tempo:\d+`` arm: Tempo Cloud worklog IDs are documented
+# integers and ``time_entry_transformer.py`` reads them as such. If a
+# future Tempo API version (or a custom extractor) emits non-numeric
+# IDs (UUIDs, strings), this audit would flag every Tempo row as a
+# format violation — fail-loud, not silent, but a hint to the future
+# maintainer that the ``\d+`` Tempo arm needs updating alongside the
+# transformer.
 _TE_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
     ("J2O Origin Worklog Key", r"\A([A-Z][A-Z0-9_]+-\d+:\d+|tempo:\d+)\z"),
 )
