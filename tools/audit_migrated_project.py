@@ -43,6 +43,11 @@ _REQUIRED_USER_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O External URL",
 )
 
+# A project of this size or larger should typically have at least
+# one relation and one watcher across its WPs; below this we don't
+# warn (small/inactive projects legitimately have zero).
+_HEURISTIC_SIZE_THRESHOLD = 50
+
 _REQUIRED_TE_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O Origin Worklog Key",
     "J2O Origin Issue ID",
@@ -101,6 +106,9 @@ def _build_audit_script(jira_project_key: str) -> str:
     'wp_with_author' => wps.where.not(author_id: nil).count,
     'wp_with_due_date' => wps.where.not(due_date: nil).count,
     'wp_with_start_date' => wps.where.not(start_date: nil).count,
+    'wp_with_type' => wps.where.not(type_id: nil).count,
+    'wp_with_status' => wps.where.not(status_id: nil).count,
+    'wp_with_priority' => wps.where.not(priority_id: nil).count,
     'wp_created_in_last_24h' => wps.where("created_at > ?", Time.now - 86400).count,
     'wp_provenance_cfs' => wp_provenance,
     'user_provenance_cfs' => user_provenance,
@@ -113,7 +121,11 @@ def _build_audit_script(jira_project_key: str) -> str:
     'te_distinct_hours_count' => te.distinct.count(:hours),
     'te_min_hours' => (te.minimum(:hours) || 0).to_f,
     'te_max_hours' => (te.maximum(:hours) || 0).to_f,
-    'relation_total' => Relation.where(from_id: wp_ids).count + Relation.where(to_id: wp_ids).count,
+    # Single OR-query so a relation with both ends inside ``wp_ids``
+    # (the common intra-project case) is counted exactly once instead
+    # of twice. The downstream zero-threshold heuristic still works:
+    # zero stays zero, but non-zero numbers reflect reality.
+    'relation_total' => Relation.where('from_id IN (?) OR to_id IN (?)', wp_ids, wp_ids).count,
   }}
 end).call
 """
@@ -183,6 +195,46 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             failures.append(
                 f"All {te_total} TimeEntries have hours = {metrics['te_min_hours']} — units"
                 " are not being preserved (Bug B indicator)"
+            )
+
+    # Type / Status / Priority — mapping integrity. Any WP with NULL on
+    # one of these is a silent mapping failure (the Jira→OP map for the
+    # corresponding domain didn't resolve and the WP got persisted
+    # anyway).
+    for label, key in (
+        ("type", "wp_with_type"),
+        ("status", "wp_with_status"),
+        ("priority", "wp_with_priority"),
+    ):
+        populated = int(metrics.get(key, 0))
+        if populated < wp_total:
+            failures.append(
+                f"WPs missing {label}_id: {wp_total - populated}/{wp_total}"
+                f" — {label} mapping likely failed for those issues",
+            )
+
+    # Journal count — Rails auto-emits a Journal on WP create/update.
+    # If wp_journal_total < wp_total, journaling is broken (or WPs were
+    # bulk-inserted in a way that bypassed the Journal hooks).
+    journal_total = int(metrics.get("wp_journal_total", 0))
+    if journal_total < wp_total:
+        failures.append(
+            f"Journal count {journal_total} < wp_total {wp_total} — every WP"
+            " creation should emit at least one Journal record",
+        )
+
+    # Relations / Watchers — size-gated heuristic warnings. A small
+    # project legitimately may have neither, but on a project of
+    # ``_HEURISTIC_SIZE_THRESHOLD`` WPs or more, zero is suspicious.
+    if wp_total >= _HEURISTIC_SIZE_THRESHOLD:
+        if int(metrics.get("relation_total", 0)) == 0:
+            warnings.append(
+                f"No relations found across {wp_total} WPs — relation"
+                " migration may have silently skipped (Bug D2 indicator)",
+            )
+        if int(metrics.get("wp_watcher_total", 0)) == 0:
+            warnings.append(
+                f"No watchers found across {wp_total} WPs — watcher migration may have silently skipped",
             )
 
     # Description coverage (warning only)
