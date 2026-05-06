@@ -778,15 +778,46 @@ class UserMigration(BaseMigration):
             "cache": cache_entry,
         }
 
-    def _sync_user_avatars(self, jobs: list[dict[str, Any]]) -> dict[str, int]:
+    def _sync_user_avatars(self, jobs: list[dict[str, Any]]) -> dict[str, Any]:
+        """Download Jira user avatars and upload them to OpenProject.
+
+        Returns a dict with:
+
+        - ``uploaded`` (int): avatars successfully transferred + set on OP.
+        - ``skipped`` (int): aggregate of *every* job that didn't upload —
+          including idempotent re-run hits. NOT a "real loss" count;
+          inspect ``skip_reasons`` below to subtract the expected
+          buckets (notably ``cached_digest_match``).
+        - ``skip_reasons`` (dict[str, int]): breakdown by reason. Sums
+          to ``skipped`` by construction. Buckets:
+
+          - ``cached_digest_match`` — *expected*; idempotent re-run.
+          - ``download_failed`` — Jira returned no avatar bytes.
+          - ``local_persist_failed`` — host write failed.
+          - ``container_transfer_failed`` — ``docker cp`` raised.
+          - ``set_avatar_api_raised`` — OP API call raised an exception.
+          - ``set_avatar_api_returned_false`` — OP API returned
+            cleanly with ``success=False`` (semantic rejection).
+
+        Consumers reading ``skipped`` for alerting / dashboards SHOULD
+        compute ``skipped - skip_reasons.get("cached_digest_match", 0)``
+        for "actual failures" — otherwise idempotent re-runs trigger
+        false alarms.
+        """
         if not jobs:
-            return {"uploaded": 0, "skipped": 0}
+            return {"uploaded": 0, "skipped": 0, "skip_reasons": {}}
 
         try:
             self.op_client.ensure_local_avatars_enabled()
         except Exception as exc:
             self.logger.warning("Failed to ensure local avatars are enabled: %s", exc)
-            return {"uploaded": 0, "skipped": len(jobs)}
+            # Whole batch fails one bucket — surface so consumers can
+            # tell "OP-side avatar feature off" from per-row failures.
+            return {
+                "uploaded": 0,
+                "skipped": len(jobs),
+                "skip_reasons": {"local_avatars_disabled": len(jobs)},
+            }
 
         avatar_dir = self.data_dir / "avatars"
         avatar_dir.mkdir(parents=True, exist_ok=True)
