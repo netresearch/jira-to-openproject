@@ -23,7 +23,6 @@ from typing import Any
 
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
-
 # --- spec checks ----------------------------------------------------------
 
 _REQUIRED_WP_PROVENANCE_CFS: tuple[str, ...] = (
@@ -49,14 +48,19 @@ _REQUIRED_TE_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O Origin Issue ID",
     "J2O Origin Issue Key",
     "J2O Origin System",
+    "J2O First Migration Date",
+    "J2O Last Update Date",
 )
 
 
 def _build_audit_script(jira_project_key: str) -> str:
-    """Build a single Ruby expression that evaluates to a hash of audit
+    """Build the Ruby audit expression for a Jira project.
+
+    Returns a single Ruby expression that evaluates to a hash of audit
     metrics. Routed through ``execute_large_query_to_json_file`` so the
     result is read back via a container tempfile — bypassing the noisy
-    tmux scrollback and any stale-marker collisions."""
+    tmux scrollback and any stale-marker collisions.
+    """
     expected_wp_cfs = list(_REQUIRED_WP_PROVENANCE_CFS)
     expected_user_cfs = list(_REQUIRED_USER_PROVENANCE_CFS)
     expected_te_cfs = list(_REQUIRED_TE_PROVENANCE_CFS)
@@ -119,6 +123,15 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return (failures, warnings) per the migration spec."""
     failures: list[str] = []
     warnings: list[str] = []
+
+    # Surface the Ruby-side error first — the audit script returns
+    # ``{"error": "OP project '<key>' not found"}`` when the project
+    # identifier doesn't resolve, and downstream rules would otherwise
+    # generate misleading "no work packages" output.
+    error_msg = metrics.get("error")
+    if error_msg:
+        failures.append(f"Audit aborted: {error_msg}")
+        return failures, warnings
 
     wp_total = int(metrics.get("wp_total", 0))
     if wp_total == 0:
@@ -190,6 +203,7 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: audit one Jira project's migrated WPs in OP."""
     parser = argparse.ArgumentParser(description="Audit a migrated Jira project in OpenProject")
     parser.add_argument("jira_key", help="Jira project key (e.g. NRS)")
     args = parser.parse_args(argv)
@@ -197,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         metrics = _execute_audit(args.jira_key)
     except Exception as exc:
-        print(f"AUDIT_ERROR: {exc}", file=sys.stderr)
+        sys.stderr.write(f"AUDIT_ERROR: {exc}\n")
         return 2
 
     failures, warnings = _classify(metrics)
@@ -208,12 +222,12 @@ def main(argv: list[str] | None = None) -> int:
         "warnings": warnings,
         "passed": len(failures) == 0,
     }
-    print(json.dumps(output, indent=2, default=str))
+    sys.stdout.write(json.dumps(output, indent=2, default=str))
+    sys.stdout.write("\n")
 
     status = "PASS" if not failures else "FAIL"
-    print(
-        f"\n{status}: {args.jira_key}: {len(failures)} failures, {len(warnings)} warnings",
-        file=sys.stderr,
+    sys.stderr.write(
+        f"\n{status}: {args.jira_key}: {len(failures)} failures, {len(warnings)} warnings\n",
     )
     return 0 if not failures else 1
 
