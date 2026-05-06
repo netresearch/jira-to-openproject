@@ -242,9 +242,119 @@ class UserMigration(BaseMigration):
 
         self.logger.info("Extracted %s users from Jira", len(self.jira_users))
 
+        # Augment the directory list with users discovered from
+        # cached issues (watchers, assignees, reporters, comment
+        # authors). Per the live TEST audit (2026-05-06) and the
+        # recon for PR #195, the directory ``get_users()`` call
+        # systematically misses inactive / disabled / never-logged-in
+        # accounts that nonetheless appear as watchers — driving the
+        # 93% watcher loss class. Adding discovered users here lets
+        # ``create_user_mapping`` map them and ``create_missing_users``
+        # provision OP accounts for them BEFORE watcher_migration
+        # tries to resolve them.
+        discovered = self._discover_users_from_cached_issues()
+        if discovered:
+            existing_ids = {self._stable_user_id(u) for u in self.jira_users if self._stable_user_id(u)}
+            added = 0
+            for raw in discovered:
+                stable_id = self._stable_user_id(raw)
+                if not stable_id or stable_id in existing_ids:
+                    continue
+                self.jira_users.append(raw)
+                existing_ids.add(stable_id)
+                added += 1
+            if added:
+                self.logger.info(
+                    "Discovered %d additional users from cached issues (watchers/"
+                    "assignee/reporter/comments) — total now %d",
+                    added,
+                    len(self.jira_users),
+                )
+
         self._save_to_json(self.jira_users, Path("jira_users.json"))
 
         return self.jira_users
+
+    @staticmethod
+    def _stable_user_id(raw: dict[str, Any]) -> str:
+        """Lowercase ``account_id`` or ``name`` — whichever is present.
+
+        Used as a dedup key when merging discovered users into
+        ``self.jira_users``. Mirrors the probe order of
+        :meth:`watcher_migration._resolve_user_id` so two callers
+        agree on which identity is "the same user".
+        """
+        for key in ("accountId", "name"):
+            value = raw.get(key)
+            if isinstance(value, str) and value:
+                return value.lower()
+        return ""
+
+    def _discover_users_from_cached_issues(self) -> list[dict[str, Any]]:
+        """Harvest user identities from the cached Jira issues file.
+
+        For each issue in ``data_dir / 'jira_issues_cache.json'``,
+        collect raw user dicts from:
+
+        - ``fields.watches.watchers[*]``
+        - ``fields.assignee``
+        - ``fields.reporter``
+        - ``fields.comment.comments[*].author``
+
+        Returns deduped list (by lowercase ``accountId`` or ``name``)
+        of raw dicts. Discovery is best-effort — on cache-read failure
+        it returns an empty list (the directory pass remains the
+        fallback).
+        """
+        cache_file = self.data_dir / "jira_issues_cache.json"
+        if not cache_file.exists():
+            return []
+        try:
+            import json as _json
+
+            with open(cache_file, encoding="utf-8") as f:
+                issues = _json.load(f)
+        except Exception as exc:
+            self.logger.warning(
+                "Could not read jira_issues_cache.json for user discovery: %s",
+                exc,
+            )
+            return []
+
+        discovered: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        def _add(raw: Any) -> None:
+            if not isinstance(raw, dict):
+                return
+            stable = self._stable_user_id(raw)
+            if not stable or stable in seen_ids:
+                return
+            seen_ids.add(stable)
+            discovered.append(raw)
+
+        if not isinstance(issues, dict):
+            return []
+
+        for issue in issues.values():
+            if not isinstance(issue, dict):
+                continue
+            fields = issue.get("fields") or {}
+            if not isinstance(fields, dict):
+                continue
+            watches = fields.get("watches") or {}
+            if isinstance(watches, dict):
+                for w in watches.get("watchers") or []:
+                    _add(w)
+            _add(fields.get("assignee"))
+            _add(fields.get("reporter"))
+            comment = fields.get("comment") or {}
+            if isinstance(comment, dict):
+                for c in comment.get("comments") or []:
+                    if isinstance(c, dict):
+                        _add(c.get("author"))
+
+        return discovered
 
     def extract_openproject_users(self, *, force: bool = False) -> list[dict[str, Any]]:
         """Extract users from OpenProject.

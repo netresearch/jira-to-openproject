@@ -143,3 +143,88 @@ def test_prepare_avatar_job_uses_cache(logger_stub):
         )
         is None
     )
+
+
+# --- User discovery from cached issues ---------------------------------------
+# Per the live TEST audit (2026-05-06): the directory ``get_users()``
+# call misses users who appear as watchers/assignees/reporters/
+# comment authors but aren't in the Jira user directory (inactive,
+# disabled, never-logged-in). PR #195 surfaced the distinct
+# unmapped users; this PR's discovery method adds them to
+# ``self.jira_users`` so they get mapped + created BEFORE
+# watcher_migration tries to resolve them.
+
+
+def test_discover_users_from_cached_issues_harvests_all_sources(logger_stub, tmp_path):
+    """Harvest watchers + assignee + reporter + comment authors, deduped by id."""
+    import json as _json
+
+    instance = UserMigration.__new__(UserMigration)
+    instance.logger = logger_stub
+    instance.data_dir = tmp_path
+    cache_file = tmp_path / "jira_issues_cache.json"
+    cache_file.write_text(
+        _json.dumps(
+            {
+                "PROJ-1": {
+                    "fields": {
+                        "watches": {
+                            "watchers": [
+                                {"name": "alice", "accountId": "acc-alice"},
+                                {"name": "bob", "accountId": "acc-bob"},
+                            ],
+                        },
+                        "assignee": {"name": "carol", "accountId": "acc-carol"},
+                        "reporter": {"name": "dave", "accountId": "acc-dave"},
+                        "comment": {
+                            "comments": [
+                                {"author": {"name": "eve", "accountId": "acc-eve"}},
+                            ],
+                        },
+                    },
+                },
+                "PROJ-2": {
+                    "fields": {
+                        # Same alice — must dedup, not double-count.
+                        "watches": {"watchers": [{"name": "alice", "accountId": "acc-alice"}]},
+                    },
+                },
+            },
+        ),
+    )
+
+    discovered = instance._discover_users_from_cached_issues()
+    names = sorted(u["name"] for u in discovered)
+    assert names == ["alice", "bob", "carol", "dave", "eve"], discovered
+
+
+def test_discover_users_handles_missing_cache(logger_stub, tmp_path):
+    """No cache file → empty list, no exception."""
+    instance = UserMigration.__new__(UserMigration)
+    instance.logger = logger_stub
+    instance.data_dir = tmp_path
+
+    assert instance._discover_users_from_cached_issues() == []
+
+
+def test_discover_users_handles_malformed_cache(logger_stub, tmp_path):
+    """Garbage JSON → empty list + warning, NOT a raised exception.
+
+    Pin: discovery is best-effort. The directory pass remains the
+    fallback, never block migration.
+    """
+    cache_file = tmp_path / "jira_issues_cache.json"
+    cache_file.write_text("not valid json {{{")
+
+    instance = UserMigration.__new__(UserMigration)
+    instance.logger = logger_stub
+    instance.data_dir = tmp_path
+
+    assert instance._discover_users_from_cached_issues() == []
+
+
+def test_stable_user_id_prefers_account_id_over_name():
+    """Dedup key uses ``accountId`` first, then ``name``, lowercase."""
+    assert UserMigration._stable_user_id({"accountId": "ACC-1", "name": "alice"}) == "acc-1"
+    assert UserMigration._stable_user_id({"name": "ALICE"}) == "alice"
+    assert UserMigration._stable_user_id({}) == ""
