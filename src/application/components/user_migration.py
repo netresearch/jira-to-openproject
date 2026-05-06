@@ -306,35 +306,53 @@ class UserMigration(BaseMigration):
         it returns an empty list (the directory pass remains the
         fallback).
         """
+        import json as _json
+
         cache_file = self.data_dir / "jira_issues_cache.json"
         if not cache_file.exists():
             return []
         try:
-            import json as _json
-
             with open(cache_file, encoding="utf-8") as f:
                 issues = _json.load(f)
-        except Exception as exc:
+        except (OSError, _json.JSONDecodeError) as exc:
+            # Narrow to realistic failure modes — a refactor bug
+            # (e.g. accidental ``getattr`` typo) should crash loud
+            # instead of being silently classified as "could not
+            # read cache".
             self.logger.warning(
                 "Could not read jira_issues_cache.json for user discovery: %s",
                 exc,
             )
             return []
 
+        if not isinstance(issues, dict):
+            self.logger.warning(
+                "jira_issues_cache.json is not a dict at the top level — skipping user discovery",
+            )
+            return []
+
         discovered: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
+        # Track user dicts that had neither ``accountId`` nor
+        # ``name`` — they're silently unmappable by
+        # ``watcher_migration._resolve_user_id`` too (the probe
+        # ladder starts with those two fields), so dropping is
+        # correct, but the COUNT must be visible so a future audit
+        # can quantify the residual loss.
+        dropped_no_identity = 0
 
         def _add(raw: Any) -> None:
+            nonlocal dropped_no_identity
             if not isinstance(raw, dict):
                 return
             stable = self._stable_user_id(raw)
-            if not stable or stable in seen_ids:
+            if not stable:
+                dropped_no_identity += 1
+                return
+            if stable in seen_ids:
                 return
             seen_ids.add(stable)
             discovered.append(raw)
-
-        if not isinstance(issues, dict):
-            return []
 
         for issue in issues.values():
             if not isinstance(issue, dict):
@@ -353,6 +371,14 @@ class UserMigration(BaseMigration):
                 for c in comment.get("comments") or []:
                     if isinstance(c, dict):
                         _add(c.get("author"))
+
+        if dropped_no_identity:
+            self.logger.info(
+                "User discovery: %d dict(s) had neither accountId nor name and"
+                " were skipped (unmappable downstream — anonymized accounts /"
+                " pre-7.x Server users / system actors)",
+                dropped_no_identity,
+            )
 
         return discovered
 

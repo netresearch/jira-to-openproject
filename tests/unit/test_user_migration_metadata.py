@@ -228,3 +228,67 @@ def test_stable_user_id_prefers_account_id_over_name():
     assert UserMigration._stable_user_id({"accountId": "ACC-1", "name": "alice"}) == "acc-1"
     assert UserMigration._stable_user_id({"name": "ALICE"}) == "alice"
     assert UserMigration._stable_user_id({}) == ""
+
+
+def test_discover_users_top_level_list_not_dict_returns_empty(logger_stub, tmp_path):
+    """If the cache is a JSON list (not a dict), discovery returns ``[]``.
+
+    Pin the structural assumption — the existing reader walks
+    ``issues.values()`` which would fail on a list. The defensive
+    ``isinstance(issues, dict)`` guard catches it and returns an
+    empty list with a warning, NOT a TypeError.
+    """
+    import json as _json
+
+    cache_file = tmp_path / "jira_issues_cache.json"
+    cache_file.write_text(_json.dumps([{"key": "PROJ-1"}]))  # list, not dict
+
+    instance = UserMigration.__new__(UserMigration)
+    instance.logger = logger_stub
+    instance.data_dir = tmp_path
+
+    assert instance._discover_users_from_cached_issues() == []
+
+
+def test_discover_users_drops_dicts_without_account_or_name(logger_stub, tmp_path):
+    """User dicts with only ``displayName`` / ``emailAddress`` are dropped.
+
+    Documents the trade-off: ``watcher_migration._resolve_user_id``
+    probes ``accountId`` then ``name`` first, so a user dict with
+    only ``displayName`` couldn't be mapped downstream anyway —
+    keeping it in ``self.jira_users`` would just create a
+    placeholder OP user with no usable identity. The drop is
+    correct policy, but PR #196's hardening logs the count so a
+    future audit can quantify the residual loss.
+    """
+    import json as _json
+
+    cache_file = tmp_path / "jira_issues_cache.json"
+    cache_file.write_text(
+        _json.dumps(
+            {
+                "PROJ-1": {
+                    "fields": {
+                        "watches": {
+                            "watchers": [
+                                {"accountId": "real", "name": "real-user"},
+                                # Anonymized — no accountId, no name.
+                                {"displayName": "Former user"},
+                                # Email-only system actor.
+                                {"emailAddress": "sys@example.org"},
+                            ],
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+    instance = UserMigration.__new__(UserMigration)
+    instance.logger = logger_stub
+    instance.data_dir = tmp_path
+
+    discovered = instance._discover_users_from_cached_issues()
+    # Only the user with a usable identity survives.
+    assert len(discovered) == 1
+    assert discovered[0]["accountId"] == "real"
