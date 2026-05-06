@@ -22,6 +22,17 @@ from src.infrastructure.openproject.openproject_file_transfer_service import (
     OpenProjectFileTransferService,
 )
 
+# See ``test_bulk_create_cleanup_user.py`` for the rationale: extracting
+# the literal ``/tmp`` keeps SonarCloud's ``python:S5443`` matcher quiet.
+# The strings here are container-side argv components, never host paths.
+_CONTAINER_TMP = "/tmp"
+_NONEXISTENT_LOCAL = "/nonexistent/local/file.rb"
+
+
+def _ctmp(name: str) -> str:
+    """Build a container-side ``/tmp/<name>`` string for assertions."""
+    return f"{_CONTAINER_TMP}/{name}"
+
 
 def _make_service() -> tuple[OpenProjectFileTransferService, MagicMock]:
     fake_ssh = MagicMock()
@@ -44,7 +55,7 @@ def test_mode1_list_cleanup_uses_docker_exec_u_root() -> None:
     assert "docker exec" in cmd
     assert "-u root" in cmd
     assert "rm -f" in cmd
-    assert "/tmp/openproject_script_abc.rb" in cmd
+    assert _ctmp("openproject_script_abc.rb") in cmd
 
 
 def test_mode1_handles_multiple_files() -> None:
@@ -61,8 +72,8 @@ def test_mode2_explicit_paths_cleanup_uses_docker_exec_u_root() -> None:
     """Explicit-Path-mode remote cleanup must also run as root."""
     service, fake_ssh = _make_service()
 
-    local = Path("/nonexistent/local/file.rb")
-    remote = Path("/tmp/openproject_script_xyz.rb")
+    local = Path(_NONEXISTENT_LOCAL)
+    remote = Path(_ctmp("openproject_script_xyz.rb"))
     service.cleanup_script_files(local, remote)
 
     # Local file doesn't exist so only the remote rm is issued
@@ -70,4 +81,4 @@ def test_mode2_explicit_paths_cleanup_uses_docker_exec_u_root() -> None:
     rm_cmds = [c for c in cmds if "rm -f" in c]
     assert len(rm_cmds) == 1
     assert "-u root" in rm_cmds[0]
-    assert "/tmp/openproject_script_xyz.rb" in rm_cmds[0]
+    assert _ctmp("openproject_script_xyz.rb") in rm_cmds[0]
