@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import traceback
 from typing import Any
@@ -131,6 +132,19 @@ _REQUIRED_TE_PROVENANCE_CFS: tuple[str, ...] = (
 _TE_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
     ("J2O Origin Worklog Key", r"\A([A-Z][A-Z0-9_]+-\d+:\d+|tempo:\d+)\z"),
 )
+
+# Validated against argv before being interpolated into a JQL string —
+# a stray quote in a malformed key would otherwise silently change the
+# query scope (``NRS" OR project = "PROD`` → both projects).
+_JIRA_PROJECT_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]+\z")
+
+# Hard cap for the attachment pagination loop. Defends against a buggy
+# proxy / Jira returning the same page repeatedly (so neither the
+# empty-page break nor the actual end-of-results triggers) — without
+# this cap, ``start_at`` would grow unboundedly and the audit would
+# pound the rate-limiter forever. 1000 pages × 100 issues/page =
+# 100k issues, well above any real project.
+_PAGINATION_MAX_PAGES = 1000
 
 
 def _build_audit_script(jira_project_key: str) -> str:
@@ -466,6 +480,26 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 f" {wp_total} ({int(jira_count) - wp_total:+d}) — wholesale data loss",
             )
 
+    # Jira source comparison: attachment count. Per spec, attachments
+    # must match exactly — any non-zero delta means silent attachment
+    # loss (file-too-large, backend rejected, transformer bug) or a
+    # phantom OP-side artifact. ``None`` warns ("source unavailable")
+    # without blocking the OP-side report. Missing key = legacy run.
+    if "jira_attachment_count" in metrics:
+        jira_att = metrics["jira_attachment_count"]
+        if jira_att is None:
+            warnings.append(
+                "Jira attachment source comparison unavailable — check skipped",
+            )
+        else:
+            op_att = _metric_int(metrics, "wp_attachment_total")
+            if int(jira_att) != op_att:
+                failures.append(
+                    f"Jira→OP attachment count mismatch: Jira reports {jira_att},"
+                    f" OP has {op_att} ({int(jira_att) - op_att:+d}) — silent"
+                    " attachment loss or phantom OP-side artifacts",
+                )
+
     # WP CF format validation. The Ruby side counts populated values
     # that don't match the expected regex per CF. Missing key = legacy
     # audit run before this branch — silently skip (zero is healthy).
@@ -569,6 +603,96 @@ def _fetch_jira_issue_count(jira_project_key: str) -> int | None:
         return None
 
 
+def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
+    """Best-effort: count total attachments across all issues in the project.
+
+    Paginates ``search_issues(jql='project="X"', fields="attachment")``
+    and sums ``len(issue.fields.attachment)`` across all pages. Same
+    error contract as :func:`_fetch_jira_issue_count`: any failure
+    (no creds, network down, project not found, mid-pagination error,
+    auth, CAPTCHA) collapses to ``None`` so the classifier emits a
+    warning rather than blocking the OP-side report.
+
+    **Pagination correctness.** Two subtle bugs that an earlier draft
+    of this helper had:
+
+    1. ``start_at`` MUST advance by ``len(page)``, not by the requested
+       ``page_size``. Jira Server / Data Center caps ``maxResults`` via
+       ``jira.search.views.default.max`` (commonly 50 or 100,
+       configurable). Requesting 100 and receiving 50 must still mean
+       "page complete, more may follow". The obvious heuristic
+       ``if len(page) < page_size: break`` silently truncates the
+       entire project past page 1 — the exact silent-failure class
+       this audit tool exists to catch.
+    2. The loop needs a hard cap. A buggy proxy that returns the same
+       page repeatedly (``len(page) == page_size`` forever) would
+       otherwise spin until the rate-limiter melts. ``for...else``
+       fires ``return None`` if the cap is hit so a buggy upstream
+       presents as "source unavailable" rather than a silent count.
+
+    Project key is regex-validated before the JQL is built — a stray
+    quote in argv would otherwise silently change the query scope
+    (``NRS" OR project = "PROD`` would query both).
+
+    The lazy import + broad ``except`` mirror the issue-count helper
+    so the audit module imports cleanly without Jira config — the
+    classifier unit tests rely on this.
+    """
+    if not _JIRA_PROJECT_KEY_RE.match(jira_project_key):
+        sys.stderr.write(
+            f"[audit] Jira attachment comparison skipped — invalid project key"
+            f" {jira_project_key!r} (expected uppercase Jira key like 'NRS')\n",
+        )
+        return None
+    try:
+        from src.infrastructure.jira.jira_client import JiraClient
+    except ImportError as exc:
+        sys.stderr.write(
+            f"[audit] Jira attachment comparison skipped — could not import JiraClient: {exc}\n",
+        )
+        return None
+    try:
+        jira = JiraClient()
+        # ``jira.jira`` is the underlying ``python-jira`` JIRA instance
+        # used elsewhere in src/infrastructure/jira/ for paginated
+        # search calls (see jira_search_service.py:64-72).
+        underlying = jira.jira
+        page_size = 100
+        start_at = 0
+        total = 0
+        jql = f'project = "{jira_project_key}"'
+        for _ in range(_PAGINATION_MAX_PAGES):
+            page = underlying.search_issues(
+                jql,
+                startAt=start_at,
+                maxResults=page_size,
+                fields="attachment",
+                expand="",
+            )
+            if not page:
+                break
+            for issue in page:
+                attachments = getattr(issue.fields, "attachment", None) or []
+                total += len(attachments)
+            # Advance by what the server actually returned, not by what
+            # we asked for. See the docstring for why.
+            start_at += len(page)
+        else:
+            sys.stderr.write(
+                f"[audit] Jira attachment pagination hit the {_PAGINATION_MAX_PAGES}"
+                f"-page safety cap for project {jira_project_key!r} — likely a buggy"
+                " upstream returning the same page repeatedly\n",
+            )
+            return None
+    except Exception as exc:
+        sys.stderr.write(
+            f"[audit] Jira attachment comparison skipped — {type(exc).__name__}: {exc}\n",
+        )
+        sys.stderr.write(traceback.format_exc())
+        return None
+    return total
+
+
 def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     """Run the audit Ruby expression via the OpenProject client and return parsed metrics."""
     op_client = OpenProjectClient()
@@ -580,6 +704,7 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     # ``None`` and surfaces as a warning in the classifier; the OP-side
     # report is still valid.
     metrics["jira_issue_count"] = _fetch_jira_issue_count(jira_project_key)
+    metrics["jira_attachment_count"] = _fetch_jira_attachment_count(jira_project_key)
     return metrics
 
 

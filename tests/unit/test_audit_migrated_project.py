@@ -612,6 +612,116 @@ def test_jira_issue_count_missing_field_treated_as_silent() -> None:
     assert not any("jira" in w.lower() for w in warnings), warnings
 
 
+# --- Jira source comparison: attachment count -------------------------------
+# Per spec: attachment count must EXACTLY equal Jira's. Any silent
+# attachment loss (file-too-large, OP backend rejected, transformer bug)
+# would currently slip through every other rule.
+
+
+def test_jira_attachment_count_match_passes() -> None:
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_attachment_count=0, wp_attachment_total=0),
+    )
+    assert not any("attachment" in f.lower() for f in failures), failures
+
+
+def test_jira_attachment_count_mismatch_is_failure() -> None:
+    """Any non-zero delta is a hard failure — exact match required by spec."""
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_attachment_count=42, wp_attachment_total=40),
+    )
+    assert any("attachment" in f.lower() and "42" in f and "40" in f for f in failures), failures
+
+
+def test_jira_attachment_count_zero_jira_with_op_attachments_is_failure() -> None:
+    """OP > Jira = phantom attachments somehow appeared in OP. Real bug."""
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_attachment_count=0, wp_attachment_total=5),
+    )
+    assert any("attachment" in f.lower() for f in failures), failures
+
+
+def test_jira_attachment_count_none_warns_source_unavailable() -> None:
+    _failures, warnings = _classify(_baseline_metrics(jira_attachment_count=None))
+    assert any("attachment" in w.lower() and ("source" in w.lower() or "unavailable" in w.lower()) for w in warnings), (
+        warnings
+    )
+
+
+def test_jira_attachment_count_missing_field_treated_as_silent() -> None:
+    """Missing key = legacy audit run; rule must not fire."""
+    metrics = _baseline_metrics()
+    failures, warnings = _classify(metrics)
+    assert not any("attachment" in f.lower() and "jira" in f.lower() for f in failures), failures
+    assert not any("attachment" in w.lower() and "jira" in w.lower() for w in warnings), warnings
+
+
+def test_fetch_jira_attachment_count_paginates_when_server_caps_maxresults(monkeypatch) -> None:
+    """The helper must page through all results when Jira caps maxResults.
+
+    Jira Server / Data Center enforces ``jira.search.views.default.max``
+    (commonly 50). Requesting ``maxResults=100`` then receiving 50
+    must still mean "page complete, more may follow". An earlier draft
+    used ``if len(page) < page_size: break`` which silently truncated
+    the count to page 1 — the exact silent-failure class this tool
+    exists to catch.
+
+    The fake returns 50 items per page (capping the helper's request
+    of 100) across two pages, then an empty terminator. With correct
+    pagination the helper sums attachments across BOTH pages.
+    """
+    import sys as _sys
+    import types
+
+    class _FakeFields:
+        def __init__(self, attachments_per_issue: int) -> None:
+            self.attachment = [object()] * attachments_per_issue
+
+    class _FakeIssue:
+        def __init__(self, attachments_per_issue: int) -> None:
+            self.fields = _FakeFields(attachments_per_issue)
+
+    pages = [
+        [_FakeIssue(1) for _ in range(50)],  # page 1: 50 issues × 1 attachment
+        [_FakeIssue(2) for _ in range(50)],  # page 2: 50 issues × 2 attachments
+        [],  # page 3: empty terminator
+    ]
+    page_iter = iter(pages)
+
+    class _FakeUnderlying:
+        def search_issues(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+            return next(page_iter)
+
+    class _FakeJiraClient:
+        def __init__(self) -> None:
+            self.jira = _FakeUnderlying()
+
+    fake_module = types.ModuleType("src.infrastructure.jira.jira_client")
+    fake_module.JiraClient = _FakeJiraClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(_sys.modules, "src.infrastructure.jira.jira_client", fake_module)
+
+    from tools.audit_migrated_project import _fetch_jira_attachment_count
+
+    result = _fetch_jira_attachment_count("NRS")
+    # Correct pagination: 50×1 + 50×2 = 150. Buggy pagination would
+    # have stopped after page 1 and returned 50.
+    assert result == 150
+
+
+def test_fetch_jira_attachment_count_rejects_invalid_project_key() -> None:
+    """Malformed project keys must not be interpolated into JQL.
+
+    Defends against a stray quote in argv silently changing the query
+    scope (e.g. ``NRS" OR project = "PROD`` would query both projects).
+    """
+    from tools.audit_migrated_project import _fetch_jira_attachment_count
+
+    # Each malformed key short-circuits before any Jira call would be
+    # attempted — no monkeypatch needed.
+    for bad in ('NRS"', "nrs", "NRS PROD", "", "1NRS", "NR-S"):
+        assert _fetch_jira_attachment_count(bad) is None
+
+
 # --- Pre-existing rules still hold (regression guard) -------------------------
 
 
