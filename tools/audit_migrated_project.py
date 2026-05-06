@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from typing import Any
 
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -545,12 +546,26 @@ def _fetch_jira_issue_count(jira_project_key: str) -> int | None:
     """
     try:
         from src.infrastructure.jira.jira_client import JiraClient
-    except ImportError:
+    except ImportError as exc:
+        sys.stderr.write(
+            f"[audit] Jira source comparison skipped — could not import JiraClient: {exc}\n",
+        )
         return None
     try:
         jira = JiraClient()
         return int(jira.get_issue_count(jira_project_key))
-    except Exception:
+    except Exception as exc:
+        # Surface the underlying error on stderr so operators can tell
+        # "no creds" (expected) from "JiraClient is broken" (a real
+        # bug). The audit's stdout JSON stays clean; the warning
+        # emitted by ``_classify`` keeps the high-level signal, while
+        # the trace below preserves a forensic trail. ``ValueError``
+        # from ``int(...)`` (malformed upstream response) and network
+        # errors land here together — the trace tells them apart.
+        sys.stderr.write(
+            f"[audit] Jira source comparison skipped — {type(exc).__name__}: {exc}\n",
+        )
+        sys.stderr.write(traceback.format_exc())
         return None
 
 
