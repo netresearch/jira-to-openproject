@@ -79,7 +79,16 @@ _REQUIRED_USER_PROVENANCE_CFS: tuple[str, ...] = (
 # *exist* via the population path; format validation is left to the
 # migration code's own normalization.
 _USER_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
-    ("J2O Origin System", r"\AJira[\w\s.]*\z"),
+    # ``Jira`` followed optionally by a whitespace separator and a
+    # mix of label/version/punctuation chars. The mandatory whitespace
+    # after ``Jira`` (when the optional group is present) blocks
+    # typo-style corruptions like ``"Jiraz"`` from passing as valid.
+    # The expanded charset (``()-/``) accepts operator-overridden
+    # deployment labels — ``user_migration._get_origin_system_label``
+    # falls back to ``config.jira_config["deployment"]`` which is a
+    # free-form string that may contain parens, slashes, or hyphens
+    # (e.g. ``"Jira (Server)"``, ``"Jira Data-Center"``).
+    ("J2O Origin System", r"\AJira(?:\s[\w\s.()\-/]*)?\z"),
     # ``ViewProfile.jspa?<param>=<value>`` — forward slashes escaped so
     # the Ruby ``/.../`` regex literal doesn't terminate at ``://``.
     ("J2O External URL", r"\Ahttps?:\/\/[^\s]+\/secure\/ViewProfile\.jspa\?[^\s]*\z"),

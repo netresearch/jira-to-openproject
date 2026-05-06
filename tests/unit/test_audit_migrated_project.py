@@ -399,6 +399,51 @@ def test_user_cf_format_null_count_does_not_crash() -> None:
     assert not any("format" in f.lower() and "User CF" in f for f in failures), failures
 
 
+def test_user_origin_system_regex_rejects_typo_corruption() -> None:
+    """The ``Origin System`` regex must not pass typo-style corruption.
+
+    Pins the mandatory whitespace separator: ``"Jiraz"``,
+    ``"Jirabad"``, ``"Jira_corrupted"`` (no whitespace after ``Jira``)
+    must all be rejected. Without the whitespace anchor, the regex
+    would silently accept arbitrary suffixes attached to ``"Jira"``.
+    """
+    import re
+
+    from tools.audit_migrated_project import _USER_CF_FORMAT_REGEXES
+
+    pattern = dict(_USER_CF_FORMAT_REGEXES)["J2O Origin System"]
+    rx = re.compile(pattern)
+    for bad in ("Jiraz", "Jirabad", "Jira_corrupted", "JiraX"):
+        assert rx.match(bad) is None, f"regex accepted corrupted value {bad!r}"
+
+
+def test_user_origin_system_regex_accepts_operator_override_punctuation() -> None:
+    """The ``Origin System`` regex must accept operator-typed deployment labels.
+
+    ``user_migration._get_origin_system_label`` falls back to
+    ``config.jira_config["deployment"]`` — a free-form string that may
+    legitimately contain parens, slashes, and hyphens (e.g.
+    ``"Jira (Server)"``, ``"Jira Data-Center"``, ``"Jira Cloud/v9"``).
+    A regex that's too tight here would false-positive on real values.
+    """
+    import re
+
+    from tools.audit_migrated_project import _USER_CF_FORMAT_REGEXES
+
+    pattern = dict(_USER_CF_FORMAT_REGEXES)["J2O Origin System"]
+    rx = re.compile(pattern)
+    for good in (
+        "Jira",
+        "Jira Cloud",
+        "Jira Server v9.1",
+        "Jira (Server)",
+        "Jira Data-Center",
+        "Jira Cloud/v9",
+        "Jira Data Center 9.1.2",
+    ):
+        assert rx.match(good) is not None, f"regex rejected legit value {good!r}"
+
+
 # --- TimeEntry Origin Worklog Key population --------------------------------
 # Per spec, ``J2O Origin Worklog Key`` MUST be populated on every migrated
 # TimeEntry — it's the dedup key on re-runs. Existence-of-the-CF alone is
