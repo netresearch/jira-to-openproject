@@ -130,15 +130,23 @@ def _build_audit_script(jira_project_key: str) -> str:
     # of twice. The downstream zero-threshold heuristic still works:
     # zero stays zero, but non-zero numbers reflect reality.
     'relation_total' => project_relations.count,
-    # Orphan detection. A *project relation* with ``from_id NOT IN
-    # work_packages`` can only mean ``to_id IN wp_ids`` AND the from-end
+    # Orphan detection. A *project relation* with ``from_id`` not in
+    # ``work_packages`` can only mean ``to_id IN wp_ids`` AND the from-end
     # is a deleted WP elsewhere — i.e. the "from" endpoint is dangling.
     # Symmetric for the to-end. Watcher orphans fire when a watching
     # user has been deleted without cascade.
-    'orphaned_relations_from' => project_relations.where('from_id NOT IN (SELECT id FROM work_packages)').count,
-    'orphaned_relations_to' => project_relations.where('to_id NOT IN (SELECT id FROM work_packages)').count,
+    #
+    # ``NOT EXISTS`` instead of ``NOT IN (SELECT ...)`` so a NULL in the
+    # subquery cannot collapse the entire predicate to ``UNKNOWN`` (the
+    # three-valued-logic trap). PKs are ``NOT NULL`` today so behavior
+    # is identical, but ``NOT EXISTS`` stays correct if that ever
+    # changes and is typically faster.
+    'orphaned_relations_from' => project_relations.
+      where('NOT EXISTS (SELECT 1 FROM work_packages wp WHERE wp.id = relations.from_id)').count,
+    'orphaned_relations_to' => project_relations.
+      where('NOT EXISTS (SELECT 1 FROM work_packages wp WHERE wp.id = relations.to_id)').count,
     'orphaned_watchers' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_ids).
-      where('user_id NOT IN (SELECT id FROM users)').count,
+      where('NOT EXISTS (SELECT 1 FROM users u WHERE u.id = watchers.user_id)').count,
   }}
 end).call
 """
