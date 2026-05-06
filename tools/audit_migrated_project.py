@@ -300,9 +300,12 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     # WP CF format validation. The Ruby side counts populated values
     # that don't match the expected regex per CF. Missing key = legacy
     # audit run before this branch — silently skip (zero is healthy).
+    # ``int(count or 0)`` so a future Ruby schema that emits ``null``
+    # (or a partial-result blob with a missing CF) doesn't crash
+    # ``_classify`` with ``TypeError``; a ``None`` collapses to zero.
     wp_cf_violations = metrics.get("wp_cf_format_violations", {}) or {}
     for cf_name, count in wp_cf_violations.items():
-        if int(count) > 0:
+        if int(count or 0) > 0:
             failures.append(
                 f"{count} populated values of WP CF '{cf_name}' do not match the expected format",
             )

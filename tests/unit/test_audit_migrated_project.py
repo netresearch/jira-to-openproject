@@ -277,6 +277,22 @@ def test_wp_cf_format_multiple_violations_each_reported() -> None:
     assert any("J2O Origin URL" in f for f in failed_cfs)
 
 
+def test_wp_cf_format_null_count_does_not_crash() -> None:
+    """A ``None`` count for a CF must collapse to zero, not raise.
+
+    Defends against a Ruby schema change or partial-result blob where
+    the violation count comes back as JSON ``null``. ``int(None)`` would
+    crash ``_classify`` with ``TypeError`` and turn a data-quality
+    signal into a hard tool failure with no actionable message.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            wp_cf_format_violations={"J2O Origin Key": None, "J2O Origin ID": 0},
+        ),
+    )
+    assert not any("format" in f.lower() for f in failures), failures
+
+
 def test_wp_cf_format_missing_field_treated_as_silent() -> None:
     """A missing ``wp_cf_format_violations`` key must NOT fail.
 
