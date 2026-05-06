@@ -445,6 +445,26 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 f"No watchers found across {wp_total} WPs — watcher migration may have silently skipped",
             )
 
+    # Jira source comparison: issue count. The audit is otherwise
+    # OP-side only — without this check, a wholesale loss (e.g. 1000
+    # Jira issues → 800 OP WPs) passes every other rule. Spec mandates
+    # exact match; any delta is a failure. ``None`` = the audit
+    # couldn't reach Jira (no creds / network) — warn so operators see
+    # the gap, but don't block the OP-side report. Missing key = legacy
+    # audit run before this branch — silent (zero false positives on
+    # cached metrics blobs).
+    if "jira_issue_count" in metrics:
+        jira_count = metrics["jira_issue_count"]
+        if jira_count is None:
+            warnings.append(
+                "Jira source comparison unavailable — issue-count check skipped",
+            )
+        elif int(jira_count) != wp_total:
+            failures.append(
+                f"Jira→OP issue count mismatch: Jira reports {jira_count}, OP has"
+                f" {wp_total} ({int(jira_count) - wp_total:+d}) — wholesale data loss",
+            )
+
     # WP CF format validation. The Ruby side counts populated values
     # that don't match the expected regex per CF. Missing key = legacy
     # audit run before this branch — silently skip (zero is healthy).
@@ -509,13 +529,43 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     return failures, warnings
 
 
+def _fetch_jira_issue_count(jira_project_key: str) -> int | None:
+    """Best-effort: ask Jira how many issues live in this project.
+
+    Returns ``None`` if Jira can't be reached for any reason (no
+    creds, network down, project not found, auth error). The audit
+    must not fail closed on Jira-side issues — operators may
+    legitimately run it without Jira creds, and the OP-side checks
+    still produce useful output. A ``None`` flows through ``_classify``
+    as a warning ("source comparison unavailable"), not a failure.
+
+    Imported lazily so the module imports cleanly even when Jira
+    config is absent (e.g. in unit tests that exercise the
+    classifier directly).
+    """
+    try:
+        from src.infrastructure.jira.jira_client import JiraClient
+    except ImportError:
+        return None
+    try:
+        jira = JiraClient()
+        return int(jira.get_issue_count(jira_project_key))
+    except Exception:
+        return None
+
+
 def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     """Run the audit Ruby expression via the OpenProject client and return parsed metrics."""
     op_client = OpenProjectClient()
     script = _build_audit_script(jira_project_key)
     # File-based path: writes the JSON to a container tempfile and reads
     # it back, avoiding tmux scrollback parsing.
-    return op_client.execute_json_query(script, timeout=120)
+    metrics: dict[str, Any] = op_client.execute_json_query(script, timeout=120)
+    # Best-effort source comparison. Any Jira-side error collapses to
+    # ``None`` and surfaces as a warning in the classifier; the OP-side
+    # report is still valid.
+    metrics["jira_issue_count"] = _fetch_jira_issue_count(jira_project_key)
+    return metrics
 
 
 def main(argv: list[str] | None = None) -> int:

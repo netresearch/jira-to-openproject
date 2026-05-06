@@ -565,6 +565,53 @@ def test_te_worklog_key_null_value_does_not_crash() -> None:
     assert any("worklog" in f.lower() for f in failures), failures
 
 
+# --- Jira source comparison: issue count ------------------------------------
+# Without comparing to the Jira source, the audit can verify OP-side
+# consistency but not "did everything actually migrate". A wholesale
+# data loss (1000 Jira issues → 800 OP WPs) would currently pass every
+# OP-side rule. This adds the first source-side check: exact issue count
+# match (per spec: issues should be exact).
+
+
+def test_jira_issue_count_match_passes() -> None:
+    """``jira_issue_count == wp_total`` is the healthy state."""
+    failures, _warnings = _classify(_baseline_metrics(jira_issue_count=100))
+    assert not any("jira" in f.lower() for f in failures), failures
+
+
+def test_jira_issue_count_mismatch_is_failure() -> None:
+    """Any delta between Jira and OP issue counts is a hard failure."""
+    failures, _warnings = _classify(_baseline_metrics(jira_issue_count=120))
+    assert any("jira" in f.lower() and "100" in f and "120" in f for f in failures), failures
+
+
+def test_jira_issue_count_lower_than_wp_total_is_failure() -> None:
+    """Reverse direction (OP > Jira) also fails — both indicate inconsistency."""
+    failures, _warnings = _classify(_baseline_metrics(jira_issue_count=80))
+    assert any("jira" in f.lower() for f in failures), failures
+
+
+def test_jira_issue_count_none_warns_source_unavailable() -> None:
+    """If Jira couldn't be reached, emit a warning, not a failure.
+
+    Audit shouldn't fail closed on Jira-side issues — operators may
+    legitimately run the audit without Jira creds. ``None`` is the
+    sentinel for "source comparison unavailable".
+    """
+    _failures, warnings = _classify(_baseline_metrics(jira_issue_count=None))
+    assert any("jira" in w.lower() and ("source" in w.lower() or "unavailable" in w.lower()) for w in warnings), (
+        warnings
+    )
+
+
+def test_jira_issue_count_missing_field_treated_as_silent() -> None:
+    """Missing key = legacy audit run, must NOT fail or warn (silent contract)."""
+    metrics = _baseline_metrics()
+    failures, warnings = _classify(metrics)
+    assert not any("jira" in f.lower() for f in failures), failures
+    assert not any("jira" in w.lower() for w in warnings), warnings
+
+
 # --- Pre-existing rules still hold (regression guard) -------------------------
 
 
