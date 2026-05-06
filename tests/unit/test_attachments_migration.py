@@ -108,3 +108,41 @@ def test_attachments_migration_end_to_end(tmp_path: Path):
     assert mp.success is True
     assert ld.success is True
     assert ld.updated >= 2
+
+
+def test_attachments_migration_fails_loud_on_empty_wp_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Empty WP mapping must FAIL loud, not silently exit success.
+
+    Caught by the live TEST audit (2026-05-06): TEST showed Jira=10
+    attachments, OP=0 — 100% loss. Root cause: ``run()`` exited
+    early with ``success=True, updated=0`` when
+    ``_wp_lookup_by_jira_key()`` returned an empty dict (because
+    the WP migration hadn't completed or hadn't persisted its
+    mapping). The ``success=True`` verdict masked the real failure
+    — the orchestrator moved on, the audit only saw the OP-side
+    count, and the missing precondition was invisible.
+
+    Pin: empty WP mapping → ``ComponentResult(success=False)`` with
+    a ``missing_work_package_mapping`` error tag and a message
+    pointing the operator at the precondition. The orchestration
+    will then surface it instead of silently swallowing.
+    """
+    import src.config as cfg
+
+    # Override the autouse fixture's mapping with an EMPTY one.
+    class EmptyMappings:
+        def get_mapping(self, name: str):
+            return {}
+
+    monkeypatch.setattr(cfg, "mappings", EmptyMappings(), raising=False)
+
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    result = mig.run()
+
+    assert result.success is False, f"Empty WP mapping must fail loud, not silently succeed. Got: {result}"
+    assert "work_package" in (result.message or "").lower(), result.message
+    # Error tag for downstream consumers (audit, dashboards, alerts)
+    assert any("missing_work_package_mapping" in str(e) for e in (result.errors or [])), result.errors
