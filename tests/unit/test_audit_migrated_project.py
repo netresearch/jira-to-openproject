@@ -342,6 +342,43 @@ def test_te_worklog_key_missing_field_treated_as_zero() -> None:
     assert any("worklog" in f.lower() for f in failures), failures
 
 
+def test_classify_does_not_crash_when_all_numeric_metrics_are_null() -> None:
+    """Every numeric metric site must coerce ``None`` to 0 instead of raising.
+
+    Defends against a future Ruby schema change emitting JSON ``null``
+    on any metric (a conditional branch that returns ``nil`` instead of
+    0, a partial-result blob, etc.). Without uniform ``or 0`` coercion,
+    Python ``int(None)`` and arithmetic-with-None crash ``_classify``
+    and turn a data-quality signal into a hard tool failure.
+
+    Smoke test: blanks every numeric site simultaneously and verifies
+    ``_classify`` returns normally. The actual outcome (lots of
+    failures, since 0 < wp_total triggers most rules) is the secondary
+    signal — the primary contract under test is "doesn't raise".
+    """
+    metrics = _baseline_metrics(
+        wp_with_author=None,
+        wp_with_subject=None,
+        wp_with_assignee=None,
+        wp_created_in_last_24h=None,
+        wp_with_type=None,
+        wp_with_status=None,
+        wp_with_priority=None,
+        wp_with_description=None,
+        wp_journal_total=None,
+        wp_watcher_total=None,
+        relation_total=None,
+        te_total=None,
+        te_with_worklog_key=None,
+        te_distinct_hours_count=None,
+        orphaned_relations_from=None,
+        orphaned_relations_to=None,
+        orphaned_watchers=None,
+    )
+    failures, _warnings = _classify(metrics)
+    assert isinstance(failures, list)
+
+
 def test_te_worklog_key_null_value_does_not_crash() -> None:
     """A ``None`` value (e.g. future Ruby branch emits ``nil``) must not raise.
 
