@@ -180,6 +180,55 @@ def test_watcher_present_does_not_warn() -> None:
     assert not any("watcher" in w.lower() for w in warnings), warnings
 
 
+# --- Orphan referential integrity (relations / watchers) ---------------------
+# A "project relation" is one where either ``from_id`` OR ``to_id`` is in the
+# project's WP IDs. A relation is *orphaned* when the *other* endpoint
+# references a WP that no longer exists (typically because that WP was
+# deleted in another project without its relations cascading). Watchers are
+# orphaned when ``user_id`` references a deleted user.
+
+
+def test_orphaned_relations_from_is_failure() -> None:
+    """A non-zero ``orphaned_relations_from`` count must fail."""
+    failures, _warnings = _classify(_baseline_metrics(orphaned_relations_from=2))
+    assert any("orphan" in f.lower() and "relation" in f.lower() for f in failures), failures
+
+
+def test_orphaned_relations_to_is_failure() -> None:
+    failures, _warnings = _classify(_baseline_metrics(orphaned_relations_to=1))
+    assert any("orphan" in f.lower() and "relation" in f.lower() for f in failures), failures
+
+
+def test_orphaned_watchers_is_failure() -> None:
+    failures, _warnings = _classify(_baseline_metrics(orphaned_watchers=1))
+    assert any("orphan" in f.lower() and "watcher" in f.lower() for f in failures), failures
+
+
+def test_zero_orphans_passes() -> None:
+    """All orphan counts at zero produce no orphan-related failure."""
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            orphaned_relations_from=0,
+            orphaned_relations_to=0,
+            orphaned_watchers=0,
+        ),
+    )
+    assert not any("orphan" in f.lower() for f in failures), failures
+
+
+def test_missing_orphan_fields_treated_as_zero() -> None:
+    """Missing orphan keys must NOT fire as failures.
+
+    Unlike the type/journal contracts (where missing-key-as-zero is a
+    *failure*), an orphan count of zero is the *healthy* baseline. The
+    rule must therefore be silent when keys are absent — otherwise every
+    legacy audit run would suddenly fail on this branch.
+    """
+    metrics = _baseline_metrics()
+    failures, _warnings = _classify(metrics)
+    assert not any("orphan" in f.lower() for f in failures), failures
+
+
 # --- Pre-existing rules still hold (regression guard) -------------------------
 
 
