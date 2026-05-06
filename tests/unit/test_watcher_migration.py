@@ -272,6 +272,38 @@ def test_skip_reasons_breakdown_sums_to_total_skipped(
     )
 
 
+def test_watcher_migration_fails_loud_on_empty_wp_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """Empty WP mapping must FAIL loud — same anti-pattern as #194/#197.
+
+    If ``work_packages_skeleton`` didn't persist its mapping, the
+    pre-#198 watcher path returned the default ``success=True``
+    result with a "skipping" log line, masking the upstream
+    failure. Pin: empty WP mapping → ``success=False`` with the
+    stable ``missing_work_package_mapping`` error tag.
+    """
+    op = DummyOpClient()
+    # Override autouse fixture with an empty WP mapping (the bug
+    # condition). The cache file is irrelevant — early exit fires
+    # before it's checked.
+    _map_store.set_mapping("work_package", {})
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            return []
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    wm.data_dir = tmp_path
+
+    res = wm.run()
+
+    assert res.success is False, res
+    assert any("missing_work_package_mapping" in str(e) for e in (res.errors or [])), res.errors
+
+
 def test_skip_reasons_empty_when_all_succeed(
     monkeypatch: pytest.MonkeyPatch,
     _map_store,
