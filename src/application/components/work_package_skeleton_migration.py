@@ -66,11 +66,31 @@ if TYPE_CHECKING:
     from jira.resources import Issue
 
 
+def _stringify_optional_timestamp(value: Any) -> str | None:
+    """Coerce a Jira timestamp field to ``str`` while preserving ``None``.
+
+    The Jira SDK occasionally returns ``datetime`` objects for
+    ``fields.created`` / ``fields.updated`` instead of ISO strings, which
+    breaks ``json.dump(work_packages)`` and silently drops the timestamp
+    on the way to the Ruby template's ``Time.parse``. The naive
+    ``str(getattr(...))`` workaround turns a real ``None`` into the
+    literal string ``"None"`` (truthy, then ``Time.parse`` blows up).
+    Branch on ``None`` / empty string first so missing values stay
+    ``None`` in the JSON payload.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    return str(value)
+
+
 def _build_provenance_custom_field_entries(
     jira_issue: Any,
     cf_ids: dict[str, int],
     *,
     jira_base_url: str,
+    today_iso: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the list of ``{id, value}`` provenance CF entries for one WP.
 
@@ -86,6 +106,11 @@ def _build_provenance_custom_field_entries(
             actually exist in OP. Missing entries are silently skipped.
         jira_base_url: Base URL for the Jira instance (for the Origin
             URL value). Empty string ⇒ no URL emitted.
+        today_iso: ISO-8601 date string ``YYYY-MM-DD`` to use for
+            ``J2O First Migration Date`` / ``J2O Last Update Date``.
+            Defaults to ``datetime.now(UTC).date().isoformat()`` so
+            production callers don't need to pass anything; tests can
+            inject a deterministic date.
 
     Returns:
         List of ``{"id": <cf_id>, "value": <string>}`` ready to splice
@@ -95,6 +120,8 @@ def _build_provenance_custom_field_entries(
     entries: list[dict[str, Any]] = []
     fields = getattr(jira_issue, "fields", None)
     project = getattr(fields, "project", None) if fields is not None else None
+    if today_iso is None:
+        today_iso = datetime.now(UTC).date().isoformat()
 
     def _add(name: str, value: Any) -> None:
         cf_id = cf_ids.get(name)
@@ -112,6 +139,8 @@ def _build_provenance_custom_field_entries(
     if project is not None:
         _add("J2O Project Key", getattr(project, "key", None))
         _add("J2O Project ID", getattr(project, "id", None))
+    _add("J2O First Migration Date", today_iso)
+    _add("J2O Last Update Date", today_iso)
     return entries
 
 
@@ -464,7 +493,12 @@ class WorkPackageSkeletonMigration(BaseMigration):
         cached = getattr(self, "_provenance_cf_ids", None)
         if isinstance(cached, dict):
             return cached
-        names = (
+        # ``ensure_custom_field`` only matches by ``(type, name)`` so the
+        # passed ``field_format`` is only used when the CF doesn't yet
+        # exist (i.e. the startup bootstrap was skipped). Pass the
+        # correct format per CF so a missing-CF fallback creation
+        # produces the right shape.
+        string_cfs: tuple[str, ...] = (
             "J2O Origin Key",
             "J2O Origin ID",
             "J2O Origin System",
@@ -472,10 +506,21 @@ class WorkPackageSkeletonMigration(BaseMigration):
             "J2O Project Key",
             "J2O Project ID",
         )
+        date_cfs: tuple[str, ...] = (
+            "J2O First Migration Date",
+            "J2O Last Update Date",
+        )
         ids: dict[str, int] = {}
-        for name in names:
+        for name in string_cfs:
             try:
                 cf = self.op_client.ensure_custom_field(name=name, field_format="string")
+                if cf and cf.get("id"):
+                    ids[name] = int(cf["id"])
+            except Exception as exc:
+                self.logger.warning("Failed to fetch provenance CF '%s': %s", name, exc)
+        for name in date_cfs:
+            try:
+                cf = self.op_client.ensure_custom_field(name=name, field_format="date")
                 if cf and cf.get("id"):
                     ids[name] = int(cf["id"])
             except Exception as exc:
@@ -584,12 +629,15 @@ class WorkPackageSkeletonMigration(BaseMigration):
             # ``datetime`` objects for these depending on configuration,
             # which break ``json.dump`` and silently drop the field
             # entirely. Stringifying keeps the value flowing into the Ruby
-            # template's ``Time.parse(wp_data['created_at'])``.
-            "created_at": (
-                str(getattr(jira_issue.fields, "created", "")) or None
+            # template's ``Time.parse(wp_data['created_at'])``. Branch on
+            # ``None`` first so a missing source field stays ``None`` in
+            # the JSON payload — never the literal string ``"None"``,
+            # which would otherwise be truthy and crash ``Time.parse``.
+            "created_at": _stringify_optional_timestamp(
+                getattr(jira_issue.fields, "created", None),
             ),
-            "updated_at": (
-                str(getattr(jira_issue.fields, "updated", "")) or None
+            "updated_at": _stringify_optional_timestamp(
+                getattr(jira_issue.fields, "updated", None),
             ),
         }
 

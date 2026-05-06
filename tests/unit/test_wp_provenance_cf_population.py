@@ -16,6 +16,7 @@ from typing import Any
 
 from src.application.components.work_package_skeleton_migration import (
     _build_provenance_custom_field_entries,
+    _stringify_optional_timestamp,
 )
 
 
@@ -90,3 +91,65 @@ def test_handles_empty_base_url() -> None:
     by_id = {e["id"]: e["value"] for e in entries}
     assert by_id[100] == "TEST-1"
     assert 103 not in by_id  # no URL written when base is unknown
+
+
+def test_emits_iso_dates_for_first_and_last_migration_dates() -> None:
+    """Date provenance CFs (First/Last Migration Date) get ISO ``YYYY-MM-DD``
+    values that the OP date-format CF can parse.
+    """
+    cf_ids = {
+        "J2O Origin Key": 100,
+        "J2O First Migration Date": 110,
+        "J2O Last Update Date": 111,
+    }
+    entries = _build_provenance_custom_field_entries(
+        _make_issue(),
+        cf_ids,
+        jira_base_url="https://jira.x",
+        today_iso="2026-05-05",
+    )
+    by_id = {e["id"]: e["value"] for e in entries}
+    assert by_id[110] == "2026-05-05"
+    assert by_id[111] == "2026-05-05"
+
+
+def test_skips_date_cfs_when_not_in_map() -> None:
+    """Like the other CFs, date entries don't appear when their CF id is
+    missing from ``cf_ids``.
+    """
+    cf_ids = {"J2O Origin Key": 100}
+    entries = _build_provenance_custom_field_entries(
+        _make_issue(),
+        cf_ids,
+        jira_base_url="https://jira.x",
+        today_iso="2026-05-05",
+    )
+    assert len(entries) == 1
+
+
+def test_stringify_optional_timestamp_preserves_none() -> None:
+    """A real ``None`` must stay ``None`` — never the literal string ``'None'``
+    that would later be truthy and crash Ruby ``Time.parse``.
+    """
+    assert _stringify_optional_timestamp(None) is None
+
+
+def test_stringify_optional_timestamp_treats_empty_string_as_none() -> None:
+    assert _stringify_optional_timestamp("") is None
+
+
+def test_stringify_optional_timestamp_passes_string_through() -> None:
+    assert (
+        _stringify_optional_timestamp("2024-01-15T10:30:00.000+0000")
+        == "2024-01-15T10:30:00.000+0000"
+    )
+
+
+def test_stringify_optional_timestamp_coerces_non_string() -> None:
+    """Datetime-like objects (Jira SDK can return these) get str()'d."""
+    from datetime import UTC, datetime
+
+    dt = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
+    out = _stringify_optional_timestamp(dt)
+    assert isinstance(out, str)
+    assert out.startswith("2024-01-15")
