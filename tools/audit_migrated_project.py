@@ -759,7 +759,18 @@ def _paginated_per_issue_field_count(
             if not page:
                 break
             for issue in page:
-                items = getattr(issue.fields, attr_name, None) or []
+                # python-jira's ``Issue.__getattr__`` raises
+                # ``AttributeError`` when ``.fields`` is missing on a
+                # partial / cached / permission-restricted response.
+                # The broad ``except`` below would otherwise collapse
+                # the WHOLE audit to "source unavailable" because of
+                # one bad issue, losing the partial count we already
+                # accumulated. Guard ``.fields`` first; skip the
+                # broken issue and keep summing.
+                fields_obj = getattr(issue, "fields", None)
+                if fields_obj is None:
+                    continue
+                items = getattr(fields_obj, attr_name, None) or []
                 total += len(items)
             # Advance by what the server actually returned, not by what
             # we asked for. See the docstring for why.
@@ -846,7 +857,14 @@ def _fetch_jira_watcher_count(jira_project_key: str) -> int | None:
             if not page:
                 break
             for issue in page:
-                watches = getattr(issue.fields, "watches", None)
+                # Same guard as ``_paginated_per_issue_field_count`` —
+                # ``issue.fields`` may be missing on partial / cached
+                # responses. Without this check, one bad issue
+                # collapses the whole audit to "source unavailable".
+                fields_obj = getattr(issue, "fields", None)
+                if fields_obj is None:
+                    continue
+                watches = getattr(fields_obj, "watches", None)
                 if watches is None:
                     continue
                 # ``python-jira`` usually returns ``Watcher`` resource
