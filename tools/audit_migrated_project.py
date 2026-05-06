@@ -136,16 +136,18 @@ def _build_audit_script(jira_project_key: str) -> str:
   }}.to_h
 
   te = TimeEntry.where(entity_type: 'WorkPackage', entity_id: wp_ids)
-  te_ids = te.pluck(:id)
 
   # Per-TE population of ``J2O Origin Worklog Key``. The spec mandates
   # this CF on every migrated TimeEntry — it's the dedup key on re-run.
   # Below ``te_total`` means duplicate worklogs would slip through on
-  # the next migration pass.
+  # the next migration pass. Passing ``te`` (an ``ActiveRecord::Relation``)
+  # straight into ``customized_id:`` generates a subquery instead of
+  # materializing every TE id in Ruby — keeps the query fast on large
+  # projects and avoids any DB parameter/packet limits.
   worklog_key_cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
   te_with_worklog_key = worklog_key_cf ?
     CustomValue.where(custom_field_id: worklog_key_cf.id, customized_type: 'TimeEntry').
-      where(customized_id: te_ids).where.not(value: [nil, '']).count : 0
+      where(customized_id: te.select(:id)).where.not(value: [nil, '']).count : 0
 
   # Relations involving this project on either endpoint. Reused below
   # for the total count and the two orphan-detection queries.
