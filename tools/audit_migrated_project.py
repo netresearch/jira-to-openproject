@@ -62,6 +62,29 @@ _REQUIRED_USER_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O External URL",
 )
 
+# Regex specs for User provenance CF *values*. Per the migrator
+# (``src/application/components/user_migration.py``,
+# ``_build_user_origin_metadata`` and ``create_missing_users``):
+#
+#   - ``J2O Origin System``: ``"Jira"`` + optional deployment label
+#     ("Cloud", "Server", "Data Center") + optional version.
+#   - ``J2O External URL``: ``<base>/secure/ViewProfile.jspa?<param>=<val>``.
+#
+# ``J2O User ID`` and ``J2O User Key`` are *deliberately not* validated
+# here. Their values are user-input-derived (account IDs, usernames,
+# display names, emails) and the realistic shape varies wildly across
+# Jira deployments — any conservative pattern would false-positive on
+# legitimate edge cases (display names with spaces, mixed-case keys
+# from older Server installs, non-ASCII names). The audit checks they
+# *exist* via the population path; format validation is left to the
+# migration code's own normalization.
+_USER_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
+    ("J2O Origin System", r"\AJira[\w\s.]*\z"),
+    # ``ViewProfile.jspa?<param>=<value>`` — forward slashes escaped so
+    # the Ruby ``/.../`` regex literal doesn't terminate at ``://``.
+    ("J2O External URL", r"\Ahttps?:\/\/[^\s]+\/secure\/ViewProfile\.jspa\?[^\s]*\z"),
+)
+
 # A project of this size or larger should typically have at least
 # one relation and one watcher across its WPs; below this we don't
 # warn (small/inactive projects legitimately have zero).
@@ -116,6 +139,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     # (Ruby and Python both accept ``\A``, ``\z``, character classes).
     cf_format_pairs = ", ".join(f"{name!r} => /{pattern}/" for name, pattern in _WP_CF_FORMAT_REGEXES)
     te_cf_format_pairs = ", ".join(f"{name!r} => /{pattern}/" for name, pattern in _TE_CF_FORMAT_REGEXES)
+    user_cf_format_pairs = ", ".join(f"{name!r} => /{pattern}/" for name, pattern in _USER_CF_FORMAT_REGEXES)
     return f"""
 (lambda do
   proj_key = {jira_project_key!r}.downcase
@@ -154,6 +178,21 @@ def _build_audit_script(jira_project_key: str) -> str:
   user_provenance = {expected_user_cfs!r}.map {{ |n|
     [n, !CustomField.find_by(type: 'UserCustomField', name: n).nil?]
   }}.to_h
+
+  # Per-CF format-violation count for User provenance CFs. Same shape
+  # as the WP/TE versions (``pluck.count {{ block }}`` streams the
+  # comparison without an intermediate array). Scoped to *all*
+  # populated values across ALL users — User CFs are global and the
+  # audit project doesn't restrict the user set.
+  user_cf_format_violations = {{}}
+  {{ {user_cf_format_pairs} }}.each do |cf_name, regex|
+    cf = CustomField.find_by(type: 'UserCustomField', name: cf_name)
+    next unless cf
+    bad = CustomValue.where(custom_field_id: cf.id, customized_type: 'User').
+      where.not(value: [nil, '']).
+      pluck(:value).count {{ |v| v !~ regex }}
+    user_cf_format_violations[cf_name] = bad
+  end
 
   te_provenance = {expected_te_cfs!r}.map {{ |n|
     [n, !CustomField.find_by(type: 'TimeEntryCustomField', name: n).nil?]
@@ -210,6 +249,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     'wp_provenance_cfs' => wp_provenance,
     'wp_cf_format_violations' => wp_cf_format_violations,
     'te_cf_format_violations' => te_cf_format_violations,
+    'user_cf_format_violations' => user_cf_format_violations,
     'user_provenance_cfs' => user_provenance,
     'te_provenance_cfs' => te_provenance,
     'wp_journal_total' => Journal.where(journable_type: 'WorkPackage', journable_id: wp_ids).count,
@@ -418,6 +458,17 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             failures.append(
                 f"{count} populated values of TimeEntry CF '{cf_name}' do not match the expected format"
                 " — dedup on re-run depends on this format",
+            )
+
+    # User CF format validation (parallel to WP/TE). Scoped only to the
+    # two CFs whose value formats are deterministic — user IDs and
+    # keys are intentionally not validated (see _USER_CF_FORMAT_REGEXES
+    # docstring).
+    user_cf_violations = metrics.get("user_cf_format_violations", {}) or {}
+    for cf_name, count in user_cf_violations.items():
+        if int(count or 0) > 0:
+            failures.append(
+                f"{count} populated values of User CF '{cf_name}' do not match the expected format",
             )
 
     # Orphan referential integrity. Unlike the type/journal contracts

@@ -349,6 +349,56 @@ def test_te_cf_format_null_count_does_not_crash() -> None:
     assert not any("format" in f.lower() and "TimeEntry" in f for f in failures), failures
 
 
+# --- User CF value-format validation -----------------------------------------
+# Parallel to WP/TE CF format checks. Scoped to the two User CFs whose
+# value formats are deterministic — ``J2O Origin System`` (always
+# ``Jira[ + variant]``) and ``J2O External URL``
+# (``ViewProfile.jspa`` link). User ID/Key are deliberately skipped
+# because their values are user-input-derived (display names, mixed-case
+# keys, non-ASCII), and any conservative pattern would false-positive.
+
+
+def test_user_cf_format_violation_is_failure() -> None:
+    failures, _warnings = _classify(
+        _baseline_metrics(user_cf_format_violations={"J2O Origin System": 3}),
+    )
+    assert any("format" in f.lower() and "User CF" in f and "J2O Origin System" in f for f in failures), failures
+
+
+def test_user_cf_format_zero_violations_passes() -> None:
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            user_cf_format_violations={"J2O Origin System": 0, "J2O External URL": 0},
+        ),
+    )
+    assert not any("format" in f.lower() and "User CF" in f for f in failures), failures
+
+
+def test_user_cf_format_multiple_violations_each_reported() -> None:
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            user_cf_format_violations={"J2O Origin System": 1, "J2O External URL": 2},
+        ),
+    )
+    failed_user_cfs = [f for f in failures if "User CF" in f and "format" in f.lower()]
+    assert len(failed_user_cfs) == 2, failed_user_cfs
+
+
+def test_user_cf_format_missing_field_treated_as_silent() -> None:
+    """Legacy audit-run contract: missing key is healthy (zero), not a failure."""
+    metrics = _baseline_metrics()
+    failures, _warnings = _classify(metrics)
+    assert not any("format" in f.lower() and "User CF" in f for f in failures), failures
+
+
+def test_user_cf_format_null_count_does_not_crash() -> None:
+    """``None`` count collapses to zero, not raise — Ruby schema-skew guard."""
+    failures, _warnings = _classify(
+        _baseline_metrics(user_cf_format_violations={"J2O Origin System": None}),
+    )
+    assert not any("format" in f.lower() and "User CF" in f for f in failures), failures
+
+
 # --- TimeEntry Origin Worklog Key population --------------------------------
 # Per spec, ``J2O Origin Worklog Key`` MUST be populated on every migrated
 # TimeEntry — it's the dedup key on re-runs. Existence-of-the-CF alone is
