@@ -404,6 +404,33 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     missing_cfs = [name for name, info in wp_provenance.items() if not info.get("exists")]
     if missing_cfs:
         failures.append(f"WP provenance CFs missing: {missing_cfs} (Bug D indicator)")
+
+    # Per-CF *population* check — distinct from the existence check
+    # above. A CF can ``exists=True, populated=0`` when the migration
+    # created the CustomField record but never wrote any CustomValue
+    # rows (e.g. migration ran before the populating fix landed).
+    # Caught by the live TEST audit: every WP CF showed populated=0
+    # because the migration was pre-#175. Per spec, ``J2O Origin
+    # Key`` is hard-required ("must" line 27); the others are "should"
+    # — fail vs warn accordingly. Skip CFs that didn't exist (the
+    # missing-CF rule above already claims them with a clearer
+    # message).
+    for cf_name, info in wp_provenance.items():
+        if not info.get("exists"):
+            continue
+        populated = int(info.get("populated") or 0)
+        if populated >= wp_total:
+            continue
+        if cf_name == "J2O Origin Key":
+            failures.append(
+                f"WP CF '{cf_name}' under-populated: {populated}/{wp_total}"
+                " — hard-required per spec (dedup + provenance broken)",
+            )
+        else:
+            warnings.append(
+                f"WP CF '{cf_name}' under-populated: {populated}/{wp_total}",
+            )
+
     user_provenance = metrics.get("user_provenance_cfs", {}) or {}
     missing_user_cfs = [n for n, exists in user_provenance.items() if not exists]
     if missing_user_cfs:

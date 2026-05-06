@@ -1090,6 +1090,75 @@ def test_generated_audit_script_parses_as_ruby() -> None:
     assert "Syntax OK" in proc.stdout, proc.stdout
 
 
+def test_wp_origin_key_under_populated_is_failure() -> None:
+    """``J2O Origin Key`` is a hard-requirement (per spec line 27).
+
+    Caught by the live TEST audit: TEST showed every WP CF with
+    ``populated: 0`` because the migration ran before #175 wired
+    them up. The audit's existing rule only checks ``exists``, not
+    ``populated`` — so the gap was invisible. Without ``J2O Origin
+    Key`` populated, dedup on re-run is broken AND the audit can't
+    identify which Jira issue each WP came from.
+    """
+    metrics = _baseline_metrics()
+    # Override Origin Key to populated=50 (with wp_total=100 baseline)
+    metrics["wp_provenance_cfs"]["J2O Origin Key"] = {
+        "exists": True,
+        "populated": 50,
+    }
+    failures, _warnings = _classify(metrics)
+    assert any("Origin Key" in f and ("populated" in f.lower() or "/100" in f) for f in failures), failures
+
+
+def test_wp_other_cfs_under_populated_is_warning() -> None:
+    """Other WP provenance CFs are 'should' per spec — warning, not failure."""
+    metrics = _baseline_metrics()
+    # ``J2O Origin URL`` is "should" per spec, not hard-required.
+    metrics["wp_provenance_cfs"]["J2O Origin URL"] = {
+        "exists": True,
+        "populated": 70,
+    }
+    failures, warnings = _classify(metrics)
+    # Not in failures
+    assert not any("Origin URL" in f for f in failures), failures
+    # But surfaced as a warning so operators see it
+    assert any("Origin URL" in w for w in warnings), warnings
+
+
+def test_wp_origin_key_fully_populated_passes() -> None:
+    """Healthy state: every WP has Origin Key populated."""
+    metrics = _baseline_metrics()
+    # Baseline already has populated=100 for all CFs; explicit for clarity.
+    metrics["wp_provenance_cfs"]["J2O Origin Key"] = {
+        "exists": True,
+        "populated": 100,
+    }
+    failures, _warnings = _classify(metrics)
+    assert not any("Origin Key" in f for f in failures), failures
+
+
+def test_wp_cf_population_silent_when_cf_missing_entirely() -> None:
+    """If a CF doesn't exist at all, the existing missing-CF rule fires.
+
+    The new under-populated rule must not double-fire — only the
+    missing-CF rule should claim that CF, with a clear "missing"
+    message rather than confusing population numbers.
+    """
+    metrics = _baseline_metrics()
+    metrics["wp_provenance_cfs"]["J2O Origin Key"] = {
+        "exists": False,
+        "populated": 0,
+    }
+    failures, _warnings = _classify(metrics)
+    # The missing-CF rule fires (Bug D indicator)
+    assert any("CFs missing" in f and "Origin Key" in f for f in failures), failures
+    # The new under-populated rule does NOT also fire — would be a
+    # confusing double-message.
+    assert not any("Origin Key" in f and "populated" in f.lower() and "CFs missing" not in f for f in failures), (
+        failures
+    )
+
+
 def test_audit_regexes_have_no_unescaped_forward_slash_in_ruby_literal() -> None:
     """Every audit regex must be safe to embed in a Ruby ``/.../`` literal.
 
