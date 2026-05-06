@@ -60,6 +60,7 @@ def _baseline_metrics(**overrides: Any) -> dict[str, Any]:
         "wp_attachment_total": 0,
         "wp_watcher_total": 50,
         "te_total": 10,
+        "te_with_worklog_key": 10,
         "te_hours_sum": 12.5,
         "te_distinct_hours_count": 5,
         "te_min_hours": 0.25,
@@ -303,6 +304,57 @@ def test_wp_cf_format_missing_field_treated_as_silent() -> None:
     metrics = _baseline_metrics()
     failures, _warnings = _classify(metrics)
     assert not any("format" in f.lower() for f in failures), failures
+
+
+# --- TimeEntry Origin Worklog Key population --------------------------------
+# Per spec, ``J2O Origin Worklog Key`` MUST be populated on every migrated
+# TimeEntry — it's the dedup key on re-runs. Existence-of-the-CF alone is
+# not enough; missing values let duplicate worklogs slip through silently.
+
+
+def test_te_worklog_key_population_below_te_total_is_failure() -> None:
+    """A populated count below ``te_total`` must fail with a dedup hint."""
+    failures, _warnings = _classify(
+        _baseline_metrics(te_total=10, te_with_worklog_key=7),
+    )
+    assert any("worklog" in f.lower() and ("dedup" in f.lower() or "re-run" in f.lower()) for f in failures), failures
+
+
+def test_te_worklog_key_population_equals_te_total_passes() -> None:
+    """100% population is the healthy state."""
+    failures, _warnings = _classify(
+        _baseline_metrics(te_total=10, te_with_worklog_key=10),
+    )
+    assert not any("worklog" in f.lower() for f in failures), failures
+
+
+def test_te_worklog_key_zero_te_total_is_silent() -> None:
+    """If there are no TimeEntries to begin with, the rule must not fire."""
+    failures, _warnings = _classify(_baseline_metrics(te_total=0, te_with_worklog_key=0))
+    assert not any("worklog" in f.lower() for f in failures), failures
+
+
+def test_te_worklog_key_missing_field_treated_as_zero() -> None:
+    """Missing key fails loud (same contract as type/journal — Ruby/Python skew)."""
+    metrics = _baseline_metrics(te_total=5)
+    del metrics["te_with_worklog_key"]
+    failures, _warnings = _classify(metrics)
+    assert any("worklog" in f.lower() for f in failures), failures
+
+
+def test_te_worklog_key_null_value_does_not_crash() -> None:
+    """A ``None`` value (e.g. future Ruby branch emits ``nil``) must not raise.
+
+    Defends against a Ruby schema change where ``te_with_worklog_key``
+    comes back as JSON ``null``. ``int(None)`` would raise ``TypeError``
+    and turn a data-quality signal into a hard tool failure with no
+    actionable message — same contract as PR #178's CF-format rule.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(te_total=5, te_with_worklog_key=None),
+    )
+    # None collapses to 0 → 0 < 5 → still fails loud, just doesn't crash.
+    assert any("worklog" in f.lower() for f in failures), failures
 
 
 # --- Pre-existing rules still hold (regression guard) -------------------------

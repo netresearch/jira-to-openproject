@@ -137,6 +137,18 @@ def _build_audit_script(jira_project_key: str) -> str:
 
   te = TimeEntry.where(entity_type: 'WorkPackage', entity_id: wp_ids)
 
+  # Per-TE population of ``J2O Origin Worklog Key``. The spec mandates
+  # this CF on every migrated TimeEntry — it's the dedup key on re-run.
+  # Below ``te_total`` means duplicate worklogs would slip through on
+  # the next migration pass. Passing ``te`` (an ``ActiveRecord::Relation``)
+  # straight into ``customized_id:`` generates a subquery instead of
+  # materializing every TE id in Ruby — keeps the query fast on large
+  # projects and avoids any DB parameter/packet limits.
+  worklog_key_cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
+  te_with_worklog_key = worklog_key_cf ?
+    CustomValue.where(custom_field_id: worklog_key_cf.id, customized_type: 'TimeEntry').
+      where(customized_id: te.select(:id)).where.not(value: [nil, '']).count : 0
+
   # Relations involving this project on either endpoint. Reused below
   # for the total count and the two orphan-detection queries.
   project_relations = Relation.where('from_id IN (?) OR to_id IN (?)', wp_ids, wp_ids)
@@ -163,6 +175,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     'wp_attachment_total' => Attachment.where(container_type: 'WorkPackage', container_id: wp_ids).count,
     'wp_watcher_total' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_ids).count,
     'te_total' => te.count,
+    'te_with_worklog_key' => te_with_worklog_key,
     'te_hours_sum' => te.sum(:hours).to_f,
     'te_distinct_hours_count' => te.distinct.count(:hours),
     'te_min_hours' => (te.minimum(:hours) || 0).to_f,
@@ -258,6 +271,20 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             failures.append(
                 f"All {te_total} TimeEntries have hours = {metrics['te_min_hours']} — units"
                 " are not being preserved (Bug B indicator)"
+            )
+        # ``J2O Origin Worklog Key`` MUST be populated on every migrated
+        # TE. Below ``te_total`` means dedup on re-run will silently fail
+        # for the unmarked entries (each rerun would create duplicates).
+        # Missing key in metrics → 0 → fail loud (Ruby/Python skew guard).
+        # ``or 0`` so a future Ruby branch that emits ``null`` (rather
+        # than 0) doesn't crash ``_classify`` with ``TypeError`` —
+        # matches the contract pinned by PR #178.
+        te_with_wlk = int(metrics.get("te_with_worklog_key", 0) or 0)
+        if te_with_wlk < te_total:
+            failures.append(
+                f"TimeEntry 'J2O Origin Worklog Key' population:"
+                f" {te_with_wlk}/{te_total} — dedup on re-run will silently"
+                " fail for entries missing the key",
             )
 
     # Type / Status / Priority — mapping integrity. Any WP with NULL on
