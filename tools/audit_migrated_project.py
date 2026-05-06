@@ -76,6 +76,21 @@ _REQUIRED_TE_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O Last Update Date",
 )
 
+# Regex specs for TimeEntry provenance CF *values*. Per the migrator
+# (``src/utils/time_entry_transformer.py``), the dedup-critical
+# ``J2O Origin Worklog Key`` is built from one of two unconditional
+# formulas:
+#
+#   - ``f"{issue_key}:{worklog_id}"``  for Jira worklogs
+#   - ``f"tempo:{tempo_id}"``          for Tempo worklogs
+#
+# A regression that corrupts either form breaks dedup on re-run
+# silently — the existing populated-count check (PR #179) cannot
+# detect a populated-but-malformed value.
+_TE_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
+    ("J2O Origin Worklog Key", r"\A([A-Z][A-Z0-9_]+-\d+:\d+|tempo:\d+)\z"),
+)
+
 
 def _build_audit_script(jira_project_key: str) -> str:
     """Build the Ruby audit expression for a Jira project.
@@ -92,6 +107,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     # Keep the regex sources verbatim — they're the same on both sides
     # (Ruby and Python both accept ``\A``, ``\z``, character classes).
     cf_format_pairs = ", ".join(f"{name!r} => /{pattern}/" for name, pattern in _WP_CF_FORMAT_REGEXES)
+    te_cf_format_pairs = ", ".join(f"{name!r} => /{pattern}/" for name, pattern in _TE_CF_FORMAT_REGEXES)
     return f"""
 (lambda do
   proj_key = {jira_project_key!r}.downcase
@@ -149,6 +165,22 @@ def _build_audit_script(jira_project_key: str) -> str:
     CustomValue.where(custom_field_id: worklog_key_cf.id, customized_type: 'TimeEntry').
       where(customized_id: te.select(:id)).where.not(value: [nil, '']).count : 0
 
+  # Per-CF format-violation count for TE provenance CFs. Same shape as
+  # the WP version above (pluck → ``count {{ block }}`` streams the
+  # comparison without an intermediate array). The dedup-critical
+  # ``J2O Origin Worklog Key`` is the only TE CF the migrator
+  # populates per-row; corrupting its format silently breaks
+  # idempotent re-runs.
+  te_cf_format_violations = {{}}
+  {{ {te_cf_format_pairs} }}.each do |cf_name, regex|
+    cf = CustomField.find_by(type: 'TimeEntryCustomField', name: cf_name)
+    next unless cf
+    bad = CustomValue.where(custom_field_id: cf.id, customized_type: 'TimeEntry').
+      where(customized_id: te.select(:id)).where.not(value: [nil, '']).
+      pluck(:value).count {{ |v| v !~ regex }}
+    te_cf_format_violations[cf_name] = bad
+  end
+
   # Relations involving this project on either endpoint. Reused below
   # for the total count and the two orphan-detection queries.
   project_relations = Relation.where('from_id IN (?) OR to_id IN (?)', wp_ids, wp_ids)
@@ -169,6 +201,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     'wp_created_in_last_24h' => wps.where("created_at > ?", Time.now - 86400).count,
     'wp_provenance_cfs' => wp_provenance,
     'wp_cf_format_violations' => wp_cf_format_violations,
+    'te_cf_format_violations' => te_cf_format_violations,
     'user_provenance_cfs' => user_provenance,
     'te_provenance_cfs' => te_provenance,
     'wp_journal_total' => Journal.where(journable_type: 'WorkPackage', journable_id: wp_ids).count,
@@ -366,6 +399,17 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         if int(count or 0) > 0:
             failures.append(
                 f"{count} populated values of WP CF '{cf_name}' do not match the expected format",
+            )
+
+    # TE CF format validation (parallel to WP). Same missing-key
+    # contract: silent on absent metric (legacy audit run); fails
+    # loud only when a populated value doesn't match its regex.
+    te_cf_violations = metrics.get("te_cf_format_violations", {}) or {}
+    for cf_name, count in te_cf_violations.items():
+        if int(count or 0) > 0:
+            failures.append(
+                f"{count} populated values of TimeEntry CF '{cf_name}' do not match the expected format"
+                " — dedup on re-run depends on this format",
             )
 
     # Orphan referential integrity. Unlike the type/journal contracts
