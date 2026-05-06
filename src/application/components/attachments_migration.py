@@ -510,8 +510,24 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
         key_to_wp_id = self._wp_lookup_by_jira_key()
         if not key_to_wp_id:
-            self.logger.warning("No work package mapping found - skipping attachment migration")
-            return ComponentResult(success=True, updated=0, message="No work packages to process")
+            # FAIL LOUD. Returning ``success=True`` here used to mask
+            # a 100% attachment loss (caught by the live TEST audit
+            # 2026-05-06: Jira=10, OP=0). The orchestration then
+            # moved on, the audit only saw the OP-side count, and
+            # the missing precondition was invisible — the canonical
+            # silent-failure pattern this rewrite closes.
+            msg = (
+                "No work_package mapping available — attachments cannot be"
+                " correlated to OP work packages. Run the work_packages_skeleton"
+                " component first (or verify it persisted its mapping)."
+            )
+            self.logger.error(msg)
+            return ComponentResult(
+                success=False,
+                updated=0,
+                message=msg,
+                errors=["missing_work_package_mapping"],
+            )
 
         by_project: dict[str, list[str]] = {}
         for jira_key in key_to_wp_id:
