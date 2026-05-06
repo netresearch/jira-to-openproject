@@ -342,6 +342,21 @@ def test_te_worklog_key_missing_field_treated_as_zero() -> None:
     assert any("worklog" in f.lower() for f in failures), failures
 
 
+def test_te_worklog_key_null_value_does_not_crash() -> None:
+    """A ``None`` value (e.g. future Ruby branch emits ``nil``) must not raise.
+
+    Defends against a Ruby schema change where ``te_with_worklog_key``
+    comes back as JSON ``null``. ``int(None)`` would raise ``TypeError``
+    and turn a data-quality signal into a hard tool failure with no
+    actionable message — same contract as PR #178's CF-format rule.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(te_total=5, te_with_worklog_key=None),
+    )
+    # None collapses to 0 → 0 < 5 → still fails loud, just doesn't crash.
+    assert any("worklog" in f.lower() for f in failures), failures
+
+
 # --- Pre-existing rules still hold (regression guard) -------------------------
 
 

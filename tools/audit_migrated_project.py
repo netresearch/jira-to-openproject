@@ -274,7 +274,10 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         # TE. Below ``te_total`` means dedup on re-run will silently fail
         # for the unmarked entries (each rerun would create duplicates).
         # Missing key in metrics → 0 → fail loud (Ruby/Python skew guard).
-        te_with_wlk = int(metrics.get("te_with_worklog_key", 0))
+        # ``or 0`` so a future Ruby branch that emits ``null`` (rather
+        # than 0) doesn't crash ``_classify`` with ``TypeError`` —
+        # matches the contract pinned by PR #178.
+        te_with_wlk = int(metrics.get("te_with_worklog_key", 0) or 0)
         if te_with_wlk < te_total:
             failures.append(
                 f"TimeEntry 'J2O Origin Worklog Key' population:"
