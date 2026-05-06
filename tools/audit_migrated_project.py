@@ -90,7 +90,13 @@ _USER_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
     # falls back to ``config.jira_config["deployment"]`` which is a
     # free-form string that may contain parens, slashes, or hyphens
     # (e.g. ``"Jira (Server)"``, ``"Jira Data-Center"``).
-    ("J2O Origin System", r"\AJira(?:\s[\w\s.()\-/]*)?\z"),
+    # Forward slash inside the character class MUST be escaped — the
+    # Ruby ``/.../`` regex literal terminates at any unescaped ``/``,
+    # even one inside ``[...]``. Without ``\/`` the audit's generated
+    # Ruby script ends up with a syntax error at load time. Python's
+    # ``re`` engine accepts the unescaped form (no ``/.../`` literal
+    # syntax), so the regression is invisible to the unit-test loop.
+    ("J2O Origin System", r"\AJira(?:\s[\w\s.()\-\/]*)?\z"),
     # ``ViewProfile.jspa?<param>=<value>`` — forward slashes escaped so
     # the Ruby ``/.../`` regex literal doesn't terminate at ``://``.
     ("J2O External URL", r"\Ahttps?:\/\/[^\s]+\/secure\/ViewProfile\.jspa\?[^\s]*\z"),

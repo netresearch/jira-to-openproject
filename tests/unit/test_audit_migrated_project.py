@@ -926,6 +926,47 @@ def test_fetch_jira_relation_count_propagates_none_from_paginator(monkeypatch) -
     assert audit_mod._fetch_jira_relation_count("NRS") is None
 
 
+def test_audit_regexes_have_no_unescaped_forward_slash_in_ruby_literal() -> None:
+    """Every audit regex must be safe to embed in a Ruby ``/.../`` literal.
+
+    Ruby's regex literal terminates at any unescaped ``/`` — even one
+    inside a character class. Python's ``re`` engine has no equivalent
+    rule (no literal syntax), so the unit-test loop happily accepts a
+    pattern that crashes on the live audit. Pin all three regex maps
+    here so the next slash-in-charclass slip fails CI instead of a
+    real audit run.
+
+    Caught a real bug shipped in #182: the Origin System pattern
+    had an unescaped forward slash inside its character class which
+    broke the Ruby parser when the script was loaded in the OP
+    rails console.
+    """
+    import re as _re
+
+    from tools.audit_migrated_project import (
+        _TE_CF_FORMAT_REGEXES,
+        _USER_CF_FORMAT_REGEXES,
+        _WP_CF_FORMAT_REGEXES,
+    )
+
+    # Match an unescaped ``/`` — i.e. one not preceded by a backslash.
+    # Negative lookbehind handles the simple case; doubled backslash
+    # before slash (escape of escape) isn't a pattern any of these
+    # specs use, so the simple lookbehind is correct here.
+    unescaped_slash = _re.compile(r"(?<!\\)/")
+    for label, regexes in (
+        ("WP", _WP_CF_FORMAT_REGEXES),
+        ("User", _USER_CF_FORMAT_REGEXES),
+        ("TE", _TE_CF_FORMAT_REGEXES),
+    ):
+        for cf_name, pattern in regexes:
+            assert not unescaped_slash.search(pattern), (
+                f"{label} CF regex {cf_name!r} contains an unescaped '/'"
+                f" — this WILL break the Ruby /.../ literal at audit run time:\n"
+                f"  {pattern}"
+            )
+
+
 def test_fetch_jira_attachment_count_rejects_invalid_project_key() -> None:
     """Malformed project keys must not be interpolated into JQL.
 
