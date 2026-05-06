@@ -792,6 +792,14 @@ def _fetch_jira_watcher_count(jira_project_key: str) -> int | None:
     total ``(user, issue)`` watch pairs — the same shape OP stores in
     its ``Watcher`` table (one row per pair).
 
+    **Permission scope caveat.** ``watchCount`` is filtered by the
+    calling user's *view voters and watchers* project permission. If
+    the audit token has less scope than the migration admin token did,
+    this helper will systematically *under*-report and the classifier
+    will then incorrectly flag ``OP > Jira`` as "duplicates leaked
+    through" — when the real cause is missing audit-token permission.
+    Run the audit with the same scope as the migration ran with.
+
     Implementation parallels :func:`_paginated_per_issue_field_count`
     but reads a per-issue *scalar* (``watches.watchCount``) instead of
     a list length. The whole shared-helper-via-``label`` approach
@@ -833,8 +841,18 @@ def _fetch_jira_watcher_count(jira_project_key: str) -> int | None:
                 break
             for issue in page:
                 watches = getattr(issue.fields, "watches", None)
-                if watches is not None:
-                    total += int(getattr(watches, "watchCount", 0) or 0)
+                if watches is None:
+                    continue
+                # ``python-jira`` usually returns ``Watcher`` resource
+                # objects but some code paths (raw cache, partial
+                # responses) yield a dict. ``getattr`` on a dict
+                # returns the default and would silently zero the
+                # count — explicitly branch on shape.
+                if isinstance(watches, dict):
+                    raw_count = watches.get("watchCount", 0)
+                else:
+                    raw_count = getattr(watches, "watchCount", 0)
+                total += int(raw_count or 0)
             start_at += len(page)
         else:
             sys.stderr.write(

@@ -814,6 +814,56 @@ def test_jira_watcher_count_missing_field_treated_as_silent() -> None:
     assert not any("jira" in w.lower() and "watcher" in w.lower() for w in warnings), warnings
 
 
+def test_fetch_jira_watcher_count_handles_dict_and_object_watches(monkeypatch) -> None:
+    """``watches`` may be either a python-jira resource OR a raw dict.
+
+    Defends against the silent-failure path where ``getattr(dict, "watchCount", 0)``
+    returns ``0``: a dict-shaped response would silently zero the
+    count and the classifier would (wrongly) blame the migration.
+    """
+    import sys as _sys
+    import types
+
+    class _ObjWatches:
+        watchCount = 7
+
+    class _Fields:
+        def __init__(self, watches: Any) -> None:
+            self.watches = watches
+
+    class _Issue:
+        def __init__(self, watches: Any) -> None:
+            self.fields = _Fields(watches)
+
+    pages = [
+        # 2 issues with object-shaped watches (7 each)
+        [_Issue(_ObjWatches()), _Issue(_ObjWatches())],
+        # 2 issues with dict-shaped watches (3 + 5)
+        [_Issue({"watchCount": 3}), _Issue({"watchCount": 5})],
+        # 1 issue with no watches attribute (None)
+        [_Issue(None)],
+        [],  # terminator
+    ]
+    page_iter = iter(pages)
+
+    class _FakeUnderlying:
+        def search_issues(self, *_a: Any, **_kw: Any) -> list[Any]:
+            return next(page_iter)
+
+    class _FakeJiraClient:
+        def __init__(self) -> None:
+            self.jira = _FakeUnderlying()
+
+    fake_module = types.ModuleType("src.infrastructure.jira.jira_client")
+    fake_module.JiraClient = _FakeJiraClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(_sys.modules, "src.infrastructure.jira.jira_client", fake_module)
+
+    from tools.audit_migrated_project import _fetch_jira_watcher_count
+
+    # Object pages: 7+7=14, dict pages: 3+5=8, None: 0 → total 22
+    assert _fetch_jira_watcher_count("NRS") == 22
+
+
 def test_fetch_jira_relation_count_halves_raw_to_match_op_semantics(monkeypatch) -> None:
     """``_fetch_jira_relation_count`` must halve the raw issuelinks count.
 
