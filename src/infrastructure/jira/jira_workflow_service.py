@@ -163,6 +163,16 @@ class JiraWorkflowService:
 
         try:
             response = client.jira._session.get(url)
+            # The per-workflow transitions endpoint isn't part of the public
+            # Jira REST API in many Server/DC versions and returns 404. The
+            # caller treats absence as an empty list, so don't raise (would
+            # only generate noise). Other HTTP errors still raise normally.
+            if getattr(response, "status_code", None) == 404:
+                self._logger.debug(
+                    "Workflow '%s' returned 404 for transitions; treating as empty",
+                    workflow_name,
+                )
+                return []
             response.raise_for_status()
             payload = response.json()
             transitions = payload.get("transitions") if isinstance(payload, dict) else payload
@@ -193,6 +203,16 @@ class JiraWorkflowService:
 
         try:
             response = client.jira._session.get(url)
+            # See ``get_workflow_transitions``: the per-workflow definition
+            # endpoint is not part of the public Jira REST API in many
+            # Server/DC versions and returns 404. Caller already tolerates
+            # an empty list, so suppress 404 silently.
+            if getattr(response, "status_code", None) == 404:
+                self._logger.debug(
+                    "Workflow '%s' returned 404 for definition; treating as empty",
+                    workflow_name,
+                )
+                return []
             response.raise_for_status()
             workflow = response.json()
             if isinstance(workflow, dict):

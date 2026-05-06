@@ -53,6 +53,7 @@ _RE_CTRL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _ALLOWED_MODELS = frozenset(
     {
         "Attachment",
+        "Category",
         "Color",
         "CustomField",
         "CustomOption",

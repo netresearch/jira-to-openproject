@@ -66,6 +66,95 @@ from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, JiraUser, MigrationError
 
 
+def _backfill_unmapped_users_from_op(
+    user_mapping: dict[str, dict[str, Any]],
+    op_client: Any,
+    logger: Any,
+) -> int:
+    """Reconcile ``matched_by="none"`` mapping entries with live OP users.
+
+    The initial probe in ``create_user_mapping`` can leave entries with
+    ``matched_by="none"`` and ``openproject_id: None`` even when the user
+    actually exists in OP (custom-field provenance not populated, login
+    case mismatch, the disk file came from a partial earlier run, etc.).
+    Walk those entries and try a final ``op_client.get_user(login)`` /
+    ``...(email)`` lookup; back-fill the mapping when found.
+
+    Returns the count of mappings updated.
+    """
+    n = 0
+    for entry in user_mapping.values():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("openproject_id"):
+            continue
+        if entry.get("matched_by") != "none":
+            continue
+        login = entry.get("jira_name")
+        email = entry.get("jira_email")
+
+        existing: dict[str, Any] | None = None
+        for probe in (login, email):
+            if not probe:
+                continue
+            try:
+                existing = op_client.get_user(probe)
+            except Exception:
+                existing = None
+            if isinstance(existing, dict) and existing.get("id"):
+                break
+            existing = None
+        if not existing:
+            continue
+        entry["openproject_id"] = int(existing["id"])
+        if existing.get("login"):
+            entry["openproject_login"] = existing.get("login")
+        if existing.get("mail") or existing.get("email"):
+            entry["openproject_email"] = existing.get("mail") or existing.get("email")
+        entry["matched_by"] = "backfill_op_lookup"
+        n += 1
+    if n:
+        logger.info("Backfilled %d previously-unmapped users from OP lookup", n)
+    return n
+
+
+def _apply_created_user_ids_to_mapping(
+    batch: list[dict[str, Any]],
+    meta: list[dict[str, Any]],
+    created_list: list[dict[str, Any]],
+) -> int:
+    """Write fresh-created OP user ids back to their mapping entries.
+
+    ``bulk_create_records("User", ...)`` returns ``[{index: N, id: OP_ID}]``
+    for each successfully-created user. The caller knows ``batch[N]`` is
+    the corresponding mapping entry and ``meta[N]`` carries login/mail.
+    Without this back-fill, downstream WP migration's ``_map_user`` treats
+    the mapping entry as un-mapped (``openproject_id is None``) and
+    silently drops the assignee for every WP authored by that user.
+
+    Returns the count of mappings updated.
+    """
+    n = 0
+    for item in created_list:
+        idx = item.get("index")
+        if not isinstance(idx, int) or not (0 <= idx < len(batch)) or not (0 <= idx < len(meta)):
+            continue
+        new_op_id = item.get("id")
+        if not new_op_id:
+            continue
+        target = batch[idx]
+        # Don't trample an existing mapping (e.g. from duplicate resolution
+        # earlier in the same run) — that one was deliberate.
+        if target.get("openproject_id"):
+            continue
+        target["openproject_id"] = int(new_op_id)
+        target["openproject_login"] = meta[idx].get("login")
+        target["openproject_email"] = meta[idx].get("mail")
+        target["matched_by"] = "created"
+        n += 1
+    return n
+
+
 @register_entity_types("users", "user_accounts")
 class UserMigration(BaseMigration):
     """Handles the migration of users from Jira to OpenProject.
@@ -962,6 +1051,20 @@ class UserMigration(BaseMigration):
         if not self.user_mapping:
             self.create_user_mapping()
 
+        # Bug A2 reconcile: the initial probe in ``create_user_mapping``
+        # sometimes can't match a user that already exists in OP — e.g.
+        # because the user-provenance CFs aren't populated yet, or the
+        # disk file came from an older partial run. Look those rows up
+        # by login / email before deciding who's "missing", so we don't
+        # try to re-create users that exist (and avoid leaving the
+        # mapping with ``openproject_id: None`` for users we know are
+        # there — which silently drops their downstream WP/TimeEntry
+        # author/assignee assignments).
+        try:
+            _backfill_unmapped_users_from_op(self.user_mapping, self.op_client, self.logger)
+        except Exception as backfill_err:
+            self.logger.warning("User-mapping back-fill skipped: %s", backfill_err)
+
         missing_users = [user for user in self.user_mapping.values() if user["matched_by"] == "none"]
 
         total = len(missing_users)
@@ -1236,6 +1339,14 @@ class UserMigration(BaseMigration):
                                 unresolved_indices.add(idx)
 
                         failed += len(unresolved_indices)
+
+                        # Write the new OP id back to the mapping for each
+                        # freshly-created user. Without this, downstream
+                        # ``_map_user`` lookups in the WP migration treat
+                        # these users as un-mapped (the file still has
+                        # ``openproject_id: None`` from the initial probe)
+                        # and silently drop ~half of all assignees.
+                        _apply_created_user_ids_to_mapping(batch, meta, created_list)
 
                         # Build created_users payload to retain for summary (limited fields, no PII beyond login/mail)
                         for item in created_list:

@@ -1,0 +1,32 @@
+# Pre-existing test fixtures and test private keys — none of these are
+# real secrets. They were introduced in 2025 commits and main has been
+# passing gitleaks since then; the betterleaks scan in the PR check
+# evaluates them only when the runner version / matcher updates.
+#
+# Format: <commit>:<file>:<rule-id>:<line>
+#
+# If you add a new test fixture that betterleaks/gitleaks flags as a
+# suspected secret, prefer to either (a) trim/redact the literal so it
+# stops looking like a real key, or (b) add an inline ``# gitleaks:allow``
+# comment on the same line. Add an entry here only as a last resort.
+
+# Test private key for SSH/JWT-signing fixtures (config/security/keys/rsa_private.pem)
+45dbc9e7ef345e215a8cd0caa721904877f256ae:config/security/keys/rsa_private.pem:private-key:1
+
+# tests/security/test_security_regression.py — Jira-key-shaped strings
+# ("COMBINED-UA-123") that the generic-api-key matcher mistakes for keys.
+4a8e8735cc2e53c5fcdc3e18ac9faa6d81fb5028:tests/security/test_security_regression.py:generic-api-key:216
+4a8e8735cc2e53c5fcdc3e18ac9faa6d81fb5028:tests/security/test_security_regression.py:generic-api-key:222
+
+# tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py —
+# in-test JWT/api-key fixtures used to exercise auth/retry code paths.
+6a5bd646c843d6e427af9d11144587898c656759:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:jwt:717
+95ab56ed9bf9310146e8edb83bce0b228988c4ed:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:generic-api-key:721
+95ab56ed9bf9310146e8edb83bce0b228988c4ed:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:generic-api-key:753
+95ab56ed9bf9310146e8edb83bce0b228988c4ed:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:jwt:709
+95ab56ed9bf9310146e8edb83bce0b228988c4ed:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:jwt:767
+a5e93fd466d0c4d655dfa3747dcf09f2373e25a9:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:generic-api-key:525
+a5e93fd466d0c4d655dfa3747dcf09f2373e25a9:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:jwt:498
+bf784914d452b1b21ad033b526fc3bb875db6f04:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:jwt:651
+bf784914d452b1b21ad033b526fc3bb875db6f04:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:jwt:929
+bf784914d452b1b21ad033b526fc3bb875db6f04:tests/unit/test_enhanced_user_association_migrator_enhanced_retry.py:jwt:999

@@ -22,6 +22,39 @@ from src.utils.file_manager import FileManager
 logger = configure_logging("INFO", None)
 
 
+# Prefixes that mark a captured tmux line as console noise (sentinels, irb
+# prompts, irb auto-print results) rather than actual script output.
+_CONSOLE_NOISE_PREFIXES: tuple[str, ...] = (
+    "--EXEC_",
+    "TMUX_CMD_",
+    "=> ",
+    "irb(main):",
+    "open-project(",
+)
+
+
+def filter_console_output_lines(lines: list[str]) -> str:
+    """Strip console noise from a slice of captured tmux lines.
+
+    Removes blank lines, ``--EXEC_*`` sentinels, irb prompts (including the
+    ``open-project(prod):NNNN*`` continuation prompts that irb echoes when a
+    multi-line wrapped script is pasted into the console) and irb's ``=>``
+    auto-print lines, then joins the survivors with newlines.
+
+    Returning a trimmed string keeps callers' downstream parsing
+    (e.g. ``int(...)`` for a custom-field id) immune to console echo noise.
+    """
+    kept: list[str] = []
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_CONSOLE_NOISE_PREFIXES):
+            continue
+        kept.append(stripped)
+    return "\n".join(kept).strip()
+
+
 class RailsConsoleError(Exception):
     """Base exception for all Rails Console errors."""
 
@@ -99,11 +132,9 @@ class RailsConsoleClient:
         try:
             lines = [ln.strip() for ln in text.split("\n")]
 
-            # Filter out prompts, markers, and Ruby nil/inspects
-            def is_noise(ln: str) -> bool:
-                return not ln or ln.startswith(("--EXEC_", "TMUX_CMD_", "=> ", "irb(main):", "open-project("))
-
-            candidates = [ln for ln in lines if not is_noise(ln)]
+            # Filter out prompts, markers, and Ruby nil/inspects (same set as
+            # ``filter_console_output_lines`` uses for normal output extraction).
+            candidates = [ln for ln in lines if ln and not ln.startswith(_CONSOLE_NOISE_PREFIXES)]
 
             # Targeted patterns
             key_preds = [
@@ -545,9 +576,7 @@ class RailsConsoleClient:
                             new_end = j
                             break
                 if new_start != -1 and new_end != -1:
-                    between_lines = rec_lines[new_start + 1 : new_end]
-                    out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
-                    return "\n".join(out_lines).strip()
+                    return filter_console_output_lines(rec_lines[new_start + 1 : new_end])
 
                 # 3) If start marker still missing, but we have end marker and the script-echo comment,
                 #    extract output between the echoed script end and the end marker as a fallback.
@@ -563,10 +592,9 @@ class RailsConsoleClient:
                             rec_script_echo = j
                             break
                 if rec_script_echo != -1 and rec_end != -1 and rec_end > rec_script_echo:
-                    between_lines = rec_lines[rec_script_echo + 1 : rec_end]
-                    out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
-                    if out_lines:
-                        return "\n".join(out_lines).strip()
+                    candidate = filter_console_output_lines(rec_lines[rec_script_echo + 1 : rec_end])
+                    if candidate:
+                        return candidate
             except Exception:
                 # Fall through to strict error below
                 pass
@@ -608,9 +636,7 @@ class RailsConsoleClient:
                             break
                 if new_start != -1 and new_end != -1:
                     # Use recaptured range
-                    between_lines = rec_lines[new_start + 1 : new_end]
-                    out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
-                    return "\n".join(out_lines).strip()
+                    return filter_console_output_lines(rec_lines[new_start + 1 : new_end])
             except Exception:
                 # Fall through to existing error handling
                 pass
@@ -632,17 +658,13 @@ class RailsConsoleClient:
                 logger.error(
                     "Console appears ready despite missing end marker - attempting to extract output",
                 )
-                candidate_lines = [
-                    ln.strip()
-                    for ln in all_lines[start_line_index + 1 :]
-                    if ln.strip() and not ln.strip().startswith("--EXEC_")
-                ]
-                if candidate_lines:
+                candidate = filter_console_output_lines(all_lines[start_line_index + 1 :])
+                if candidate:
                     logger.info(
                         "Extracted %s lines of output despite missing end marker",
-                        len(candidate_lines),
+                        candidate.count("\n") + 1,
                     )
-                    return "\n".join(candidate_lines)
+                    return candidate
                 msg = f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
                 raise CommandExecutionError(msg)
             msg = f"End marker '{end_marker_out}' not found in output"
@@ -660,8 +682,7 @@ class RailsConsoleClient:
             raise RubyError(error_message)
 
         # Build command output from lines strictly between markers, excluding any marker lines
-        out_lines = [ln for ln in between_lines if ln.strip() and not ln.strip().startswith("--EXEC_")]
-        command_output = "\n".join(out_lines).strip()
+        command_output = filter_console_output_lines(between_lines)
 
         error_patterns = [
             "SyntaxError:",

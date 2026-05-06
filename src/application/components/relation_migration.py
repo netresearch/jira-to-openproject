@@ -371,11 +371,19 @@ class RelationMigration(BaseMigration):
                 errors,
             )
 
+        total_skipped = skipped + bulk_skipped
         result.details.update(
             {
                 "created": created,
-                "skipped": skipped + bulk_skipped,
+                "skipped": total_skipped,
                 "errors": errors,
+                # Counts the migration runner's reporter looks for
+                # (``base_migration._extract_counts``). Without these the
+                # summary line reads '0/0 items migrated, 0 failed' even
+                # when the bulk path actually created hundreds of relations.
+                "success_count": created,
+                "failed_count": errors,
+                "total_count": created + total_skipped + errors,
             },
         )
         result.success = errors == 0
