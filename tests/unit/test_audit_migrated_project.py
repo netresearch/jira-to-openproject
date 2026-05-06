@@ -764,6 +764,56 @@ def test_jira_relation_count_missing_field_treated_as_silent() -> None:
     assert not any("relation" in w.lower() and "jira" in w.lower() for w in warnings), warnings
 
 
+# --- Jira source comparison: watcher count -----------------------------------
+# Per spec, watchers "should" equal Jira's count (softer than the
+# relation "must" wording). ±5% tolerance lets the audit catch real
+# regressions while tolerating locked/disabled users whose watches
+# can't migrate.
+
+
+def test_jira_watcher_count_within_tolerance_passes() -> None:
+    # OP=50 baseline, Jira=51 → within 5%
+    failures, _warnings = _classify(_baseline_metrics(jira_watcher_count=51))
+    assert not any("watcher" in f.lower() and "jira" in f.lower() for f in failures), failures
+
+
+def test_jira_watcher_count_above_tolerance_is_failure() -> None:
+    # OP=50 baseline, Jira=80 → 60% high → fails
+    failures, _warnings = _classify(_baseline_metrics(jira_watcher_count=80))
+    assert any("watcher" in f.lower() and "jira" in f.lower() for f in failures), failures
+
+
+def test_jira_watcher_count_below_tolerance_is_failure() -> None:
+    # OP=50 baseline, Jira=10 → 80% low → fails
+    failures, _warnings = _classify(_baseline_metrics(jira_watcher_count=10))
+    assert any("watcher" in f.lower() and "jira" in f.lower() for f in failures), failures
+
+
+def test_jira_watcher_count_zero_jira_zero_op_passes() -> None:
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_watcher_count=0, wp_watcher_total=0, wp_total=10),
+    )
+    assert not any("watcher" in f.lower() and "jira" in f.lower() for f in failures), failures
+
+
+def test_jira_watcher_count_none_warns_source_unavailable() -> None:
+    _failures, warnings = _classify(_baseline_metrics(jira_watcher_count=None))
+    assert any(
+        "watcher" in w.lower() and "jira" in w.lower() and ("source" in w.lower() or "unavailable" in w.lower())
+        for w in warnings
+    ), warnings
+
+
+def test_jira_watcher_count_missing_field_treated_as_silent() -> None:
+    metrics = _baseline_metrics()
+    failures, warnings = _classify(metrics)
+    # Existing zero-watchers heuristic warning may fire (it's gated on
+    # ``wp_total>=50``, not on ``jira_watcher_count``); only assert the
+    # NEW Jira-watcher rule didn't add its own failure or warning.
+    assert not any("jira" in f.lower() and "watcher" in f.lower() for f in failures), failures
+    assert not any("jira" in w.lower() and "watcher" in w.lower() for w in warnings), warnings
+
+
 def test_fetch_jira_relation_count_halves_raw_to_match_op_semantics(monkeypatch) -> None:
     """``_fetch_jira_relation_count`` must halve the raw issuelinks count.
 

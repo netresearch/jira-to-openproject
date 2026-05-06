@@ -144,6 +144,13 @@ _JIRA_PROJECT_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]+\z")
 # links that don't migrate, and rounding from per-issue counting.
 _RELATION_TOLERANCE = 0.05
 
+# Acceptable drift between Jira's watcher count and OP's. The spec
+# says watchers "should" match (line 40, weaker than the relation
+# rule's "must equal"); ±5% lets the audit catch real migration
+# regressions while tolerating the occasional locked/disabled user
+# whose Jira watch couldn't carry over.
+_WATCHER_TOLERANCE = 0.05
+
 # Hard cap for the attachment pagination loop. Defends against a buggy
 # proxy / Jira returning the same page repeatedly (so neither the
 # empty-page break nor the actual end-of-results triggers) — without
@@ -506,6 +513,33 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                     " attachment loss or phantom OP-side artifacts",
                 )
 
+    # Jira source comparison: watcher count, ±5% tolerance. The spec
+    # uses "should equal" rather than "must equal" for watchers
+    # (locked users / disabled accounts won't migrate their watches),
+    # so this is a softer signal than the relation rule but still
+    # catches wholesale watcher loss.
+    if "jira_watcher_count" in metrics:
+        jira_watch = metrics["jira_watcher_count"]
+        if jira_watch is None:
+            warnings.append(
+                "Jira watcher source comparison unavailable — check skipped",
+            )
+        else:
+            op_watch = _metric_int(metrics, "wp_watcher_total")
+            jira_watch_int = int(jira_watch)
+            if jira_watch_int == 0:
+                tolerance_ok = op_watch == 0
+            else:
+                delta_pct = abs(op_watch - jira_watch_int) / jira_watch_int
+                tolerance_ok = delta_pct <= _WATCHER_TOLERANCE
+            if not tolerance_ok:
+                failures.append(
+                    f"Jira→OP watcher count mismatch beyond ±5%:"
+                    f" Jira reports {jira_watch_int}, OP has {op_watch}"
+                    f" ({op_watch - jira_watch_int:+d}) — watch records dropped"
+                    " or duplicated during migration",
+                )
+
     # Jira source comparison: relation (issue-link) count, ±5%
     # tolerance per spec. Replaces the size-gated "zero-relations
     # warning" heuristic from #176 with an exact source comparison
@@ -750,6 +784,74 @@ def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
     )
 
 
+def _fetch_jira_watcher_count(jira_project_key: str) -> int | None:
+    """Best-effort: sum ``watchCount`` across all issues in the project.
+
+    Each ``issue.fields.watches.watchCount`` is the number of distinct
+    users watching that issue. Summing across project issues gives the
+    total ``(user, issue)`` watch pairs — the same shape OP stores in
+    its ``Watcher`` table (one row per pair).
+
+    Implementation parallels :func:`_paginated_per_issue_field_count`
+    but reads a per-issue *scalar* (``watches.watchCount``) instead of
+    a list length. The whole shared-helper-via-``label`` approach
+    would only make the parameterization noisier here, so this is a
+    near-copy with the value-extraction line as the only divergence.
+    All the pagination correctness invariants from #184 still apply
+    (advance by ``len(page)``, hard cap via ``for...else``, regex-
+    validate the project key).
+    """
+    if not _JIRA_PROJECT_KEY_RE.match(jira_project_key):
+        sys.stderr.write(
+            f"[audit] Jira watcher comparison skipped — invalid project key"
+            f" {jira_project_key!r} (expected uppercase Jira key like 'NRS')\n",
+        )
+        return None
+    try:
+        from src.infrastructure.jira.jira_client import JiraClient
+    except ImportError as exc:
+        sys.stderr.write(
+            f"[audit] Jira watcher comparison skipped — could not import JiraClient: {exc}\n",
+        )
+        return None
+    try:
+        jira = JiraClient()
+        underlying = jira.jira
+        page_size = 100
+        start_at = 0
+        total = 0
+        jql = f'project = "{jira_project_key}"'
+        for _ in range(_PAGINATION_MAX_PAGES):
+            page = underlying.search_issues(
+                jql,
+                startAt=start_at,
+                maxResults=page_size,
+                fields="watches",
+                expand="",
+            )
+            if not page:
+                break
+            for issue in page:
+                watches = getattr(issue.fields, "watches", None)
+                if watches is not None:
+                    total += int(getattr(watches, "watchCount", 0) or 0)
+            start_at += len(page)
+        else:
+            sys.stderr.write(
+                f"[audit] Jira watcher pagination hit the {_PAGINATION_MAX_PAGES}"
+                f"-page safety cap for project {jira_project_key!r} — likely a buggy"
+                " upstream returning the same page repeatedly\n",
+            )
+            return None
+    except Exception as exc:
+        sys.stderr.write(
+            f"[audit] Jira watcher comparison skipped — {type(exc).__name__}: {exc}\n",
+        )
+        sys.stderr.write(traceback.format_exc())
+        return None
+    return total
+
+
 def _fetch_jira_relation_count(jira_project_key: str) -> int | None:
     """Best-effort: count total issue-link records across all issues in the project.
 
@@ -809,6 +911,7 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     metrics["jira_issue_count"] = _fetch_jira_issue_count(jira_project_key)
     metrics["jira_attachment_count"] = _fetch_jira_attachment_count(jira_project_key)
     metrics["jira_relation_count"] = _fetch_jira_relation_count(jira_project_key)
+    metrics["jira_watcher_count"] = _fetch_jira_watcher_count(jira_project_key)
     return metrics
 
 
