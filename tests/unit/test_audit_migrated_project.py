@@ -229,6 +229,82 @@ def test_missing_orphan_fields_treated_as_zero() -> None:
     assert not any("orphan" in f.lower() for f in failures), failures
 
 
+# --- WP CF value-format validation -------------------------------------------
+# Provenance CFs are populated by the migrator with specific shapes
+# (e.g. ``J2O Origin Key`` is always a Jira issue key like ``NRS-123``).
+# Existence + populated-count alone does not catch a regression that
+# silently corrupts the value (wrong format, truncation, missing
+# prefix). The Ruby side counts per-CF format violations; the
+# classifier fails on any non-zero violation count.
+
+
+def test_wp_cf_format_violation_is_failure() -> None:
+    """One violation in any tracked WP CF must fail with the CF name."""
+    failures, _warnings = _classify(
+        _baseline_metrics(wp_cf_format_violations={"J2O Origin Key": 3}),
+    )
+    assert any("format" in f.lower() and "J2O Origin Key" in f for f in failures), failures
+
+
+def test_wp_cf_format_zero_violations_passes() -> None:
+    """An all-zero violations dict must produce no failures."""
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            wp_cf_format_violations={
+                "J2O Origin Key": 0,
+                "J2O Origin ID": 0,
+                "J2O Origin URL": 0,
+            },
+        ),
+    )
+    assert not any("format" in f.lower() for f in failures), failures
+
+
+def test_wp_cf_format_multiple_violations_each_reported() -> None:
+    """Each violating CF gets its own line so operators can pinpoint the bad field."""
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            wp_cf_format_violations={
+                "J2O Origin Key": 2,
+                "J2O Origin URL": 1,
+                "J2O Project Key": 0,
+            },
+        ),
+    )
+    failed_cfs = [f for f in failures if "format" in f.lower()]
+    assert len(failed_cfs) == 2, failed_cfs
+    assert any("J2O Origin Key" in f for f in failed_cfs)
+    assert any("J2O Origin URL" in f for f in failed_cfs)
+
+
+def test_wp_cf_format_null_count_does_not_crash() -> None:
+    """A ``None`` count for a CF must collapse to zero, not raise.
+
+    Defends against a Ruby schema change or partial-result blob where
+    the violation count comes back as JSON ``null``. ``int(None)`` would
+    crash ``_classify`` with ``TypeError`` and turn a data-quality
+    signal into a hard tool failure with no actionable message.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            wp_cf_format_violations={"J2O Origin Key": None, "J2O Origin ID": 0},
+        ),
+    )
+    assert not any("format" in f.lower() for f in failures), failures
+
+
+def test_wp_cf_format_missing_field_treated_as_silent() -> None:
+    """A missing ``wp_cf_format_violations`` key must NOT fail.
+
+    Same contract as the orphan rule: a missing key means a legacy
+    audit run from before this branch. Zero is the healthy baseline;
+    silently skipping the check on absent metric is correct.
+    """
+    metrics = _baseline_metrics()
+    failures, _warnings = _classify(metrics)
+    assert not any("format" in f.lower() for f in failures), failures
+
+
 # --- Pre-existing rules still hold (regression guard) -------------------------
 
 

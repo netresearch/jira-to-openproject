@@ -36,6 +36,25 @@ _REQUIRED_WP_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O Last Update Date",
 )
 
+# Ruby regex literals for each WP provenance CF — the migrator
+# populates these with crisp formats and a regression that corrupts
+# the value (truncation, missing prefix, wrong type) is invisible to
+# the populated-count check. Patterns are kept conservative so a
+# legitimate edge case cannot silently fail; if a CF name is absent
+# from this map, the audit only checks population, not format.
+_WP_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
+    ("J2O Origin Key", r"\A[A-Z][A-Z0-9_]+-\d+\z"),
+    ("J2O Origin ID", r"\A\d+\z"),
+    ("J2O Origin System", r"\AJira\z"),
+    # Forward slashes escaped so the Ruby ``/.../`` regex literal
+    # doesn't terminate at the protocol's ``://``.
+    ("J2O Origin URL", r"\Ahttps?:\/\/[^\s]+\/browse\/[A-Z][A-Z0-9_]+-\d+\z"),
+    ("J2O Project Key", r"\A[A-Z][A-Z0-9_]*\z"),
+    ("J2O Project ID", r"\A\d+\z"),
+    ("J2O First Migration Date", r"\A\d{4}-\d{2}-\d{2}\z"),
+    ("J2O Last Update Date", r"\A\d{4}-\d{2}-\d{2}\z"),
+)
+
 _REQUIRED_USER_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O Origin System",
     "J2O User ID",
@@ -69,6 +88,10 @@ def _build_audit_script(jira_project_key: str) -> str:
     expected_wp_cfs = list(_REQUIRED_WP_PROVENANCE_CFS)
     expected_user_cfs = list(_REQUIRED_USER_PROVENANCE_CFS)
     expected_te_cfs = list(_REQUIRED_TE_PROVENANCE_CFS)
+    # Build the Ruby hash literal mapping CF name -> Regexp literal.
+    # Keep the regex sources verbatim — they're the same on both sides
+    # (Ruby and Python both accept ``\A``, ``\z``, character classes).
+    cf_format_pairs = ", ".join(f"{name!r} => /{pattern}/" for name, pattern in _WP_CF_FORMAT_REGEXES)
     return f"""
 (lambda do
   proj_key = {jira_project_key!r}.downcase
@@ -84,6 +107,24 @@ def _build_audit_script(jira_project_key: str) -> str:
     populated = cf ? CustomValue.where(custom_field_id: cf.id, customized_type: 'WorkPackage').
       where(customized_id: wp_ids).where.not(value: [nil, '']).count : 0
     wp_provenance[cf_name] = {{ 'exists' => !cf.nil?, 'populated' => populated }}
+  end
+
+  # Per-CF format-violation count. For each WP provenance CF that has
+  # a regex spec, count populated values that don't match. Pluck-then-
+  # filter (rather than DB-side regex) keeps the query DB-portable
+  # across Postgres/MySQL/SQLite and lets us reuse the same regex
+  # source on both sides.
+  wp_cf_format_violations = {{}}
+  {{ {cf_format_pairs} }}.each do |cf_name, regex|
+    cf = CustomField.find_by(type: 'WorkPackageCustomField', name: cf_name)
+    next unless cf
+    # ``pluck.count {{ block }}`` streams the comparison instead of
+    # building an intermediate ``reject``-array — same semantics, no
+    # per-value allocation overhead on large projects.
+    bad = CustomValue.where(custom_field_id: cf.id, customized_type: 'WorkPackage').
+      where(customized_id: wp_ids).where.not(value: [nil, '']).
+      pluck(:value).count {{ |v| v !~ regex }}
+    wp_cf_format_violations[cf_name] = bad
   end
 
   user_provenance = {expected_user_cfs!r}.map {{ |n|
@@ -115,6 +156,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     'wp_with_priority' => wps.where.not(priority_id: nil).count,
     'wp_created_in_last_24h' => wps.where("created_at > ?", Time.now - 86400).count,
     'wp_provenance_cfs' => wp_provenance,
+    'wp_cf_format_violations' => wp_cf_format_violations,
     'user_provenance_cfs' => user_provenance,
     'te_provenance_cfs' => te_provenance,
     'wp_journal_total' => Journal.where(journable_type: 'WorkPackage', journable_id: wp_ids).count,
@@ -256,6 +298,19 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         if int(metrics.get("wp_watcher_total", 0)) == 0:
             warnings.append(
                 f"No watchers found across {wp_total} WPs — watcher migration may have silently skipped",
+            )
+
+    # WP CF format validation. The Ruby side counts populated values
+    # that don't match the expected regex per CF. Missing key = legacy
+    # audit run before this branch — silently skip (zero is healthy).
+    # ``int(count or 0)`` so a future Ruby schema that emits ``null``
+    # (or a partial-result blob with a missing CF) doesn't crash
+    # ``_classify`` with ``TypeError``; a ``None`` collapses to zero.
+    wp_cf_violations = metrics.get("wp_cf_format_violations", {}) or {}
+    for cf_name, count in wp_cf_violations.items():
+        if int(count or 0) > 0:
+            failures.append(
+                f"{count} populated values of WP CF '{cf_name}' do not match the expected format",
             )
 
     # Orphan referential integrity. Unlike the type/journal contracts
