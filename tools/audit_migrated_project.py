@@ -118,9 +118,12 @@ def _build_audit_script(jira_project_key: str) -> str:
   {{ {cf_format_pairs} }}.each do |cf_name, regex|
     cf = CustomField.find_by(type: 'WorkPackageCustomField', name: cf_name)
     next unless cf
+    # ``pluck.count {{ block }}`` streams the comparison instead of
+    # building an intermediate ``reject``-array — same semantics, no
+    # per-value allocation overhead on large projects.
     bad = CustomValue.where(custom_field_id: cf.id, customized_type: 'WorkPackage').
       where(customized_id: wp_ids).where.not(value: [nil, '']).
-      pluck(:value).reject {{ |v| v =~ regex }}.count
+      pluck(:value).count {{ |v| v !~ regex }}
     wp_cf_format_violations[cf_name] = bad
   end
 
