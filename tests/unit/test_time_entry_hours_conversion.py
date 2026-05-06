@@ -1,21 +1,24 @@
 """Time entry hours conversion (Bug B).
 
 The audit of the live OP database showed 10,606 time entries summing to
-**106.06 hours total** — average 0.01 h per entry, 100x too small.
+**106.06 hours total** — every entry stored exactly ``hours = 0.01``,
+~100x too small for typical worklogs.
 
-Root cause was the conditional clamp at
-``src/utils/time_entry_transformer.py:93``:
+Root cause was a key-name mismatch between the Jira-side extractor and
+the transformer:
 
-    final_hours = round(max(hours, min_hours if hours <= 0 or round(hours, 2) <= 0 else hours), 2)
+* ``jira_worklog_service.extract_work_logs`` produces snake_case
+  ``time_spent_seconds`` (line 105 in that file).
+* ``time_entry_transformer.transform_jira_work_log`` was reading the
+  camelCase ``timeSpentSeconds`` (the raw Jira REST shape) — so
+  ``work_log.get("timeSpentSeconds", 0)`` always returned ``0``,
+  ``hours = 0/3600 = 0.0``, and the existing min-hours clamp then
+  floored every entry to ``min_time_entry_hours`` (default 0.01).
 
-The condition ``round(hours, 2) <= 0`` is True for **any** ``hours`` value
-that rounds to 0.00 — i.e. anything below 0.005 (= 18 seconds). Such
-worklogs were silently floored to ``min_hours`` (0.01) instead of preserving
-the actual ``seconds / 3600`` value. For a workload with many short worklogs
-this collapses the bulk of the dataset to the floor.
-
-Fix: compute hours straight from seconds and clamp ONLY positive but tiny
-values to the configured floor — without the rounding-trick that mis-fires.
+The clamp expression itself is unchanged. The fix reads both keys
+(snake_case primary, camelCase fallback) so the transformer is robust
+to either upstream shape — both paths now produce realistic hours
+distributions on real data.
 """
 
 from __future__ import annotations
