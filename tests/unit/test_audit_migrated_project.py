@@ -656,6 +656,120 @@ def test_jira_attachment_count_missing_field_treated_as_silent() -> None:
     assert not any("attachment" in w.lower() and "jira" in w.lower() for w in warnings), warnings
 
 
+def test_fetch_jira_attachment_count_skips_issues_without_fields_attr(monkeypatch) -> None:
+    """An ``Issue`` without a populated ``.fields`` must skip cleanly, not raise.
+
+    Caught by a live audit run on NRS — python-jira can return Issue
+    objects whose ``.fields`` is missing entirely (partial / cached
+    response, permission restriction, server quirk). ``getattr(issue.fields, ...)``
+    then triggers the resource ``__getattr__`` which falls through to
+    a subscript attempt and raises ``AttributeError`` — the broad
+    ``except`` then collapses the whole audit to "source unavailable",
+    losing the partial count we DID accumulate.
+
+    Pin: a page mixing well-formed and ``.fields``-less issues must
+    still sum the well-formed entries instead of raising.
+    """
+    import sys as _sys
+    import types
+
+    class _Fields:
+        def __init__(self, attachments_per_issue: int) -> None:
+            self.attachment = [object()] * attachments_per_issue
+
+    class _GoodIssue:
+        def __init__(self, attachments_per_issue: int) -> None:
+            self.fields = _Fields(attachments_per_issue)
+
+    class _BrokenIssue:
+        """Mimics a python-jira Issue whose fields response was incomplete."""
+
+        def __getattr__(self, name: str) -> Any:
+            # Mimic resources.Resource.__getattr__'s eventual fall-through:
+            # raise AttributeError with the trailing subscript hint.
+            raise AttributeError(
+                f"<class 'jira.resources.Issue'> object has no attribute {name!r}"
+                f" ('Issue' object is not subscriptable)",
+            )
+
+    pages = [
+        # 1 well-formed, 1 broken, 1 well-formed
+        [_GoodIssue(2), _BrokenIssue(), _GoodIssue(3)],
+        [],
+    ]
+    page_iter = iter(pages)
+
+    class _FakeUnderlying:
+        def search_issues(self, *_a: Any, **_kw: Any) -> list[Any]:
+            return next(page_iter)
+
+    class _FakeJiraClient:
+        def __init__(self) -> None:
+            self.jira = _FakeUnderlying()
+
+    fake_module = types.ModuleType("src.infrastructure.jira.jira_client")
+    fake_module.JiraClient = _FakeJiraClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(_sys.modules, "src.infrastructure.jira.jira_client", fake_module)
+
+    from tools.audit_migrated_project import _fetch_jira_attachment_count
+
+    # Should sum the two good issues (2 + 3 = 5) and skip the broken one,
+    # NOT raise AttributeError, NOT return None.
+    assert _fetch_jira_attachment_count("NRS") == 5
+
+
+def test_fetch_jira_watcher_count_skips_issues_without_fields_attr(monkeypatch) -> None:
+    """Watcher helper has the same vulnerability — same hardening required.
+
+    Hasn't been hit by a live audit yet because watcher responses tend
+    to be more uniform, but the access pattern ``issue.fields.watches``
+    is identical to the attachment helper. Pin the guard now so the
+    same silent-failure can't slip through later.
+    """
+    import sys as _sys
+    import types
+
+    class _ObjWatches:
+        watchCount = 4
+
+    class _Fields:
+        def __init__(self) -> None:
+            self.watches = _ObjWatches()
+
+    class _GoodIssue:
+        def __init__(self) -> None:
+            self.fields = _Fields()
+
+    class _BrokenIssue:
+        def __getattr__(self, name: str) -> Any:
+            raise AttributeError(
+                f"<class 'jira.resources.Issue'> object has no attribute {name!r}",
+            )
+
+    pages = [
+        [_GoodIssue(), _BrokenIssue(), _GoodIssue()],
+        [],
+    ]
+    page_iter = iter(pages)
+
+    class _FakeUnderlying:
+        def search_issues(self, *_a: Any, **_kw: Any) -> list[Any]:
+            return next(page_iter)
+
+    class _FakeJiraClient:
+        def __init__(self) -> None:
+            self.jira = _FakeUnderlying()
+
+    fake_module = types.ModuleType("src.infrastructure.jira.jira_client")
+    fake_module.JiraClient = _FakeJiraClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(_sys.modules, "src.infrastructure.jira.jira_client", fake_module)
+
+    from tools.audit_migrated_project import _fetch_jira_watcher_count
+
+    # Two good issues, 4 watchers each = 8; broken one skipped.
+    assert _fetch_jira_watcher_count("NRS") == 8
+
+
 def test_fetch_jira_attachment_count_paginates_when_server_caps_maxresults(monkeypatch) -> None:
     """The helper must page through all results when Jira caps maxResults.
 
