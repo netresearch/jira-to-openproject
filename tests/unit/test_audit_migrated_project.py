@@ -708,6 +708,62 @@ def test_fetch_jira_attachment_count_paginates_when_server_caps_maxresults(monke
     assert result == 150
 
 
+# --- Jira source comparison: relation count ---------------------------------
+# Per spec, relations should be within ±5% of the Jira link count. Phase 1
+# (#176) added a "zero relations on a >=50 WP project" heuristic warning;
+# this Phase 3 rule replaces the heuristic with an exact source comparison
+# (with tolerance) when Jira data is available.
+
+_RELATION_TOLERANCE = 0.05
+
+
+def test_jira_relation_count_within_tolerance_passes() -> None:
+    """Within ±5% of Jira's link count is acceptable per spec."""
+    # OP=30 baseline, Jira=31 (within 5% of 30)
+    failures, _warnings = _classify(_baseline_metrics(jira_relation_count=31))
+    assert not any("relation" in f.lower() and "jira" in f.lower() for f in failures), failures
+
+
+def test_jira_relation_count_above_tolerance_is_failure() -> None:
+    """Beyond ±5% means relation migration silently dropped or duplicated links."""
+    # OP=30 baseline, Jira=50 → ~67% high → out of tolerance
+    failures, _warnings = _classify(_baseline_metrics(jira_relation_count=50))
+    assert any("relation" in f.lower() and "jira" in f.lower() and "5" in f for f in failures), failures
+
+
+def test_jira_relation_count_below_tolerance_is_failure() -> None:
+    """Reverse direction (OP > Jira) also fails."""
+    # OP=30 baseline, Jira=10 → 67% low → out of tolerance
+    failures, _warnings = _classify(_baseline_metrics(jira_relation_count=10))
+    assert any("relation" in f.lower() and "jira" in f.lower() for f in failures), failures
+
+
+def test_jira_relation_count_zero_jira_zero_op_passes() -> None:
+    """Both ends zero is healthy (no relations expected, none found)."""
+    failures, _warnings = _classify(
+        _baseline_metrics(jira_relation_count=0, relation_total=0, wp_total=10),
+    )
+    assert not any("relation" in f.lower() and "jira" in f.lower() for f in failures), failures
+
+
+def test_jira_relation_count_none_warns_source_unavailable() -> None:
+    _failures, warnings = _classify(_baseline_metrics(jira_relation_count=None))
+    assert any(
+        "relation" in w.lower() and "jira" in w.lower() and ("source" in w.lower() or "unavailable" in w.lower())
+        for w in warnings
+    ), warnings
+
+
+def test_jira_relation_count_missing_field_treated_as_silent() -> None:
+    metrics = _baseline_metrics()
+    failures, warnings = _classify(metrics)
+    assert not any("relation" in f.lower() and "jira" in f.lower() for f in failures), failures
+    # Missing key: existing zero-heuristic warning may still fire from the
+    # ``relation_total < 50`` rule; here we just check the new Jira rule
+    # didn't add its own warning.
+    assert not any("relation" in w.lower() and "jira" in w.lower() for w in warnings), warnings
+
+
 def test_fetch_jira_attachment_count_rejects_invalid_project_key() -> None:
     """Malformed project keys must not be interpolated into JQL.
 

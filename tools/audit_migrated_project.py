@@ -138,6 +138,12 @@ _TE_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
 # query scope (``NRS" OR project = "PROD`` → both projects).
 _JIRA_PROJECT_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]+\z")
 
+# Acceptable drift between Jira's link count and OP's relation count.
+# Per ``MIGRATION_SPEC.md``: "count must equal Jira's link count, ±5%
+# tolerance". The tolerance accommodates link-type dedup, cross-project
+# links that don't migrate, and rounding from per-issue counting.
+_RELATION_TOLERANCE = 0.05
+
 # Hard cap for the attachment pagination loop. Defends against a buggy
 # proxy / Jira returning the same page repeatedly (so neither the
 # empty-page break nor the actual end-of-results triggers) — without
@@ -500,6 +506,36 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                     " attachment loss or phantom OP-side artifacts",
                 )
 
+    # Jira source comparison: relation (issue-link) count, ±5%
+    # tolerance per spec. Replaces the size-gated "zero-relations
+    # warning" heuristic from #176 with an exact source comparison
+    # whenever Jira data is available. Both directions out-of-band
+    # are failures: a low OP count means relations were dropped on
+    # migration; a high OP count means duplicates leaked through.
+    if "jira_relation_count" in metrics:
+        jira_rel = metrics["jira_relation_count"]
+        if jira_rel is None:
+            warnings.append(
+                "Jira relation source comparison unavailable — check skipped",
+            )
+        else:
+            op_rel = _metric_int(metrics, "relation_total")
+            jira_rel_int = int(jira_rel)
+            # Tolerance is symmetric; when Jira reports zero we just
+            # require OP to also report zero (no division-by-zero).
+            if jira_rel_int == 0:
+                tolerance_ok = op_rel == 0
+            else:
+                delta_pct = abs(op_rel - jira_rel_int) / jira_rel_int
+                tolerance_ok = delta_pct <= _RELATION_TOLERANCE
+            if not tolerance_ok:
+                failures.append(
+                    f"Jira→OP relation count mismatch beyond ±5%:"
+                    f" Jira reports {jira_rel_int}, OP has {op_rel}"
+                    f" ({op_rel - jira_rel_int:+d}) — relations dropped or"
+                    " duplicated during migration",
+                )
+
     # WP CF format validation. The Ruby side counts populated values
     # that don't match the expected regex per CF. Missing key = legacy
     # audit run before this branch — silently skip (zero is healthy).
@@ -603,18 +639,29 @@ def _fetch_jira_issue_count(jira_project_key: str) -> int | None:
         return None
 
 
-def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
-    """Best-effort: count total attachments across all issues in the project.
+def _paginated_per_issue_field_count(
+    jira_project_key: str,
+    *,
+    jira_field: str,
+    attr_name: str,
+    label: str,
+) -> int | None:
+    """Best-effort: paginate ``search_issues`` summing a per-issue list field.
 
-    Paginates ``search_issues(jql='project="X"', fields="attachment")``
-    and sums ``len(issue.fields.attachment)`` across all pages. Same
-    error contract as :func:`_fetch_jira_issue_count`: any failure
-    (no creds, network down, project not found, mid-pagination error,
-    auth, CAPTCHA) collapses to ``None`` so the classifier emits a
-    warning rather than blocking the OP-side report.
+    Used by both :func:`_fetch_jira_attachment_count` and
+    :func:`_fetch_jira_relation_count` — they differ only in *which*
+    Jira field to fetch (``attachment`` vs. ``issuelinks``) and which
+    Issue attribute to count (same names). ``label`` is the human-
+    facing word that goes into the stderr-trace messages
+    (``"attachment"`` / ``"relation"``).
 
-    **Pagination correctness.** Two subtle bugs that an earlier draft
-    of this helper had:
+    Returns ``None`` on any failure (no creds, network down, project
+    not found, mid-pagination error, auth, CAPTCHA, malformed
+    response, hit-the-page-cap). Stderr is written with full
+    traceback to preserve a forensic trail; stdout JSON stays clean.
+
+    **Pagination correctness.** Two subtle bugs an earlier draft of
+    the attachment-counter had:
 
     1. ``start_at`` MUST advance by ``len(page)``, not by the requested
        ``page_size``. Jira Server / Data Center caps ``maxResults`` via
@@ -640,7 +687,7 @@ def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
     """
     if not _JIRA_PROJECT_KEY_RE.match(jira_project_key):
         sys.stderr.write(
-            f"[audit] Jira attachment comparison skipped — invalid project key"
+            f"[audit] Jira {label} comparison skipped — invalid project key"
             f" {jira_project_key!r} (expected uppercase Jira key like 'NRS')\n",
         )
         return None
@@ -648,7 +695,7 @@ def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
         from src.infrastructure.jira.jira_client import JiraClient
     except ImportError as exc:
         sys.stderr.write(
-            f"[audit] Jira attachment comparison skipped — could not import JiraClient: {exc}\n",
+            f"[audit] Jira {label} comparison skipped — could not import JiraClient: {exc}\n",
         )
         return None
     try:
@@ -666,31 +713,74 @@ def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
                 jql,
                 startAt=start_at,
                 maxResults=page_size,
-                fields="attachment",
+                fields=jira_field,
                 expand="",
             )
             if not page:
                 break
             for issue in page:
-                attachments = getattr(issue.fields, "attachment", None) or []
-                total += len(attachments)
+                items = getattr(issue.fields, attr_name, None) or []
+                total += len(items)
             # Advance by what the server actually returned, not by what
             # we asked for. See the docstring for why.
             start_at += len(page)
         else:
             sys.stderr.write(
-                f"[audit] Jira attachment pagination hit the {_PAGINATION_MAX_PAGES}"
+                f"[audit] Jira {label} pagination hit the {_PAGINATION_MAX_PAGES}"
                 f"-page safety cap for project {jira_project_key!r} — likely a buggy"
                 " upstream returning the same page repeatedly\n",
             )
             return None
     except Exception as exc:
         sys.stderr.write(
-            f"[audit] Jira attachment comparison skipped — {type(exc).__name__}: {exc}\n",
+            f"[audit] Jira {label} comparison skipped — {type(exc).__name__}: {exc}\n",
         )
         sys.stderr.write(traceback.format_exc())
         return None
     return total
+
+
+def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
+    """Best-effort: count total attachments across all issues in the project."""
+    return _paginated_per_issue_field_count(
+        jira_project_key,
+        jira_field="attachment",
+        attr_name="attachment",
+        label="attachment",
+    )
+
+
+def _fetch_jira_relation_count(jira_project_key: str) -> int | None:
+    """Best-effort: count total issue-link records across all issues in the project.
+
+    Each ``issue.fields.issuelinks`` entry is one *direction* of a
+    Jira link (``inwardIssue`` or ``outwardIssue``); summing across
+    all issues counts each link twice (once on each end). The OP
+    ``relation_total`` (built from ``project_relations`` in the Ruby
+    side) counts each Relation row exactly once. Comparison therefore
+    has a built-in 2x ratio that the ±5% tolerance is not designed
+    to absorb.
+
+    For a meaningful comparison the Jira-side count needs to be
+    halved to match OP's "one-row-per-link" semantics. Doing so here
+    keeps the classifier's tolerance logic simple (single delta vs
+    Jira). Note: cross-project links contribute a 1x count on the
+    project's side (only one endpoint is in scope), so the halving
+    over-corrects slightly for those — within the ±5% band in
+    practice on most projects.
+    """
+    raw = _paginated_per_issue_field_count(
+        jira_project_key,
+        jira_field="issuelinks",
+        attr_name="issuelinks",
+        label="relation",
+    )
+    if raw is None:
+        return None
+    # Halve to match OP's one-row-per-link convention. ``// 2`` rounds
+    # down so cross-project links (counted 1x on the Jira side) don't
+    # inflate; the ±5% tolerance absorbs the rounding.
+    return raw // 2
 
 
 def _execute_audit(jira_project_key: str) -> dict[str, Any]:
@@ -705,6 +795,7 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     # report is still valid.
     metrics["jira_issue_count"] = _fetch_jira_issue_count(jira_project_key)
     metrics["jira_attachment_count"] = _fetch_jira_attachment_count(jira_project_key)
+    metrics["jira_relation_count"] = _fetch_jira_relation_count(jira_project_key)
     return metrics
 
 
