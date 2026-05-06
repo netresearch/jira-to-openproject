@@ -129,6 +129,104 @@ def test_skip_reasons_wp_unmapped(
     assert breakdown.get("wp_unmapped") == 1, breakdown
 
 
+def test_unmapped_users_set_is_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """Same Jira user watching N issues counts ONCE in the unmapped set.
+
+    Per the live TEST audit (2026-05-06): 38 watcher rows missing,
+    but likely only ~10 distinct users. Telling the operator
+    "10 users to fix" is far more actionable than "38 watchers
+    skipped". Pin the dedup so a future regression that increments
+    a list (instead of a set) is caught.
+    """
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            # Same unmapped user (bob) appears on every issue.
+            return [{"name": "bob"}]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    # 3 issues all mapped to the same WP, all watched by ``bob``.
+    _map_store.set_mapping(
+        "work_package",
+        {
+            "J1": {"openproject_id": 10},
+            "J2": {"openproject_id": 11},
+            "J3": {"openproject_id": 12},
+        },
+    )
+    (cache_dir / "jira_issues_cache.json").write_text(
+        '{"J1": {"key": "J1"}, "J2": {"key": "J2"}, "J3": {"key": "J3"}}',
+    )
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    # 3 watcher rows dropped (one per issue) but only 1 distinct user.
+    assert res.details["unmapped_user_count"] == 1, res.details
+    assert res.details["unmapped_users"] == ["bob"], res.details
+    # Aggregate skip count still matches all the dropped rows.
+    assert res.details["skip_reasons"].get("user_unmapped") == 3, res.details
+
+
+def test_unmapped_users_records_identity_via_probe_order(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """Recorded identity matches ``_resolve_user_id``'s probe order.
+
+    Operators search the user mapping with the SAME identity the
+    resolver tried. Logging ``account_id`` first (then name, email,
+    display_name) means the operator can paste the logged value
+    straight into the mapping key.
+    """
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            # Watcher with both account_id AND name; account_id wins.
+            return [{"accountId": "557058:abc", "name": "fallback-name"}]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    (cache_dir / "jira_issues_cache.json").write_text('{"J1": {"key": "J1"}}')
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    # account_id wins over name in the probe order.
+    assert res.details["unmapped_users"] == ["557058:abc"], res.details
+
+
+def test_unmapped_users_empty_when_all_mapped(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """All watchers map cleanly → unmapped_users is empty list."""
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            return [{"name": "alice"}]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    (cache_dir / "jira_issues_cache.json").write_text('{"J1": {"key": "J1"}}')
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    assert res.details["unmapped_users"] == [], res.details
+    assert res.details["unmapped_user_count"] == 0
+
+
 def test_skip_reasons_breakdown_sums_to_total_skipped(
     monkeypatch: pytest.MonkeyPatch,
     _map_store,
