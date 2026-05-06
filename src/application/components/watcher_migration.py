@@ -123,8 +123,26 @@ class WatcherMigration(BaseMigration):
                 continue
             jira_keys.append(str(entry.jira_key))
         if not jira_keys:
-            logger.info("No work package mappings; skipping watcher migration")
-            return result
+            # FAIL LOUD. Same anti-pattern as pre-#194 attachments and
+            # pre-#197 wp_skeleton — silent ``success=True`` here masks
+            # an upstream broken precondition (e.g. ``_save_mapping``
+            # swallowed a write error in ``work_packages_skeleton``).
+            # Without the WP map there are no watchers to migrate, but
+            # this is a *failure mode*, not a success, because every
+            # downstream consumer reading this component's
+            # ``ComponentResult`` would see green and move on.
+            msg = (
+                "No work_package mapping available — watchers cannot be"
+                " correlated to OP work packages. Run work_packages_skeleton"
+                " first (or verify its mapping persisted)."
+            )
+            logger.error(msg)
+            return ComponentResult(
+                success=False,
+                message=msg,
+                errors=["missing_work_package_mapping"],
+                details={},
+            )
 
         # Collect all watchers for bulk creation. Track *why* each
         # watcher was skipped so a post-run summary can distinguish

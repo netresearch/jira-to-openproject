@@ -78,3 +78,31 @@ def test_attachment_provenance_updates_author_and_timestamp():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated == 2
+
+
+def test_attachment_provenance_fails_loud_on_empty_wp_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Empty WP mapping must FAIL loud, not silently exit success.
+
+    Same anti-pattern as the pre-#194 attachments path. If
+    ``work_packages_skeleton`` doesn't persist its mapping (e.g.
+    ``_save_mapping`` swallows a write error per #197), this
+    component used to return ``success=True, updated=0`` —
+    masking the missing precondition. Pin: empty WP mapping →
+    ``success=False`` with a stable error tag.
+    """
+    import src.config as cfg
+
+    class EmptyMappings:
+        def get_mapping(self, name: str):
+            return {}
+
+    monkeypatch.setattr(cfg, "mappings", EmptyMappings(), raising=False)
+
+    mig = AttachmentProvenanceMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    result = mig.run()
+
+    assert result.success is False, result
+    assert any("missing_work_package_mapping" in str(e) for e in (result.errors or [])), result.errors
+    assert "work_package" in (result.message or "").lower(), result.message

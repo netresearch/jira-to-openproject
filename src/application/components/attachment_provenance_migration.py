@@ -197,8 +197,26 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
 
         wp_map = self.mappings.get_mapping("work_package") or {}
         if not wp_map:
-            self.logger.warning("No work package mapping found - skipping provenance migration")
-            return ComponentResult(success=True, updated=0, message="No work packages to process")
+            # FAIL LOUD. Same anti-pattern as the pre-#194 attachments
+            # path — ``success=True`` here masks the real cause
+            # (upstream ``work_packages_skeleton`` didn't persist
+            # its mapping, e.g. ``_save_mapping`` swallowed a write
+            # error per #197). Without the WP map this component
+            # has nothing to do; surface the missing precondition
+            # so the orchestrator's partial-success classifier
+            # flags the run instead of cascading silent successes.
+            msg = (
+                "No work_package mapping available — attachment provenance"
+                " cannot run. Run work_packages_skeleton first (or verify"
+                " its mapping persisted) and re-run this component."
+            )
+            self.logger.error(msg)
+            return ComponentResult(
+                success=False,
+                updated=0,
+                message=msg,
+                errors=["missing_work_package_mapping"],
+            )
 
         # Group jira keys by project for efficient processing. Each entry
         # is normalised through :class:`WorkPackageMappingEntry.from_legacy`
