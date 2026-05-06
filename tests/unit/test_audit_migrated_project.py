@@ -764,6 +764,68 @@ def test_jira_relation_count_missing_field_treated_as_silent() -> None:
     assert not any("relation" in w.lower() and "jira" in w.lower() for w in warnings), warnings
 
 
+def test_fetch_jira_relation_count_halves_raw_to_match_op_semantics(monkeypatch) -> None:
+    """``_fetch_jira_relation_count`` must halve the raw issuelinks count.
+
+    Each Jira link contributes 2 entries to ``issuelinks`` summed across
+    a project (one inward, one outward); OP's ``relation_total`` counts
+    each Relation row once. Removing the ``// 2`` would produce a 2x
+    over-count and silently fail the tolerance check on every project
+    with any links. This test pins the halving so a future
+    "simplification" doesn't break the semantics.
+
+    Even raw → exact halving. The next test pins the odd-raw
+    rounding-down behavior + the stderr warning.
+    """
+    from tools import audit_migrated_project as audit_mod
+
+    # Patch the shared paginator to return a known raw count, bypassing
+    # the lazy JiraClient import + the actual pagination loop.
+    monkeypatch.setattr(
+        audit_mod,
+        "_paginated_per_issue_field_count",
+        lambda *_a, **_kw: 60,
+    )
+    assert audit_mod._fetch_jira_relation_count("NRS") == 30
+
+
+def test_fetch_jira_relation_count_odd_raw_rounds_down_and_warns(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Odd raw count = cross-project link present.
+
+    Halving rounds down (silent under-count of half a link) but the
+    asymmetry must be surfaced on stderr so an operator investigating
+    a tolerance failure can tell "real migration defect" from
+    "cross-project asymmetry".
+    """
+    from tools import audit_migrated_project as audit_mod
+
+    monkeypatch.setattr(
+        audit_mod,
+        "_paginated_per_issue_field_count",
+        lambda *_a, **_kw: 7,
+    )
+    result = audit_mod._fetch_jira_relation_count("NRS")
+    assert result == 3  # 7 // 2
+    captured = capsys.readouterr()
+    assert "odd" in captured.err.lower(), captured.err
+    assert "cross-project" in captured.err.lower(), captured.err
+
+
+def test_fetch_jira_relation_count_propagates_none_from_paginator(monkeypatch) -> None:
+    """``None`` from the paginator (Jira unreachable) must propagate."""
+    from tools import audit_migrated_project as audit_mod
+
+    monkeypatch.setattr(
+        audit_mod,
+        "_paginated_per_issue_field_count",
+        lambda *_a, **_kw: None,
+    )
+    assert audit_mod._fetch_jira_relation_count("NRS") is None
+
+
 def test_fetch_jira_attachment_count_rejects_invalid_project_key() -> None:
     """Malformed project keys must not be interpolated into JQL.
 

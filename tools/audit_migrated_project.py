@@ -755,19 +755,21 @@ def _fetch_jira_relation_count(jira_project_key: str) -> int | None:
 
     Each ``issue.fields.issuelinks`` entry is one *direction* of a
     Jira link (``inwardIssue`` or ``outwardIssue``); summing across
-    all issues counts each link twice (once on each end). The OP
-    ``relation_total`` (built from ``project_relations`` in the Ruby
-    side) counts each Relation row exactly once. Comparison therefore
-    has a built-in 2x ratio that the ±5% tolerance is not designed
-    to absorb.
+    the project's issues counts each *intra-project* link twice (once
+    on each end) and each *cross-project* link once (only the in-scope
+    end is counted). The OP ``relation_total`` counts each Relation
+    row exactly once. So:
 
-    For a meaningful comparison the Jira-side count needs to be
-    halved to match OP's "one-row-per-link" semantics. Doing so here
-    keeps the classifier's tolerance logic simple (single delta vs
-    Jira). Note: cross-project links contribute a 1x count on the
-    project's side (only one endpoint is in scope), so the halving
-    over-corrects slightly for those — within the ±5% band in
-    practice on most projects.
+    - 7 intra-project + 0 cross → raw=14, halved=7, OP=7 ✓
+    - 7 intra + 5 cross → raw=19, halved=9, OP=7 → fails ±5% (false positive)
+    - 0 intra + 1 cross → raw=1, halved=0, OP=0 ✓ (assuming cross-project
+      links don't migrate, which the current migration code does)
+
+    Halving is the right model when cross-project links are rare.
+    On projects where they're common the audit may report a drift
+    that's actually expected — operator should treat the failure as
+    a hint, then check ``stderr`` for the odd-raw warning below to
+    distinguish "real loss" from "cross-project asymmetry".
     """
     raw = _paginated_per_issue_field_count(
         jira_project_key,
@@ -777,9 +779,20 @@ def _fetch_jira_relation_count(jira_project_key: str) -> int | None:
     )
     if raw is None:
         return None
+    if raw % 2 != 0:
+        # Odd raw count means at least one cross-project link, which
+        # the floor-division below silently rounds down. Surface the
+        # asymmetry on stderr so an operator investigating a relation
+        # mismatch can tell "real migration defect" from "cross-
+        # project link counted only on this side".
+        sys.stderr.write(
+            f"[audit] Jira raw issuelinks count for {jira_project_key!r}"
+            f" is odd ({raw}) — at least one cross-project link is"
+            " present; the floor-divided count below may be 0.5 low,"
+            " which on small projects can push past ±5% tolerance\n",
+        )
     # Halve to match OP's one-row-per-link convention. ``// 2`` rounds
-    # down so cross-project links (counted 1x on the Jira side) don't
-    # inflate; the ±5% tolerance absorbs the rounding.
+    # down (per the warning above when raw is odd).
     return raw // 2
 
 
