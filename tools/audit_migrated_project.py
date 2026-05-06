@@ -96,6 +96,10 @@ def _build_audit_script(jira_project_key: str) -> str:
 
   te = TimeEntry.where(entity_type: 'WorkPackage', entity_id: wp_ids)
 
+  # Relations involving this project on either endpoint. Reused below
+  # for the total count and the two orphan-detection queries.
+  project_relations = Relation.where('from_id IN (?) OR to_id IN (?)', wp_ids, wp_ids)
+
   {{
     'project_id' => proj.id,
     'project_identifier' => proj.identifier,
@@ -125,7 +129,24 @@ def _build_audit_script(jira_project_key: str) -> str:
     # (the common intra-project case) is counted exactly once instead
     # of twice. The downstream zero-threshold heuristic still works:
     # zero stays zero, but non-zero numbers reflect reality.
-    'relation_total' => Relation.where('from_id IN (?) OR to_id IN (?)', wp_ids, wp_ids).count,
+    'relation_total' => project_relations.count,
+    # Orphan detection. A *project relation* with ``from_id`` not in
+    # ``work_packages`` can only mean ``to_id IN wp_ids`` AND the from-end
+    # is a deleted WP elsewhere — i.e. the "from" endpoint is dangling.
+    # Symmetric for the to-end. Watcher orphans fire when a watching
+    # user has been deleted without cascade.
+    #
+    # ``NOT EXISTS`` instead of ``NOT IN (SELECT ...)`` so a NULL in the
+    # subquery cannot collapse the entire predicate to ``UNKNOWN`` (the
+    # three-valued-logic trap). PKs are ``NOT NULL`` today so behavior
+    # is identical, but ``NOT EXISTS`` stays correct if that ever
+    # changes and is typically faster.
+    'orphaned_relations_from' => project_relations.
+      where('NOT EXISTS (SELECT 1 FROM work_packages wp WHERE wp.id = relations.from_id)').count,
+    'orphaned_relations_to' => project_relations.
+      where('NOT EXISTS (SELECT 1 FROM work_packages wp WHERE wp.id = relations.to_id)').count,
+    'orphaned_watchers' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_ids).
+      where('NOT EXISTS (SELECT 1 FROM users u WHERE u.id = watchers.user_id)').count,
   }}
 end).call
 """
@@ -236,6 +257,27 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             warnings.append(
                 f"No watchers found across {wp_total} WPs — watcher migration may have silently skipped",
             )
+
+    # Orphan referential integrity. Unlike the type/journal contracts
+    # (where missing-key-as-zero is *also* a failure to flag a stale
+    # Ruby script), a missing orphan key must stay silent — zero is the
+    # healthy baseline and legacy audit runs without these keys would
+    # otherwise wrongly fail. Only fire when we get a positive count.
+    orphan_rel_from = int(metrics.get("orphaned_relations_from", 0))
+    orphan_rel_to = int(metrics.get("orphaned_relations_to", 0))
+    orphan_rel_total = orphan_rel_from + orphan_rel_to
+    if orphan_rel_total > 0:
+        failures.append(
+            f"{orphan_rel_total} orphaned relations"
+            f" (from-side dangling: {orphan_rel_from},"
+            f" to-side dangling: {orphan_rel_to})"
+            " — relations reference deleted WPs",
+        )
+    orphan_watchers = int(metrics.get("orphaned_watchers", 0))
+    if orphan_watchers > 0:
+        failures.append(
+            f"{orphan_watchers} orphaned watchers — user_id references a deleted user",
+        )
 
     # Description coverage (warning only)
     desc_pct = (metrics.get("wp_with_description", 0) / wp_total) * 100
