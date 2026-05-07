@@ -58,6 +58,7 @@ from src.application.components.work_package_content_migration import WorkPackag
 from src.application.components.work_package_migration import WorkPackageMigration
 from src.application.components.work_package_skeleton_migration import WorkPackageSkeletonMigration
 from src.application.components.workflow_migration import WorkflowMigration
+from src.application.components.wp_metadata_backfill_migration import WpMetadataBackfillMigration
 from src.infrastructure.health_check_client import HealthCheckClient
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.docker_client import DockerClient
@@ -106,6 +107,11 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "attachment_provenance",
     # === Phase 3: Work Package Content (with resolved attachment URLs) ===
     "work_packages_content",
+    # Backfill assignee + provenance CFs on existing WPs (closes Bug A
+    # for pre-#175 WPs and the under-populated CF warnings flagged by
+    # the audit; idempotent — only sets fields where the OP value is
+    # currently null/blank).
+    "wp_metadata_backfill",
     # === Post-WP Data: Versions, Components, Labels ===
     "versions",
     "components",
@@ -412,6 +418,7 @@ def _build_component_factories(
         "remote_links": lambda: RemoteLinksMigration(jira_client=jira_client, op_client=op_client),
         "category_defaults": lambda: CategoryDefaultsMigration(jira_client=jira_client, op_client=op_client),
         "attachment_provenance": lambda: AttachmentProvenanceMigration(jira_client=jira_client, op_client=op_client),
+        "wp_metadata_backfill": lambda: WpMetadataBackfillMigration(jira_client=jira_client, op_client=op_client),
         "inline_refs": lambda: InlineRefsMigration(jira_client=jira_client, op_client=op_client),
         "native_tags": lambda: NativeTagsMigration(jira_client=jira_client, op_client=op_client),
         "accounts": lambda: AccountMigration(jira_client=jira_client, op_client=op_client),
