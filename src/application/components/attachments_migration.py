@@ -177,8 +177,23 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         filename = getattr(a, "filename", None)
                         size = getattr(a, "size", None)
                         url = getattr(a, "content", None)
-                        if not filename or not url:
+                        # Without ``url`` we can't download — that's a
+                        # genuine skip. But ``filename`` may be empty
+                        # or the literal string ``"noname"`` for
+                        # rich-text-paste images / clipboard uploads;
+                        # those are still real attachments and we
+                        # must preserve them. Derive a stable name
+                        # from the Jira attachment id so the file
+                        # ends up under a unique key downstream and
+                        # the Rails LOWER(filename) idempotency check
+                        # doesn't collapse multiple ``noname``s into
+                        # one.
+                        if not url:
                             continue
+                        if not filename or not str(filename).strip() or str(filename).lower() == "noname":
+                            if aid is None:
+                                continue
+                            filename = f"jira-attachment-{aid}"
                         items.append({"id": aid, "filename": filename, "size": size, "url": url})
                     except Exception:
                         continue
