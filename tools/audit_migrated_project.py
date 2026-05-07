@@ -989,8 +989,11 @@ def _fetch_jira_relation_breakdown(jira_project_key: str) -> dict[str, int] | No
       do not migrate.
     * ``raw`` — total issuelink entries summed across all issues.
       Kept for back-compat with the legacy ``jira_relation_count``
-      metric (= ``raw // 2``) and to surface the "odd raw"
-      diagnostic if present.
+      metric (= ``raw // 2``). If ``raw`` is odd at the end of
+      pagination, an "[audit] odd raw" diagnostic is written to
+      stderr — same hint the legacy halved counter emits, surfaced
+      here so an operator investigating a small mismatch can
+      distinguish "real loss" from cross-project asymmetry.
 
     Pagination + project-key validation reuse the same hardening as
     :func:`_paginated_per_issue_field_count`.
@@ -1014,6 +1017,17 @@ def _fetch_jira_relation_breakdown(jira_project_key: str) -> dict[str, int] | No
     cross_count = 0
     raw_count = 0
 
+    def _read_attr(obj: Any, name: str) -> Any:
+        """Dual-shape access: dicts use ``.get``, SDK objects use
+        ``getattr``. Mirrors the dual-shape pattern in
+        ``relation_migration._merge_batch_issues`` so the breakdown
+        works on both live SDK responses AND any future dict-shaped
+        cache the audit might consume.
+        """
+        if isinstance(obj, dict):
+            return obj.get(name)
+        return getattr(obj, name, None)
+
     try:
         jira = JiraClient()
         underlying = jira.jira
@@ -1031,22 +1045,19 @@ def _fetch_jira_relation_breakdown(jira_project_key: str) -> dict[str, int] | No
             if not page:
                 break
             for issue in page:
-                fields_obj = getattr(issue, "fields", None)
+                fields_obj = _read_attr(issue, "fields")
                 if fields_obj is None:
                     continue
-                source_key = getattr(issue, "key", None)
+                source_key = _read_attr(issue, "key")
                 if not source_key:
                     continue
-                links = getattr(fields_obj, "issuelinks", None) or []
+                links = _read_attr(fields_obj, "issuelinks") or []
                 for link in links:
                     raw_count += 1
-                    target_key: str | None = None
-                    outward = getattr(link, "outwardIssue", None)
-                    inward = getattr(link, "inwardIssue", None)
-                    if outward is not None:
-                        target_key = getattr(outward, "key", None)
-                    elif inward is not None:
-                        target_key = getattr(inward, "key", None)
+                    outward = _read_attr(link, "outwardIssue")
+                    inward = _read_attr(link, "inwardIssue")
+                    target = outward if outward is not None else inward
+                    target_key = _read_attr(target, "key") if target is not None else None
                     if not target_key:
                         # Malformed link — neither outward nor inward
                         # carries a key. Skip from both buckets so we
@@ -1072,6 +1083,19 @@ def _fetch_jira_relation_breakdown(jira_project_key: str) -> dict[str, int] | No
         )
         sys.stderr.write(traceback.format_exc())
         return None
+
+    if raw_count % 2 != 0:
+        # Odd raw count means at least one cross-project link the legacy
+        # halving model rounds down. Emit the same diagnostic the legacy
+        # ``_fetch_jira_relation_count`` does so an operator
+        # investigating a small mismatch sees the same hint regardless
+        # of which path produced the metrics.
+        sys.stderr.write(
+            f"[audit] Jira raw issuelinks count for {jira_project_key!r}"
+            f" is odd ({raw_count}) — at least one cross-project link is"
+            " present; the legacy halved count derived from this raw is"
+            " 0.5 low, which on small projects can push past ±5% tolerance\n",
+        )
 
     return {
         "intra_unique": len(intra_pairs),
@@ -1127,6 +1151,10 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     # Prefer the breakdown over the legacy halved count — the latter
     # over-counts on cross-project-heavy projects (NRS audit caught
     # this: -1759 false positive, see _fetch_jira_relation_breakdown).
+    # If the breakdown fails (transient Jira shape change, permission
+    # issue, etc.), fall back to the legacy halved count so the audit
+    # still produces *some* signal instead of degrading to a "check
+    # skipped" warning. Per PR #202 review.
     breakdown = _fetch_jira_relation_breakdown(jira_project_key)
     if breakdown is not None:
         metrics["jira_relation_breakdown"] = breakdown
@@ -1136,7 +1164,7 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
         metrics["jira_relation_count"] = breakdown["raw"] // 2
     else:
         metrics["jira_relation_breakdown"] = None
-        metrics["jira_relation_count"] = None
+        metrics["jira_relation_count"] = _fetch_jira_relation_count(jira_project_key)
     metrics["jira_watcher_count"] = _fetch_jira_watcher_count(jira_project_key)
     return metrics
 

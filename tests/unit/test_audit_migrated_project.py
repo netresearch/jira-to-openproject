@@ -1136,6 +1136,204 @@ def test_fetch_jira_relation_count_propagates_none_from_paginator(monkeypatch) -
     assert audit_mod._fetch_jira_relation_count("NRS") is None
 
 
+# --- Direct tests for _fetch_jira_relation_breakdown -------------------------
+# Per PR #202 review: the breakdown function has non-trivial parsing
+# logic (intra dedup, cross counting, dual-shape link handling). These
+# tests pin the breakdown calculation directly without going through
+# ``_classify``, so a regression in the parsing surfaces as a focused
+# failure rather than a downstream classifier mismatch.
+
+
+class _FakeJiraIssue:
+    """Object-shape Jira issue for the breakdown tests."""
+
+    def __init__(self, key: str, links: list[Any]) -> None:
+        self.key = key
+        self.fields = type("F", (), {"issuelinks": links})()
+
+
+def _link_obj(*, outward_key: str | None = None, inward_key: str | None = None) -> Any:
+    """Object-shape link with optional outward/inward target key."""
+    link = type("L", (), {})()
+    link.outwardIssue = type("O", (), {"key": outward_key})() if outward_key else None
+    link.inwardIssue = type("I", (), {"key": inward_key})() if inward_key else None
+    return link
+
+
+def _link_dict(*, outward_key: str | None = None, inward_key: str | None = None) -> dict[str, Any]:
+    """Dict-shape link, mirroring the cached / serialized shape that
+    ``relation_migration._merge_batch_issues`` produces.
+    """
+    out: dict[str, Any] = {}
+    if outward_key:
+        out["outwardIssue"] = {"key": outward_key}
+    if inward_key:
+        out["inwardIssue"] = {"key": inward_key}
+    return out
+
+
+def _patch_jira_search(monkeypatch, pages: list[list[Any]]) -> None:
+    """Patch the JiraClient lookup so the breakdown sees ``pages`` in order."""
+
+    class _FakeUnderlying:
+        def __init__(self, pages_: list[list[Any]]) -> None:
+            self._pages = list(pages_)
+
+        def search_issues(self, *_a, **_kw):
+            return self._pages.pop(0) if self._pages else []
+
+    class _FakeJira:
+        def __init__(self) -> None:
+            self.jira = _FakeUnderlying(pages)
+
+    monkeypatch.setattr(
+        "src.infrastructure.jira.jira_client.JiraClient",
+        _FakeJira,
+    )
+
+
+def test_breakdown_dedups_intra_pairs(monkeypatch) -> None:
+    """Each intra-project link appears twice (once per end) — must dedup to 1."""
+    pages = [
+        [
+            _FakeJiraIssue("NRS-1", [_link_obj(outward_key="NRS-2")]),
+            _FakeJiraIssue("NRS-2", [_link_obj(inward_key="NRS-1")]),
+        ],
+    ]
+    _patch_jira_search(monkeypatch, pages)
+    from tools import audit_migrated_project as audit_mod
+
+    result = audit_mod._fetch_jira_relation_breakdown("NRS")
+    assert result == {"intra_unique": 1, "cross": 0, "raw": 2}
+
+
+def test_breakdown_counts_cross_separately(monkeypatch) -> None:
+    """Cross-project link appears once (only the in-scope end carries it)."""
+    pages = [
+        [_FakeJiraIssue("NRS-1", [_link_obj(outward_key="OTHER-1")])],
+    ]
+    _patch_jira_search(monkeypatch, pages)
+    from tools import audit_migrated_project as audit_mod
+
+    result = audit_mod._fetch_jira_relation_breakdown("NRS")
+    assert result == {"intra_unique": 0, "cross": 1, "raw": 1}
+
+
+def test_breakdown_handles_dict_shaped_links(monkeypatch) -> None:
+    """Dict-shape links (cached / serialized form) classify identically.
+
+    Without dual-shape support, every dict link falls into the
+    "malformed" path and gets dropped from both intra and cross —
+    skewing the breakdown. Per PR #202 review.
+    """
+    pages = [
+        [
+            _FakeJiraIssue("NRS-1", [_link_dict(outward_key="NRS-2"), _link_dict(outward_key="OTHER-7")]),
+        ],
+    ]
+    _patch_jira_search(monkeypatch, pages)
+    from tools import audit_migrated_project as audit_mod
+
+    result = audit_mod._fetch_jira_relation_breakdown("NRS")
+    # 1 cross + 1 intra (NRS-1 → NRS-2 only, the reciprocal isn't fetched here)
+    assert result == {"intra_unique": 1, "cross": 1, "raw": 2}
+
+
+def test_breakdown_handles_dict_shaped_issues(monkeypatch) -> None:
+    """Dict-shape issues + dict-shape links both work."""
+    pages = [
+        [
+            {"key": "NRS-1", "fields": {"issuelinks": [_link_dict(outward_key="NRS-2")]}},
+            {"key": "NRS-2", "fields": {"issuelinks": [_link_dict(inward_key="NRS-1")]}},
+        ],
+    ]
+    _patch_jira_search(monkeypatch, pages)
+    from tools import audit_migrated_project as audit_mod
+
+    result = audit_mod._fetch_jira_relation_breakdown("NRS")
+    assert result == {"intra_unique": 1, "cross": 0, "raw": 2}
+
+
+def test_breakdown_skips_malformed_links_without_keys(monkeypatch) -> None:
+    """Link with neither outwardIssue nor inwardIssue → counted as raw,
+    dropped from both intra and cross to avoid double-counting.
+    """
+    pages = [
+        [_FakeJiraIssue("NRS-1", [_link_obj()])],  # no outward, no inward
+    ]
+    _patch_jira_search(monkeypatch, pages)
+    from tools import audit_migrated_project as audit_mod
+
+    result = audit_mod._fetch_jira_relation_breakdown("NRS")
+    assert result == {"intra_unique": 0, "cross": 0, "raw": 1}
+
+
+def test_breakdown_invalid_project_key_returns_none(monkeypatch, capsys) -> None:
+    """Same project-key validation contract as the legacy halved counter."""
+    from tools import audit_migrated_project as audit_mod
+
+    result = audit_mod._fetch_jira_relation_breakdown("nrs lower-case")
+    assert result is None
+    captured = capsys.readouterr()
+    assert "invalid project key" in captured.err.lower(), captured.err
+
+
+def test_breakdown_emits_odd_raw_diagnostic(monkeypatch, capsys) -> None:
+    """Odd raw count → "[audit] odd" stderr warning (same hint as legacy)."""
+    pages = [
+        # 3 raw entries: 1 intra (NRS-1 → NRS-2), 1 cross, 1 cross.
+        # Reciprocal end of the intra link is missing → odd raw.
+        [
+            _FakeJiraIssue(
+                "NRS-1",
+                [
+                    _link_obj(outward_key="NRS-2"),
+                    _link_obj(outward_key="OTHER-1"),
+                    _link_obj(outward_key="OTHER-2"),
+                ],
+            ),
+        ],
+    ]
+    _patch_jira_search(monkeypatch, pages)
+    from tools import audit_migrated_project as audit_mod
+
+    audit_mod._fetch_jira_relation_breakdown("NRS")
+    captured = capsys.readouterr()
+    assert "odd" in captured.err.lower() and "(3)" in captured.err, captured.err
+
+
+def test_breakdown_failure_falls_back_to_legacy_count(monkeypatch) -> None:
+    """When the breakdown raises mid-pagination, ``_execute_audit`` falls
+    back to the legacy halved count so the audit still produces signal.
+
+    Per PR #202 review: previously the breakdown failure path set
+    ``jira_relation_count = None`` too, which collapsed the relation
+    check to a "source unavailable" warning even when the legacy
+    counter would have worked.
+    """
+    from tools import audit_migrated_project as audit_mod
+
+    # Force the breakdown to fail.
+    monkeypatch.setattr(audit_mod, "_fetch_jira_relation_breakdown", lambda _k: None)
+    # Force the legacy halved counter to succeed.
+    monkeypatch.setattr(audit_mod, "_fetch_jira_relation_count", lambda _k: 42)
+    # Stub the other Jira-side comparisons + the OP-side script execution.
+    monkeypatch.setattr(audit_mod, "_fetch_jira_issue_count", lambda _k: 100)
+    monkeypatch.setattr(audit_mod, "_fetch_jira_attachment_count", lambda _k: 10)
+    monkeypatch.setattr(audit_mod, "_fetch_jira_watcher_count", lambda _k: 50)
+
+    class _StubOp:
+        def execute_json_query(self, *_a, **_kw) -> dict[str, Any]:
+            return {}
+
+    monkeypatch.setattr(audit_mod, "OpenProjectClient", _StubOp)
+
+    metrics = audit_mod._execute_audit("NRS")
+    assert metrics["jira_relation_breakdown"] is None
+    # Crucial: legacy counter still populated, classifier uses it.
+    assert metrics["jira_relation_count"] == 42
+
+
 def test_generated_audit_script_parses_as_ruby() -> None:
     """The generated Ruby script must pass ``ruby -c`` (parse-only).
 
