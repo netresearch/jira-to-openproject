@@ -227,36 +227,82 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         """
         return ComponentResult(success=True, extracted=0, data={"attachments": {}})
 
+    @staticmethod
+    def _double_encode_slashes(url: str) -> str | None:
+        """Return the same URL with each ``%2F`` / ``%2C`` in the *path*
+        re-encoded as ``%252F`` / ``%252C``.
+
+        Tomcat (Jira's web server) blocks URLs whose path contains a
+        literal encoded slash (``%2F``) by default — it returns
+        ``HTTP 400 Bad Request`` before the request ever reaches the
+        Jira app. Double-encoding bypasses Tomcat's check: the ``%25``
+        stays a percent literal at Tomcat's layer, and Jira's
+        application then decodes it once to ``%2F`` and parses it as a
+        slash inside the filename — which is what Jira originally
+        produced when generating the URL.
+
+        Live 2026-05-08 NRS audit: the last ``still_missing=1`` was
+        traced here. Returns ``None`` when no transform applies, so
+        callers can short-circuit.
+        """
+        replaced = url.replace("%2F", "%252F").replace("%2C", "%252C")
+        return replaced if replaced != url else None
+
     def _download_attachment(self, url: str, dest_path: Path) -> Path:
         """Download attachment from Jira to dest_path; return local path.
 
         Uses Jira client's authenticated session to download.
         Tests may monkeypatch this to avoid network IO.
+
+        On HTTP 400 with a URL containing ``%2F`` / ``%2C`` in the path,
+        retries once with the slashes/commas re-encoded as
+        ``%252F`` / ``%252C`` to bypass Tomcat's literal-encoded-slash
+        block. See :meth:`_double_encode_slashes`.
         """
-        try:
-            # Use Jira client's authenticated session
+
+        def _fetch(target_url: str) -> None:
             session = getattr(self.jira_client.jira, "_session", None)
             if session is None:
                 import requests
 
-                # Fallback to unauthenticated request (unlikely to work)
                 logger.warning("Jira session not available, attempting unauthenticated download")
-                with requests.get(url, stream=True, timeout=60) as r:
+                with requests.get(target_url, stream=True, timeout=60) as r:
                     r.raise_for_status()
                     with dest_path.open("wb") as f:
                         for chunk in r.iter_content(chunk_size=65536):
                             if chunk:
                                 f.write(chunk)
-            else:
-                # Use authenticated session (don't pass timeout - Jira session already sets it)
-                response = session.get(url, stream=True)
-                response.raise_for_status()
-                with dest_path.open("wb") as f:
-                    for chunk in response.iter_content(chunk_size=65536):
-                        if chunk:
-                            f.write(chunk)
+                return
+            response = session.get(target_url, stream=True)
+            response.raise_for_status()
+            with dest_path.open("wb") as f:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+
+        try:
+            _fetch(url)
         except Exception as e:
-            logger.warning("Attachment download failed for %s: %s", url, e)
+            # Retry with double-encoded slashes/commas if the failure
+            # smells like Tomcat's encoded-slash block. Cheap to attempt
+            # — at most one extra HTTP call per legitimately-failing
+            # download, and the recovery is decisive (no silent loss).
+            retried = False
+            err_text = str(e)
+            if "400" in err_text or "Bad Request" in err_text:
+                fallback = self._double_encode_slashes(url)
+                if fallback:
+                    try:
+                        _fetch(fallback)
+                        retried = True
+                    except Exception as e2:
+                        logger.warning(
+                            "Attachment download failed for %s (also double-encoded retry): %s",
+                            url,
+                            e2,
+                        )
+            if not retried:
+                logger.warning("Attachment download failed for %s: %s", url, e)
         return dest_path
 
     @staticmethod

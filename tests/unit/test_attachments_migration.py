@@ -640,6 +640,35 @@ def test_disambiguate_filenames_in_group_avoids_existing_suffix_collision():
     assert out[2] == "a (3).png", out
 
 
+def test_double_encode_slashes_returns_none_when_nothing_to_change():
+    """No ``%2F`` / ``%2C`` in URL → no transform — caller short-circuits."""
+    assert AttachmentsMigration._double_encode_slashes("https://j/secure/attachment/1/foo.png") is None
+
+
+def test_double_encode_slashes_replaces_2f_and_2c():
+    """``%2F`` → ``%252F``, ``%2C`` → ``%252C``.
+
+    Live 2026-05-08 NRS regression: NRS-3127's
+    ``[EXTERNAL] ... 70227341// , INVDE196205.msg`` URL contained
+    ``%2F%2F%2C`` in the path. Tomcat rejects literal encoded
+    slashes; double-encoding bypasses that check.
+    """
+    src = "https://j/secure/attachment/92933/foo%2F%2F%2Cbar.msg"
+    assert AttachmentsMigration._double_encode_slashes(src) == (
+        "https://j/secure/attachment/92933/foo%252F%252F%252Cbar.msg"
+    )
+
+
+def test_double_encode_slashes_preserves_other_query_chars():
+    """The fallback only swaps ``%2F`` and ``%2C`` — other
+    percent-encoded characters in the URL must be left untouched
+    (e.g. ``%5B`` for ``[``, ``%20`` for space).
+    """
+    src = "https://j/x/%5BEXTERNAL%5D+foo%2Fbar%2Cbaz%20qux.msg"
+    out = AttachmentsMigration._double_encode_slashes(src)
+    assert out == "https://j/x/%5BEXTERNAL%5D+foo%252Fbar%252Cbaz%20qux.msg", out
+
+
 def test_disambiguate_per_wp_only(monkeypatch: pytest.MonkeyPatch):
     """``_disambiguate_duplicate_filenames`` only renames within the
     same ``work_package_id``. Two ops with the same filename for
