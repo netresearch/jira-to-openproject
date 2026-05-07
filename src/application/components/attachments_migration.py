@@ -371,6 +371,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         if not container_ops:
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
+        # Within a single batch, multiple ops may target the same
+        # ``(work_package_id, filename)`` — e.g. a Jira issue with
+        # multiple ``logobottom.gif`` attachments. The Rails idempotency
+        # check (``LOWER(filename) = ?``) keeps the first and skips
+        # the rest, silently losing duplicates. Suffix-disambiguate
+        # in-batch so each op presents a unique filename to Rails.
+        # The matching audit-side disambiguation lives in
+        # ``AttachmentRecoveryMigration._iter_jira_issues_with_attachments``.
+        # Live 2026-05-07 NRS: 95 still_missing files traced largely to
+        # this collision class (NRS-3363 alone: 13 distinct duplicate
+        # filename pairs == 26 files).
+        container_ops = self._disambiguate_duplicate_filenames(container_ops)
+
         # Rails script returns attachment IDs for mapping content migration
         # Must output JSON between markers for execute_script_with_data to parse.
         #
@@ -508,6 +521,85 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             failed=failed,
             data={"attachment_mapping": attachment_mapping},
         )
+
+    @staticmethod
+    def disambiguate_duplicate_filenames_in_group(
+        names: list[str],
+    ) -> list[str]:
+        """Return a list of unique filenames given an input list that
+        may contain duplicates (case-insensitive).
+
+        First occurrence keeps its original name. Each subsequent
+        duplicate gets a ``" (N)"`` suffix inserted before the extension.
+
+        Examples:
+            ``["a.png", "a.png", "A.PNG"]`` →
+            ``["a.png", "a (2).png", "A (3).PNG"]``
+            ``["doc"]`` → ``["doc"]``  (no extension)
+            ``["doc", "doc"]`` → ``["doc", "doc (2)"]``
+
+        Naming scheme matches what browsers use when downloading
+        duplicate files — natural and human-readable.
+
+        """
+        used_lower: dict[str, int] = {}
+        out: list[str] = []
+        for name in names:
+            key = name.lower()
+            n = used_lower.get(key, 0)
+            if n == 0:
+                out.append(name)
+                used_lower[key] = 1
+                continue
+            # Find a free suffix. The base name + extension live on
+            # either side of the LAST dot (no dot → bare name, append
+            # at end).
+            stem, dot, ext = name.rpartition(".")
+            base = stem if dot else name
+            tail = (dot + ext) if dot else ""
+            counter = n + 1
+            while True:
+                candidate = f"{base} ({counter}){tail}"
+                if candidate.lower() not in used_lower:
+                    out.append(candidate)
+                    used_lower[candidate.lower()] = 1
+                    used_lower[key] = counter
+                    break
+                counter += 1
+        return out
+
+    def _disambiguate_duplicate_filenames(
+        self,
+        ops: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Disambiguate duplicate filenames per work-package group.
+
+        Each op's ``filename`` is rewritten so that within a single
+        ``work_package_id``, no two ops collide on
+        ``LOWER(filename)`` — Rails's idempotency check would
+        otherwise drop the duplicates. The disambiguator preserves
+        original input order so the first-seen filename keeps its
+        original name.
+        """
+        by_wp: dict[int, list[int]] = {}
+        for idx, op in enumerate(ops):
+            wp = int(op["work_package_id"])
+            by_wp.setdefault(wp, []).append(idx)
+
+        renamed = list(ops)
+        for indices in by_wp.values():
+            if len(indices) <= 1:
+                continue
+            originals = [str(renamed[i]["filename"]) for i in indices]
+            unique = self.disambiguate_duplicate_filenames_in_group(originals)
+            for i, new_name in zip(indices, unique, strict=True):
+                if new_name != renamed[i]["filename"]:
+                    # Mutate a fresh dict so the caller's payload
+                    # isn't surprised by an in-place edit.
+                    new_op = dict(renamed[i])
+                    new_op["filename"] = new_name
+                    renamed[i] = new_op
+        return renamed
 
     @staticmethod
     def _build_attachment_max_size_script(value_kb: int | None) -> str:

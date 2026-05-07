@@ -569,3 +569,90 @@ def test_run_skips_bump_when_cap_already_high_enough(
     writes = [q for q in setting_calls if re.search(r"Setting\.attachment_max_size\s*=", q)]
     assert writes == [], setting_calls
     assert op.attachment_max_kb == 2_000_000
+
+
+# --- duplicate filename disambiguation (added 2026-05-07) ---
+
+
+def test_disambiguate_filenames_in_group_no_duplicates_returns_input():
+    """No collisions → identity transform.
+
+    Pin: the disambiguator must not silently rename files when there's
+    nothing to fix.
+    """
+    out = AttachmentsMigration.disambiguate_duplicate_filenames_in_group(
+        ["a.png", "b.png", "c.txt"],
+    )
+    assert out == ["a.png", "b.png", "c.txt"]
+
+
+def test_disambiguate_filenames_in_group_basic_duplicates():
+    """Repeated filename → ``" (N)"`` suffix before the extension.
+
+    Live 2026-05-07 NRS regression: dozens of WPs each carried multiple
+    Jira attachments sharing a name (e.g. ``logobottom.gif`` x2). The
+    Rails idempotency check (``LOWER(filename) = ?``) kept the first
+    and silently dropped the rest.
+    """
+    out = AttachmentsMigration.disambiguate_duplicate_filenames_in_group(
+        ["a.png", "a.png", "a.png"],
+    )
+    assert out == ["a.png", "a (2).png", "a (3).png"]
+
+
+def test_disambiguate_filenames_in_group_case_insensitive():
+    """Disambiguation must use case-insensitive comparison — Rails's
+    idempotency check uses ``LOWER(filename)``.
+    """
+    out = AttachmentsMigration.disambiguate_duplicate_filenames_in_group(
+        ["IMG.PNG", "img.png", "Img.PNG"],
+    )
+    # The first wins its raw form; subsequent collisions get suffixes
+    # in the input's original casing.
+    assert out[0] == "IMG.PNG"
+    assert "img (2).png" in (n.lower() for n in out)
+    assert "img (3).png" in (n.lower() for n in out)
+
+
+def test_disambiguate_filenames_in_group_no_extension():
+    """Names without an extension still get a suffix appended.
+
+    The ``rpartition('.')`` fallback puts the suffix at the end so the
+    bare ``doc`` becomes ``doc (2)``.
+    """
+    out = AttachmentsMigration.disambiguate_duplicate_filenames_in_group(["doc", "doc"])
+    assert out == ["doc", "doc (2)"]
+
+
+def test_disambiguate_filenames_in_group_avoids_existing_suffix_collision():
+    """If the natural suffix is already taken, fall through to the
+    next available counter.
+
+    Edge case: input ``["a.png", "a (2).png", "a.png"]`` — the second
+    is already disambiguated, so the third must skip ``(2)`` and use
+    ``(3)``.
+    """
+    out = AttachmentsMigration.disambiguate_duplicate_filenames_in_group(
+        ["a.png", "a (2).png", "a.png"],
+    )
+    assert out[0] == "a.png"
+    assert out[1] == "a (2).png"
+    assert out[2] == "a (3).png", out
+
+
+def test_disambiguate_per_wp_only(monkeypatch: pytest.MonkeyPatch):
+    """``_disambiguate_duplicate_filenames`` only renames within the
+    same ``work_package_id``. Two ops with the same filename for
+    different WPs both keep their original names — Rails's
+    idempotency is per-WP, so cross-WP "collisions" aren't real.
+    """
+    op = DummyOp()
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    ops = [
+        {"work_package_id": 1, "filename": "a.png", "jira_key": "K-1", "container_path": "/x1"},
+        {"work_package_id": 2, "filename": "a.png", "jira_key": "K-2", "container_path": "/x2"},
+        {"work_package_id": 1, "filename": "a.png", "jira_key": "K-1", "container_path": "/x3"},
+    ]
+    out = mig._disambiguate_duplicate_filenames(ops)
+    names = [o["filename"] for o in out]
+    assert names == ["a.png", "a.png", "a (2).png"], names
