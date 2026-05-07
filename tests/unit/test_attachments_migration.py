@@ -337,10 +337,10 @@ def test_load_rails_script_includes_update_columns_filename_guard():
     # script directly, so re-derive: the script source is computed in _load
     # from a static template — assert against the running migration's
     # method by re-invoking the same code path via inspecting it.
-    from src.application.components.attachments_migration import AttachmentsMigration as _AM
-
     # Instead: find the Rails string in the source — pin the substring.
     import inspect
+
+    from src.application.components.attachments_migration import AttachmentsMigration as _AM
 
     src = inspect.getsource(_AM._load)
     assert "att.update_columns(filename: fname)" in src, (
