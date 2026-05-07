@@ -485,6 +485,18 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     failed = len(errors)
                     if errors:
                         self._loss_counters["load_rails_per_op_error"] += len(errors)
+                        # Surface the first few error objects so future
+                        # runs can diagnose why Rails rejected an
+                        # attach. Without this the counter alone
+                        # gives no clue what failed; the live re-run
+                        # on NRS reported 39 errors with no text.
+                        sample = errors[:5]
+                        logger.warning(
+                            "_load: Rails returned %d per-op errors (sample of %d): %s",
+                            len(errors),
+                            len(sample),
+                            sample,
+                        )
         except Exception:
             logger.exception("Rails attach operation failed")
             failed = len(container_ops)
