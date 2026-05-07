@@ -190,13 +190,20 @@ def _build_audit_script(jira_project_key: str) -> str:
   next {{ error: "OP project '#{{proj_key}}' not found" }} unless proj
 
   wps = WorkPackage.where(project_id: proj.id)
-  wp_ids = wps.pluck(:id)
+  # Reuse the relation as a subquery (``wps.select(:id)``) instead of
+  # plucking ids into an IN(?) array. ``pluck`` materialises every WP id
+  # in Ruby memory and ships them back to the DB on every CustomValue /
+  # Journal / Attachment / Watcher / Relation query in this audit; on
+  # large projects (>32k WPs on Postgres, >65k on MySQL) that hits the
+  # bind-parameter limit and aborts the audit. ``select(:id)`` lets the
+  # DB plan a subquery and keeps the row count off the wire entirely.
+  wp_id_scope = wps.select(:id)
 
   wp_provenance = {{}}
   {expected_wp_cfs!r}.each do |cf_name|
     cf = CustomField.find_by(type: 'WorkPackageCustomField', name: cf_name)
     populated = cf ? CustomValue.where(custom_field_id: cf.id, customized_type: 'WorkPackage').
-      where(customized_id: wp_ids).where.not(value: [nil, '']).count : 0
+      where(customized_id: wp_id_scope).where.not(value: [nil, '']).count : 0
     wp_provenance[cf_name] = {{ 'exists' => !cf.nil?, 'populated' => populated }}
   end
 
@@ -213,7 +220,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     # building an intermediate ``reject``-array — same semantics, no
     # per-value allocation overhead on large projects.
     bad = CustomValue.where(custom_field_id: cf.id, customized_type: 'WorkPackage').
-      where(customized_id: wp_ids).where.not(value: [nil, '']).
+      where(customized_id: wp_id_scope).where.not(value: [nil, '']).
       pluck(:value).count {{ |v| v !~ regex }}
     wp_cf_format_violations[cf_name] = bad
   end
@@ -241,7 +248,7 @@ def _build_audit_script(jira_project_key: str) -> str:
     [n, !CustomField.find_by(type: 'TimeEntryCustomField', name: n).nil?]
   }}.to_h
 
-  te = TimeEntry.where(entity_type: 'WorkPackage', entity_id: wp_ids)
+  te = TimeEntry.where(entity_type: 'WorkPackage', entity_id: wp_id_scope)
 
   # Per-TE population of ``J2O Origin Worklog Key``. The spec mandates
   # this CF on every migrated TimeEntry — it's the dedup key on re-run.
@@ -272,8 +279,11 @@ def _build_audit_script(jira_project_key: str) -> str:
   end
 
   # Relations involving this project on either endpoint. Reused below
-  # for the total count and the two orphan-detection queries.
-  project_relations = Relation.where('from_id IN (?) OR to_id IN (?)', wp_ids, wp_ids)
+  # for the total count and the two orphan-detection queries. Use
+  # ``.or`` with two scoped relations rather than a raw IN-array string
+  # — Rails turns each side into a subquery against ``wp_id_scope``,
+  # avoiding the bind-parameter blowup on large projects.
+  project_relations = Relation.where(from_id: wp_id_scope).or(Relation.where(to_id: wp_id_scope))
 
   {{
     'project_id' => proj.id,
@@ -295,23 +305,24 @@ def _build_audit_script(jira_project_key: str) -> str:
     'user_cf_format_violations' => user_cf_format_violations,
     'user_provenance_cfs' => user_provenance,
     'te_provenance_cfs' => te_provenance,
-    'wp_journal_total' => Journal.where(journable_type: 'WorkPackage', journable_id: wp_ids).count,
-    'wp_attachment_total' => Attachment.where(container_type: 'WorkPackage', container_id: wp_ids).count,
-    'wp_watcher_total' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_ids).count,
+    'wp_journal_total' => Journal.where(journable_type: 'WorkPackage', journable_id: wp_id_scope).count,
+    'wp_attachment_total' => Attachment.where(container_type: 'WorkPackage', container_id: wp_id_scope).count,
+    'wp_watcher_total' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_id_scope).count,
     'te_total' => te.count,
     'te_with_worklog_key' => te_with_worklog_key,
     'te_hours_sum' => te.sum(:hours).to_f,
     'te_distinct_hours_count' => te.distinct.count(:hours),
     'te_min_hours' => (te.minimum(:hours) || 0).to_f,
     'te_max_hours' => (te.maximum(:hours) || 0).to_f,
-    # Single OR-query so a relation with both ends inside ``wp_ids``
-    # (the common intra-project case) is counted exactly once instead
-    # of twice. The downstream zero-threshold heuristic still works:
-    # zero stays zero, but non-zero numbers reflect reality.
+    # Single ``.or`` query so a relation with both ends inside the
+    # project (the common intra-project case) is counted exactly once
+    # instead of twice. The downstream zero-threshold heuristic still
+    # works: zero stays zero, but non-zero numbers reflect reality.
     'relation_total' => project_relations.count,
     # Orphan detection. A *project relation* with ``from_id`` not in
-    # ``work_packages`` can only mean ``to_id IN wp_ids`` AND the from-end
-    # is a deleted WP elsewhere — i.e. the "from" endpoint is dangling.
+    # ``work_packages`` can only mean the to-end is in the project
+    # AND the from-end is a deleted WP elsewhere — i.e. the "from"
+    # endpoint is dangling.
     # Symmetric for the to-end. Watcher orphans fire when a watching
     # user has been deleted without cascade.
     #
@@ -324,7 +335,7 @@ def _build_audit_script(jira_project_key: str) -> str:
       where('NOT EXISTS (SELECT 1 FROM work_packages wp WHERE wp.id = relations.from_id)').count,
     'orphaned_relations_to' => project_relations.
       where('NOT EXISTS (SELECT 1 FROM work_packages wp WHERE wp.id = relations.to_id)').count,
-    'orphaned_watchers' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_ids).
+    'orphaned_watchers' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_id_scope).
       where('NOT EXISTS (SELECT 1 FROM users u WHERE u.id = watchers.user_id)').count,
   }}
 end).call
@@ -418,7 +429,11 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     for cf_name, info in wp_provenance.items():
         if not info.get("exists"):
             continue
-        populated = int(info.get("populated") or 0)
+        # Use ``_metric_int`` — same null-coercion contract as every
+        # other numeric read in this function. The previous ``int(... or 0)``
+        # form was inconsistent with the sibling metric reads and would
+        # collapse a legitimate ``0`` differently from a missing key.
+        populated = _metric_int(info, "populated")
         if populated >= wp_total:
             continue
         if cf_name == "J2O Origin Key":

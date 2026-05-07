@@ -106,3 +106,39 @@ def test_attachment_provenance_fails_loud_on_empty_wp_mapping(
     assert result.success is False, result
     assert any("missing_work_package_mapping" in str(e) for e in (result.errors or [])), result.errors
     assert "work_package" in (result.message or "").lower(), result.message
+
+
+def test_attachment_provenance_fails_loud_on_legacy_int_only_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Mapping non-empty but contains only legacy bare-int rows → FAIL loud.
+
+    Closes review thread on PR #198. The pre-fix code only guarded
+    against an *empty* ``wp_map``; a legacy-int-only mapping (e.g.
+    ``{"PROJ-1": 42}``) passed the empty check, then the
+    grouping loop filtered every row out, leaving ``by_project={}``.
+    The function returned ``success=True, updated=0`` and silently
+    lost attachment provenance for the whole run.
+    """
+    import src.config as cfg
+
+    class LegacyIntMappings:
+        def get_mapping(self, name: str):
+            if name == "work_package":
+                # Bare-int rows: ``isinstance(raw_entry, dict)`` is False,
+                # so ``inner_key`` ends up ``None`` and the row is filtered
+                # out of ``by_project``.
+                return {"PROJ-1": 42, "PROJ-2": 43}
+            return {}
+
+    monkeypatch.setattr(cfg, "mappings", LegacyIntMappings(), raising=False)
+
+    mig = AttachmentProvenanceMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    result = mig.run()
+
+    assert result.success is False, result
+    assert any("missing_work_package_mapping" in str(e) for e in (result.errors or [])), result.errors
+    # Message must mention the present-but-unusable distinction so
+    # operators know to back-fill ``jira_key`` rather than re-running
+    # skeleton from scratch.
+    assert "no usable rows" in (result.message or "").lower(), result.message

@@ -86,6 +86,8 @@ operators have a single reference for what the audit checks.
 | WP type/status/priority NULL | failure | `wp_with_type/status/priority < wp_total` | per-WP `type_id`/`status_id`/`priority_id` | #176 |
 | Journal count below WP count | failure | `wp_journal_total < wp_total` (Rails auto-emits ≥1 per create) | per-instance | #176 |
 | WP CF format violation | failure | Any populated WP provenance CF value doesn't match its regex | per-WP provenance | #178 |
+| `J2O Origin Key` under-populated | failure | `wp_provenance_cfs["J2O Origin Key"].populated < wp_total` | per-WP `J2O Origin Key` (hard-required, line 27) | #193 |
+| Other WP CF under-populated | warning | Any other existing WP provenance CF has `populated < wp_total` | per-WP provenance (soft) | #193 |
 | TE CF format violation | failure | `J2O Origin Worklog Key` value doesn't match `<KEY>:<id>` or `tempo:<id>` | per-TE worklog key | #181 |
 | User CF format violation | failure | `J2O Origin System` or `J2O External URL` value malformed | per-User provenance | #182 |
 | Orphan relations | failure | Any `Relation` references a deleted WP | per-instance | #177 |

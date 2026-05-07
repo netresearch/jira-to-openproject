@@ -1058,7 +1058,7 @@ def test_generated_audit_script_parses_as_ruby() -> None:
 
     Skipped if ``ruby`` isn't on PATH (CI environments without Ruby
     fall through silently rather than failing). The other regex
-    guards in this file (``_audit_regexes_have_no_unescaped_forward_slash_in_ruby_literal``)
+    guards in this file (``test_audit_regexes_have_no_unescaped_forward_slash_in_ruby_literal``)
     catch the slash subset without needing Ruby.
     """
     import shutil

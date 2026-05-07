@@ -146,3 +146,40 @@ def test_attachments_migration_fails_loud_on_empty_wp_mapping(
     assert "work_package" in (result.message or "").lower(), result.message
     # Error tag for downstream consumers (audit, dashboards, alerts)
     assert any("missing_work_package_mapping" in str(e) for e in (result.errors or [])), result.errors
+
+
+def test_attachments_migration_fails_loud_on_legacy_int_only_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Mapping non-empty but contains only legacy bare-int rows → FAIL loud.
+
+    Closes review thread on PR #194. The pre-fix message implied the
+    mapping was *absent* ("No work_package mapping available"); when
+    it actually contained only legacy bare-int rows that
+    ``_wp_lookup_by_jira_key`` strips, the operator was given the
+    wrong remediation hint. Pin: present-but-unusable mapping →
+    different message, same error tag.
+    """
+    import src.config as cfg
+
+    class LegacyIntMappings:
+        def get_mapping(self, name: str):
+            if name == "work_package":
+                # Bare-int rows ``isinstance(raw_entry, dict)`` is False
+                # in ``_wp_lookup_by_jira_key`` so every row is skipped.
+                return {"PROJ-1": 42, "PROJ-2": 43}
+            return {}
+
+    monkeypatch.setattr(cfg, "mappings", LegacyIntMappings(), raising=False)
+
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    result = mig.run()
+
+    assert result.success is False, result
+    assert any("missing_work_package_mapping" in str(e) for e in (result.errors or [])), result.errors
+    # Operator-facing distinction: the message must NOT say "No
+    # work_package mapping available" (which implies absent); it must
+    # say the mapping is present but has no usable rows.
+    msg_lower = (result.message or "").lower()
+    assert "no usable rows" in msg_lower, result.message
+    assert "legacy" in msg_lower, result.message
