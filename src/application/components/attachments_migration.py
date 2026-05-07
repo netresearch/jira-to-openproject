@@ -509,6 +509,42 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             data={"attachment_mapping": attachment_mapping},
         )
 
+    def _get_op_attachment_max_kb(self) -> int | None:
+        """Return OP's current ``Setting.attachment_max_size`` in KB.
+
+        OP stores this as a string of KB (Rails ``Setting`` integer
+        coercion). Returns ``None`` if the value can't be read — the
+        caller treats that as "don't bump".
+        """
+        try:
+            raw = self.op_client.execute_query("Setting.attachment_max_size")
+        except Exception:
+            logger.exception("Failed to read Setting.attachment_max_size")
+            return None
+        # Rails console echoes ``=> 5120`` for an integer setting; the
+        # runner returns the stripped value. Be tolerant of stray
+        # whitespace and non-numeric noise.
+        try:
+            return int(str(raw).strip().splitlines()[-1])
+        except ValueError, IndexError:
+            logger.warning("Could not parse attachment_max_size from %r", raw)
+            return None
+
+    def _set_op_attachment_max_kb(self, value_kb: int) -> bool:
+        """Write ``Setting.attachment_max_size = value_kb`` (in KB).
+
+        Returns True on apparent success.
+        """
+        # ``execute_query`` is a thin shell over the Rails console; the
+        # write expression is fixed-shape and uses an int we control,
+        # so there's no shell-injection vector.
+        try:
+            self.op_client.execute_query(f"Setting.attachment_max_size = {int(value_kb)}")
+        except Exception:
+            logger.exception("Failed to write Setting.attachment_max_size=%d", value_kb)
+            return False
+        return True
+
     def _save_attachment_mapping(self, mapping: dict[str, dict[str, int]]) -> None:
         """Save attachment mapping to file for content migration phase.
 
@@ -692,6 +728,64 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         all_mappings: dict[str, dict[str, int]] = {}
         batch_size = 50  # Process 50 issues at a time to limit memory usage
 
+        # Pre-flight: ensure OP's ``Setting.attachment_max_size`` is
+        # high enough that Rails won't reject oversized files with
+        # ``Validation failed: File is too large``. The 2026-05-07
+        # NRS audit traced 34 silent attachment losses to this 5 MB
+        # cap. ``J2O_ATTACHMENT_MAX_KB`` (default 1 GiB) controls the
+        # bumped value; the original is restored in ``finally`` so a
+        # crash mid-run doesn't leave the cap permanently elevated.
+        target_max_kb = int(os.environ.get("J2O_ATTACHMENT_MAX_KB", str(1024 * 1024)))
+        original_max_kb = self._get_op_attachment_max_kb()
+        cap_was_raised = False
+        if original_max_kb is not None and target_max_kb > original_max_kb:
+            if self._set_op_attachment_max_kb(target_max_kb):
+                cap_was_raised = True
+                self.logger.warning(
+                    "Raised OP Setting.attachment_max_size from %d KB to %d KB"
+                    " for the duration of this run; will restore in finally.",
+                    original_max_kb,
+                    target_max_kb,
+                )
+            else:
+                self.logger.error(
+                    "Could not raise OP attachment_max_size; oversized files"
+                    " (>%d KB) will be rejected by Rails validation.",
+                    original_max_kb,
+                )
+
+        try:
+            return self._run_per_project_loop(
+                by_project=by_project,
+                batch_size=batch_size,
+                total_updated=total_updated,
+                total_failed=total_failed,
+                all_mappings=all_mappings,
+            )
+        finally:
+            if cap_was_raised and original_max_kb is not None:
+                if self._set_op_attachment_max_kb(original_max_kb):
+                    self.logger.info(
+                        "Restored OP Setting.attachment_max_size to %d KB",
+                        original_max_kb,
+                    )
+                else:
+                    self.logger.error(
+                        "FAILED to restore OP attachment_max_size to %d KB —"
+                        " operator must reset manually (current: %d KB)",
+                        original_max_kb,
+                        target_max_kb,
+                    )
+
+    def _run_per_project_loop(
+        self,
+        *,
+        by_project: dict[str, list[str]],
+        batch_size: int,
+        total_updated: int,
+        total_failed: int,
+        all_mappings: dict[str, dict[str, int]],
+    ) -> ComponentResult:
         for project_key, jira_keys in by_project.items():
             self.logger.info(
                 "Processing project %s (%d issues)",

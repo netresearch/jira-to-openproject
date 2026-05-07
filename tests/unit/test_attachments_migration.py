@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,21 @@ class DummyOp:
     def __init__(self) -> None:
         self.transfers: list[tuple[Path, str]] = []
         self.last_input: list[dict] | None = None
+        self.queries: list[str] = []
+        # ``Setting.attachment_max_size`` value (in KB) seen by the
+        # dummy. Tests can override before calling ``run()``.
+        self.attachment_max_kb: int = 5120
+
+    def execute_query(self, query: str, timeout: int | None = None) -> str:
+        self.queries.append(query)
+        if query == "Setting.attachment_max_size":
+            return str(self.attachment_max_kb)
+        # Pattern-match the writer: ``Setting.attachment_max_size = 12345``
+        m = re.match(r"^\s*Setting\.attachment_max_size\s*=\s*(\d+)\s*$", query)
+        if m:
+            self.attachment_max_kb = int(m.group(1))
+            return str(self.attachment_max_kb)
+        return ""
 
     def transfer_file_to_container(self, local_path: Path, container_path: str):
         self.transfers.append((local_path, container_path))
@@ -477,3 +493,73 @@ def test_load_logs_sample_when_rails_returns_per_op_errors(
     joined = " ".join(rec.getMessage() for rec in caplog.records)
     assert "boom-1" in joined and "boom-2" in joined, joined
     assert mig._loss_counters["load_rails_per_op_error"] == 2
+
+
+# --- attachment_max_size pre-flight (added 2026-05-07) ---
+
+
+def test_run_raises_op_attachment_max_size_then_restores(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """``run()`` must bump ``Setting.attachment_max_size`` if the
+    target value exceeds the current OP cap, then restore the
+    original cap after the per-project loop completes.
+
+    Live 2026-05-07 NRS regression: 34 silent attachment losses
+    traced to OP's default 5 MB ``attachment_max_size``. Without
+    this pre-flight, every Jira attachment >5 MB hits
+    ``Validation failed: File is too large`` and the file is lost.
+    """
+    monkeypatch.setenv("J2O_ATTACHMENT_MAX_KB", "1048576")  # 1 GiB
+
+    op = DummyOp()
+    op.attachment_max_kb = 5120  # OP default
+    jira = DummyJira()
+    mig = AttachmentsMigration(jira_client=jira, op_client=op)  # type: ignore[arg-type]
+
+    # Make the per-project loop a no-op so we just exercise the
+    # bump/restore wrap.
+    monkeypatch.setattr(
+        mig,
+        "_run_per_project_loop",
+        lambda **_kw: ComponentResult(success=True, updated=0, failed=0),
+    )
+
+    mig.run()
+
+    # Verify the cap was raised and restored — the dummy stores the
+    # latest write, so after ``run()`` it must be the original value.
+    assert op.attachment_max_kb == 5120, "cap not restored"
+    # The query log must contain both the read, the bump write, and
+    # the restore write.
+    reads = [q for q in op.queries if q == "Setting.attachment_max_size"]
+    writes = [q for q in op.queries if "=" in q]
+    assert len(reads) >= 1, op.queries
+    assert any("1048576" in w for w in writes), op.queries
+    assert any("5120" in w for w in writes), op.queries
+
+
+def test_run_skips_bump_when_cap_already_high_enough(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """If OP's existing cap already meets the target, ``run()`` must
+    not write anything — avoiding pointless Rails round-trips and
+    keeping the operator's intentional cap intact.
+    """
+    monkeypatch.setenv("J2O_ATTACHMENT_MAX_KB", "1048576")
+
+    op = DummyOp()
+    op.attachment_max_kb = 2_000_000  # already higher than target
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        mig,
+        "_run_per_project_loop",
+        lambda **_kw: ComponentResult(success=True, updated=0, failed=0),
+    )
+
+    mig.run()
+
+    # Read happened once; no writes.
+    writes = [q for q in op.queries if "=" in q]
+    assert writes == [], writes
+    assert op.attachment_max_kb == 2_000_000
