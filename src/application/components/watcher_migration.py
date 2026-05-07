@@ -163,7 +163,15 @@ class WatcherMigration(BaseMigration):
         # as a set so a user watching N issues only logs once.
         unmapped_users: set[str] = set()
 
-        # Use cached issues if available, otherwise iterate through keys directly
+        # Use cached issues if available, otherwise iterate through keys directly.
+        # The ``issue`` value is only used by the field-fallback path
+        # below when the explicit watchers API call fails — when there's
+        # no cache we still iterate the keys and rely on the API. The
+        # previous fallback ``{k: {} for k in jira_keys}`` combined with
+        # an early ``if not issue: skip`` was a self-inflicted bug:
+        # every empty placeholder failed the truthiness check and got
+        # categorised as ``empty_issue``, dropping all 4204 watchers
+        # silently on the live TEST run (2026-05-07).
         issues: dict[str, Any] = {}
         cache_file = self.data_dir / "jira_issues_cache.json"
         if cache_file.exists():
@@ -176,15 +184,15 @@ class WatcherMigration(BaseMigration):
             except Exception:
                 issues = {}
 
-        # If no cache, create a minimal dict from jira_keys for iteration
+        # If no cache, create a minimal dict from jira_keys for iteration.
+        # The empty placeholder values are intentional — the explicit
+        # watchers API call below doesn't need any issue body, and the
+        # field-fallback handles the empty case gracefully.
         if not issues:
             logger.info("No cached issues, will iterate through %d Jira keys", len(jira_keys))
             issues = {k: {} for k in jira_keys}
 
         for key, issue in issues.items():
-            if not issue:
-                skip_reasons["empty_issue"] += 1
-                continue
             wp_id = self._resolve_wp_id(str(key))
             if not wp_id:
                 skip_reasons["wp_unmapped"] += 1

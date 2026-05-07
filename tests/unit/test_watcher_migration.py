@@ -327,3 +327,44 @@ def test_skip_reasons_empty_when_all_succeed(
     assert breakdown == {}, breakdown
     assert res.details["created"] == 1
     assert res.details["skipped"] == 0
+
+
+def test_watchers_added_without_issue_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """No ``jira_issues_cache.json`` → watchers still get processed.
+
+    Regression: live TEST run (2026-05-07) showed all 4204 watchers
+    skipped as ``empty_issue`` because the no-cache fallback built
+    ``issues = {k: {} for k in jira_keys}`` and the immediate
+    ``if not issue: skip_reasons["empty_issue"]`` rejected every
+    placeholder. The ``issue`` value is only used by the
+    field-fallback path when the explicit ``get_issue_watchers``
+    API call raises — without a cache the API call still works,
+    so we must iterate keys regardless.
+    """
+    op = DummyOpClient()
+
+    class DummyJira:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_issue_watchers(self, key: str):
+            self.calls.append(key)
+            return [{"name": "alice"}]
+
+    jira = DummyJira()
+    wm = WatcherMigration(jira_client=jira, op_client=op)  # type: ignore[arg-type]
+    # Empty data_dir — NO cache file present.
+    wm.data_dir = tmp_path
+
+    res = wm.run()
+
+    # The watcher was created via the API path despite no cache.
+    assert res.success
+    assert op.added == [(10, 5)], op.added
+    assert "J1" in jira.calls, jira.calls
+    # No ``empty_issue`` skip reason — that bucket has been removed.
+    assert "empty_issue" not in res.details["skip_reasons"], res.details
