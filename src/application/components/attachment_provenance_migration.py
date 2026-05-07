@@ -197,14 +197,8 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
 
         wp_map = self.mappings.get_mapping("work_package") or {}
         if not wp_map:
-            # FAIL LOUD. Same anti-pattern as the pre-#194 attachments
-            # path — ``success=True`` here masks the real cause
-            # (upstream ``work_packages_skeleton`` didn't persist
-            # its mapping, e.g. ``_save_mapping`` swallowed a write
-            # error per #197). Without the WP map this component
-            # has nothing to do; surface the missing precondition
-            # so the orchestrator's partial-success classifier
-            # flags the run instead of cascading silent successes.
+            # FAIL LOUD. ``success=True`` here masks an upstream
+            # broken precondition (skeleton mapping never persisted).
             msg = (
                 "No work_package mapping available — attachment provenance"
                 " cannot run. Run work_packages_skeleton first (or verify"
@@ -223,12 +217,18 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         # — the inner ``jira_key`` is the source of truth (the outer
         # wp_map key is ``str(jira_id)`` in production).
         by_project: dict[str, list[str]] = {}
-        for raw_entry in wp_map.values():
-            inner_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            if not inner_key:
+        for outer_key, raw_entry in wp_map.items():
+            if not isinstance(raw_entry, dict):
+                # Legacy bare-int rows have no recoverable Jira key.
                 continue
+            inner_key = raw_entry.get("jira_key")
+            # Match :meth:`AttachmentsMigration._wp_lookup_by_jira_key`:
+            # prefer the inner ``jira_key``, fall back to the outer key.
+            # Legacy/test fixtures sometimes key the outer dict directly
+            # by ``jira_key`` and omit the inner duplicate.
+            jira_key_for_legacy = str(inner_key or outer_key)
             try:
-                entry = WorkPackageMappingEntry.from_legacy(str(inner_key), raw_entry)
+                entry = WorkPackageMappingEntry.from_legacy(jira_key_for_legacy, raw_entry)
             except ValueError:
                 continue
             jira_key = str(entry.jira_key)
@@ -238,6 +238,30 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             by_project[project_key].append(jira_key)
 
         total_issues = sum(len(keys) for keys in by_project.values())
+
+        # Second-stage fail-loud: ``wp_map`` was non-empty but the
+        # filtering loop above produced no usable entries. This fires
+        # when every row is a legacy bare-int (or otherwise lacks a
+        # recoverable ``jira_key``). Without this guard the component
+        # would skip the entire main loop, return ``success=True,
+        # updated=0`` and silently lose attachment provenance for the
+        # whole run — the same silent-skip class #194/#197/#198 closed
+        # for missing/empty mappings.
+        if total_issues == 0:
+            msg = (
+                f"work_package mapping present ({len(wp_map)} entries) but"
+                " contains no usable rows for attachment provenance"
+                " (no entry has a recoverable Jira key — likely all legacy"
+                " bare-int entries). Re-run work_packages_skeleton to refresh"
+                " the mapping shape."
+            )
+            self.logger.error(msg)
+            return ComponentResult(
+                success=False,
+                updated=0,
+                message=msg,
+                errors=["missing_work_package_mapping"],
+            )
         self.logger.info(
             "Processing provenance for %d projects (%d issues total)",
             len(by_project),

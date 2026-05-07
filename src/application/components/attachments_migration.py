@@ -510,17 +510,29 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
         key_to_wp_id = self._wp_lookup_by_jira_key()
         if not key_to_wp_id:
-            # FAIL LOUD. Returning ``success=True`` here used to mask
-            # a 100% attachment loss (caught by the live TEST audit
-            # 2026-05-06: Jira=10, OP=0). The orchestration then
-            # moved on, the audit only saw the OP-side count, and
-            # the missing precondition was invisible — the canonical
-            # silent-failure pattern this rewrite closes.
-            msg = (
-                "No work_package mapping available — attachments cannot be"
-                " correlated to OP work packages. Run the work_packages_skeleton"
-                " component first (or verify it persisted its mapping)."
-            )
+            # FAIL LOUD. Silent ``success=True`` here masks a 100%
+            # attachment loss (operator postmortem in PR #194). The
+            # mapping may be either *absent* (skeleton never ran /
+            # ``_save_mapping`` swallowed an error) or *present but
+            # unusable* (only legacy bare-int rows that
+            # ``_wp_lookup_by_jira_key`` skips). Distinguish both
+            # cases in the message so the operator knows whether to
+            # re-run skeleton or to back-fill ``jira_key`` on the
+            # legacy rows.
+            raw_wp_map = self.mappings.get_mapping("work_package") or {}
+            if raw_wp_map:
+                msg = (
+                    f"work_package mapping present ({len(raw_wp_map)} entries) but"
+                    " contains no usable rows (no entry has a recoverable Jira key"
+                    " — likely all legacy bare-int entries). Re-run"
+                    " work_packages_skeleton to refresh the mapping shape."
+                )
+            else:
+                msg = (
+                    "No work_package mapping available — attachments cannot be"
+                    " correlated to OP work packages. Run the work_packages_skeleton"
+                    " component first (or verify it persisted its mapping)."
+                )
             self.logger.error(msg)
             return ComponentResult(
                 success=False,

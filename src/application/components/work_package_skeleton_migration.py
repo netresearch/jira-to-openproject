@@ -168,6 +168,16 @@ class WorkPackageSkeletonMigration(BaseMigration):
         # Data storage
         self.work_package_mapping: dict[str, dict[str, Any]] = {}
 
+        # Tracks whether the most recent ``_save_mapping`` call
+        # succeeded. ``None`` until the first save attempt — the
+        # post-condition treats that as "no save was attempted",
+        # which only happens when zero skeletons were created. The
+        # ``run()`` post-condition guard uses this to distinguish a
+        # fresh successful save from a stale on-disk file left over
+        # from an earlier successful run, where the current save
+        # silently failed (e.g. permissions / disk full).
+        self._last_save_succeeded: bool | None = None
+
         # Load mappings
         self._load_mappings()
 
@@ -223,14 +233,24 @@ class WorkPackageSkeletonMigration(BaseMigration):
         else:
             self.work_package_mapping = {}
 
-    def _save_mapping(self) -> None:
-        """Save the work package mapping to disk."""
+    def _save_mapping(self) -> bool:
+        """Save the work package mapping to disk.
+
+        Returns ``True`` on a clean write, ``False`` when the write
+        raised. Also records the outcome on
+        ``self._last_save_succeeded`` so the post-condition guard in
+        :meth:`run` can distinguish a fresh successful save from a
+        stale on-disk file left by an earlier run.
+        """
         try:
             with self.work_package_mapping_file.open("w") as f:
                 json.dump(self.work_package_mapping, f, indent=2)
             self.logger.debug("Saved work package mapping to %s", self.work_package_mapping_file)
+            self._last_save_succeeded = True
         except Exception as e:
             self.logger.error("Failed to save mapping: %s", e)
+            self._last_save_succeeded = False
+        return self._last_save_succeeded
 
     def _get_projects_to_migrate(self) -> list[dict[str, Any]]:
         """Get list of Jira projects to migrate based on filter."""
@@ -926,50 +946,100 @@ class WorkPackageSkeletonMigration(BaseMigration):
             # successes downstream.
             total_created = int(migration_results.get("total_created") or 0)
             if total_created > 0:
+                # Layer 1: did the most recent save attempt succeed?
+                # ``exists()`` alone misses the case where a stale
+                # mapping file from an earlier run is left in place
+                # while the current ``_save_mapping`` raised — the
+                # file would still pass an existence check but its
+                # content is wrong for the current run.
+                if self._last_save_succeeded is False:
+                    msg = (
+                        f"Work-package mapping save failed during the run"
+                        f" (despite {total_created} skeletons being created)"
+                        " — downstream migrations would read stale or missing"
+                        " data. Check the migration log for the underlying"
+                        " ``_save_mapping`` error."
+                    )
+                    self.logger.error(msg)
+                    return ComponentResult(
+                        status="error",
+                        success=False,
+                        error="work_package_mapping_save_failed",
+                        errors=["work_package_mapping_save_failed"],
+                        message=msg,
+                        timestamp=end_time.isoformat(),
+                        start_time=start_time.isoformat(),
+                        duration_seconds=duration_seconds,
+                    )
                 if not self.work_package_mapping_file.exists():
                     msg = (
                         f"Work-package mapping file was not persisted at"
                         f" {self.work_package_mapping_file} despite"
                         f" {total_created} skeletons being created — downstream"
                         " migrations (attachments, watchers, relations) will"
-                        " silently skip. Likely cause: ``_save_mapping`` swallowed"
-                        " a write error (disk full, permissions, etc.); check"
-                        " the migration log for the underlying error."
+                        " silently skip."
                     )
                     self.logger.error(msg)
                     return ComponentResult(
                         status="error",
                         success=False,
                         error="missing_work_package_mapping_file",
+                        errors=["missing_work_package_mapping_file"],
                         message=msg,
                         timestamp=end_time.isoformat(),
                         start_time=start_time.isoformat(),
                         duration_seconds=duration_seconds,
                     )
-                # File exists — sanity-check it isn't empty
-                # (zero-byte / ``{}`` would also brick downstream).
+                # Layer 2: parse the file and count entries. The
+                # previous ``stat().st_size <= 2`` heuristic missed
+                # two failure modes: (a) a corrupt/partially-written
+                # JSON file from a mid-write crash (the bytes are
+                # there but ``json.load`` raises) and (b) a
+                # well-formed JSON dict that's empty or smaller than
+                # the just-created skeleton count. Parse defensively
+                # — corrupt JSON is a fail-loud condition, not a
+                # warning.
                 try:
-                    if self.work_package_mapping_file.stat().st_size <= 2:
-                        msg = (
-                            f"Work-package mapping file at"
-                            f" {self.work_package_mapping_file} is empty / ``{{}}``"
-                            f" despite {total_created} skeletons being created"
-                            " — downstream migrations would silently skip."
-                        )
-                        self.logger.error(msg)
-                        return ComponentResult(
-                            status="error",
-                            success=False,
-                            error="empty_work_package_mapping_file",
-                            message=msg,
-                            timestamp=end_time.isoformat(),
-                            start_time=start_time.isoformat(),
-                            duration_seconds=duration_seconds,
-                        )
-                except OSError as stat_exc:
-                    self.logger.warning(
-                        "Could not stat work-package mapping file: %s",
-                        stat_exc,
+                    with self.work_package_mapping_file.open() as f:
+                        on_disk = json.load(f)
+                except (OSError, json.JSONDecodeError) as load_exc:
+                    msg = (
+                        f"Work-package mapping file at"
+                        f" {self.work_package_mapping_file} is unreadable or"
+                        f" corrupt ({load_exc!s}) despite {total_created}"
+                        " skeletons being created — downstream migrations"
+                        " would silently skip or crash on load."
+                    )
+                    self.logger.error(msg)
+                    return ComponentResult(
+                        status="error",
+                        success=False,
+                        error="corrupt_work_package_mapping_file",
+                        errors=["corrupt_work_package_mapping_file"],
+                        message=msg,
+                        timestamp=end_time.isoformat(),
+                        start_time=start_time.isoformat(),
+                        duration_seconds=duration_seconds,
+                    )
+                if not isinstance(on_disk, dict) or not on_disk:
+                    msg = (
+                        f"Work-package mapping file at"
+                        f" {self.work_package_mapping_file} parsed to"
+                        f" {type(on_disk).__name__} with"
+                        f" {len(on_disk) if hasattr(on_disk, '__len__') else 0}"
+                        f" entries despite {total_created} skeletons being"
+                        " created — downstream migrations would silently skip."
+                    )
+                    self.logger.error(msg)
+                    return ComponentResult(
+                        status="error",
+                        success=False,
+                        error="empty_work_package_mapping_file",
+                        errors=["empty_work_package_mapping_file"],
+                        message=msg,
+                        timestamp=end_time.isoformat(),
+                        start_time=start_time.isoformat(),
+                        duration_seconds=duration_seconds,
                     )
 
             return ComponentResult(
