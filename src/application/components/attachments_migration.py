@@ -340,7 +340,20 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
         # Rails script returns attachment IDs for mapping content migration
-        # Must output JSON between markers for execute_script_with_data to parse
+        # Must output JSON between markers for execute_script_with_data to parse.
+        #
+        # Filename fidelity: ``att.filename = fname`` runs through
+        # ActiveRecord's setter, which on OP / CarrierWave models can
+        # apply silent normalisation (strip internal whitespace,
+        # Unicode-normalise) — caught by the live 2026-05-07 NRS run
+        # where Jira's ``Screenshot 2026-04-21 122931.png`` was stored
+        # in OP as ``Screenshot2026-04-21 122931.png``. ``update_columns``
+        # bypasses callbacks/validations and writes the exact byte
+        # string we provide. Run AFTER ``save!`` so the row exists
+        # to update; the storage filename (CarrierWave's
+        # ``file_file_name``) is left untouched (it's the
+        # on-disk path) — only the user-visible ``filename`` column
+        # is corrected.
         ruby_runner = (
             "require 'json'\n"
             "start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'\n"
@@ -355,10 +368,13 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             "      next unless wp\n"
             "      jira_key = op['jira_key']\n"
             "      fname = op['filename']\n"
-            "      # Check if an attachment with same name already exists\n"
+            "      # Check if an attachment with same name already exists.\n"
+            "      # Compare against the byte-exact ``filename`` column the\n"
+            "      # post-save ``update_columns`` writes — case-insensitive\n"
+            "      # to match the project's existing idempotency contract.\n"
             "      existing = wp.attachments.where('LOWER(filename) = ?', fname.to_s.downcase).first\n"
             "      if existing\n"
-            "        # Return existing attachment ID for mapping\n"
+            "        # Return existing attachment ID for mapping.\n"
             "        results << { jira_key: jira_key, filename: fname, attachment_id: existing.id, existed: true }\n"
             "        next\n"
             "      end\n"
@@ -366,12 +382,18 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             "      file = File.open(path, 'rb')\n"
             "      author = User.where(admin: true).first\n"
             "      att = Attachment.new(container: wp, author: author)\n"
-            "      # Assign file using Paperclip-style API\n"
+            "      # Assign file using Paperclip-style API.\n"
             "      if att.respond_to?(:file=)\n"
             "        att.file = file\n"
             "      end\n"
             "      att.filename = fname if att.respond_to?(:filename=)\n"
             "      att.save!\n"
+            "      # Filename-fidelity guard: bypass any AR callbacks and\n"
+            "      # write the exact byte string. Without this, OP's\n"
+            "      # filename sanitiser strips selected internal\n"
+            "      # whitespace (NRS audit: ~31 of 163 'missing' files\n"
+            "      # were present under a normalised name).\n"
+            "      att.update_columns(filename: fname) if att.filename != fname\n"
             "      results << { jira_key: jira_key, filename: fname, attachment_id: att.id, existed: false }\n"
             "    rescue => e\n"
             "      errors << { jira_key: op['jira_key'], filename: op['filename'], error: e.message }\n"
@@ -391,23 +413,43 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         attachment_mapping: dict[str, dict[str, int]] = {}
         logger.info("_load: all %d files transferred, executing Rails script with %d ops", len(ops), len(container_ops))
         try:
-            res = self.op_client.execute_script_with_data(ruby_runner, container_ops)
+            envelope = self.op_client.execute_script_with_data(ruby_runner, container_ops)
             logger.info("_load: Rails script completed")
-            if isinstance(res, dict):
-                results = res.get("results", [])
-                errors = res.get("errors", [])
-                # Build attachment mapping: {jira_key: {filename: attachment_id}}
-                for r in results:
-                    jira_key = r.get("jira_key")
-                    filename = r.get("filename")
-                    att_id = r.get("attachment_id")
-                    if jira_key and filename and att_id:
-                        if jira_key not in attachment_mapping:
-                            attachment_mapping[jira_key] = {}
-                        attachment_mapping[jira_key][filename] = int(att_id)
-                        if not r.get("existed"):
-                            updated += 1
-                failed = len(errors)
+            # ``execute_script_with_data`` returns an envelope:
+            # ``{status, message, data, output}``. The actual results
+            # live under ``data`` (the parsed JSON the Ruby script
+            # printed between the markers). The pre-fix code read
+            # ``res.get("results")`` directly on the envelope and
+            # always saw an empty list — silently returning
+            # ``updated=0, failed=0`` regardless of what Rails did.
+            # Same envelope-bug class PR #201 caught for
+            # ``wp_metadata_backfill``.
+            if isinstance(envelope, dict):
+                if envelope.get("status") != "success":
+                    logger.warning(
+                        "_load: Rails returned status=%r message=%r — counting batch as failed",
+                        envelope.get("status"),
+                        envelope.get("message"),
+                    )
+                    failed = len(container_ops)
+                else:
+                    data = envelope.get("data") or {}
+                    if not isinstance(data, dict):
+                        data = {}
+                    results = data.get("results", [])
+                    errors = data.get("errors", [])
+                    # Build attachment mapping: {jira_key: {filename: attachment_id}}
+                    for r in results:
+                        jira_key = r.get("jira_key")
+                        filename = r.get("filename")
+                        att_id = r.get("attachment_id")
+                        if jira_key and filename and att_id:
+                            if jira_key not in attachment_mapping:
+                                attachment_mapping[jira_key] = {}
+                            attachment_mapping[jira_key][filename] = int(att_id)
+                            if not r.get("existed"):
+                                updated += 1
+                    failed = len(errors)
         except Exception:
             logger.exception("Rails attach operation failed")
             failed = len(container_ops)
