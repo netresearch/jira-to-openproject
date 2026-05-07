@@ -1546,7 +1546,9 @@ def test_low_assignee_coverage_does_not_fail_when_jira_matches() -> None:
             wp_with_status=4082,
             wp_with_priority=4082,
             wp_journal_total=4082,
-            wp_provenance_cfs={k: {"exists": True, "populated": 4082} for k in _baseline_metrics()["wp_provenance_cfs"]},
+            wp_provenance_cfs={
+                k: {"exists": True, "populated": 4082} for k in _baseline_metrics()["wp_provenance_cfs"]
+            },
             jira_assignee_count=12,
         ),
     )
@@ -1572,7 +1574,9 @@ def test_assignee_gap_beyond_tolerance_fails() -> None:
             wp_with_status=1000,
             wp_with_priority=1000,
             wp_journal_total=1000,
-            wp_provenance_cfs={k: {"exists": True, "populated": 1000} for k in _baseline_metrics()["wp_provenance_cfs"]},
+            wp_provenance_cfs={
+                k: {"exists": True, "populated": 1000} for k in _baseline_metrics()["wp_provenance_cfs"]
+            },
             jira_assignee_count=600,  # Jira has 600 — 200 missing in OP
         ),
     )
