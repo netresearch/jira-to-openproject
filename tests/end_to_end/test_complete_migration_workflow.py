@@ -4,17 +4,53 @@ These tests validate the entire migration process from start to finish,
 ensuring all components work together correctly.
 """
 
+from __future__ import annotations
+
+import contextlib
 import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src import config
+from src.mappings.mappings import Mappings
 from src.migration import create_backup, run_migration
 from src.models.component_results import ComponentResult
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+@contextlib.contextmanager
+def _isolated_global_mappings(data_dir: Path) -> Iterator[Mappings]:
+    """Swap ``config.mappings`` for a tmp-scoped instance and restore on exit.
+
+    ``Mappings.set_mapping`` writes through to ``data_dir`` on disk —
+    when tests call it against the global ``config.mappings`` (which
+    initialises against the real ``var/data/``), they overwrite the
+    developer's working data. Caught by the live 2026-05-07 run: the
+    pre-existing seed-mapping calls below were wiping the 438-entry
+    ``user_mapping.json`` mid-migration, replacing it with the test
+    fixture ``{"alice": {"openproject_id": 1}}`` and dropping every
+    real worklog as ``user_unmapped`` downstream.
+
+    Usage:
+
+        with _isolated_global_mappings(data_dir) as tmp_mappings:
+            tmp_mappings.set_mapping(...)
+            ...  # rest of test body
+    """
+    original = config.mappings
+    tmp = Mappings(data_dir=data_dir)
+    config.mappings = tmp
+    try:
+        yield tmp
+    finally:
+        config.mappings = original
 
 
 def configure_comprehensive_mocks(mock_jira, mock_op):
@@ -1030,7 +1066,9 @@ class TestCompleteMigrationWorkflow:
         3. All items are processed correctly
         """
         # Set up test environment
-        test_env["J2O_DATA_DIR"] = str(temp_dir / "data")
+        data_dir = temp_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        test_env["J2O_DATA_DIR"] = str(data_dir)
 
         # Create larger test dataset
         large_user_dataset = [
@@ -1120,53 +1158,54 @@ class TestCompleteMigrationWorkflow:
 
             start_time = time.time()
 
-            # Seed the mappings the work_packages preflight requires so the
-            # test runs the same way regardless of whatever happens to live
-            # in var/data on the developer host. (CI starts with an empty
-            # var/data, so the preflight aborts the run unless these are
-            # populated up-front.)
-            from src import config as _cfg
+            # Seed the mappings the work_packages preflight requires so
+            # the test runs the same way regardless of whatever happens
+            # to live in var/data on the developer host. Use the
+            # tmp-scoped helper so the writes go to ``data_dir`` instead
+            # of polluting the developer's real ``var/data/`` (the
+            # global ``config.mappings`` initialises against the real
+            # data dir at import time).
+            with _isolated_global_mappings(data_dir) as tmp_mappings:
+                tmp_mappings.set_mapping("project", {"TEST": {"openproject_id": 1}})
+                tmp_mappings.set_mapping("user", {"alice": {"openproject_id": 1}})
+                tmp_mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
+                tmp_mappings.set_mapping("issue_type_id", {"1": 1})
+                tmp_mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
 
-            _cfg.mappings.set_mapping("project", {"TEST": {"openproject_id": 1}})
-            _cfg.mappings.set_mapping("user", {"alice": {"openproject_id": 1}})
-            _cfg.mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
-            _cfg.mappings.set_mapping("issue_type_id", {"1": 1})
-            _cfg.mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
-
-            with (
-                patch(
-                    "src.config.migration_config",
-                    {
-                        "dry_run": False,
-                        "no_backup": True,
-                    },
-                ),
-                # User/work-package migrations rely on many downstream
-                # subsystems (custom fields, provenance, association
-                # migrators) that are out of scope for this performance test.
-                # Short-circuit them to a success result so the test can
-                # exercise the end-to-end orchestration timing assertion.
-                patch(
-                    "src.application.components.user_migration.UserMigration.run",
-                    return_value=ComponentResult(
-                        success=True,
-                        message="stubbed user migration",
-                        success_count=0,
+                with (
+                    patch(
+                        "src.config.migration_config",
+                        {
+                            "dry_run": False,
+                            "no_backup": True,
+                        },
                     ),
-                ),
-                patch(
-                    "src.application.components.work_package_migration.WorkPackageMigration.run",
-                    return_value=ComponentResult(
-                        success=True,
-                        message="stubbed work package migration",
-                        success_count=0,
+                    # User/work-package migrations rely on many downstream
+                    # subsystems (custom fields, provenance, association
+                    # migrators) that are out of scope for this performance test.
+                    # Short-circuit them to a success result so the test can
+                    # exercise the end-to-end orchestration timing assertion.
+                    patch(
+                        "src.application.components.user_migration.UserMigration.run",
+                        return_value=ComponentResult(
+                            success=True,
+                            message="stubbed user migration",
+                            success_count=0,
+                        ),
                     ),
-                ),
-            ):
-                result = await run_migration(
-                    components=["users", "work_packages"],
-                    no_confirm=True,
-                )
+                    patch(
+                        "src.application.components.work_package_migration.WorkPackageMigration.run",
+                        return_value=ComponentResult(
+                            success=True,
+                            message="stubbed work package migration",
+                            success_count=0,
+                        ),
+                    ),
+                ):
+                    result = await run_migration(
+                        components=["users", "work_packages"],
+                        no_confirm=True,
+                    )
 
             end_time = time.time()
             migration_time = end_time - start_time
@@ -1193,7 +1232,9 @@ class TestCompleteMigrationWorkflow:
         3. Custom fields are created before work packages (work packages may use custom fields)
         """
         # Set up test environment
-        test_env["J2O_DATA_DIR"] = str(temp_dir / "data")
+        data_dir = temp_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        test_env["J2O_DATA_DIR"] = str(data_dir)
 
         call_order = []
 
@@ -1267,46 +1308,47 @@ class TestCompleteMigrationWorkflow:
 
             # See note in test_large_dataset_migration: seed the preflight
             # mappings so this test runs identically locally and in CI.
-            from src import config as _cfg
+            # Use the tmp-scoped helper so the writes don't pollute the
+            # developer's real ``var/data/``.
+            with _isolated_global_mappings(data_dir) as tmp_mappings:
+                tmp_mappings.set_mapping("project", {"TEST": {"openproject_id": 1}})
+                tmp_mappings.set_mapping("user", {"alice": {"openproject_id": 1}})
+                tmp_mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
+                tmp_mappings.set_mapping("issue_type_id", {"1": 1})
+                tmp_mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
 
-            _cfg.mappings.set_mapping("project", {"TEST": {"openproject_id": 1}})
-            _cfg.mappings.set_mapping("user", {"alice": {"openproject_id": 1}})
-            _cfg.mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
-            _cfg.mappings.set_mapping("issue_type_id", {"1": 1})
-            _cfg.mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
-
-            with (
-                patch(
-                    "src.config.migration_config",
-                    {
-                        "dry_run": False,
-                        "no_backup": True,
-                    },
-                ),
-                # See note in test_large_dataset_migration about stubbing the
-                # heavy migrations; the dependency-order assertion below only
-                # needs each component to complete successfully.
-                patch(
-                    "src.application.components.user_migration.UserMigration.run",
-                    return_value=ComponentResult(
-                        success=True,
-                        message="stubbed user migration",
-                        success_count=0,
+                with (
+                    patch(
+                        "src.config.migration_config",
+                        {
+                            "dry_run": False,
+                            "no_backup": True,
+                        },
                     ),
-                ),
-                patch(
-                    "src.application.components.work_package_migration.WorkPackageMigration.run",
-                    return_value=ComponentResult(
-                        success=True,
-                        message="stubbed work package migration",
-                        success_count=0,
+                    # See note in test_large_dataset_migration about stubbing the
+                    # heavy migrations; the dependency-order assertion below only
+                    # needs each component to complete successfully.
+                    patch(
+                        "src.application.components.user_migration.UserMigration.run",
+                        return_value=ComponentResult(
+                            success=True,
+                            message="stubbed user migration",
+                            success_count=0,
+                        ),
                     ),
-                ),
-            ):
-                result = await run_migration(
-                    components=["users", "projects", "work_packages"],
-                    no_confirm=True,
-                )
+                    patch(
+                        "src.application.components.work_package_migration.WorkPackageMigration.run",
+                        return_value=ComponentResult(
+                            success=True,
+                            message="stubbed work package migration",
+                            success_count=0,
+                        ),
+                    ),
+                ):
+                    result = await run_migration(
+                        components=["users", "projects", "work_packages"],
+                        no_confirm=True,
+                    )
 
             # Validate migration completed successfully
             assert result.overall["status"] == "success"
