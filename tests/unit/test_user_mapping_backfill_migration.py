@@ -526,6 +526,55 @@ def test_run_alias_handles_malformed_historical_op_id(tmp_path: Path) -> None:
     assert res.details["added"] == 1
 
 
+def test_run_seed_name_aliased_when_jira_profile_omits_name(tmp_path: Path) -> None:
+    """Seed name is always written as an alias even when Jira's profile
+    doesn't return it as a string field.
+
+    Caught by the live 2026-05-07 NRS run: 18 watcher
+    ``unmapped_users`` were silently marked ``already_mapped``
+    because their Jira profiles for locked Server users had
+    ``name=None`` on the SDK object. Only ``key`` (e.g.
+    ``JIRAUSER18400``) made it into cand_keys; that key was
+    already in ``user_map`` so the alias path concluded "no
+    missing keys to write". Watchers kept dropping these users.
+
+    Pin: ``cand_keys`` always includes the seed name (the one
+    from ``unmapped_users`` that triggered this lookup), so the
+    alias gets written under the identifier the consumer
+    actually probes.
+    """
+
+    class _BoomOp:
+        def get_user(self, identifier: int | str):
+            msg = "OP must not be probed on alias path"
+            raise AssertionError(msg)
+
+        def get_user_by_email(self, email: str):
+            msg = "OP must not be probed"
+            raise AssertionError(msg)
+
+    _write_results(tmp_path, components={"watchers": {"details": {"unmapped_users": ["anne.geissler"]}}})
+    # Jira returns a profile with ``name=None`` (locked / minimal
+    # Server profile shape). Only ``key`` is a usable string.
+    jira = _Jira({"anne.geissler": {"name": None, "key": "JIRAUSER18400", "emailAddress": ""}})
+    mig = _make_migration(
+        tmp_path,
+        jira,
+        _BoomOp(),
+        user_map={"JIRAUSER18400": {"openproject_id": 42, "matched_by": "users"}},
+    )
+    res = mig.run()
+
+    user_map = mig.mappings.get_mapping("user")
+    # Alias under the seed name — what the watcher will probe for.
+    assert user_map["anne.geissler"]["openproject_id"] == 42
+    assert user_map["anne.geissler"]["matched_by"] == "user_mapping_backfill_alias"
+    # Existing JIRAUSER entry preserved.
+    assert user_map["JIRAUSER18400"]["matched_by"] == "users"
+    assert res.details["added"] == 1
+    assert res.details["already_mapped"] == 0
+
+
 def test_run_no_jira_user_records_not_found_in_jira(tmp_path: Path) -> None:
     """Jira returns ``None`` → user goes to ``not_found_in_jira``."""
     _write_results(tmp_path, components={"watchers": {"details": {"unmapped_users": ["ghost"]}}})
