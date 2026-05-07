@@ -239,14 +239,21 @@ class _Op:
     def get_user(self, identifier: int | str) -> dict[str, Any]:
         if identifier in self._by_login:
             return self._by_login[identifier]
+        # Mirror the real client's not-found exception so the
+        # narrowed ``except RecordNotFoundError`` in production
+        # is exercised by the tests.
+        from src.infrastructure.exceptions import RecordNotFoundError
+
         msg = f"no user with login {identifier!r}"
-        raise LookupError(msg)
+        raise RecordNotFoundError(msg)
 
     def get_user_by_email(self, email: str) -> dict[str, Any]:
         if email in self._by_email:
             return self._by_email[email]
+        from src.infrastructure.exceptions import RecordNotFoundError
+
         msg = f"no user with email {email!r}"
-        raise LookupError(msg)
+        raise RecordNotFoundError(msg)
 
 
 def test_run_no_candidates_returns_success(tmp_path: Path) -> None:

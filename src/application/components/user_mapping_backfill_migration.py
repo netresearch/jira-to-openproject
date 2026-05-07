@@ -43,13 +43,13 @@ clobber operator-set entries on an alternate identifier.
 
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
 from typing import Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.exceptions import RecordNotFoundError
+from src.infrastructure.jira.jira_client import JiraClient, JiraResourceNotFoundError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 
@@ -141,21 +141,32 @@ class UserMappingBackfillMigration(BaseMigration):
                     raw = json.load(f)
             except OSError, json.JSONDecodeError:
                 continue
-            issues_iter: list[Any] = []
+            # Iterate the parsed object directly — materialising
+            # ``list(raw.values())`` would copy every issue dict in
+            # memory on large per-project dumps (4082 NRS issues ≈
+            # tens of MB). Streaming over the underlying iterable
+            # halves peak memory.
             if isinstance(raw, dict):
-                issues_iter = list(raw.values())
+                for issue in raw.values():
+                    _harvest_users_from_issue(issue, out)
             elif isinstance(raw, list):
-                issues_iter = list(raw)
-            for issue in issues_iter:
-                _harvest_users_from_issue(issue, out)
+                for issue in raw:
+                    _harvest_users_from_issue(issue, out)
         return out
 
     def _candidate_keys(self, jira_user: dict[str, Any]) -> list[str]:
-        """Identifier ladder mirroring the consumer migrations' resolvers
-        (:meth:`AttachmentProvenanceMigration._resolve_user_id`).
+        """Identifier ladder mirroring the consumer migrations' resolvers.
+
+        Probe order matches :meth:`AttachmentProvenanceMigration._resolve_user_id`
+        and :meth:`WatcherMigration._resolve_user_id`:
+        ``accountId`` → ``name`` → ``key`` → ``emailAddress`` →
+        ``displayName``. Cloud instances key on ``accountId``;
+        Server/DC on ``name``. Yielding the most stable identifier
+        first means a backfilled mapping is reachable by the
+        consumers' first probe whenever possible.
         """
         out: list[str] = []
-        for k in ("name", "key", "accountId", "emailAddress"):
+        for k in ("accountId", "name", "key", "emailAddress", "displayName"):
             v = jira_user.get(k)
             if isinstance(v, str) and v.strip():
                 out.append(v.strip())
@@ -164,21 +175,28 @@ class UserMappingBackfillMigration(BaseMigration):
     def _find_op_user(self, jira_user: dict[str, Any]) -> dict[str, Any] | None:
         """Best-effort: locate an OP user matching the Jira user.
 
-        ``get_user`` and ``get_user_by_email`` raise on miss; catch and
-        continue so one missing probe doesn't cancel the next.
+        Suppresses *only* the not-found path
+        (:class:`RecordNotFoundError`) — a real client failure
+        (``QueryExecutionError``, auth, network) is allowed to
+        propagate so the operator sees the incident instead of a
+        silent ``not_found_in_op``. Per PR #205 review.
         """
         name = jira_user.get("name") or jira_user.get("key")
         if isinstance(name, str) and name:
-            with contextlib.suppress(Exception):
+            try:
                 user = self.op_client.get_user(name)
-                if user:
-                    return user
+            except RecordNotFoundError:
+                user = None
+            if user:
+                return user
         email = jira_user.get("emailAddress")
         if isinstance(email, str) and email:
-            with contextlib.suppress(Exception):
+            try:
                 user = self.op_client.get_user_by_email(email)
-                if user:
-                    return user
+            except RecordNotFoundError:
+                user = None
+            if user:
+                return user
         return None
 
     def _build_entry(self, op_user: dict[str, Any], jira_user: dict[str, Any]) -> dict[str, Any] | None:
@@ -220,6 +238,9 @@ class UserMappingBackfillMigration(BaseMigration):
         )
 
         if not all_names:
+            # Same details schema as the main return path so downstream
+            # consumers (audit, dashboards) read a uniform shape
+            # regardless of which branch the component took.
             return ComponentResult(
                 success=True,
                 updated=0,
@@ -230,7 +251,10 @@ class UserMappingBackfillMigration(BaseMigration):
                     "added": 0,
                     "already_mapped": 0,
                     "not_found_in_jira": 0,
-                    "not_found_in_op": 0,
+                    "not_found_in_op_count": 0,
+                    "not_found_in_op_sample": [],
+                    "jira_api_errors": 0,
+                    "added_sample": [],
                 },
             )
 
@@ -251,12 +275,29 @@ class UserMappingBackfillMigration(BaseMigration):
         added: list[dict[str, Any]] = []
         not_found_in_jira: list[str] = []
         not_found_in_op: list[dict[str, Any]] = []
+        # Tracks Jira API failures distinct from "user doesn't exist"
+        # (auth, network, rate limit). Misclassifying an outage as
+        # missing users would cause silent data loss on the next
+        # consumer (PR #205 review).
+        jira_api_errors = 0
 
         for name in unresolved:
             try:
                 jira_user = self.jira_client.get_user_info(name)
-            except Exception:
+            except JiraResourceNotFoundError:
+                # Genuine 404 — record under not_found_in_jira.
                 jira_user = None
+            except Exception as exc:
+                # Any other JiraError (auth, rate-limit, connection)
+                # is an outage, not a missing user. Log + count;
+                # don't pretend the user doesn't exist.
+                self.logger.warning(
+                    "Jira API error looking up %r: %s — counted under jira_api_errors",
+                    name,
+                    exc,
+                )
+                jira_api_errors += 1
+                continue
             if not isinstance(jira_user, dict):
                 not_found_in_jira.append(name)
                 continue
@@ -321,7 +362,8 @@ class UserMappingBackfillMigration(BaseMigration):
                 f"User mapping backfill: added={len(added)},"
                 f" already_mapped={len(already_mapped)},"
                 f" not_found_in_jira={len(not_found_in_jira)},"
-                f" not_found_in_op={len(not_found_in_op)}"
+                f" not_found_in_op={len(not_found_in_op)},"
+                f" jira_api_errors={jira_api_errors}"
             ),
             details={
                 "from_previous_results": len(from_results),
@@ -331,6 +373,7 @@ class UserMappingBackfillMigration(BaseMigration):
                 "not_found_in_jira": len(not_found_in_jira),
                 "not_found_in_op_count": len(not_found_in_op),
                 "not_found_in_op_sample": not_found_in_op[:20],
+                "jira_api_errors": jira_api_errors,
                 "added_sample": added[:20],
             },
         )
@@ -356,7 +399,14 @@ def _harvest_users_from_issue(issue: Any, into: set[str]) -> None:
     def _add(user: Any) -> None:
         if user is None:
             return
-        for k in ("name", "key", "accountId", "emailAddress"):
+        # ``accountId`` first to match the consumer resolvers' probe
+        # order (``AttachmentProvenanceMigration._resolve_user_id`` /
+        # ``WatcherMigration._resolve_user_id``). Cloud users have a
+        # stable ``accountId`` but variable ``displayName``; preferring
+        # the latter would harvest less-stable identifiers and miss
+        # matches when the display-name in the cache differs from the
+        # current Jira directory.
+        for k in ("accountId", "name", "key", "emailAddress", "displayName"):
             v = _read(user, k)
             if isinstance(v, str) and v.strip():
                 into.add(v.strip())

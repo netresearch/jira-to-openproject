@@ -143,6 +143,7 @@ type BackupDir = Path
 type ComponentStatus = Literal["success", "failed", "interrupted"]
 type ComponentName = Literal[
     "users",
+    "user_mapping_backfill",
     "groups",
     "custom_fields",
     "companies",
@@ -158,6 +159,7 @@ type ComponentName = Literal[
     "versions",
     "components",
     "attachments",
+    "attachment_recovery",
     "estimates",
     "affects_versions",
     "security_levels",
@@ -170,6 +172,7 @@ type ComponentName = Literal[
     "attachment_provenance",
     "inline_refs",
     "native_tags",
+    "wp_metadata_backfill",
 ]
 
 
