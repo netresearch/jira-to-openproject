@@ -509,39 +509,86 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             data={"attachment_mapping": attachment_mapping},
         )
 
+    @staticmethod
+    def _build_attachment_max_size_script(value_kb: int | None) -> str:
+        """Ruby that reads or writes ``Setting.attachment_max_size``.
+
+        ``value_kb is None`` → read; otherwise write that value first.
+        Output contract matches ``execute_script_with_data``: emit
+        ``{"value": int}`` between the runner's start/end markers so
+        ``envelope['data']`` carries it cleanly. The plain
+        ``execute_query`` path returns the raw tmux buffer which can
+        be polluted with leftover output from prior commands — caught
+        by the live 2026-05-07 NRS run where the read returned a
+        kilobyte-long JSON blob from a prior recovery query.
+        """
+        prelude = "" if value_kb is None else f"Setting.attachment_max_size = {int(value_kb)}\n"
+        return f"""
+require 'json'
+start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'
+end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'
+{prelude}value = Setting.attachment_max_size.to_i
+puts start_marker
+puts({{value: value}}.to_json)
+puts end_marker
+"""
+
+    def _read_envelope_value(self, envelope: object) -> int | None:
+        if not isinstance(envelope, dict):
+            return None
+        if envelope.get("status") != "success":
+            logger.warning(
+                "attachment_max_size read/write returned status=%r message=%r",
+                envelope.get("status"),
+                envelope.get("message"),
+            )
+            return None
+        data = envelope.get("data") or {}
+        if not isinstance(data, dict):
+            return None
+        try:
+            return int(data.get("value"))
+        except TypeError, ValueError:
+            return None
+
     def _get_op_attachment_max_kb(self) -> int | None:
         """Return OP's current ``Setting.attachment_max_size`` in KB.
 
-        OP stores this as a string of KB (Rails ``Setting`` integer
-        coercion). Returns ``None`` if the value can't be read — the
-        caller treats that as "don't bump".
+        Uses the marker-fenced ``execute_script_with_data`` envelope
+        (same pattern :class:`AttachmentRecoveryMigration` uses) so the
+        return value is parsed JSON, not raw tmux buffer output.
+        Returns ``None`` if the value can't be read — the caller treats
+        that as "don't bump".
         """
+        script = self._build_attachment_max_size_script(None)
         try:
-            raw = self.op_client.execute_query("Setting.attachment_max_size")
+            envelope = self.op_client.execute_script_with_data(script, [])
         except Exception:
             logger.exception("Failed to read Setting.attachment_max_size")
             return None
-        # Rails console echoes ``=> 5120`` for an integer setting; the
-        # runner returns the stripped value. Be tolerant of stray
-        # whitespace and non-numeric noise.
-        try:
-            return int(str(raw).strip().splitlines()[-1])
-        except ValueError, IndexError:
-            logger.warning("Could not parse attachment_max_size from %r", raw)
-            return None
+        return self._read_envelope_value(envelope)
 
     def _set_op_attachment_max_kb(self, value_kb: int) -> bool:
         """Write ``Setting.attachment_max_size = value_kb`` (in KB).
 
-        Returns True on apparent success.
+        Returns ``True`` only when the write round-trip emits the
+        new value back through the envelope — confirms the write
+        actually took effect rather than just trusting a fire-and-
+        forget `puts` over tmux.
         """
-        # ``execute_query`` is a thin shell over the Rails console; the
-        # write expression is fixed-shape and uses an int we control,
-        # so there's no shell-injection vector.
+        script = self._build_attachment_max_size_script(int(value_kb))
         try:
-            self.op_client.execute_query(f"Setting.attachment_max_size = {int(value_kb)}")
+            envelope = self.op_client.execute_script_with_data(script, [])
         except Exception:
             logger.exception("Failed to write Setting.attachment_max_size=%d", value_kb)
+            return False
+        observed = self._read_envelope_value(envelope)
+        if observed != int(value_kb):
+            logger.warning(
+                "attachment_max_size write did not stick: wanted=%d observed=%r",
+                value_kb,
+                observed,
+            )
             return False
         return True
 

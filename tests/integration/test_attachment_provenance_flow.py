@@ -244,30 +244,51 @@ def test_attachment_provenance_pipeline(monkeypatch: pytest.MonkeyPatch, patched
     jira_client.batch_get_issues.return_value = {"KEY-1": issue}
 
     op_client = MagicMock()
-    # Two consecutive calls — first from ``AttachmentsMigration._load``
-    # (expects ``data.results``), second from
-    # ``AttachmentProvenanceMigration._load`` (expects ``data.updated``).
-    # Wrap each in the runner's real envelope so the production
-    # parser is exercised; the pre-fix flat shape only worked for
-    # the buggy ``res.get("results")`` path that the recent
-    # filename-fidelity PR closed.
-    op_client.execute_script_with_data.side_effect = [
-        {
-            "status": "success",
-            "message": "ok",
-            "data": {
-                "results": [{"jira_key": "KEY-1", "filename": "note.txt", "attachment_id": 4242}],
-                "errors": [],
-            },
-            "output": "<dummy>",
-        },
-        {
+
+    # The attachments + provenance pipeline now issues three
+    # ``execute_script_with_data`` flavours:
+    #
+    # 1. ``AttachmentsMigration`` reads/writes ``Setting.attachment_max_size``
+    #    around its per-project loop (3 calls: read original, raise, restore)
+    # 2. ``AttachmentsMigration._load`` posts attach ops (expects ``data.results``)
+    # 3. ``AttachmentProvenanceMigration._load`` posts updates (expects ``data.updated``)
+    #
+    # A callable side_effect dispatches by inspecting the script
+    # content so the test stays stable as new envelope round-trips
+    # land. The 2026-05-07 attachment_max_size bump (NRS audit) is
+    # the latest example.
+    import re as _re
+
+    def _dispatch(script: str, data: object):
+        if "Setting.attachment_max_size" in script:
+            m = _re.search(r"Setting\.attachment_max_size\s*=\s*(\d+)", script)
+            value = int(m.group(1)) if m else 5120
+            return {
+                "status": "success",
+                "message": "ok",
+                "data": {"value": value},
+                "output": "<dummy>",
+            }
+        if "container_type" in script or "Attachment" in script:
+            # Attachments _load script (results/errors envelope).
+            return {
+                "status": "success",
+                "message": "ok",
+                "data": {
+                    "results": [{"jira_key": "KEY-1", "filename": "note.txt", "attachment_id": 4242}],
+                    "errors": [],
+                },
+                "output": "<dummy>",
+            }
+        # Provenance _load script (updated/failed envelope).
+        return {
             "status": "success",
             "message": "ok",
             "data": {"updated": 1, "failed": 0},
             "output": "<dummy>",
-        },
-    ]
+        }
+
+    op_client.execute_script_with_data.side_effect = _dispatch
 
     def fake_download(self, url: str, dest_path: Path) -> Path:
         dest_path.write_bytes(b"stub")
@@ -285,9 +306,14 @@ def test_attachment_provenance_pipeline(monkeypatch: pytest.MonkeyPatch, patched
     assert provenance_result.success is True
 
     op_client.transfer_file_to_container.assert_called_once()
-    assert op_client.execute_script_with_data.call_count == 2
-
-    _, provenance_call = op_client.execute_script_with_data.call_args_list
+    # Pull the provenance _load call by inspecting payload shape — the
+    # call list also contains setting reads/writes and the attachments
+    # _load, so positional indexing is brittle.
+    provenance_call = next(
+        c
+        for c in op_client.execute_script_with_data.call_args_list
+        if "AttachmentJournal" in c.args[0] or "Journal" in c.args[0] or "author_id" in str(c.args[1])
+    )
     payload = provenance_call.args[1]
     assert len(payload) == 1
     assert payload[0]["filename"] == "note.txt"
