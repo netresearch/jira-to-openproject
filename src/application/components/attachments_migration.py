@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,16 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         self.attachment_dir: Path = Path(ap or (Path(self.data_dir) / "attachments"))
         self.attachment_dir.mkdir(parents=True, exist_ok=True)
         self._wp_lookup_cache = None
+        # Per-stage loss counters. Each silent skip in
+        # ``_extract_batch`` / ``_map`` / ``_load`` increments a
+        # bucket; ``run()`` surfaces them under
+        # ``ComponentResult.details["loss_counters"]`` so an
+        # operator (or the audit) can pinpoint *which* stage drops
+        # files instead of seeing only the aggregate "-N missing"
+        # number from the audit. Caught by the live 2026-05-07 NRS
+        # audit where 9 sequential JPGs on NRS-3630 were silently
+        # missing with no log clue. Reset before every ``run()``.
+        self._loss_counters: Counter[str] = Counter()
 
     def _wp_lookup_by_jira_key(self) -> dict[str, int]:
         """Return a cached ``jira_key → openproject_id`` lookup.
@@ -189,17 +200,21 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         # doesn't collapse multiple ``noname``s into
                         # one.
                         if not url:
+                            self._loss_counters["extract_no_url"] += 1
                             continue
                         if not filename or not str(filename).strip() or str(filename).lower() == "noname":
                             if aid is None:
+                                self._loss_counters["extract_no_id_no_filename"] += 1
                                 continue
                             filename = f"jira-attachment-{aid}"
                         items.append({"id": aid, "filename": filename, "size": size, "url": url})
                     except Exception:
+                        self._loss_counters["extract_per_attachment_exception"] += 1
                         continue
                 if items:
                     by_key[key] = items
             except Exception:
+                self._loss_counters["extract_per_issue_exception"] += 1
                 continue
 
         return by_key
@@ -266,6 +281,10 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         for key, items in att_by_key.items():
             wp_id = key_to_wp_id.get(key)
             if not wp_id:
+                # Issue's WP isn't in our mapping (out-of-scope project
+                # or skipped issue). Counted per-attachment so the
+                # totals match the recovery diagnostic's view.
+                self._loss_counters["map_wp_unmapped"] += len(items)
                 continue
 
             for item in items:
@@ -273,12 +292,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     filename = str(item.get("filename"))
                     url = str(item.get("url"))
                     if not filename or not url:
+                        self._loss_counters["map_missing_filename_or_url"] += 1
                         continue
                     safe_name = filename.replace("/", "_")
                     local_path = self.attachment_dir / safe_name
                     # Download and hash
                     self._download_attachment(url, local_path)
                     if not local_path.exists():
+                        # ``_download_attachment`` already logs a
+                        # warning; record here so the operator sees
+                        # the count alongside the other buckets.
+                        self._loss_counters["map_download_failed"] += 1
                         continue
                     digest = self._sha256_of(local_path)
                     if digest in seen_digests:
@@ -295,6 +319,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         },
                     )
                 except Exception:
+                    self._loss_counters["map_per_item_exception"] += 1
                     continue
 
         return ComponentResult(success=True, data={"ops": ops})
@@ -311,6 +336,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             try:
                 local_path = Path(str(op["local_path"]))
                 if not local_path.exists():
+                    # Local file vanished between ``_map`` and ``_load``
+                    # (rare — only possible if something else cleaned
+                    # up the attachment dir mid-run). Counted so the
+                    # operator sees the discrepancy.
+                    self._loss_counters["load_local_file_missing"] += 1
                     continue
                 wp_id = int(op["work_package_id"])  # type: ignore[arg-type]
                 jira_key = str(op["jira_key"])
@@ -324,6 +354,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     logger.info("_load: transfer completed for %s", filename)
                 except Exception:
                     logger.exception("File transfer failed for %s", local_path)
+                    self._loss_counters["load_transfer_failed"] += 1
                     continue
                 container_ops.append(
                     {
@@ -334,6 +365,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     },
                 )
             except Exception:
+                self._loss_counters["load_per_op_exception"] += 1
                 continue
 
         if not container_ops:
@@ -432,6 +464,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         envelope.get("message"),
                     )
                     failed = len(container_ops)
+                    self._loss_counters["load_rails_status_not_success"] += len(container_ops)
                 else:
                     data = envelope.get("data") or {}
                     if not isinstance(data, dict):
@@ -450,9 +483,12 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                             if not r.get("existed"):
                                 updated += 1
                     failed = len(errors)
+                    if errors:
+                        self._loss_counters["load_rails_per_op_error"] += len(errors)
         except Exception:
             logger.exception("Rails attach operation failed")
             failed = len(container_ops)
+            self._loss_counters["load_rails_call_exception"] += len(container_ops)
 
         return ComponentResult(
             success=failed == 0,
@@ -520,6 +556,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             # Find work package ID from reverse lookup
             wp_id = key_to_wp.get(key)
             if not wp_id:
+                self._loss_counters["map_wp_unmapped"] += len(items)
                 continue
 
             for item in items:
@@ -527,12 +564,14 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     filename = str(item.get("filename"))
                     url = str(item.get("url"))
                     if not filename or not url:
+                        self._loss_counters["map_missing_filename_or_url"] += 1
                         continue
                     safe_name = filename.replace("/", "_")
                     local_path = self.attachment_dir / safe_name
                     # Download
                     self._download_attachment(url, local_path)
                     if not local_path.exists():
+                        self._loss_counters["map_download_failed"] += 1
                         continue
                     digest = self._sha256_of(local_path)
                     seen_digests.add(digest)
@@ -546,6 +585,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         },
                     )
                 except Exception:
+                    self._loss_counters["map_per_item_exception"] += 1
                     continue
 
         if not ops:
@@ -576,6 +616,14 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
     def run(self) -> ComponentResult:
         """Execute attachment migration pipeline - memory efficient per-project."""
         self.logger.info("Starting attachment migration (memory-efficient mode)")
+
+        # Reset per-stage loss counters at the start of every run so
+        # the surfaced totals reflect THIS invocation, not a prior one
+        # accumulated on the same instance (matters when ``run()`` is
+        # called more than once on the same migration object — e.g.
+        # ``attachment_recovery_migration`` constructs its own
+        # ``AttachmentsMigration`` and delegates).
+        self._loss_counters.clear()
 
         # Build the canonical Jira-key → wp-id lookup once, then group
         # the resolved Jira keys by project for batch-friendly processing.
@@ -673,12 +721,24 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         self._save_attachment_mapping(all_mappings)
 
         success = total_failed == 0 or (total_updated > 0 and total_failed < total_updated)
+        # Surface the per-stage drop breakdown so an operator can
+        # tell where files are getting lost (e.g. download failures
+        # vs Rails errors vs filename normalisation). The buckets
+        # also feed the next ``attachment_recovery`` run's
+        # diagnostics.
+        loss_counters = dict(self._loss_counters)
+        if loss_counters:
+            self.logger.info(
+                "Attachments loss breakdown (silent skips): %s",
+                loss_counters,
+            )
         return ComponentResult(
             success=success,
             updated=total_updated,
             failed=total_failed,
             data={"attachment_mapping": all_mappings},
             message=f"Processed {total_updated} attachments, {total_failed} failures",
+            details={"loss_counters": loss_counters},
         )
 
     def run_legacy(self) -> ComponentResult:

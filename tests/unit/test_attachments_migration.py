@@ -337,10 +337,10 @@ def test_load_rails_script_includes_update_columns_filename_guard():
     # script directly, so re-derive: the script source is computed in _load
     # from a static template — assert against the running migration's
     # method by re-invoking the same code path via inspecting it.
-    from src.application.components.attachments_migration import AttachmentsMigration as _AM
-
     # Instead: find the Rails string in the source — pin the substring.
     import inspect
+
+    from src.application.components.attachments_migration import AttachmentsMigration as _AM
 
     src = inspect.getsource(_AM._load)
     assert "att.update_columns(filename: fname)" in src, (
@@ -350,6 +350,84 @@ def test_load_rails_script_includes_update_columns_filename_guard():
     )
     # Idempotency: only update if AR's setter mutated the value.
     assert "att.filename != fname" in src, (
-        "update_columns must be conditional on a mismatch — otherwise"
-        " every save triggers a redundant UPDATE"
+        "update_columns must be conditional on a mismatch — otherwise every save triggers a redundant UPDATE"
     )
+
+
+# --- per-stage loss counters (added 2026-05-07) ---
+
+
+def test_extract_batch_increments_extract_no_url_when_url_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Attachment with no download URL → counted under
+    ``extract_no_url`` (not silently dropped without trace).
+
+    Live 2026-05-07 NRS regression: NRS-3630 had 9 sequential JPGs
+    silently missing with no log clue. The per-stage counters tell
+    operators *which* stage drops files instead of leaving them to
+    grep through 90k log lines.
+    """
+    from types import SimpleNamespace
+
+    class _Att:
+        def __init__(self, id_: str, filename: str, url: str | None) -> None:
+            self.id = id_
+            self.filename = filename
+            self.size = 100
+            self.content = url
+
+    class _FakeIssue:
+        def __init__(self, atts: list[_Att]) -> None:
+            self.key = "NRS-1"
+            self.fields = SimpleNamespace(attachment=atts)
+
+    class _Jira:
+        def __init__(self) -> None:
+            self.jira = SimpleNamespace(
+                search_issues=lambda *_a, **_kw: [
+                    _FakeIssue(
+                        [
+                            _Att("100", "good.txt", "http://jira/a"),
+                            _Att("200", "no-url.txt", None),
+                            _Att("300", "empty-url.txt", ""),
+                        ],
+                    ),
+                ],
+            )
+
+    mig = AttachmentsMigration(jira_client=_Jira(), op_client=DummyOp())  # type: ignore[arg-type]
+    mig._extract_batch(["NRS-1"])
+    assert mig._loss_counters["extract_no_url"] == 2, dict(mig._loss_counters)
+
+
+def test_run_resets_loss_counters_at_start(monkeypatch: pytest.MonkeyPatch):
+    """``run()`` must clear cumulative counters from any prior
+    invocation on the same instance.
+
+    Pin: when ``attachment_recovery_migration`` constructs an
+    ``AttachmentsMigration`` and delegates per-batch work, the
+    inner instance's counters reflect THAT recovery's run, not
+    leftover state from an earlier call.
+    """
+    import src.config as cfg
+
+    class _EmptyMappings:
+        def get_mapping(self, name):
+            return {}
+
+    monkeypatch.setattr(cfg, "mappings", _EmptyMappings(), raising=False)
+
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    # Seed pre-existing counters as if from a previous invocation.
+    mig._loss_counters["extract_no_url"] = 99
+    mig._loss_counters["load_transfer_failed"] = 7
+    # ``run`` fail-louds on the empty WP map, but
+    # ``self._loss_counters.clear()`` happens BEFORE that exit so
+    # the pre-seeded buckets are gone regardless of exit path.
+    try:
+        mig.run()
+    except Exception:
+        pass
+    assert mig._loss_counters.get("extract_no_url", 0) == 0
+    assert mig._loss_counters.get("load_transfer_failed", 0) == 0
