@@ -511,3 +511,76 @@ def test_pair_by_normalized_name_clean_state_has_no_pairs(
     result = mig.run()
     assert result.details["fidelity_false_positives"] == 0, result.details
     assert result.details["clean"] == 1, result.details
+
+
+# --- audit transforms (matching the upload pipeline) -----------------------
+
+
+def test_iter_jira_issues_transforms_noname_to_jira_attachment_aid() -> None:
+    """Audit must apply the same ``noname``/blank → ``jira-attachment-{aid}``
+    transformation that ``AttachmentsMigration._extract_batch`` applies
+    before upload.
+
+    Live 2026-05-07 NRS regression: NRS-4347 reported
+    ``['noname','noname','noname']`` missing while the same WP held the
+    successfully-uploaded ``jira-attachment-XXXX`` triplet under
+    ``extra``. The audit was comparing Jira's raw filename (``noname``)
+    against OP's stored filename (``jira-attachment-{id}``) and never
+    paired them — producing 3 phantom missing files plus 3 phantom
+    extras for every issue with ``noname`` attachments.
+    """
+    pages = [
+        [
+            _FakeJiraIssue(
+                "NRS-1",
+                [
+                    {"filename": "noname", "id": 1001, "url": "u1"},
+                    {"filename": "Noname", "id": 1002, "url": "u2"},
+                    {"filename": " ", "id": 1003, "url": "u3"},  # blank
+                    {"filename": "real.png", "id": 1004, "url": "u4"},
+                ],
+            ),
+        ],
+    ]
+    jira = _FakeJira(pages)
+    mig = _make_migration(
+        jira_client=jira,
+        op_client=_RecordingOp(),
+        wp_map={"NRS-1": {"jira_key": "NRS-1", "openproject_id": 501}},
+    )
+    out = mig._iter_jira_issues_with_attachments("NRS")
+    files = [e["filename"] for e in out["NRS-1"]]
+    assert "jira-attachment-1001" in files, files
+    assert "jira-attachment-1002" in files, files
+    assert "jira-attachment-1003" in files, files
+    assert "real.png" in files, files
+    # Raw 'noname' / blank entries must NOT appear in the audit set.
+    assert "noname" not in files, files
+    assert "Noname" not in files, files
+    assert " " not in files, files
+
+
+def test_iter_jira_issues_skips_blank_filename_with_no_id() -> None:
+    """No filename and no id → can't be uploaded, must not appear in
+    the audit either (matches the upload pipeline's drop).
+    """
+    pages = [
+        [
+            _FakeJiraIssue(
+                "NRS-1",
+                [
+                    {"filename": "noname", "id": None, "url": "u"},
+                    {"filename": "real.png", "id": 99, "url": "u"},
+                ],
+            ),
+        ],
+    ]
+    jira = _FakeJira(pages)
+    mig = _make_migration(
+        jira_client=jira,
+        op_client=_RecordingOp(),
+        wp_map={"NRS-1": {"jira_key": "NRS-1", "openproject_id": 501}},
+    )
+    out = mig._iter_jira_issues_with_attachments("NRS")
+    files = [e["filename"] for e in out["NRS-1"]]
+    assert files == ["real.png"], files

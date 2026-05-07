@@ -208,14 +208,37 @@ class AttachmentRecoveryMigration(BaseMigration):
                 atts = self._read_attr(fields_obj, "attachment") or []
                 entries: list[dict[str, Any]] = []
                 for a in atts:
-                    filename = self._read_attr(a, "filename")
-                    if not isinstance(filename, str) or not filename.strip():
-                        continue
+                    raw_filename = self._read_attr(a, "filename")
+                    aid = self._read_attr(a, "id")
+                    # Apply the SAME ``noname``/empty → ``jira-attachment-{aid}``
+                    # transformation that ``AttachmentsMigration._extract_batch``
+                    # applies before upload. Without this, the recovery
+                    # audit compares Jira's raw ``noname`` against OP's
+                    # uploaded ``jira-attachment-{aid}`` and reports the
+                    # files as missing even though the upload succeeded —
+                    # caught on the live 2026-05-07 NRS audit
+                    # (e.g. NRS-4347 reported ``['noname','noname','noname']``
+                    # missing while the same WP held the uploaded
+                    # ``jira-attachment-XXXX`` triplet under ``extra``).
+                    is_blank = (
+                        not isinstance(raw_filename, str)
+                        or not raw_filename.strip()
+                        or raw_filename.strip().lower() == "noname"
+                    )
+                    if is_blank:
+                        if not aid:
+                            # No id and no filename — genuinely
+                            # un-uploadable; the upload pipeline drops
+                            # these too via ``extract_no_id_no_filename``.
+                            continue
+                        filename = f"jira-attachment-{aid}"
+                    else:
+                        filename = raw_filename
                     entries.append(
                         {
                             "filename": filename,
                             "size": self._read_attr(a, "size"),
-                            "id": self._read_attr(a, "id"),
+                            "id": aid,
                             "url": self._read_attr(a, "content"),
                         },
                     )
