@@ -142,12 +142,21 @@ class WpMetadataBackfillMigration(BaseMigration):
         * Each CF is set only when the existing :class:`CustomValue`
           row is blank AND the payload provides a non-blank value.
 
-        Returns three counters per record on the JSON output:
-        ``updated_assignee``, ``updated_cf``, ``skipped`` (no change
-        made because everything was already populated or the WP didn't
-        exist).
+        Output contract: the script MUST print the JSON payload wrapped
+        between ``$j2o_start_marker`` and ``$j2o_end_marker`` so
+        :meth:`OpenProjectRailsRunner.execute_script_with_data` can
+        parse it into the envelope's ``data`` field. Without those
+        markers the runner returns ``status="error"`` and the caller
+        can't read the counters even though the Ruby work itself ran.
+        Caught by PR #201 review (copilot-pull-request-reviewer).
+
+        Returned counters: ``wp_missing``, ``updated_assignee``,
+        ``updated_cf``, ``skipped``, ``failed``.
         """
         return (
+            "require 'json'\n"
+            "start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'\n"
+            "end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'\n"
             "recs = input_data\n"
             "stats = {'wp_missing' => 0, 'updated_assignee' => 0, 'updated_cf' => 0,"
             " 'skipped' => 0, 'failed' => 0}\n"
@@ -182,7 +191,9 @@ class WpMetadataBackfillMigration(BaseMigration):
             "    stats['failed'] += 1\n"
             "  end\n"
             "end\n"
-            "stats\n"
+            "puts start_marker\n"
+            "puts stats.to_json\n"
+            "puts end_marker\n"
         )
 
     def _build_record(
@@ -253,7 +264,7 @@ class WpMetadataBackfillMigration(BaseMigration):
                 continue
             try:
                 records.append((int(wp_id), str(jira_key)))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
 
         if not records:
@@ -311,7 +322,7 @@ class WpMetadataBackfillMigration(BaseMigration):
                 continue
 
             try:
-                result = self.op_client.execute_script_with_data(rails_script, payload)
+                envelope = self.op_client.execute_script_with_data(rails_script, payload)
             except Exception:
                 self.logger.exception(
                     "Rails backfill failed for batch %d (%d records)",
@@ -321,8 +332,30 @@ class WpMetadataBackfillMigration(BaseMigration):
                 skip_reasons["rails_call_failed"] += len(payload)
                 continue
 
-            if isinstance(result, dict):
-                for k, v in result.items():
+            # ``execute_script_with_data`` returns an envelope:
+            # ``{status, message, data, output}``. The actual counters
+            # live under ``data`` (the parsed JSON the Ruby script
+            # printed between ``$j2o_start_marker`` / ``$j2o_end_marker``).
+            # If markers were missing → ``status="error"`` and ``data``
+            # is absent; treat as a Rails-side failure for this batch
+            # so the operator sees it instead of a silent ``updated=0``.
+            # Caught by PR #201 review (copilot-pull-request-reviewer).
+            if not isinstance(envelope, dict):
+                skip_reasons["rails_envelope_malformed"] += len(payload)
+                continue
+            status = envelope.get("status")
+            if status != "success":
+                self.logger.warning(
+                    "Rails backfill batch %d returned status=%r message=%r",
+                    i // self.BATCH_SIZE,
+                    status,
+                    envelope.get("message"),
+                )
+                skip_reasons["rails_status_not_success"] += len(payload)
+                continue
+            data = envelope.get("data") or {}
+            if isinstance(data, dict):
+                for k, v in data.items():
                     if isinstance(v, int):
                         totals[k] += v
 

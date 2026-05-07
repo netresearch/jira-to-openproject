@@ -41,36 +41,48 @@ class _DummyJiraClient:
 
 
 class _DummyOpClient:
-    def __init__(self, rails_response: dict[str, int] | None = None) -> None:
+    """Mirrors the real ``OpenProjectRailsRunner.execute_script_with_data``
+    envelope: ``{status, message, data, output}``. The counters live under
+    ``data`` (the parsed JSON the Ruby script prints between
+    ``$j2o_start_marker`` / ``$j2o_end_marker``). Updated to envelope
+    shape per PR #201 review — the previous flat-dict return masked a
+    real production bug where the orchestrator was iterating top-level
+    envelope keys (``status``, ``message``, …) instead of ``data``.
+    """
+
+    def __init__(
+        self,
+        force_status: str = "success",
+        force_message: str = "ok",
+    ) -> None:
         self.script_calls: list[tuple[str, list[dict]]] = []
         self._cf_id_seq = 0
-        self._rails_response = rails_response or {
-            "updated_assignee": 0,
-            "updated_cf": 0,
-            "skipped": 0,
-            "wp_missing": 0,
-            "failed": 0,
-        }
+        self._force_status = force_status
+        self._force_message = force_message
 
     def ensure_custom_field(self, name: str, field_format: str) -> dict[str, int]:
         self._cf_id_seq += 1
         return {"id": 100 + self._cf_id_seq, "name": name}
 
-    def execute_script_with_data(self, script: str, data: list[dict]) -> dict[str, int]:
+    def execute_script_with_data(self, script: str, data: list[dict]) -> dict[str, Any]:
         self.script_calls.append((script, list(data)))
-        # Compute the response from the last call's payload so tests can
-        # assert on what the orchestrator surfaced. The Rails script
-        # itself is opaque; tests pin the orchestrator's behaviour, not
-        # the Rails internals (those are pinned by an integration test
-        # that actually runs ``ruby -c`` — see #192).
+        # Compute counters from the payload — production Ruby would
+        # apply the same conditional rules; tests pin the orchestrator
+        # contract, not the Rails internals.
         updated_assignee = sum(1 for r in data if r.get("assigned_to_id"))
         updated_cf = sum(len(r.get("custom_fields") or []) for r in data)
-        return {
+        counters = {
             "updated_assignee": updated_assignee,
             "updated_cf": updated_cf,
             "skipped": 0,
             "wp_missing": 0,
             "failed": 0,
+        }
+        return {
+            "status": self._force_status,
+            "message": self._force_message,
+            "data": counters if self._force_status == "success" else None,
+            "output": "<dummy>",
         }
 
 
@@ -182,25 +194,23 @@ def test_user_unmapped_assignee_omitted_but_cfs_still_filled():
     assert len(rec["custom_fields"]) >= 2  # CFs unaffected by user-mapping miss
 
 
-def test_no_assignee_and_no_cfs_skips_record():
-    """Issue with no assignee and no project → nothing to update → skipped.
+def test_issue_without_project_still_emits_origin_cfs():
+    """Issue without ``fields.project`` still produces Origin Key/ID/System CFs.
 
-    The orchestrator drops the record entirely instead of sending an
-    empty Rails update; counted as ``nothing_to_update`` in
-    ``skip_reasons``.
+    These three CFs only need the issue's ``key`` / ``id`` (no
+    project required), so the record IS sent to Rails — pin: at
+    least one Rails call happens. The previous test name claimed
+    "skipped" but the assertions verified the opposite path; renamed
+    + reworded to match the actual behaviour. (PR #201 review.)
     """
 
-    # Issue with no assignee and synthetic ``fields`` that omits project
-    # so ``_build_provenance_custom_field_entries`` produces no entries
-    # apart from Origin Key/ID/System (which always fire because they
-    # only need the issue key/id).
-    class _NoCFsIssue:
+    class _NoProjectIssue:
         def __init__(self) -> None:
             self.key = "PROJ-1"
             self.id = "1"
             self.fields = SimpleNamespace(assignee=None, project=None)
 
-    issues = {"PROJ-1": _NoCFsIssue()}
+    issues = {"PROJ-1": _NoProjectIssue()}
     jira = _DummyJiraClient(issues)
     op = _DummyOpClient()
 
@@ -211,11 +221,71 @@ def test_no_assignee_and_no_cfs_skips_record():
     )
 
     result = mig.run()
-    # Origin Key + Origin ID + Origin System still get emitted (the
-    # ``_add`` helper doesn't need ``project``), so this is NOT a
-    # nothing-to-update case. Pin: it still runs.
     assert result.success
     assert len(op.script_calls) == 1
+    _, payload = op.script_calls[0]
+    rec = payload[0]
+    # No assignee on this issue.
+    assert rec["assigned_to_id"] is None
+    # Origin Key + Origin ID + Origin System fire regardless of project.
+    cf_names = {cf.get("id") for cf in rec["custom_fields"]}
+    assert len(cf_names) >= 3, rec["custom_fields"]
+
+
+def test_truly_nothing_to_update_record_is_skipped(monkeypatch: pytest.MonkeyPatch):
+    """Issue with no assignee AND no resolvable CFs → record dropped.
+
+    Pin: the orchestrator counts this under
+    ``skip_reasons['nothing_to_update']`` instead of sending an empty
+    Rails update. Forced by patching the ``_get_provenance_cf_ids``
+    helper to return ``{}`` — without any CF ids,
+    ``_build_provenance_custom_field_entries`` emits zero entries
+    and (combined with no assignee) the record has nothing to send.
+    """
+    issues = {"PROJ-1": _DummyJiraIssue("PROJ-1", assignee=None)}
+    jira = _DummyJiraClient(issues)
+    op = _DummyOpClient()
+
+    mig = _make_migration(jira, op)
+    # Force "no CFs available" so the only path to a non-empty
+    # update would be the assignee — which is also None here.
+    monkeypatch.setattr(mig, "_get_provenance_cf_ids", dict)
+    mig.mappings.set_mapping(
+        "work_package",
+        {"10001": {"jira_key": "PROJ-1", "openproject_id": 501}},
+    )
+
+    result = mig.run()
+    # No Rails call — record was nothing-to-update.
+    assert op.script_calls == []
+    assert result.details["skip_reasons"].get("nothing_to_update") == 1
+
+
+def test_rails_envelope_error_status_records_skip_reason():
+    """Rails returns ``status="error"`` → records counted under
+    ``rails_status_not_success`` instead of silently passing.
+
+    Pin: the orchestrator parses the envelope from
+    :meth:`OpenProjectRailsRunner.execute_script_with_data` correctly.
+    A status mismatch must NOT collapse to ``success=True, updated=0``
+    because that's exactly the silent-failure class PR #201 was
+    supposed to surface.
+    """
+    issues = {"PROJ-1": _DummyJiraIssue("PROJ-1", assignee={"name": "alice"})}
+    jira = _DummyJiraClient(issues)
+    op = _DummyOpClient(force_status="error", force_message="markers not found")
+
+    mig = _make_migration(jira, op)
+    mig.mappings.set_mapping(
+        "work_package",
+        {"10001": {"jira_key": "PROJ-1", "openproject_id": 501}},
+    )
+
+    result = mig.run()
+    # Counters stay at zero (envelope.data was None).
+    assert result.updated == 0
+    # And the skip reason is recorded so an operator can see WHY.
+    assert result.details["skip_reasons"].get("rails_status_not_success") == 1
 
 
 def test_empty_wp_mapping_fails_loud():
