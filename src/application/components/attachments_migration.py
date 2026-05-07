@@ -42,6 +42,43 @@ from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 
 
+def compute_wp_lookup_by_jira_key(mappings: Any) -> dict[str, int]:
+    """Build a ``jira_key → openproject_id`` lookup from a mappings facade.
+
+    Walks the ``work_package`` mapping once and normalises each row
+    through :meth:`WorkPackageMappingEntry.from_legacy`. Production
+    ``wp_map`` is keyed by ``str(jira_id)`` outer with the
+    human-readable ``jira_key`` stored inside; legacy/test fixtures
+    sometimes key directly by ``jira_key``. Resolution rules:
+
+    * dict shape with inner ``jira_key`` → use the inner key.
+    * dict shape without inner ``jira_key`` → fall back to outer
+      (covers test fixtures keyed by ``jira_key``).
+    * bare ``int`` shape → SKIP. Legacy bare-int rows do not carry
+      a recoverable ``jira_key``; treating the numeric outer key as
+      a Jira issue key would produce invalid downstream queries
+      like ``key in (10001, …)``.
+
+    Lifted out of :class:`AttachmentsMigration` so
+    :class:`AttachmentRecoveryMigration` can call it without
+    constructing a full migration instance (which carries the heavy
+    ``BaseMigration.__init__`` chain).
+    """
+    wp_map = mappings.get_mapping("work_package") or {}
+    lookup: dict[str, int] = {}
+    for outer_key, raw_entry in wp_map.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        inner_jira_key = raw_entry.get("jira_key")
+        jira_key = str(inner_jira_key or outer_key)
+        try:
+            entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+        except ValueError:
+            continue
+        lookup[jira_key] = int(entry.openproject_id)
+    return lookup
+
+
 @register_entity_types("attachments")
 class AttachmentsMigration(BaseMigration):  # noqa: D101
     # Cache for the wp_map → jira_key lookup. Built lazily on first use
@@ -63,38 +100,16 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
     def _wp_lookup_by_jira_key(self) -> dict[str, int]:
         """Return a cached ``jira_key → openproject_id`` lookup.
 
-        Walks the ``work_package`` mapping once and normalises each row
-        through :meth:`WorkPackageMappingEntry.from_legacy`. Production
-        ``wp_map`` is keyed by ``str(jira_id)`` outer with the
-        human-readable ``jira_key`` stored inside; legacy/test fixtures
-        sometimes key directly by ``jira_key``. Resolution rules:
-
-        * dict shape with inner ``jira_key`` → use the inner key.
-        * dict shape without inner ``jira_key`` → fall back to outer
-          (covers test fixtures keyed by ``jira_key``).
-        * bare ``int`` shape → SKIP. Legacy bare-int rows do not carry
-          a recoverable ``jira_key``; treating the numeric outer key
-          as a Jira issue key would produce invalid downstream queries
-          like ``key in (10001, …)``.
-
-        Callers receive a copy so accidental mutation cannot poison
-        the cache.
+        Thin wrapper over the module-level
+        :func:`compute_wp_lookup_by_jira_key` helper so the
+        normalisation logic is reachable by sibling components
+        (notably :class:`AttachmentRecoveryMigration`) without
+        having to construct a full :class:`AttachmentsMigration`
+        (which carries the heavy ``BaseMigration.__init__`` chain).
+        Per PR #206 review.
         """
         if self._wp_lookup_cache is None:
-            wp_map = self.mappings.get_mapping("work_package") or {}
-            lookup: dict[str, int] = {}
-            for outer_key, raw_entry in wp_map.items():
-                if not isinstance(raw_entry, dict):
-                    # Bare-int legacy rows have no recoverable Jira key.
-                    continue
-                inner_jira_key = raw_entry.get("jira_key")
-                jira_key = str(inner_jira_key or outer_key)
-                try:
-                    entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-                except ValueError:
-                    continue
-                lookup[jira_key] = int(entry.openproject_id)
-            self._wp_lookup_cache = lookup
+            self._wp_lookup_cache = compute_wp_lookup_by_jira_key(self.mappings)
         return dict(self._wp_lookup_cache)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:

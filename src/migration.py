@@ -24,6 +24,7 @@ from src.application.components.admin_scheme_migration import AdminSchemeMigrati
 from src.application.components.affects_versions_migration import AffectsVersionsMigration
 from src.application.components.agile_board_migration import AgileBoardMigration
 from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
+from src.application.components.attachment_recovery_migration import AttachmentRecoveryMigration
 from src.application.components.attachments_migration import AttachmentsMigration
 from src.application.components.base_migration import BaseMigration
 from src.application.components.category_defaults_migration import CategoryDefaultsMigration
@@ -112,6 +113,12 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     # === Phase 2: Attachments (creates mapping for URL conversion) ===
     "attachments",
     "attachment_provenance",
+    # Re-attempt attachments missing in OP after the main attachments
+    # run (transient mid-batch errors leave the partial-success
+    # classifier green; the original migration is idempotent
+    # Rails-side, so re-running it for the affected jira_keys fills
+    # the gap). Idempotent: no-op when OP already has every file.
+    "attachment_recovery",
     # === Phase 3: Work Package Content (with resolved attachment URLs) ===
     "work_packages_content",
     # Backfill assignee + provenance CFs on existing WPs (closes Bug A
@@ -426,6 +433,7 @@ def _build_component_factories(
         "remote_links": lambda: RemoteLinksMigration(jira_client=jira_client, op_client=op_client),
         "category_defaults": lambda: CategoryDefaultsMigration(jira_client=jira_client, op_client=op_client),
         "attachment_provenance": lambda: AttachmentProvenanceMigration(jira_client=jira_client, op_client=op_client),
+        "attachment_recovery": lambda: AttachmentRecoveryMigration(jira_client=jira_client, op_client=op_client),
         "wp_metadata_backfill": lambda: WpMetadataBackfillMigration(jira_client=jira_client, op_client=op_client),
         "inline_refs": lambda: InlineRefsMigration(jira_client=jira_client, op_client=op_client),
         "native_tags": lambda: NativeTagsMigration(jira_client=jira_client, op_client=op_client),
