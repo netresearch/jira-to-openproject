@@ -302,13 +302,71 @@ class UserMappingBackfillMigration(BaseMigration):
                 not_found_in_jira.append(name)
                 continue
 
-            # Second-chance dedup: if Jira reports an alternate
-            # identifier we already have mapped, skip.
+            # Build the candidate identifier ladder for this Jira user
+            # (``accountId`` → ``name`` → ``key`` → ``emailAddress`` →
+            # ``displayName``). The watcher / TE / etc. resolvers probe
+            # in that order; if even ONE of these isn't a key in
+            # ``user_map``, the consumer that probes that specific
+            # identifier first will miss the mapping.
             cand_keys = self._candidate_keys(jira_user)
-            if any(k in user_map for k in cand_keys):
-                already_mapped.append(name)
+
+            # Reuse path: an alternate identifier already maps this
+            # Jira user (e.g. ``user_map["JIRAUSER18400"]`` exists but
+            # ``user_map["anne.geissler"]`` doesn't). Reuse the
+            # existing entry's ``openproject_id`` instead of querying
+            # OP — extra API calls aren't needed and the existing
+            # entry may carry operator-set metadata we shouldn't
+            # overwrite.
+            #
+            # Caught by the live 2026-05-07 NRS run: 18 watcher
+            # ``unmapped_users`` were already mapped under their
+            # ``JIRAUSER<id>`` keys but the watcher resolver probes
+            # ``name`` first and never reached the ``key`` field. The
+            # earlier "skip if any candidate present" logic was too
+            # aggressive — it left the mapping reachable only via
+            # ``key`` and the consumer kept dropping watchers.
+            existing_op_id: int | None = None
+            for k in cand_keys:
+                rec = user_map.get(k)
+                if isinstance(rec, dict):
+                    op_id_val = rec.get("openproject_id")
+                    if isinstance(op_id_val, int):
+                        existing_op_id = op_id_val
+                        break
+                elif isinstance(rec, int):
+                    existing_op_id = rec
+                    break
+
+            if existing_op_id is not None:
+                missing_keys = [k for k in cand_keys if k not in user_map]
+                if not missing_keys:
+                    already_mapped.append(name)
+                    continue
+                # Emit a thin alias entry that points at the same OP
+                # user under each missing identifier. ``matched_by``
+                # marks these as alias-only writes so an audit can
+                # tell them apart from primary backfills.
+                alias_entry: dict[str, Any] = {
+                    "openproject_id": existing_op_id,
+                    "jira_name": jira_user.get("name"),
+                    "jira_email": jira_user.get("emailAddress"),
+                    "jira_display_name": jira_user.get("displayName"),
+                    "jira_key": jira_user.get("key"),
+                    "matched_by": "user_mapping_backfill_alias",
+                }
+                for k in missing_keys:
+                    user_map[k] = alias_entry
+                added.append(
+                    {
+                        "name": name,
+                        "openproject_id": existing_op_id,
+                        "alias_for_existing": True,
+                        "added_keys": missing_keys,
+                    },
+                )
                 continue
 
+            # No existing alias — probe OP normally.
             op_user = self._find_op_user(jira_user)
             if op_user is None:
                 not_found_in_op.append(
