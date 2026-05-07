@@ -217,12 +217,18 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         # — the inner ``jira_key`` is the source of truth (the outer
         # wp_map key is ``str(jira_id)`` in production).
         by_project: dict[str, list[str]] = {}
-        for raw_entry in wp_map.values():
-            inner_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            if not inner_key:
+        for outer_key, raw_entry in wp_map.items():
+            if not isinstance(raw_entry, dict):
+                # Legacy bare-int rows have no recoverable Jira key.
                 continue
+            inner_key = raw_entry.get("jira_key")
+            # Match :meth:`AttachmentsMigration._wp_lookup_by_jira_key`:
+            # prefer the inner ``jira_key``, fall back to the outer key.
+            # Legacy/test fixtures sometimes key the outer dict directly
+            # by ``jira_key`` and omit the inner duplicate.
+            jira_key_for_legacy = str(inner_key or outer_key)
             try:
-                entry = WorkPackageMappingEntry.from_legacy(str(inner_key), raw_entry)
+                entry = WorkPackageMappingEntry.from_legacy(jira_key_for_legacy, raw_entry)
             except ValueError:
                 continue
             jira_key = str(entry.jira_key)
