@@ -243,6 +243,22 @@ class AttachmentRecoveryMigration(BaseMigration):
                         },
                     )
                 if entries:
+                    # Apply the SAME per-WP duplicate-filename
+                    # disambiguation that ``AttachmentsMigration._load``
+                    # applies before upload. Without this, the audit
+                    # compares raw Jira filenames (with duplicates)
+                    # against OP's disambiguated filenames (with " (2)"
+                    # / " (3)" suffixes) and reports phantom losses.
+                    # See PR following 2026-05-07 NRS audit:
+                    # NRS-3363 alone had 13 duplicate-filename pairs.
+                    from src.application.components.attachments_migration import (
+                        AttachmentsMigration,
+                    )
+
+                    raw_names = [e["filename"] for e in entries]
+                    unique_names = AttachmentsMigration.disambiguate_duplicate_filenames_in_group(raw_names)
+                    for e, new_name in zip(entries, unique_names, strict=True):
+                        e["filename"] = new_name
                     out[str(key)] = entries
             start_at += len(page)
         else:

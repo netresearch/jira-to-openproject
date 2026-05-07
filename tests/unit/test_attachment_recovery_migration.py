@@ -560,6 +560,41 @@ def test_iter_jira_issues_transforms_noname_to_jira_attachment_aid() -> None:
     assert " " not in files, files
 
 
+def test_iter_jira_issues_disambiguates_duplicate_filenames_per_wp() -> None:
+    """Audit must apply the same per-WP duplicate-filename
+    disambiguation that ``AttachmentsMigration._load`` applies before
+    upload — otherwise the audit compares Jira's raw filenames
+    (with duplicates) against OP's disambiguated filenames (with
+    ``" (2)"`` / ``" (3)"`` suffixes) and reports phantom losses.
+
+    Live 2026-05-07 NRS regression: NRS-3363 alone had 13 duplicate
+    filename pairs (== 26 attachments) reported as missing because
+    Rails's idempotency check (``LOWER(filename) = ?``) kept one
+    of each pair and the audit counted the rest as gone.
+    """
+    pages = [
+        [
+            _FakeJiraIssue(
+                "NRS-1",
+                [
+                    {"filename": "logo.gif", "id": 1, "url": "u1"},
+                    {"filename": "logo.gif", "id": 2, "url": "u2"},
+                    {"filename": "logo.gif", "id": 3, "url": "u3"},
+                ],
+            ),
+        ],
+    ]
+    jira = _FakeJira(pages)
+    mig = _make_migration(
+        jira_client=jira,
+        op_client=_RecordingOp(),
+        wp_map={"NRS-1": {"jira_key": "NRS-1", "openproject_id": 501}},
+    )
+    out = mig._iter_jira_issues_with_attachments("NRS")
+    files = [e["filename"] for e in out["NRS-1"]]
+    assert files == ["logo.gif", "logo (2).gif", "logo (3).gif"], files
+
+
 def test_iter_jira_issues_skips_blank_filename_with_no_id() -> None:
     """No filename and no id → can't be uploaded, must not appear in
     the audit either (matches the upload pipeline's drop).
