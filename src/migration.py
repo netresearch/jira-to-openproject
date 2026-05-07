@@ -50,6 +50,7 @@ from src.application.components.sprint_epic_migration import SprintEpicMigration
 from src.application.components.status_migration import StatusMigration
 from src.application.components.story_points_migration import StoryPointsMigration
 from src.application.components.time_entry_migration import TimeEntryMigration
+from src.application.components.user_mapping_backfill_migration import UserMappingBackfillMigration
 from src.application.components.user_migration import UserMigration
 from src.application.components.versions_migration import VersionsMigration
 from src.application.components.votes_migration import VotesMigration
@@ -83,6 +84,12 @@ console = Console()
 DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     # === Foundation: Users & Groups ===
     "users",
+    # Retroactively pull missing Jira identities into the user mapping
+    # before any consumer tries to resolve them. Sources: previous
+    # migration_results' ``unmapped_users`` lists + cached issue
+    # author/assignee/reporter/watcher fields. Idempotent — re-runs
+    # only add what's not already mapped.
+    "user_mapping_backfill",
     "groups",
     # === Metadata: Field Definitions ===
     "custom_fields",
@@ -388,6 +395,7 @@ def _build_component_factories(
     """
     return {
         "users": lambda: UserMigration(jira_client=jira_client, op_client=op_client),
+        "user_mapping_backfill": lambda: UserMappingBackfillMigration(jira_client=jira_client, op_client=op_client),
         "groups": lambda: GroupMigration(jira_client=jira_client, op_client=op_client),
         "custom_fields": lambda: CustomFieldMigration(jira_client=jira_client, op_client=op_client),
         "companies": lambda: CompanyMigration(jira_client=jira_client, op_client=op_client),
