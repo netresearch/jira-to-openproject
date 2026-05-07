@@ -384,30 +384,146 @@ def test_run_alias_writes_missing_identifier_to_existing_mapping(tmp_path: Path)
     assert res.details["already_mapped"] == 0
 
 
-def test_run_alias_path_skips_when_all_identifiers_already_present(tmp_path: Path) -> None:
-    """Already-mapped under EVERY candidate identifier → nothing to add.
+def test_run_cheap_path_skips_when_seed_name_already_mapped(tmp_path: Path) -> None:
+    """Seed identifier ``alice`` IS a key in ``user_map`` → cheap-path
+    skip fires before the Jira lookup or alias logic runs.
 
-    Pin: the cheap-skip path correctly distinguishes "fully aliased"
-    (no work to do, ``already_mapped += 1``) from "partially aliased"
-    (alias write fires, ``added += 1``).
+    Reworded per PR #207 review: the previous docstring claimed
+    "already-mapped under EVERY candidate identifier", but the
+    fixture only ensures the seed (``"alice"``) is present. The
+    cheap-path skip is a ``name in user_map`` check that doesn't
+    even consult the Jira user's other identifiers — that's what
+    we're actually pinning here.
     """
     _write_results(tmp_path, components={"watchers": {"details": {"unmapped_users": ["alice"]}}})
-    jira = _Jira({"alice": {"name": "alice", "emailAddress": "alice@x.com"}})
+
+    class _BoomJira:
+        def get_user_info(self, name: str):
+            msg = "Jira must not be queried when cheap-path skip fires"
+            raise AssertionError(msg)
+
     mig = _make_migration(
         tmp_path,
-        jira,
-        _Op(),  # Default _Op raises RecordNotFoundError on every lookup
-        user_map={
-            "alice": {"openproject_id": 999, "matched_by": "manual"},
-            "alice@x.com": {"openproject_id": 999, "matched_by": "manual"},
-        },
+        _BoomJira(),
+        _Op(),  # _Op never queried either
+        user_map={"alice": {"openproject_id": 999, "matched_by": "manual"}},
     )
-    # The cheap-path skip catches the first iteration (``name in user_map``)
-    # so the alias logic doesn't even run.
     res = mig.run()
     assert res.details["already_mapped"] == 1
     assert res.details["added"] == 0
     assert mig.mappings.set_calls == []
+
+
+def test_run_alias_conflict_records_not_found_in_op(tmp_path: Path) -> None:
+    """Two cand_keys map to DIFFERENT OP users → conflict; refuse alias.
+
+    Pin (PR #207 review): the alias path collects every distinct
+    ``openproject_id`` across cand_keys before deciding. When two
+    or more distinct ids exist, the resolver returns a conflict
+    flag and the caller records ``not_found_in_op`` with reason
+    ``alias_op_id_conflict`` instead of silently picking one.
+    """
+
+    class _BoomOp:
+        def get_user(self, identifier: int | str):
+            msg = "OP must not be probed on alias path"
+            raise AssertionError(msg)
+
+        def get_user_by_email(self, email: str):
+            msg = "OP must not be probed on alias path"
+            raise AssertionError(msg)
+
+    _write_results(tmp_path, components={"watchers": {"details": {"unmapped_users": ["dave"]}}})
+    jira = _Jira({"dave": {"name": "dave", "key": "JIRAUSER999", "emailAddress": "dave@x.com"}})
+    mig = _make_migration(
+        tmp_path,
+        jira,
+        _BoomOp(),
+        user_map={
+            "JIRAUSER999": {"openproject_id": 42, "matched_by": "users"},
+            "dave@x.com": {"openproject_id": 999, "matched_by": "auto"},
+        },
+    )
+    res = mig.run()
+    # Conflict surfaced — no alias written.
+    assert res.details["not_found_in_op_count"] == 1
+    item = res.details["not_found_in_op_sample"][0]
+    assert item["reason"] == "alias_op_id_conflict"
+    # Original entries untouched.
+    assert mig.mappings.set_calls == []
+
+
+def test_run_alias_conflict_resolved_when_manual_entry_present(tmp_path: Path) -> None:
+    """Manual entry wins over auto entry on conflict.
+
+    Pin: when one of the conflicting cand_keys carries
+    ``matched_by="manual"``, the resolver picks ITS
+    ``openproject_id`` and writes alias entries pointing there —
+    honouring the "manual target wins" contract.
+    """
+
+    class _BoomOp:
+        def get_user(self, identifier: int | str):
+            msg = "OP must not be probed"
+            raise AssertionError(msg)
+
+        def get_user_by_email(self, email: str):
+            msg = "OP must not be probed"
+            raise AssertionError(msg)
+
+    _write_results(tmp_path, components={"watchers": {"details": {"unmapped_users": ["eve"]}}})
+    jira = _Jira({"eve": {"name": "eve", "key": "JIRAUSER123", "emailAddress": "eve@x.com"}})
+    mig = _make_migration(
+        tmp_path,
+        jira,
+        _BoomOp(),
+        user_map={
+            "JIRAUSER123": {"openproject_id": 42, "matched_by": "users"},  # auto
+            "eve@x.com": {"openproject_id": 999, "matched_by": "manual"},  # operator-set
+        },
+    )
+    res = mig.run()
+    user_map = mig.mappings.get_mapping("user")
+    # Alias entries point at the manual id (999), NOT the auto id (42).
+    assert user_map["eve"]["openproject_id"] == 999
+    assert user_map["eve"]["matched_by"] == "user_mapping_backfill_alias"
+    assert res.details["added"] == 1
+
+
+def test_run_alias_handles_malformed_historical_op_id(tmp_path: Path) -> None:
+    """Malformed historical entry (e.g. ``openproject_id="not-a-number"``)
+    is skipped silently — doesn't crash the run.
+
+    Pin (PR #207 review): defensive int parse with
+    ``try/except (TypeError, ValueError)`` so a single corrupted
+    historical record doesn't take down the whole component.
+    """
+
+    class _BoomOp:
+        def get_user(self, identifier: int | str):
+            msg = "OP must not be probed when alternate identifier is parseable"
+            raise AssertionError(msg)
+
+        def get_user_by_email(self, email: str):
+            msg = "OP must not be probed"
+            raise AssertionError(msg)
+
+    _write_results(tmp_path, components={"watchers": {"details": {"unmapped_users": ["frank"]}}})
+    jira = _Jira({"frank": {"name": "frank", "key": "JIRAUSER555", "emailAddress": "frank@x.com"}})
+    mig = _make_migration(
+        tmp_path,
+        jira,
+        _BoomOp(),
+        user_map={
+            "JIRAUSER555": {"openproject_id": "garbage", "matched_by": "users"},  # bad id
+            "frank@x.com": {"openproject_id": 77, "matched_by": "users"},  # good id
+        },
+    )
+    res = mig.run()
+    user_map = mig.mappings.get_mapping("user")
+    # Bad entry skipped, good one used as the alias target.
+    assert user_map["frank"]["openproject_id"] == 77
+    assert res.details["added"] == 1
 
 
 def test_run_no_jira_user_records_not_found_in_jira(tmp_path: Path) -> None:
