@@ -39,11 +39,15 @@ On a clean instance this component is a fast no-op.
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from typing import Any
 
-from src.application.components.attachments_migration import AttachmentsMigration
+from src.application.components.attachments_migration import (
+    AttachmentsMigration,
+    compute_wp_lookup_by_jira_key,
+)
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -83,28 +87,13 @@ class AttachmentRecoveryMigration(BaseMigration):
             return obj.get(name)
         return getattr(obj, name, None)
 
-    def _wp_lookup_by_jira_key(self) -> dict[str, int]:
-        """Reuse :class:`AttachmentsMigration`'s normalised lookup so this
-        component sees exactly the WPs the migration intended to process.
-
-        Avoids a divergence-bug class where the recovery uses a
-        slightly-different WP map than the migration and ends up
-        re-attaching against a different WP than the original load.
-        """
-        # Don't call ``__init__`` — we don't need the helper's
-        # attachment dir / cache; just the method.
-        helper = AttachmentsMigration.__new__(AttachmentsMigration)
-        helper.mappings = self.mappings
-        helper._wp_lookup_cache = None
-        return helper._wp_lookup_by_jira_key()
-
-    def _project_keys_in_scope(self) -> list[str]:
+    def _project_keys_in_scope(self, wp_map: dict[str, int]) -> list[str]:
         """Project keys present in the WP mapping (after the ``inner.jira_key`` /
         outer-fallback normalisation). Used to scope the Jira-side
         pagination query without requiring CLI flags.
         """
         prefixes: set[str] = set()
-        for k in self._wp_lookup_by_jira_key():
+        for k in wp_map:
             head = k.split("-", 1)[0]
             if _JIRA_PROJECT_KEY_RE.match(head):
                 prefixes.add(head)
@@ -256,7 +245,13 @@ puts end_marker
     def run(self) -> ComponentResult:  # type: ignore[override]
         self.logger.info("Starting attachment recovery (per-issue diff + targeted re-attach)")
 
-        wp_map = self._wp_lookup_by_jira_key()
+        # Use the shared ``compute_wp_lookup_by_jira_key`` helper so we
+        # see exactly the same normalisation the original migration
+        # used (no divergence-bug class) without paying the
+        # ``BaseMigration.__init__`` cost up-front. We only construct
+        # an :class:`AttachmentsMigration` once we actually have keys
+        # to delegate — keeps the empty/no-recovery paths fast.
+        wp_map = compute_wp_lookup_by_jira_key(self.mappings)
         if not wp_map:
             # Same fail-loud pattern as siblings (#194/#197/#198/#199).
             msg = (
@@ -271,7 +266,7 @@ puts end_marker
                 errors=["missing_work_package_mapping"],
             )
 
-        project_keys = self._project_keys_in_scope()
+        project_keys = self._project_keys_in_scope(wp_map)
         if not project_keys:
             return ComponentResult(
                 success=True,
@@ -280,40 +275,70 @@ puts end_marker
                 details={"projects_examined": 0},
             )
 
-        # Gather Jira side first — paginated per project.
-        jira_atts: dict[str, list[dict[str, Any]]] = {}
+        # Gather Jira side first — paginated per project. Scope to
+        # the keys present in the WP mapping immediately so unmapped
+        # issues never pollute the recovery accounting (PR #206
+        # review: previously they inflated ``missing_total_before``,
+        # got passed to delegation as wasted API calls, and were
+        # silently skipped from ``still_missing_total`` so a run
+        # could report ``success=True`` with ``wp_unmapped > 0``
+        # masking real loss).
+        jira_atts_all: dict[str, list[dict[str, Any]]] = {}
         for proj_key in project_keys:
             self.logger.info("Recovery: enumerating Jira attachments for %r", proj_key)
-            jira_atts.update(self._iter_jira_issues_with_attachments(proj_key))
+            jira_atts_all.update(self._iter_jira_issues_with_attachments(proj_key))
+
+        # Split into in-scope (mapped) and unmapped buckets.
+        jira_atts: dict[str, list[dict[str, Any]]] = {}
+        unmapped_jira_keys: list[str] = []
+        for k, v in jira_atts_all.items():
+            if k in wp_map:
+                jira_atts[k] = v
+            else:
+                unmapped_jira_keys.append(k)
+
+        if unmapped_jira_keys:
+            # These issues exist in Jira but their WPs aren't in our
+            # mapping — surface as a real warning so an operator
+            # knows attachments on those WPs (if any) cannot be
+            # recovered by this run.
+            self.logger.warning(
+                "Recovery: %d Jira issues have attachments but no WP mapping entry"
+                " (sample: %s) — out of scope for this component;"
+                " run work_packages_skeleton on those projects first.",
+                len(unmapped_jira_keys),
+                unmapped_jira_keys[:10],
+            )
 
         if not jira_atts:
             return ComponentResult(
+                # ``success`` reflects the *in-scope* state. Out-of-scope
+                # unmapped issues are surfaced via the warning above
+                # and the ``wp_unmapped`` count below; they do not
+                # pretend a clean run.
                 success=True,
                 updated=0,
-                message="No Jira issues with attachments in scope; nothing to recover.",
-                details={"projects_examined": len(project_keys)},
+                message=(f"No in-scope Jira issues with attachments to recover. wp_unmapped={len(unmapped_jira_keys)}"),
+                details={
+                    "projects_examined": len(project_keys),
+                    "wp_unmapped": len(unmapped_jira_keys),
+                },
             )
 
         # Resolve only the WPs we need to query.
-        relevant_wp_ids = sorted({wp_map[k] for k in jira_atts if k in wp_map})
+        relevant_wp_ids = sorted({wp_map[k] for k in jira_atts})
         op_by_wp = self._fetch_op_attachments_by_wp(relevant_wp_ids)
 
         # Per-issue diff (multiset semantics).
         per_issue_missing: dict[str, list[str]] = {}
         per_issue_extra: dict[str, list[str]] = {}
         clean = 0
-        wp_unmapped = 0
         missing_total = 0
         extra_total = 0
 
         for jira_key, jira_list in jira_atts.items():
-            wp_id = wp_map.get(jira_key)
+            wp_id = wp_map[jira_key]  # guaranteed by the in-scope filter above
             jira_filenames = [a["filename"] for a in jira_list]
-            if wp_id is None:
-                wp_unmapped += 1
-                per_issue_missing[jira_key] = jira_filenames
-                missing_total += len(jira_filenames)
-                continue
             op_filenames = op_by_wp.get(wp_id, [])
             jira_counter = Counter(jira_filenames)
             op_counter = Counter(op_filenames)
@@ -331,9 +356,10 @@ puts end_marker
         recovery_keys = sorted(per_issue_missing)
         if not recovery_keys:
             self.logger.info(
-                "Recovery: no missing attachments detected (%d issues clean, %d extras)",
+                "Recovery: no missing attachments detected (%d issues clean, %d extras, %d unmapped)",
                 clean,
                 extra_total,
+                len(unmapped_jira_keys),
             )
             # Use the same key names as the recovery branch so callers
             # can read ``details`` uniformly regardless of which path
@@ -341,12 +367,15 @@ puts end_marker
             return ComponentResult(
                 success=True,
                 updated=0,
-                message=f"All examined attachments present in OP. clean={clean}, extra={extra_total}",
+                message=(
+                    f"All in-scope attachments present in OP. clean={clean},"
+                    f" extra={extra_total}, wp_unmapped={len(unmapped_jira_keys)}"
+                ),
                 details={
                     "projects_examined": len(project_keys),
                     "issues_examined": len(jira_atts),
                     "clean": clean,
-                    "wp_unmapped": wp_unmapped,
+                    "wp_unmapped": len(unmapped_jira_keys),
                     "missing_total_before": 0,
                     "still_missing_total": 0,
                     "extra_total": extra_total,
@@ -373,11 +402,12 @@ puts end_marker
         )
         recovered = 0
         failed = 0
+        merged_mapping: dict[str, dict[str, int]] = {}
         batch_size = 50
         for i in range(0, len(recovery_keys), batch_size):
             batch = recovery_keys[i : i + batch_size]
             try:
-                up, fl, _mapping = att_migration._process_batch_end_to_end(batch)
+                up, fl, mapping = att_migration._process_batch_end_to_end(batch)
             except Exception:
                 self.logger.exception(
                     "Recovery batch %d failed (%d keys)",
@@ -388,6 +418,27 @@ puts end_marker
                 continue
             recovered += up
             failed += fl
+            # Accumulate {jira_key: {filename: attachment_id}} for
+            # downstream consumers (work_packages_content uses this
+            # mapping to resolve ``!image.png!`` references to OP API
+            # URLs). Per PR #206 review.
+            if isinstance(mapping, dict):
+                for jk, file_map in mapping.items():
+                    if not isinstance(file_map, dict):
+                        continue
+                    bucket = merged_mapping.setdefault(str(jk), {})
+                    for fn, att_id in file_map.items():
+                        try:
+                            bucket[str(fn)] = int(att_id)
+                        except TypeError, ValueError:
+                            continue
+
+        # Persist the recovered attachment mapping. Merge with any
+        # existing ``attachment_mapping.json`` so the original run's
+        # entries aren't lost. Atomic write (tmp + rename) — same
+        # defence PR #197 added for the WP mapping.
+        if merged_mapping:
+            self._merge_attachment_mapping(merged_mapping)
 
         # After the recovery pass, recompute the missing tail so we
         # report what's *still* lost (genuine 404s / collisions /
@@ -395,9 +446,7 @@ puts end_marker
         op_by_wp_after = self._fetch_op_attachments_by_wp(relevant_wp_ids)
         still_missing_total = 0
         for jira_key in recovery_keys:
-            wp_id = wp_map.get(jira_key)
-            if wp_id is None:
-                continue
+            wp_id = wp_map[jira_key]  # guaranteed by in-scope filter
             jira_counter = Counter(a["filename"] for a in jira_atts[jira_key])
             op_counter = Counter(op_by_wp_after.get(wp_id, []))
             still_missing_total += sum((jira_counter - op_counter).values())
@@ -405,7 +454,7 @@ puts end_marker
         msg = (
             f"Recovery: recovered={recovered}, still_missing={still_missing_total},"
             f" failed_batches={failed}, clean={clean}, extra={extra_total},"
-            f" wp_unmapped={wp_unmapped}"
+            f" wp_unmapped={len(unmapped_jira_keys)}"
         )
         self.logger.info(msg)
         return ComponentResult(
@@ -417,7 +466,7 @@ puts end_marker
                 "projects_examined": len(project_keys),
                 "issues_examined": len(jira_atts),
                 "clean": clean,
-                "wp_unmapped": wp_unmapped,
+                "wp_unmapped": len(unmapped_jira_keys),
                 "missing_total_before": missing_total,
                 "still_missing_total": still_missing_total,
                 "extra_total": extra_total,
@@ -425,4 +474,49 @@ puts end_marker
                 "still_missing_sample": dict(list(per_issue_missing.items())[:20]),
                 "extra_sample": dict(list(per_issue_extra.items())[:20]),
             },
+        )
+
+    def _merge_attachment_mapping(self, new_mapping: dict[str, dict[str, int]]) -> None:
+        """Merge ``new_mapping`` into ``attachment_mapping.json`` atomically.
+
+        Each entry has shape ``{jira_key: {filename: attachment_id}}``.
+        Existing entries are preserved; per-key file maps are merged
+        with the new run's entries taking precedence on duplicate
+        filenames (e.g. when an existing OP attachment was re-attached
+        with a fresh id). Atomic write (tmp + rename) keeps the file
+        consistent if the process crashes mid-dump — same defence
+        PR #197 added for ``work_package_mapping``.
+        """
+        path = self.data_dir / "attachment_mapping.json"
+        existing: dict[str, dict[str, int]] = {}
+        if path.exists():
+            try:
+                with path.open(encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    for k, v in raw.items():
+                        if isinstance(v, dict):
+                            existing[str(k)] = {
+                                str(fn): int(aid)
+                                for fn, aid in v.items()
+                                if isinstance(aid, (int, str)) and str(aid).lstrip("-").isdigit()
+                            }
+            except (OSError, json.JSONDecodeError) as exc:
+                self.logger.warning(
+                    "Existing attachment_mapping.json unreadable (%s) — recovery"
+                    " writes a fresh file from this run's results only.",
+                    exc,
+                )
+                existing = {}
+        for jk, file_map in new_mapping.items():
+            existing.setdefault(jk, {}).update(file_map)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, sort_keys=True)
+        tmp.replace(path)
+        self.logger.info(
+            "Recovery: persisted attachment_mapping for %d Jira keys (total %d entries)",
+            len(new_mapping),
+            sum(len(v) for v in existing.values()),
         )

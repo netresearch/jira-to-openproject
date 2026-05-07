@@ -27,8 +27,11 @@ def _make_migration(
     jira_client: Any,
     op_client: Any,
     wp_map: dict[str, Any] | None = None,
+    data_dir: Any = None,
 ) -> Any:
     """Bypass ``__init__`` to avoid the BaseMigration boot path."""
+    from pathlib import Path
+
     from src.application.components.attachment_recovery_migration import (
         AttachmentRecoveryMigration,
     )
@@ -45,6 +48,10 @@ def _make_migration(
         success=lambda *a, **kw: None,
         notice=lambda *a, **kw: None,
     )
+    # ``data_dir`` is needed by ``_merge_attachment_mapping``. Default
+    # to ``Path("/tmp")`` so tests that don't exercise persistence
+    # don't need to pass one.
+    instance.data_dir = Path(data_dir) if data_dir is not None else Path("/tmp")
 
     class FakeMappings:
         def __init__(self, m: dict[str, Any]) -> None:
@@ -77,15 +84,16 @@ def test_run_empty_wp_map_fails_loud() -> None:
     assert "missing_work_package_mapping" in (result.errors or [])
 
 
-def test_run_no_project_keys_in_scope_returns_success() -> None:
+def test_run_legacy_int_only_mapping_fails_loud() -> None:
     """WP map contains only legacy bare-int rows (no recoverable
-    project key) → no-op success, distinct from fail-loud.
+    Jira key) → fail loud with the same error tag as the empty-map
+    case. ``_wp_lookup_by_jira_key`` filters bare-int rows out, so
+    the lookup returns an empty dict — same fail-loud guard fires.
+    Pin: corrected docstring/name to match the asserted behaviour
+    (PR #206 review).
     """
-    # Bare ints can't yield a project key — the wp_lookup helper
-    # filters them out, so the map ends up empty for our purposes.
     mig = _make_migration(jira_client=None, op_client=None, wp_map={"PROJ-1": 42})
     result = mig.run()
-    # Bare int rows are stripped; mapping is effectively empty → fail loud.
     assert result.success is False
     assert "missing_work_package_mapping" in (result.errors or [])
 
@@ -383,5 +391,9 @@ def test_op_envelope_error_status_is_logged_and_skipped(monkeypatch: pytest.Monk
     result = mig.run()
     # Run completes (no crash).
     assert isinstance(result.message, str)
-    # OP fetch was attempted at least twice (initial + post-recover).
-    assert op.calls >= 1
+    # OP fetch was attempted twice — initial (sees nothing because
+    # the error envelope drops the data payload) AND the
+    # post-recover recompute (also sees an error envelope, so
+    # still_missing remains positive). Pin the exact contract per
+    # PR #206 review.
+    assert op.calls >= 2
