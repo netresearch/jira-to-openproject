@@ -392,13 +392,35 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     if wp_with_subject < wp_total:
         failures.append(f"WPs missing subject: {wp_total - wp_with_subject}/{wp_total}")
 
-    # Assignee — coverage signal (was the bug at <1% before fix)
+    # Assignee — coverage signal. Compare to Jira source if available;
+    # only flag when OP undercount diverges from Jira by >5% of the
+    # Jira-side count. Jira projects can legitimately have very low
+    # assignee coverage (NRS itself: 12/4082 = 0.3% on the source
+    # side — flagging that as "Bug A" was a false positive).
     wp_with_assignee = _metric_int(metrics, "wp_with_assignee")
-    assignee_pct = (wp_with_assignee / wp_total) * 100
-    if assignee_pct < 5:
-        failures.append(
-            f"Suspiciously low assignee coverage: {wp_with_assignee}/{wp_total} = {assignee_pct:.1f}% (Bug A indicator)"
-        )
+    jira_assignee_count = metrics.get("jira_assignee_count")
+    if isinstance(jira_assignee_count, int):
+        diff = jira_assignee_count - wp_with_assignee
+        # 5% tolerance, plus a small absolute floor so single-digit
+        # absences don't fire on tiny projects.
+        tolerance = max(int(jira_assignee_count * 0.05), 5)
+        if diff > tolerance:
+            failures.append(
+                f"Assignee coverage gap: Jira reports {jira_assignee_count} assigned"
+                f" issues, OP has {wp_with_assignee} ({diff} missing, tol {tolerance})"
+            )
+    else:
+        # No Jira-side count → fall back to a very conservative
+        # heuristic that only fires if assignee coverage is
+        # near-zero AND the project is non-trivially sized
+        # (avoids flagging genuine low-coverage projects when Jira
+        # creds are unavailable).
+        assignee_pct = (wp_with_assignee / wp_total) * 100
+        if wp_total >= 100 and assignee_pct < 1:
+            warnings.append(
+                f"Low assignee coverage: {wp_with_assignee}/{wp_total} = {assignee_pct:.1f}%"
+                " (no Jira-side count available for comparison; verify manually)"
+            )
 
     # created_at preservation — if >50% of WPs were created in the last 24h,
     # update_columns isn't sticking (Bug E indicator)
@@ -708,6 +730,40 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         warnings.append(f"Only {desc_pct:.0f}% of WPs have a description")
 
     return failures, warnings
+
+
+def _fetch_jira_assignee_count(jira_project_key: str) -> int | None:
+    """Best-effort: count Jira issues that have an assignee.
+
+    Returns ``None`` if Jira can't be reached. Lets the assignee
+    coverage classifier compare migrated vs source instead of
+    flagging a fixed threshold — Jira projects can legitimately
+    have low coverage (caught by 2026-05-08 NRS audit:
+    Jira itself reports only 12 of 4082 NRS issues with an
+    assignee, so the migration's 12 isn't a loss).
+    """
+    if not _JIRA_PROJECT_KEY_RE.match(jira_project_key):
+        return None
+    try:
+        from src.infrastructure.jira.jira_client import JiraClient
+    except ImportError as exc:
+        sys.stderr.write(
+            f"[audit] Jira assignee comparison skipped — could not import JiraClient: {exc}\n",
+        )
+        return None
+    try:
+        jira = JiraClient()
+        # ``get_issue_count`` accepts a free-form JQL extension; the
+        # project filter and ``assignee is not EMPTY`` together count
+        # exactly the rows we need to compare against OP's
+        # ``assigned_to_id IS NOT NULL`` count.
+        jql = f'project = "{jira_project_key}" AND assignee is not EMPTY'
+        return int(jira.jira.search_issues(jql, maxResults=0).total)  # type: ignore[attr-defined]
+    except Exception as exc:
+        sys.stderr.write(
+            f"[audit] Jira assignee comparison skipped — {type(exc).__name__}: {exc}\n",
+        )
+        return None
 
 
 def _fetch_jira_issue_count(jira_project_key: str) -> int | None:
@@ -1166,6 +1222,7 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
         metrics["jira_relation_breakdown"] = None
         metrics["jira_relation_count"] = _fetch_jira_relation_count(jira_project_key)
     metrics["jira_watcher_count"] = _fetch_jira_watcher_count(jira_project_key)
+    metrics["jira_assignee_count"] = _fetch_jira_assignee_count(jira_project_key)
     return metrics
 
 

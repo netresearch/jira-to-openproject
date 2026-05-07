@@ -1523,3 +1523,81 @@ def test_zero_wps_short_circuits_before_new_checks() -> None:
     # Single failure about no WPs; not a cascade of NULL-field complaints.
     assert len(failures) == 1
     assert "no work packages" in failures[0].lower()
+
+
+# --- Source-aware assignee heuristic (added 2026-05-08) ---
+
+
+def test_low_assignee_coverage_does_not_fail_when_jira_matches() -> None:
+    """Low coverage that matches the Jira source = NOT a failure.
+
+    Live 2026-05-08 NRS audit: Jira itself reports 12/4082 issues
+    with an assignee. The migration faithfully copied all 12. The
+    old hard 5% threshold flagged this as ``Bug A`` — false positive.
+    """
+    failures, warnings = _classify(
+        _baseline_metrics(
+            wp_total=4082,
+            wp_with_assignee=12,
+            wp_with_subject=4082,
+            wp_with_description=4082,
+            wp_with_author=4082,
+            wp_with_type=4082,
+            wp_with_status=4082,
+            wp_with_priority=4082,
+            wp_journal_total=4082,
+            wp_provenance_cfs={k: {"exists": True, "populated": 4082} for k in _baseline_metrics()["wp_provenance_cfs"]},
+            jira_assignee_count=12,
+        ),
+    )
+    assert not any("assignee" in f.lower() for f in failures), failures
+    assert not any("assignee" in w.lower() for w in warnings), warnings
+
+
+def test_assignee_gap_beyond_tolerance_fails() -> None:
+    """If OP undercount diverges from Jira by more than 5% +5
+    issues, that's real loss.
+
+    Pin: source-aware comparison — the threshold scales with the
+    Jira-side count instead of being a fixed percentage.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            wp_total=1000,
+            wp_with_assignee=400,  # OP has 400
+            wp_with_subject=1000,
+            wp_with_description=1000,
+            wp_with_author=1000,
+            wp_with_type=1000,
+            wp_with_status=1000,
+            wp_with_priority=1000,
+            wp_journal_total=1000,
+            wp_provenance_cfs={k: {"exists": True, "populated": 1000} for k in _baseline_metrics()["wp_provenance_cfs"]},
+            jira_assignee_count=600,  # Jira has 600 — 200 missing in OP
+        ),
+    )
+    assert any("assignee" in f.lower() and "missing" in f.lower() for f in failures), failures
+
+
+def test_assignee_no_jira_count_low_coverage_warns_only() -> None:
+    """Without a Jira-side count, very low coverage on a non-tiny
+    project surfaces as a warning, never a failure — operators may
+    legitimately run the audit without Jira creds.
+    """
+    failures, warnings = _classify(
+        _baseline_metrics(
+            wp_total=500,
+            wp_with_assignee=2,
+            wp_with_subject=500,
+            wp_with_description=500,
+            wp_with_author=500,
+            wp_with_type=500,
+            wp_with_status=500,
+            wp_with_priority=500,
+            wp_journal_total=500,
+            wp_provenance_cfs={k: {"exists": True, "populated": 500} for k in _baseline_metrics()["wp_provenance_cfs"]},
+            # jira_assignee_count omitted on purpose — simulates absent Jira creds.
+        ),
+    )
+    assert not any("assignee" in f.lower() for f in failures), failures
+    assert any("assignee" in w.lower() for w in warnings), warnings
