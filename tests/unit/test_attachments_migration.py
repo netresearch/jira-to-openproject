@@ -50,21 +50,27 @@ class DummyOp:
         # dummy. Tests can override before calling ``run()``.
         self.attachment_max_kb: int = 5120
 
-    def execute_query(self, query: str, timeout: int | None = None) -> str:
-        self.queries.append(query)
-        if query == "Setting.attachment_max_size":
-            return str(self.attachment_max_kb)
-        # Pattern-match the writer: ``Setting.attachment_max_size = 12345``
-        m = re.match(r"^\s*Setting\.attachment_max_size\s*=\s*(\d+)\s*$", query)
-        if m:
-            self.attachment_max_kb = int(m.group(1))
-            return str(self.attachment_max_kb)
-        return ""
-
     def transfer_file_to_container(self, local_path: Path, container_path: str):
         self.transfers.append((local_path, container_path))
 
     def execute_script_with_data(self, script_content: str, data: object):
+        # Marker-fenced ``Setting.attachment_max_size`` script — extract the
+        # write target (if any) so the dummy mirrors a real Rails read/write
+        # round-trip via the envelope.
+        if "Setting.attachment_max_size" in script_content:
+            m = re.search(
+                r"Setting\.attachment_max_size\s*=\s*(\d+)",
+                script_content,
+            )
+            if m:
+                self.attachment_max_kb = int(m.group(1))
+            self.queries.append(script_content)
+            return {
+                "status": "success",
+                "message": "ok",
+                "data": {"value": self.attachment_max_kb},
+                "output": "<dummy>",
+            }
         self.last_input = list(data) if isinstance(data, list) else []
         # Mirror the real ``OpenProjectRailsRunner.execute_script_with_data``
         # envelope: ``{status, message, data, output}``. The counters live
@@ -530,13 +536,12 @@ def test_run_raises_op_attachment_max_size_then_restores(
     # Verify the cap was raised and restored — the dummy stores the
     # latest write, so after ``run()`` it must be the original value.
     assert op.attachment_max_kb == 5120, "cap not restored"
-    # The query log must contain both the read, the bump write, and
-    # the restore write.
-    reads = [q for q in op.queries if q == "Setting.attachment_max_size"]
-    writes = [q for q in op.queries if "=" in q]
-    assert len(reads) >= 1, op.queries
-    assert any("1048576" in w for w in writes), op.queries
-    assert any("5120" in w for w in writes), op.queries
+    # Three envelope round-trips: read original, bump write, restore write.
+    setting_calls = [q for q in op.queries if "Setting.attachment_max_size" in q]
+    assert len(setting_calls) == 3, setting_calls
+    writes = [q for q in setting_calls if re.search(r"Setting\.attachment_max_size\s*=", q)]
+    assert any("1048576" in w for w in writes), setting_calls
+    assert any("= 5120" in w for w in writes), setting_calls
 
 
 def test_run_skips_bump_when_cap_already_high_enough(
@@ -559,7 +564,8 @@ def test_run_skips_bump_when_cap_already_high_enough(
 
     mig.run()
 
-    # Read happened once; no writes.
-    writes = [q for q in op.queries if "=" in q]
-    assert writes == [], writes
+    # Read happened once; no writes — only the read script is in queries.
+    setting_calls = [q for q in op.queries if "Setting.attachment_max_size" in q]
+    writes = [q for q in setting_calls if re.search(r"Setting\.attachment_max_size\s*=", q)]
+    assert writes == [], setting_calls
     assert op.attachment_max_kb == 2_000_000
