@@ -253,7 +253,7 @@ class WpMetadataBackfillMigration(BaseMigration):
                 continue
             try:
                 records.append((int(wp_id), str(jira_key)))
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 continue
 
         if not records:
