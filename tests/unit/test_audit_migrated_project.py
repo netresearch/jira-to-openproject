@@ -868,6 +868,102 @@ def test_jira_relation_count_none_warns_source_unavailable() -> None:
     ), warnings
 
 
+# --- Cross-project relation breakdown (added 2026-05-07) ---------------------
+# The legacy ``raw // 2`` halved count over-counts on cross-project-heavy
+# projects (NRS audit caught a 75% false positive). The new breakdown
+# compares OP to intra-project unique pairs and surfaces cross-project
+# count as informational. These tests pin both halves of that contract.
+
+
+def test_jira_relation_breakdown_intra_within_tolerance_passes() -> None:
+    """OP matches intra-project Jira links → no failure on relations."""
+    # baseline OP=30; intra=29 (within 5%), cross=1000 (irrelevant).
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            jira_relation_breakdown={"intra_unique": 29, "cross": 1000, "raw": 2000},
+        ),
+    )
+    assert not any("relation" in f.lower() and "jira" in f.lower() and "5" in f for f in failures), failures
+
+
+def test_jira_relation_breakdown_intra_above_tolerance_is_failure() -> None:
+    """OP missing intra-project links → failure (regardless of cross count)."""
+    # baseline OP=30; intra=100 (way over) — fails.
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            jira_relation_breakdown={"intra_unique": 100, "cross": 0, "raw": 200},
+        ),
+    )
+    assert any("intra-project" in f.lower() and "5" in f for f in failures), failures
+
+
+def test_jira_relation_breakdown_cross_emits_informational_warning() -> None:
+    """Cross-project links produce an informational warning, not a failure.
+
+    Pin: even when OP intra matches Jira intra exactly, the audit
+    surfaces the cross-project count so the operator knows how
+    much was deliberately not migrated. Live NRS run: 3451 cross
+    vs 1173 raw intra (= 586 unique pairs after dedup).
+    """
+    failures, warnings = _classify(
+        _baseline_metrics(
+            jira_relation_breakdown={"intra_unique": 30, "cross": 3451, "raw": 4624},
+        ),
+    )
+    assert not any("relation" in f.lower() and "jira" in f.lower() and "5" in f for f in failures), failures
+    assert any("cross-project" in w.lower() and "3451" in w for w in warnings), warnings
+
+
+def test_jira_relation_breakdown_cross_zero_omits_warning() -> None:
+    """No cross-project links → no informational warning."""
+    _failures, warnings = _classify(
+        _baseline_metrics(
+            jira_relation_breakdown={"intra_unique": 30, "cross": 0, "raw": 60},
+        ),
+    )
+    assert not any("cross-project" in w.lower() for w in warnings), warnings
+
+
+def test_jira_relation_breakdown_takes_precedence_over_legacy_count() -> None:
+    """When both ``jira_relation_breakdown`` and the legacy halved count are
+    present, the breakdown wins.
+
+    Mirrors what ``_execute_audit`` actually populates: both metrics
+    are set in the same dict, but the breakdown's intra-only check
+    is the authoritative comparison. Pin: a legacy halved count
+    that would fail (large cross-project tail) is silently ignored
+    in favour of the intra-only check.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            jira_relation_count=2350,  # legacy halved would FAIL: 30 vs 2350
+            jira_relation_breakdown={"intra_unique": 30, "cross": 4640, "raw": 4700},
+        ),
+    )
+    assert not any("relation" in f.lower() and "5" in f for f in failures), failures
+
+
+def test_jira_relation_breakdown_zero_intra_requires_zero_op() -> None:
+    """Both intra-counts at zero is healthy; OP non-zero would fail."""
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            jira_relation_breakdown={"intra_unique": 0, "cross": 5, "raw": 5},
+            relation_total=0,
+            wp_total=10,
+        ),
+    )
+    assert not any("relation" in f.lower() and "5" in f for f in failures), failures
+    failures2, _ = _classify(
+        _baseline_metrics(
+            jira_relation_breakdown={"intra_unique": 0, "cross": 5, "raw": 5},
+            relation_total=3,
+            wp_total=10,
+        ),
+    )
+    # OP has 3 relations but Jira intra is 0 → mismatch.
+    assert any("relation" in f.lower() and "5" in f for f in failures2), failures2
+
+
 def test_jira_relation_count_missing_field_treated_as_silent() -> None:
     metrics = _baseline_metrics()
     failures, warnings = _classify(metrics)

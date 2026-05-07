@@ -594,29 +594,57 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     # whenever Jira data is available. Both directions out-of-band
     # are failures: a low OP count means relations were dropped on
     # migration; a high OP count means duplicates leaked through.
-    if "jira_relation_count" in metrics:
-        jira_rel = metrics["jira_relation_count"]
-        if jira_rel is None:
-            warnings.append(
-                "Jira relation source comparison unavailable — check skipped",
-            )
+    # Prefer the cross/intra breakdown (added 2026-05-07): the legacy
+    # ``raw // 2`` halved count over-counts on projects whose issues
+    # link heavily to other projects (NRS: 75% audit false-positive).
+    # Only intra-project links migrate, so we compare OP to the intra
+    # count and surface the cross count as informational.
+    breakdown = metrics.get("jira_relation_breakdown")
+    if isinstance(breakdown, dict):
+        op_rel = _metric_int(metrics, "relation_total")
+        intra_unique = int(breakdown.get("intra_unique") or 0)
+        cross = int(breakdown.get("cross") or 0)
+        if intra_unique == 0:
+            tolerance_ok = op_rel == 0
         else:
-            op_rel = _metric_int(metrics, "relation_total")
-            jira_rel_int = int(jira_rel)
-            # Tolerance is symmetric; when Jira reports zero we just
-            # require OP to also report zero (no division-by-zero).
-            if jira_rel_int == 0:
-                tolerance_ok = op_rel == 0
-            else:
-                delta_pct = abs(op_rel - jira_rel_int) / jira_rel_int
-                tolerance_ok = delta_pct <= _RELATION_TOLERANCE
-            if not tolerance_ok:
-                failures.append(
-                    f"Jira→OP relation count mismatch beyond ±5%:"
-                    f" Jira reports {jira_rel_int}, OP has {op_rel}"
-                    f" ({op_rel - jira_rel_int:+d}) — relations dropped or"
-                    " duplicated during migration",
-                )
+            delta_pct = abs(op_rel - intra_unique) / intra_unique
+            tolerance_ok = delta_pct <= _RELATION_TOLERANCE
+        if not tolerance_ok:
+            failures.append(
+                f"Jira→OP intra-project relation count mismatch beyond ±5%:"
+                f" Jira intra={intra_unique}, OP has {op_rel}"
+                f" ({op_rel - intra_unique:+d}) — relations dropped or"
+                " duplicated during migration",
+            )
+        if cross:
+            warnings.append(
+                f"Jira→OP cross-project relations not migrated: {cross}"
+                " — informational, not loss (cross-project links are"
+                " out of scope per MIGRATION_SPEC.md; the matched"
+                " project is single-scope)",
+            )
+    elif "jira_relation_count" in metrics and metrics["jira_relation_count"] is None:
+        warnings.append(
+            "Jira relation source comparison unavailable — check skipped",
+        )
+    elif "jira_relation_count" in metrics:
+        # Pre-breakdown legacy fallback. Still needed for fixture-based
+        # classifier tests that bypass ``_execute_audit`` and only set
+        # ``jira_relation_count``. Same halving caveat as before.
+        jira_rel_int = int(metrics["jira_relation_count"])
+        op_rel = _metric_int(metrics, "relation_total")
+        if jira_rel_int == 0:
+            tolerance_ok = op_rel == 0
+        else:
+            delta_pct = abs(op_rel - jira_rel_int) / jira_rel_int
+            tolerance_ok = delta_pct <= _RELATION_TOLERANCE
+        if not tolerance_ok:
+            failures.append(
+                f"Jira→OP relation count mismatch beyond ±5%:"
+                f" Jira reports {jira_rel_int}, OP has {op_rel}"
+                f" ({op_rel - jira_rel_int:+d}) — relations dropped or"
+                " duplicated during migration",
+            )
 
     # WP CF format validation. The Ruby side counts populated values
     # that don't match the expected regex per CF. Missing key = legacy
@@ -936,26 +964,131 @@ def _fetch_jira_watcher_count(jira_project_key: str) -> int | None:
     return total
 
 
+def _fetch_jira_relation_breakdown(jira_project_key: str) -> dict[str, int] | None:
+    """Best-effort: classify Jira issuelinks as intra-project vs cross-project.
+
+    The previous halving model (``raw // 2``) assumed intra-project
+    links dominate, which holds for small projects but breaks badly
+    on real-world projects whose issues link heavily to *other*
+    projects. Live 2026-05-07 NRS audit: 4624 raw issuelinks split
+    as 1173 intra + 3451 cross — halving reported 2312, OP had 591
+    (which roughly matches the 586 unique intra pairs) → audit
+    failed by -1759 even though the migration was lossless on
+    intra-project relations (cross-project links don't migrate by
+    design, per ``MIGRATION_SPEC.md``).
+
+    Returns a dict with three counts, or ``None`` on Jira failure:
+
+    * ``intra_unique`` — distinct unordered pairs ``{a, b}`` where
+      both ends are in this project. Each appears twice in the raw
+      stream (once per end); deduped via ``frozenset``. This is the
+      number OP's ``relation_total`` should match.
+    * ``cross`` — links where exactly one end is in this project.
+      Counted once each (only the in-project end carries them in
+      the per-issue iteration). Informational; cross-project links
+      do not migrate.
+    * ``raw`` — total issuelink entries summed across all issues.
+      Kept for back-compat with the legacy ``jira_relation_count``
+      metric (= ``raw // 2``) and to surface the "odd raw"
+      diagnostic if present.
+
+    Pagination + project-key validation reuse the same hardening as
+    :func:`_paginated_per_issue_field_count`.
+    """
+    if not _JIRA_PROJECT_KEY_RE.match(jira_project_key):
+        sys.stderr.write(
+            f"[audit] Jira relation breakdown skipped — invalid project key"
+            f" {jira_project_key!r} (expected uppercase Jira key like 'NRS')\n",
+        )
+        return None
+    try:
+        from src.infrastructure.jira.jira_client import JiraClient
+    except ImportError as exc:
+        sys.stderr.write(
+            f"[audit] Jira relation breakdown skipped — could not import JiraClient: {exc}\n",
+        )
+        return None
+
+    project_prefix = f"{jira_project_key}-"
+    intra_pairs: set[frozenset[str]] = set()
+    cross_count = 0
+    raw_count = 0
+
+    try:
+        jira = JiraClient()
+        underlying = jira.jira
+        page_size = 100
+        start_at = 0
+        jql = f'project = "{jira_project_key}"'
+        for _ in range(_PAGINATION_MAX_PAGES):
+            page = underlying.search_issues(
+                jql,
+                startAt=start_at,
+                maxResults=page_size,
+                fields="issuelinks",
+                expand="",
+            )
+            if not page:
+                break
+            for issue in page:
+                fields_obj = getattr(issue, "fields", None)
+                if fields_obj is None:
+                    continue
+                source_key = getattr(issue, "key", None)
+                if not source_key:
+                    continue
+                links = getattr(fields_obj, "issuelinks", None) or []
+                for link in links:
+                    raw_count += 1
+                    target_key: str | None = None
+                    outward = getattr(link, "outwardIssue", None)
+                    inward = getattr(link, "inwardIssue", None)
+                    if outward is not None:
+                        target_key = getattr(outward, "key", None)
+                    elif inward is not None:
+                        target_key = getattr(inward, "key", None)
+                    if not target_key:
+                        # Malformed link — neither outward nor inward
+                        # carries a key. Skip from both buckets so we
+                        # don't double-count.
+                        continue
+                    if target_key.startswith(project_prefix):
+                        # Intra-project: dedup by sorted pair so each
+                        # link contributes exactly once.
+                        intra_pairs.add(frozenset((source_key, target_key)))
+                    else:
+                        cross_count += 1
+            start_at += len(page)
+        else:
+            sys.stderr.write(
+                f"[audit] Jira relation pagination hit the {_PAGINATION_MAX_PAGES}"
+                f"-page safety cap for project {jira_project_key!r} — likely a buggy"
+                " upstream returning the same page repeatedly\n",
+            )
+            return None
+    except Exception as exc:
+        sys.stderr.write(
+            f"[audit] Jira relation breakdown skipped — {type(exc).__name__}: {exc}\n",
+        )
+        sys.stderr.write(traceback.format_exc())
+        return None
+
+    return {
+        "intra_unique": len(intra_pairs),
+        "cross": cross_count,
+        "raw": raw_count,
+    }
+
+
 def _fetch_jira_relation_count(jira_project_key: str) -> int | None:
-    """Best-effort: count total issue-link records across all issues in the project.
+    """Back-compat shim: returns the legacy ``raw // 2`` halved count.
 
-    Each ``issue.fields.issuelinks`` entry is one *direction* of a
-    Jira link (``inwardIssue`` or ``outwardIssue``); summing across
-    the project's issues counts each *intra-project* link twice (once
-    on each end) and each *cross-project* link once (only the in-scope
-    end is counted). The OP ``relation_total`` counts each Relation
-    row exactly once. So:
-
-    - 7 intra-project + 0 cross → raw=14, halved=7, OP=7 ✓
-    - 7 intra + 5 cross → raw=19, halved=9, OP=7 → fails ±5% (false positive)
-    - 0 intra + 1 cross → raw=1, halved=0, OP=0 ✓ (assuming cross-project
-      links don't migrate, which the current migration code does)
-
-    Halving is the right model when cross-project links are rare.
-    On projects where they're common the audit may report a drift
-    that's actually expected — operator should treat the failure as
-    a hint, then check ``stderr`` for the odd-raw warning below to
-    distinguish "real loss" from "cross-project asymmetry".
+    The classifier prefers ``jira_relation_breakdown`` when present
+    (set by :func:`_execute_audit`); this function exists so older
+    callers / fixtures that read ``metrics["jira_relation_count"]``
+    keep working. The halving model is documented as broken for
+    cross-project-heavy projects in
+    :func:`_fetch_jira_relation_breakdown`.
     """
     raw = _paginated_per_issue_field_count(
         jira_project_key,
@@ -968,17 +1101,14 @@ def _fetch_jira_relation_count(jira_project_key: str) -> int | None:
     if raw % 2 != 0:
         # Odd raw count means at least one cross-project link, which
         # the floor-division below silently rounds down. Surface the
-        # asymmetry on stderr so an operator investigating a relation
-        # mismatch can tell "real migration defect" from "cross-
-        # project link counted only on this side".
+        # asymmetry on stderr — preserved here so legacy callers /
+        # tests that exercise this shim still see the same diagnostic.
         sys.stderr.write(
             f"[audit] Jira raw issuelinks count for {jira_project_key!r}"
             f" is odd ({raw}) — at least one cross-project link is"
             " present; the floor-divided count below may be 0.5 low,"
             " which on small projects can push past ±5% tolerance\n",
         )
-    # Halve to match OP's one-row-per-link convention. ``// 2`` rounds
-    # down (per the warning above when raw is odd).
     return raw // 2
 
 
@@ -994,7 +1124,19 @@ def _execute_audit(jira_project_key: str) -> dict[str, Any]:
     # report is still valid.
     metrics["jira_issue_count"] = _fetch_jira_issue_count(jira_project_key)
     metrics["jira_attachment_count"] = _fetch_jira_attachment_count(jira_project_key)
-    metrics["jira_relation_count"] = _fetch_jira_relation_count(jira_project_key)
+    # Prefer the breakdown over the legacy halved count — the latter
+    # over-counts on cross-project-heavy projects (NRS audit caught
+    # this: -1759 false positive, see _fetch_jira_relation_breakdown).
+    breakdown = _fetch_jira_relation_breakdown(jira_project_key)
+    if breakdown is not None:
+        metrics["jira_relation_breakdown"] = breakdown
+        # Keep the legacy ``jira_relation_count`` populated for any
+        # downstream tooling that still reads it; derive from the same
+        # raw count so the two stay consistent.
+        metrics["jira_relation_count"] = breakdown["raw"] // 2
+    else:
+        metrics["jira_relation_breakdown"] = None
+        metrics["jira_relation_count"] = None
     metrics["jira_watcher_count"] = _fetch_jira_watcher_count(jira_project_key)
     return metrics
 
