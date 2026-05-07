@@ -50,7 +50,14 @@ class DummyOp:
 
     def execute_script_with_data(self, script_content: str, data: object):
         self.last_input = list(data) if isinstance(data, list) else []
-        # Return results in the expected format for attachments_migration._load
+        # Mirror the real ``OpenProjectRailsRunner.execute_script_with_data``
+        # envelope: ``{status, message, data, output}``. The counters live
+        # under ``data`` (the parsed JSON the Ruby script prints between
+        # ``$j2o_start_marker`` / ``$j2o_end_marker``). The earlier flat
+        # shape masked a real production bug where ``_load`` was reading
+        # ``res.get("results")`` directly off the envelope and silently
+        # always returning ``updated=0`` — caught alongside the
+        # filename-fidelity fix.
         results = []
         for i, item in enumerate(self.last_input):
             results.append(
@@ -60,7 +67,12 @@ class DummyOp:
                     "attachment_id": 1000 + i,
                 },
             )
-        return {"results": results, "errors": []}
+        return {
+            "status": "success",
+            "message": "ok",
+            "data": {"results": results, "errors": []},
+            "output": "<dummy>",
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -293,3 +305,129 @@ def test_extract_batch_skips_when_no_id_and_no_filename(
     # The single attachment is skipped because there's no id to derive
     # a filename from; the issue key drops out entirely.
     assert result == {}
+
+
+# --- filename fidelity (added 2026-05-07) ---
+
+
+def test_load_rails_script_includes_update_columns_filename_guard():
+    """The generated Rails script MUST include the byte-exact filename
+    write so OP's silent normalisation (strip internal whitespace)
+    doesn't corrupt the stored filename.
+
+    Caught by the live 2026-05-07 NRS audit: ~31 of 163 "missing"
+    files were present in OP under a sanitised name (e.g.
+    ``Screenshot 2026-04-21 122931.png`` → ``Screenshot2026-04-21 122931.png``).
+    The user-visible ``filename`` column is a plain string in OP's
+    schema; ``update_columns`` skips callbacks/validations and writes
+    the byte-exact value — restoring fidelity without touching the
+    on-disk storage path.
+    """
+    op = DummyOp()
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    # Run the load on a small payload so we can inspect the script.
+    att_data = {"PRJ-1": [{"id": "1", "filename": "x.txt", "size": 1, "url": "http://example/x"}]}
+    ex = ComponentResult(success=True, data={"attachments": att_data})
+    mp = mig._map(ex)
+    mig._load(mp)
+    # Inspect the Rails script the dummy received via execute_script_with_data.
+    # The dummy stores its calls; pull the script content.
+    # ``transfers`` is set by transfer_file_to_container; the script is what
+    # _load passes to execute_script_with_data. The dummy doesn't store the
+    # script directly, so re-derive: the script source is computed in _load
+    # from a static template — assert against the running migration's
+    # method by re-invoking the same code path via inspecting it.
+    # Instead: find the Rails string in the source — pin the substring.
+    import inspect
+
+    from src.application.components.attachments_migration import AttachmentsMigration as _AM
+
+    src = inspect.getsource(_AM._load)
+    assert "att.update_columns(filename: fname)" in src, (
+        "Rails script must include the byte-exact filename guard "
+        "(att.update_columns) to prevent OP's silent filename"
+        " normalisation"
+    )
+    # Idempotency: only update if AR's setter mutated the value.
+    assert "att.filename != fname" in src, (
+        "update_columns must be conditional on a mismatch — otherwise every save triggers a redundant UPDATE"
+    )
+
+
+# --- per-stage loss counters (added 2026-05-07) ---
+
+
+def test_extract_batch_increments_extract_no_url_when_url_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Attachment with no download URL → counted under
+    ``extract_no_url`` (not silently dropped without trace).
+
+    Live 2026-05-07 NRS regression: NRS-3630 had 9 sequential JPGs
+    silently missing with no log clue. The per-stage counters tell
+    operators *which* stage drops files instead of leaving them to
+    grep through 90k log lines.
+    """
+    from types import SimpleNamespace
+
+    class _Att:
+        def __init__(self, id_: str, filename: str, url: str | None) -> None:
+            self.id = id_
+            self.filename = filename
+            self.size = 100
+            self.content = url
+
+    class _FakeIssue:
+        def __init__(self, atts: list[_Att]) -> None:
+            self.key = "NRS-1"
+            self.fields = SimpleNamespace(attachment=atts)
+
+    class _Jira:
+        def __init__(self) -> None:
+            self.jira = SimpleNamespace(
+                search_issues=lambda *_a, **_kw: [
+                    _FakeIssue(
+                        [
+                            _Att("100", "good.txt", "http://jira/a"),
+                            _Att("200", "no-url.txt", None),
+                            _Att("300", "empty-url.txt", ""),
+                        ],
+                    ),
+                ],
+            )
+
+    mig = AttachmentsMigration(jira_client=_Jira(), op_client=DummyOp())  # type: ignore[arg-type]
+    mig._extract_batch(["NRS-1"])
+    assert mig._loss_counters["extract_no_url"] == 2, dict(mig._loss_counters)
+
+
+def test_run_resets_loss_counters_at_start(monkeypatch: pytest.MonkeyPatch):
+    """``run()`` must clear cumulative counters from any prior
+    invocation on the same instance.
+
+    Pin: when ``attachment_recovery_migration`` constructs an
+    ``AttachmentsMigration`` and delegates per-batch work, the
+    inner instance's counters reflect THAT recovery's run, not
+    leftover state from an earlier call.
+    """
+    import src.config as cfg
+
+    class _EmptyMappings:
+        def get_mapping(self, name):
+            return {}
+
+    monkeypatch.setattr(cfg, "mappings", _EmptyMappings(), raising=False)
+
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    # Seed pre-existing counters as if from a previous invocation.
+    mig._loss_counters["extract_no_url"] = 99
+    mig._loss_counters["load_transfer_failed"] = 7
+    # ``run`` fail-louds on the empty WP map, but
+    # ``self._loss_counters.clear()`` happens BEFORE that exit so
+    # the pre-seeded buckets are gone regardless of exit path.
+    try:
+        mig.run()
+    except Exception:
+        pass
+    assert mig._loss_counters.get("extract_no_url", 0) == 0
+    assert mig._loss_counters.get("load_transfer_failed", 0) == 0

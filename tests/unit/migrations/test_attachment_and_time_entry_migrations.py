@@ -48,10 +48,19 @@ def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapp
 
     jira_client = MagicMock()
     op_client = MagicMock()
-    # _load expects {"results": [...], "errors": [...]} format
+    # ``execute_script_with_data`` returns the runner envelope:
+    # ``{status, message, data, output}``. The pre-fix flat shape
+    # masked the envelope-parsing bug closed in the recent
+    # filename-fidelity PR — keeping the real shape here means the
+    # production parser is exercised.
     op_client.execute_script_with_data.return_value = {
-        "results": [{"jira_key": "KEY-1", "filename": "foo.txt", "attachment_id": 1001}],
-        "errors": [],
+        "status": "success",
+        "message": "ok",
+        "data": {
+            "results": [{"jira_key": "KEY-1", "filename": "foo.txt", "attachment_id": 1001}],
+            "errors": [],
+        },
+        "output": "<dummy>",
     }
 
     migration = AttachmentsMigration(jira_client=jira_client, op_client=op_client)
