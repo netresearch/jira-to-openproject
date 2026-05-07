@@ -369,7 +369,20 @@ class UserMappingBackfillMigration(BaseMigration):
             # ``key`` even though watcher skips it) ensures the same
             # user is reachable from any probe path the consumers use
             # now — or might use after a future code change.
+            #
+            # **Always include the seed ``name``** even when Jira's
+            # profile doesn't return it as a string field. Locked /
+            # inactive Server users sometimes have ``name=None`` on
+            # the SDK object; without this guard the alias would
+            # never get written under the identifier the watcher
+            # probes for, which is the entire point of this backfill.
+            # Caught by the live 2026-05-07 NRS run: 18 watcher
+            # ``unmapped_users`` were marked ``already_mapped`` (no
+            # alias written) because their Jira profiles' ``name``
+            # was None and only ``key`` made it into cand_keys.
             cand_keys = self._candidate_keys(jira_user)
+            if name not in cand_keys:
+                cand_keys.insert(0, name)
 
             # Reuse path: an alternate identifier already maps this
             # Jira user (e.g. ``user_map["JIRAUSER18400"]`` exists but
