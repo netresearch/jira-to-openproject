@@ -350,6 +350,5 @@ def test_load_rails_script_includes_update_columns_filename_guard():
     )
     # Idempotency: only update if AR's setter mutated the value.
     assert "att.filename != fname" in src, (
-        "update_columns must be conditional on a mismatch — otherwise"
-        " every save triggers a redundant UPDATE"
+        "update_columns must be conditional on a mismatch — otherwise every save triggers a redundant UPDATE"
     )
