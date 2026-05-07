@@ -397,3 +397,117 @@ def test_op_envelope_error_status_is_logged_and_skipped(monkeypatch: pytest.Monk
     # still_missing remains positive). Pin the exact contract per
     # PR #206 review.
     assert op.calls >= 2
+
+
+# --- filename-fidelity false positives (added 2026-05-07) ---
+
+
+def test_normalize_filename_strips_whitespace_and_nfc_normalises() -> None:
+    """``_normalize_filename`` is the comparison key for missing/extra
+    pairing. Pin: ASCII spaces, NBSP, and zero-width spaces all strip;
+    Unicode forms compose to the same NFC form; case is folded.
+    """
+    from src.application.components.attachment_recovery_migration import (
+        AttachmentRecoveryMigration,
+    )
+
+    norm = AttachmentRecoveryMigration._normalize_filename
+    # ASCII space stripped.
+    assert norm("Screenshot 2026-04-21.png") == norm("Screenshot2026-04-21.png")
+    # Mixed (NBSP) stripped.
+    assert norm("Backup job.png") == norm("Backupjob.png")
+    # Case-folded.
+    assert norm("README.PDF") == norm("readme.pdf")
+    # NFC: precomposed ä equals decomposed a + combining-diaeresis.
+    assert norm("für.txt") == norm("für.txt")
+
+
+def test_pair_by_normalized_name_subtracts_matched_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: a file present in OP under a space-stripped name
+    is no longer counted as ``missing_total_before``.
+
+    Live 2026-05-07 NRS regression: 8 of 20 sampled "missing" files
+    were actually present in OP under whitespace-normalised names;
+    the diagnostic double-counted them. Pin: with the fidelity-pair
+    pass, those drop out of the missing tally and surface as
+    ``fidelity_false_positives``.
+    """
+    pages = [
+        [
+            _FakeJiraIssue(
+                "NRS-1",
+                [
+                    {"filename": "Screenshot 2026-04-21 122931.png", "id": 1, "url": "u1"},
+                    {"filename": "Real loss.txt", "id": 2, "url": "u2"},
+                ],
+            ),
+        ],
+    ]
+    jira = _FakeJira(pages)
+    op = _RecordingOp(
+        attachment_fetches=[
+            {501: ["Screenshot2026-04-21 122931.png"]},  # space-stripped — same file
+            {501: ["Screenshot2026-04-21 122931.png"]},  # post-recover unchanged
+        ],
+    )
+    mig = _make_migration(
+        jira_client=jira,
+        op_client=op,
+        wp_map={"10001": {"jira_key": "NRS-1", "openproject_id": 501}},
+    )
+
+    def _spy_init(self, jira_client=None, op_client=None):
+        return None
+
+    def _spy_process(self, keys):
+        return (0, 0, {})
+
+    from src.application.components import attachments_migration as am_mod
+
+    monkeypatch.setattr(am_mod.AttachmentsMigration, "__init__", _spy_init)
+    monkeypatch.setattr(am_mod.AttachmentsMigration, "_process_batch_end_to_end", _spy_process)
+
+    result = mig.run()
+    # ONE real loss (``Real loss.txt``); ONE fidelity false positive
+    # (the screenshot, present under sanitised name).
+    assert result.details["missing_total_before"] == 1, result.details
+    assert result.details["fidelity_false_positives"] == 1, result.details
+    assert result.details["extra_total"] == 0, result.details
+
+
+def test_pair_by_normalized_name_clean_state_has_no_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clean run (filenames match exactly) → 0 fidelity false positives.
+
+    Pin: the new pairing logic doesn't accidentally merge files that
+    weren't actually missing.
+    """
+    pages = [
+        [_FakeJiraIssue("NRS-1", [{"filename": "ok.txt", "id": 1, "url": "u"}])],
+    ]
+    jira = _FakeJira(pages)
+    op = _RecordingOp(attachment_fetches=[{501: ["ok.txt"]}])
+    mig = _make_migration(
+        jira_client=jira,
+        op_client=op,
+        wp_map={"10001": {"jira_key": "NRS-1", "openproject_id": 501}},
+    )
+
+    def _spy_init(self, jira_client=None, op_client=None):
+        return None
+
+    def _spy_process(self, keys):
+        msg = "should not delegate on clean state"
+        raise AssertionError(msg)
+
+    from src.application.components import attachments_migration as am_mod
+
+    monkeypatch.setattr(am_mod.AttachmentsMigration, "__init__", _spy_init)
+    monkeypatch.setattr(am_mod.AttachmentsMigration, "_process_batch_end_to_end", _spy_process)
+
+    result = mig.run()
+    assert result.details["fidelity_false_positives"] == 0, result.details
+    assert result.details["clean"] == 1, result.details

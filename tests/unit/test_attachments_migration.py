@@ -183,3 +183,113 @@ def test_attachments_migration_fails_loud_on_legacy_int_only_mapping(
     msg_lower = (result.message or "").lower()
     assert "no usable rows" in msg_lower, result.message
     assert "legacy" in msg_lower, result.message
+
+
+# --- noname / empty-filename handling (added 2026-05-07) ---
+
+
+def test_extract_batch_derives_filename_for_empty_or_noname(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Empty / ``"noname"`` Jira filename → derived ``jira-attachment-<id>``.
+
+    Live 2026-05-07 NRS regression: NRS-4347 had 3 attachments with
+    filename ``"noname"`` (Jira's placeholder for clipboard / paste
+    uploads without a real name). The pre-fix
+    ``_extract_batch`` skipped them via the ``not filename.strip()``
+    guard. The Rails-side ``LOWER(filename)`` idempotency would have
+    further collapsed them to one entry even if they made it through.
+    Pin: derived names per attachment id keep all three distinct so
+    Rails creates three rows.
+    """
+    from types import SimpleNamespace
+
+    # Build a fake issue with three attachments — empty, "noname",
+    # whitespace-only — exercising the three skip paths the
+    # pre-fix code took.
+    class _FakeAtt:
+        def __init__(self, id_: str, filename: str | None) -> None:
+            self.id = id_
+            self.filename = filename
+            self.size = 100
+            self.content = f"http://jira/secure/attachment/{id_}/blob"
+
+    class _FakeFields:
+        def __init__(self, atts: list[_FakeAtt]) -> None:
+            self.attachment = atts
+
+    class _FakeIssue:
+        def __init__(self, key: str, atts: list[_FakeAtt]) -> None:
+            self.key = key
+            self.fields = _FakeFields(atts)
+
+    class _BatchJira:
+        def __init__(self) -> None:
+            self.jira = SimpleNamespace(
+                search_issues=lambda *_a, **_kw: [
+                    _FakeIssue(
+                        "NRS-1",
+                        [
+                            _FakeAtt("100", ""),
+                            _FakeAtt("200", "noname"),
+                            _FakeAtt("300", "   "),
+                            _FakeAtt("400", "real-file.png"),
+                        ],
+                    ),
+                ],
+            )
+
+    mig = AttachmentsMigration(jira_client=_BatchJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    result = mig._extract_batch(["NRS-1"])
+    items = result.get("NRS-1", [])
+    # All four attachments processed; empty/noname/whitespace get
+    # derived names, real-file passes through.
+    assert len(items) == 4
+    by_id = {it["id"]: it["filename"] for it in items}
+    assert by_id["100"] == "jira-attachment-100"
+    assert by_id["200"] == "jira-attachment-200"
+    assert by_id["300"] == "jira-attachment-300"
+    assert by_id["400"] == "real-file.png"
+
+
+def test_extract_batch_skips_when_no_id_and_no_filename(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Without ``aid`` AND without filename, there's no stable name to
+    derive — skip rather than write an unnameable row.
+
+    Pin: the ``aid is None`` defensive skip catches the impossible-
+    in-practice case where Jira returns an attachment with neither
+    id nor filename. We don't want to fabricate a filename like
+    ``jira-attachment-None``.
+    """
+    from types import SimpleNamespace
+
+    class _FakeAtt:
+        def __init__(self) -> None:
+            self.id = None
+            self.filename = ""
+            self.size = 100
+            self.content = "http://jira/secure/attachment/x/blob"
+
+    class _FakeFields:
+        def __init__(self, atts: list[_FakeAtt]) -> None:
+            self.attachment = atts
+
+    class _FakeIssue:
+        def __init__(self) -> None:
+            self.key = "NRS-1"
+            self.fields = _FakeFields([_FakeAtt()])
+
+    class _BatchJira:
+        def __init__(self) -> None:
+            self.jira = SimpleNamespace(
+                search_issues=lambda *_a, **_kw: [_FakeIssue()],
+            )
+
+    mig = AttachmentsMigration(jira_client=_BatchJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    result = mig._extract_batch(["NRS-1"])
+    # The single attachment is skipped because there's no id to derive
+    # a filename from; the issue key drops out entirely.
+    assert result == {}

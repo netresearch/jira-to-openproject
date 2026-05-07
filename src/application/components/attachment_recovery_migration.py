@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections import Counter
 from typing import Any
 
@@ -77,6 +78,59 @@ class AttachmentRecoveryMigration(BaseMigration):
             " state at runtime."
         )
         raise ValueError(msg)
+
+    @staticmethod
+    def _normalize_filename(name: str) -> str:
+        """Return a normalized form of ``name`` for false-positive
+        pairing.
+
+        Strips ALL whitespace (regular, NBSP, zero-width, …) and
+        applies Unicode NFC normalisation + case folding. Two
+        filenames that differ only in whitespace or Unicode
+        composition will share the same normalized form — which is
+        exactly the false-positive class CarrierWave / Rails creates
+        when it sanitises the stored filename on save.
+        """
+        # NFC-normalise then strip ALL Unicode whitespace classes
+        # (matches \s + NBSP + zero-width spaces).
+        nfc = unicodedata.normalize("NFC", name)
+        return re.sub(r"\s+", "", nfc, flags=re.UNICODE).casefold()
+
+    @classmethod
+    def _pair_by_normalized_name(
+        cls,
+        missing: Counter[str],
+        extra: Counter[str],
+    ) -> int:
+        """Mutate ``missing`` and ``extra`` in place: subtract any
+        files whose normalized name matches across both sides.
+
+        Returns the count of paired filenames (each pair == one
+        false positive). On a clean run with perfect filename
+        fidelity, returns 0.
+        """
+        paired = 0
+        # Index by normalized form to find matches in O(n).
+        missing_by_norm: dict[str, list[str]] = {}
+        for fn in list(missing.elements()):
+            missing_by_norm.setdefault(cls._normalize_filename(fn), []).append(fn)
+        for fn in list(extra.elements()):
+            norm = cls._normalize_filename(fn)
+            candidates = missing_by_norm.get(norm)
+            if not candidates:
+                continue
+            # Pop one candidate from missing.
+            paired_name = candidates.pop()
+            missing[paired_name] -= 1
+            if missing[paired_name] <= 0:
+                del missing[paired_name]
+            extra[fn] -= 1
+            if extra[fn] <= 0:
+                del extra[fn]
+            paired += 1
+            if not candidates:
+                missing_by_norm.pop(norm, None)
+        return paired
 
     @staticmethod
     def _read_attr(obj: Any, name: str) -> Any:
@@ -336,14 +390,36 @@ puts end_marker
         missing_total = 0
         extra_total = 0
 
+        # Track filename-fidelity false positives: files that ARE in
+        # OP but under a slightly-different name (CarrierWave / Rails
+        # strips certain whitespace + Unicode normalises the filename
+        # on save). Without this match-by-normalized-name pass, the
+        # diagnostic counts the same file as both "missing" (under the
+        # Jira name) AND "extra" (under the OP name), inflating the
+        # apparent loss. Live 2026-05-07 NRS run: ~31 of 163
+        # "missing" attachments are actually present under a
+        # space-stripped filename. A separate fix in the Rails-side
+        # attach script is needed to preserve fidelity; this only
+        # corrects the diagnostic accounting.
+        fidelity_false_positives = 0
+
         for jira_key, jira_list in jira_atts.items():
             wp_id = wp_map[jira_key]  # guaranteed by the in-scope filter above
             jira_filenames = [a["filename"] for a in jira_list]
             op_filenames = op_by_wp.get(wp_id, [])
             jira_counter = Counter(jira_filenames)
             op_counter = Counter(op_filenames)
-            missing = sorted((jira_counter - op_counter).elements())
-            extra = sorted((op_counter - jira_counter).elements())
+            raw_missing = jira_counter - op_counter
+            raw_extra = op_counter - jira_counter
+            # Pair raw_missing with raw_extra by normalized filename
+            # (case-folded, NFC-normalised, all whitespace stripped).
+            # If a missing file matches an extra under that key, the
+            # file is actually present in OP — just under a sanitised
+            # name. Subtract those pairs from both buckets.
+            paired = self._pair_by_normalized_name(raw_missing, raw_extra)
+            fidelity_false_positives += paired
+            missing = sorted(raw_missing.elements())
+            extra = sorted(raw_extra.elements())
             if missing:
                 per_issue_missing[jira_key] = missing
                 missing_total += len(missing)
@@ -356,10 +432,12 @@ puts end_marker
         recovery_keys = sorted(per_issue_missing)
         if not recovery_keys:
             self.logger.info(
-                "Recovery: no missing attachments detected (%d issues clean, %d extras, %d unmapped)",
+                "Recovery: no missing attachments detected (%d issues clean, %d extras,"
+                " %d unmapped, %d fidelity false positives paired)",
                 clean,
                 extra_total,
                 len(unmapped_jira_keys),
+                fidelity_false_positives,
             )
             # Use the same key names as the recovery branch so callers
             # can read ``details`` uniformly regardless of which path
@@ -369,7 +447,8 @@ puts end_marker
                 updated=0,
                 message=(
                     f"All in-scope attachments present in OP. clean={clean},"
-                    f" extra={extra_total}, wp_unmapped={len(unmapped_jira_keys)}"
+                    f" extra={extra_total}, wp_unmapped={len(unmapped_jira_keys)},"
+                    f" fidelity_false_positives={fidelity_false_positives}"
                 ),
                 details={
                     "projects_examined": len(project_keys),
@@ -379,6 +458,7 @@ puts end_marker
                     "missing_total_before": 0,
                     "still_missing_total": 0,
                     "extra_total": extra_total,
+                    "fidelity_false_positives": fidelity_false_positives,
                     "recovered": 0,
                 },
             )
@@ -454,7 +534,8 @@ puts end_marker
         msg = (
             f"Recovery: recovered={recovered}, still_missing={still_missing_total},"
             f" failed_batches={failed}, clean={clean}, extra={extra_total},"
-            f" wp_unmapped={len(unmapped_jira_keys)}"
+            f" wp_unmapped={len(unmapped_jira_keys)},"
+            f" fidelity_false_positives={fidelity_false_positives}"
         )
         self.logger.info(msg)
         return ComponentResult(
@@ -470,6 +551,7 @@ puts end_marker
                 "missing_total_before": missing_total,
                 "still_missing_total": still_missing_total,
                 "extra_total": extra_total,
+                "fidelity_false_positives": fidelity_false_positives,
                 "recovered": recovered,
                 "still_missing_sample": dict(list(per_issue_missing.items())[:20]),
                 "extra_sample": dict(list(per_issue_extra.items())[:20]),
