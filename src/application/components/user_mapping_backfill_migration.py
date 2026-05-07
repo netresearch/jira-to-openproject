@@ -154,6 +154,57 @@ class UserMappingBackfillMigration(BaseMigration):
                     _harvest_users_from_issue(issue, out)
         return out
 
+    @staticmethod
+    def _resolve_existing_op_id(
+        user_map: dict[str, Any],
+        cand_keys: list[str],
+    ) -> tuple[int | None, bool]:
+        """Walk ``cand_keys``, collecting every distinct ``openproject_id``
+        already present in ``user_map``.
+
+        Returns ``(op_id, conflict)`` where:
+
+        * ``op_id`` is the unique OP user id when all populated entries
+          agree (or ``None`` when no cand key is mapped).
+        * ``conflict`` is ``True`` when two cand keys point to
+          DIFFERENT OP users — caller treats as
+          ``alias_op_id_conflict`` and refuses to write aliases that
+          would pick one silently. If any conflicting entry has
+          ``matched_by="manual"``, that one wins (operator's
+          manual mapping target is the source of truth).
+
+        Defensive on the int parse: malformed historical entries
+        (string ids, etc.) get coerced via ``int()``; on
+        ``ValueError`` / ``TypeError`` the entry is skipped instead
+        of crashing the run. Per PR #207 review.
+        """
+        seen_ids: set[int] = set()
+        manual_op_id: int | None = None
+        for k in cand_keys:
+            rec = user_map.get(k)
+            if rec is None:
+                continue
+            raw_op_id: Any = rec.get("openproject_id") if isinstance(rec, dict) else rec
+            if raw_op_id is None:
+                continue
+            try:
+                op_id = int(raw_op_id)
+            except TypeError, ValueError:
+                continue
+            seen_ids.add(op_id)
+            if isinstance(rec, dict) and rec.get("matched_by") == "manual":
+                manual_op_id = op_id
+
+        if not seen_ids:
+            return None, False
+        if len(seen_ids) == 1:
+            return next(iter(seen_ids)), False
+        # Multiple distinct ids → conflict. If one is operator-set,
+        # honour the "manual target wins" contract and use it.
+        if manual_op_id is not None:
+            return manual_op_id, False
+        return None, True
+
     def _candidate_keys(self, jira_user: dict[str, Any]) -> list[str]:
         """Identifier ladder mirroring the consumer migrations' resolvers.
 
@@ -302,13 +353,87 @@ class UserMappingBackfillMigration(BaseMigration):
                 not_found_in_jira.append(name)
                 continue
 
-            # Second-chance dedup: if Jira reports an alternate
-            # identifier we already have mapped, skip.
+            # Build the candidate identifier ladder for this Jira user
+            # (``accountId`` → ``name`` → ``key`` → ``emailAddress`` →
+            # ``displayName``). The probe orders are NOT identical
+            # across consumer migrations:
+            #
+            #   - ``WatcherMigration._resolve_user_id``:
+            #     account_id → name → email_address → display_name (no ``key``).
+            #   - ``AttachmentProvenanceMigration._author_identifiers``:
+            #     accountId → name → key → emailAddress → email → displayName.
+            #   - ``WpMetadataBackfillMigration._resolve_user_id``:
+            #     accountId → name → key → emailAddress → displayName.
+            #
+            # Writing the alias under EVERY identifier (including
+            # ``key`` even though watcher skips it) ensures the same
+            # user is reachable from any probe path the consumers use
+            # now — or might use after a future code change.
             cand_keys = self._candidate_keys(jira_user)
-            if any(k in user_map for k in cand_keys):
-                already_mapped.append(name)
+
+            # Reuse path: an alternate identifier already maps this
+            # Jira user (e.g. ``user_map["JIRAUSER18400"]`` exists but
+            # ``user_map["anne.geissler"]`` doesn't). Reuse the
+            # existing entry's ``openproject_id`` instead of querying
+            # OP — extra API calls aren't needed and the existing
+            # entry may carry operator-set metadata we shouldn't
+            # overwrite.
+            #
+            # Caught by the live 2026-05-07 NRS run: 18 watcher
+            # ``unmapped_users`` were already mapped under their
+            # ``JIRAUSER<id>`` keys but the watcher resolver probes
+            # ``name`` first and never reached the ``key`` field. The
+            # earlier "skip if any candidate present" logic was too
+            # aggressive — it left the mapping reachable only via
+            # ``key`` and the consumer kept dropping watchers.
+            existing_op_id, conflict = self._resolve_existing_op_id(user_map, cand_keys)
+            if conflict:
+                # Multiple cand_keys point to DIFFERENT OP users.
+                # Don't silently pick one — that would write alias
+                # entries pointing to whichever id we happened to see
+                # first and could redirect the consumer to the wrong
+                # OP user. Surface as ``not_found_in_op`` so the
+                # operator triages (the conflict could be a stale
+                # auto-mapped entry vs an operator-fixed one).
+                not_found_in_op.append(
+                    {
+                        "jira_name": name,
+                        "reason": "alias_op_id_conflict",
+                        "details": "multiple cand_keys map to different OP users; refusing to silently pick one",
+                    },
+                )
                 continue
 
+            if existing_op_id is not None:
+                missing_keys = [k for k in cand_keys if k not in user_map]
+                if not missing_keys:
+                    already_mapped.append(name)
+                    continue
+                # Emit a thin alias entry that points at the same OP
+                # user under each missing identifier. ``matched_by``
+                # marks these as alias-only writes so an audit can
+                # tell them apart from primary backfills.
+                alias_entry: dict[str, Any] = {
+                    "openproject_id": existing_op_id,
+                    "jira_name": jira_user.get("name"),
+                    "jira_email": jira_user.get("emailAddress"),
+                    "jira_display_name": jira_user.get("displayName"),
+                    "jira_key": jira_user.get("key"),
+                    "matched_by": "user_mapping_backfill_alias",
+                }
+                for k in missing_keys:
+                    user_map[k] = alias_entry
+                added.append(
+                    {
+                        "name": name,
+                        "openproject_id": existing_op_id,
+                        "alias_for_existing": True,
+                        "added_keys": missing_keys,
+                    },
+                )
+                continue
+
+            # No existing alias — probe OP normally.
             op_user = self._find_op_user(jira_user)
             if op_user is None:
                 not_found_in_op.append(
