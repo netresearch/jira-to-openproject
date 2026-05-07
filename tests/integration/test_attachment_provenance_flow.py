@@ -244,9 +244,29 @@ def test_attachment_provenance_pipeline(monkeypatch: pytest.MonkeyPatch, patched
     jira_client.batch_get_issues.return_value = {"KEY-1": issue}
 
     op_client = MagicMock()
+    # Two consecutive calls — first from ``AttachmentsMigration._load``
+    # (expects ``data.results``), second from
+    # ``AttachmentProvenanceMigration._load`` (expects ``data.updated``).
+    # Wrap each in the runner's real envelope so the production
+    # parser is exercised; the pre-fix flat shape only worked for
+    # the buggy ``res.get("results")`` path that the recent
+    # filename-fidelity PR closed.
     op_client.execute_script_with_data.side_effect = [
-        {"updated": 1, "failed": 0},
-        {"updated": 1, "failed": 0},
+        {
+            "status": "success",
+            "message": "ok",
+            "data": {
+                "results": [{"jira_key": "KEY-1", "filename": "note.txt", "attachment_id": 4242}],
+                "errors": [],
+            },
+            "output": "<dummy>",
+        },
+        {
+            "status": "success",
+            "message": "ok",
+            "data": {"updated": 1, "failed": 0},
+            "output": "<dummy>",
+        },
     ]
 
     def fake_download(self, url: str, dest_path: Path) -> Path:
