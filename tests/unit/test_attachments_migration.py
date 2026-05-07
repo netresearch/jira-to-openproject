@@ -431,3 +431,49 @@ def test_run_resets_loss_counters_at_start(monkeypatch: pytest.MonkeyPatch):
         pass
     assert mig._loss_counters.get("extract_no_url", 0) == 0
     assert mig._loss_counters.get("load_transfer_failed", 0) == 0
+
+
+def test_load_logs_sample_when_rails_returns_per_op_errors(
+    caplog: pytest.LogCaptureFixture,
+):
+    """When Rails returns a non-empty ``errors`` array, ``_load`` must
+    log a sample so operators can see WHY ops failed — not just count.
+
+    Live 2026-05-07 NRS regression: a re-run reported
+    ``load_rails_per_op_error: 39`` with no error text in the log,
+    leaving the underlying Rails failure invisible. The fix logs the
+    first 5 error objects.
+    """
+    import logging
+
+    class _ErrOp(DummyOp):
+        def execute_script_with_data(self, script_content: str, data: object):
+            self.last_input = list(data) if isinstance(data, list) else []
+            return {
+                "status": "success",
+                "message": "ok",
+                "data": {
+                    "results": [],
+                    "errors": [
+                        {"jira_key": "PRJ-1", "filename": "a.txt", "error": "boom-1"},
+                        {"jira_key": "PRJ-1", "filename": "b.txt", "error": "boom-2"},
+                    ],
+                },
+                "output": "<dummy>",
+            }
+
+    op = _ErrOp()
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    att_data = {
+        "PRJ-1": [
+            {"id": "1", "filename": "a.txt", "size": 1, "url": "http://example/a"},
+            {"id": "2", "filename": "b.txt", "size": 1, "url": "http://example/b"},
+        ],
+    }
+    ex = ComponentResult(success=True, data={"attachments": att_data})
+    mp = mig._map(ex)
+    with caplog.at_level(logging.WARNING, logger="src.application.components.attachments_migration"):
+        mig._load(mp)
+    joined = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "boom-1" in joined and "boom-2" in joined, joined
+    assert mig._loss_counters["load_rails_per_op_error"] == 2
