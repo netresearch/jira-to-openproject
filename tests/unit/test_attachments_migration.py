@@ -494,7 +494,14 @@ def test_load_logs_sample_when_rails_returns_per_op_errors(
     }
     ex = ComponentResult(success=True, data={"attachments": att_data})
     mp = mig._map(ex)
-    with caplog.at_level(logging.WARNING, logger="src.application.components.attachments_migration"):
+    # ``AttachmentsMigration`` logs via ``from src.config import logger``,
+    # which is the stdlib ``"migration"`` logger configured in
+    # ``src/config/_bootstrap.py:139``. The previous attempt to gate
+    # capture by the module-path name was a no-op (the explicit
+    # ``logger=`` arg only sets the level on the named logger; capture
+    # itself flows through the root logger's handler) — caught by
+    # PR #212 review.
+    with caplog.at_level(logging.WARNING, logger="migration"):
         mig._load(mp)
     joined = " ".join(rec.getMessage() for rec in caplog.records)
     assert "boom-1" in joined and "boom-2" in joined, joined
@@ -659,10 +666,13 @@ def test_double_encode_slashes_replaces_2f_and_2c():
     )
 
 
-def test_double_encode_slashes_preserves_other_query_chars():
+def test_double_encode_slashes_preserves_other_percent_encoded_chars():
     """The fallback only swaps ``%2F`` and ``%2C`` — other
     percent-encoded characters in the URL must be left untouched
-    (e.g. ``%5B`` for ``[``, ``%20`` for space).
+    (e.g. ``%5B`` for ``[``, ``%20`` for space). Per PR #217 review:
+    the URL under test has no actual query string, so the previous
+    name "query_chars" was misleading — this is about preserving
+    other percent-encodings *anywhere* in the URL.
     """
     src = "https://j/x/%5BEXTERNAL%5D+foo%2Fbar%2Cbaz%20qux.msg"
     out = AttachmentsMigration._double_encode_slashes(src)

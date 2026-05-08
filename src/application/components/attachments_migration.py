@@ -229,8 +229,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
     @staticmethod
     def _double_encode_slashes(url: str) -> str | None:
-        """Return the same URL with each ``%2F`` / ``%2C`` in the *path*
-        re-encoded as ``%252F`` / ``%252C``.
+        """Return the same URL with each ``%2F`` / ``%2C`` re-encoded
+        as ``%252F`` / ``%252C``.
+
+        The replace runs over the *whole* URL — for Jira attachment
+        URLs the offending ``%2F`` / ``%2C`` only ever appear inside
+        the filename component of the path (Jira percent-encodes them
+        when building the URL from the attachment metadata), so a
+        plain string replace is safe in practice; if a future caller
+        passes URLs whose query string also contains those encodings,
+        the behaviour will still be correct because the recipient (Jira)
+        decodes them the same way regardless of position. Per PR #217
+        review (the previous docstring claimed "path-only" while the
+        code does a whole-URL replace — clarify rather than narrow).
 
         Tomcat (Jira's web server) blocks URLs whose path contains a
         literal encoded slash (``%2F``) by default — it returns
@@ -571,10 +582,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     data = envelope.get("data") or {}
                     if not isinstance(data, dict):
                         data = {}
-                    results = data.get("results", [])
-                    errors = data.get("errors", [])
+                    # Defensive type validation — a malformed Rails
+                    # response could send back a string/null/dict here,
+                    # which the downstream ``len()`` and iteration
+                    # would crash on without rescue. Per PR #211
+                    # review.
+                    raw_results = data.get("results", [])
+                    raw_errors = data.get("errors", [])
+                    results = raw_results if isinstance(raw_results, list) else []
+                    errors = raw_errors if isinstance(raw_errors, list) else []
                     # Build attachment mapping: {jira_key: {filename: attachment_id}}
                     for r in results:
+                        if not isinstance(r, dict):
+                            continue
                         jira_key = r.get("jira_key")
                         filename = r.get("filename")
                         att_id = r.get("attachment_id")
