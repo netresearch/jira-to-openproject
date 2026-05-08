@@ -113,8 +113,11 @@ test_reports/
 # AI Tools - ignore all IDE-specific directories
 .cursor/
 .taskmaster/
+.claude/
 .claude-composer/
+.mcp.json
 .repomix/
+.repowise/
 claudedocs/
 
 # Backup files
