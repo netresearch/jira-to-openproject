@@ -248,7 +248,7 @@ local-lint: ## Run linting locally
 	mypy src || uvx mypy src
 
 check-architecture: ## Enforce Cosmic Python layered architecture (import-linter)
-	.venv/bin/lint-imports || uvx --from import-linter lint-imports
+	uv run lint-imports
 
 local-format: ## Format code locally
 	ruff format src tests || uvx ruff format src tests

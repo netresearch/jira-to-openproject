@@ -19,51 +19,11 @@ root_packages =
     src
 
 ; ---------------------------------------------------------------------------
-; Contract 1: Models cannot depend on adapters, services, or entrypoints.
-; The domain/model layer must remain framework-free and pure.
-; ---------------------------------------------------------------------------
-[importlinter:contract:models-isolated]
-name = Models layer must not depend on adapters, services, or entrypoints
-type = forbidden
-source_modules =
-    src.domain
-    src.models
-forbidden_modules =
-    src.infrastructure
-    src.application
-    src.dashboard
-    src.main
-
-; ---------------------------------------------------------------------------
-; Contract 2: Infrastructure cannot depend on application or entrypoints.
-; Adapters provide capabilities upward; they must not call into services.
-; ---------------------------------------------------------------------------
-[importlinter:contract:infra-no-application]
-name = Infrastructure must not depend on services or entrypoints
-type = forbidden
-source_modules =
-    src.infrastructure
-forbidden_modules =
-    src.application
-    src.dashboard
-    src.main
-
-; ---------------------------------------------------------------------------
-; Contract 3: Application cannot depend on dashboard or CLI entrypoints.
-; Services are reusable; they must not know about delivery mechanisms.
-; ---------------------------------------------------------------------------
-[importlinter:contract:app-no-dashboard]
-name = Application services must not depend on entrypoints
-type = forbidden
-source_modules =
-    src.application
-forbidden_modules =
-    src.dashboard
-    src.main
-
-; ---------------------------------------------------------------------------
-; Contract 4: Declarative layered contract (top-down).
-; Higher layers may import from lower layers, never the reverse.
+; Layered contract (top-down): higher layers may import from lower layers,
+; never the reverse. import-linter's layers contract type implicitly forbids
+; upward imports, so we don't need separate `forbidden` contracts to enforce
+; the same rules (e.g. "models can't import infrastructure" falls out of the
+; bottom→top relationship below).
 ;
 ; Delimiter semantics (per import-linter docs):
 ;   "|"  -> peers at the same level that MUST remain independent of each other
