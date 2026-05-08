@@ -496,11 +496,10 @@ def test_load_logs_sample_when_rails_returns_per_op_errors(
     mp = mig._map(ex)
     # ``AttachmentsMigration`` logs via ``from src.config import logger``,
     # which is the stdlib ``"migration"`` logger configured in
-    # ``src/config/_bootstrap.py:139``. The previous attempt to gate
-    # capture by the module-path name was a no-op (the explicit
-    # ``logger=`` arg only sets the level on the named logger; capture
-    # itself flows through the root logger's handler) — caught by
-    # PR #212 review.
+    # ``src/config``. The previous attempt to gate capture by the
+    # module-path name was a no-op (the explicit ``logger=`` arg
+    # only sets the level on the named logger; capture itself flows
+    # through the root logger's handler) — caught by PR #212 review.
     with caplog.at_level(logging.WARNING, logger="migration"):
         mig._load(mp)
     joined = " ".join(rec.getMessage() for rec in caplog.records)
