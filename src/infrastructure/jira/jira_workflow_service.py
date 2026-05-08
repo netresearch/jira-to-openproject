@@ -62,6 +62,10 @@ def _is_workflow_unfetchable(exc: BaseException) -> bool:
     """
     from jira.exceptions import JIRAError as _JIRAError
 
+    # Tomcat's ``ALLOW_ENCODED_SLASH=false`` rejects ``%2F`` in URI paths with
+    # an HTML page whose body contains both phrases. We require *both* markers
+    # so that a generic "Invalid URI" response from a different cause is not
+    # silently demoted to DEBUG.
     _ENCODED_SLASH_MARKERS = ("invalid uri", "encoded slash")
 
     seen: set[int] = set()
@@ -74,7 +78,7 @@ def _is_workflow_unfetchable(exc: BaseException) -> bool:
                 return True
             if status == 400:
                 text = (getattr(current, "text", "") or "").lower()
-                if any(marker in text for marker in _ENCODED_SLASH_MARKERS):
+                if all(marker in text for marker in _ENCODED_SLASH_MARKERS):
                     return True
         current = current.__cause__
     return False

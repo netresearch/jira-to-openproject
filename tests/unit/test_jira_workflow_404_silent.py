@@ -97,20 +97,22 @@ def _make_service_raising_jira_error(status_code: int, text: str = "Not Found") 
     return JiraWorkflowService(fake_client)
 
 
+_TOMCAT_400_TEXT = (
+    "<!doctype html><h1>HTTP Status 400 – Bad Request</h1>"
+    "Message: Invalid URI: [The encoded slash character is not allowed]"
+    "Apache Tomcat/9.0.85"
+)
+
+
 def _make_service_raising_jira_error_400_encoded_slash(
     workflow_name: str = "NREDIT: Blog/CS Workflow",
 ) -> JiraWorkflowService:
     """Session raises JIRAError(400) with Tomcat encoded-slash message — bare path."""
     from jira.exceptions import JIRAError
 
-    tomcat_body = (
-        "<!doctype html><h1>HTTP Status 400 – Bad Request</h1>"
-        "Message: Invalid URI: [The encoded slash character is not allowed]"
-        "Apache Tomcat/9.0.85"
-    )
     fake_session = MagicMock()
     fake_session.get.side_effect = JIRAError(
-        text=tomcat_body,
+        text=_TOMCAT_400_TEXT,
         status_code=400,
         url=f"https://jira.example.com/rest/api/2/workflow/{workflow_name}/transitions",
     )
@@ -158,13 +160,6 @@ def _make_service_raising_wrapped_jira_error(status_code: int, text: str = "Not 
     fake_client.base_url = "https://jira.example.com"
 
     return JiraWorkflowService(fake_client)
-
-
-_TOMCAT_400_TEXT = (
-    "<!doctype html><h1>HTTP Status 400 – Bad Request</h1>"
-    "Message: Invalid URI: [The encoded slash character is not allowed]"
-    "Apache Tomcat/9.0.85"
-)
 
 
 def _make_service_raising_wrapped_jira_error_400_encoded_slash() -> JiraWorkflowService:
