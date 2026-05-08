@@ -65,7 +65,7 @@ def test_save_mapping_persists_to_disk(tmp_path: Path, _mock_mappings: None) -> 
     assert mig._save_mapping() is True
     assert mig._last_save_succeeded is True
 
-    on_disk = json.loads(mig.work_package_mapping_file.read_text())
+    on_disk = json.loads(mig.work_package_mapping_file.read_text(encoding="utf-8"))
     assert on_disk == mig.work_package_mapping
 
 
@@ -88,6 +88,7 @@ def test_save_mapping_records_failure_when_write_fails(
 def test_load_existing_mapping_for_incremental_run(
     tmp_path: Path,
     _mock_mappings: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A pre-existing mapping file is loaded by the constructor for incremental runs."""
     from src.application.components.work_package_skeleton_migration import (
@@ -101,14 +102,16 @@ def test_load_existing_mapping_for_incremental_run(
 
     monkeypatch_data_dir = tmp_path / "var_data"
     monkeypatch_data_dir.mkdir()
-    (monkeypatch_data_dir / "work_package_mapping.json").write_text(json.dumps(seeded))
+    (monkeypatch_data_dir / "work_package_mapping.json").write_text(json.dumps(seeded), encoding="utf-8")
 
+    # Use monkeypatch so cfg.get_path is restored automatically even on failure.
     original_get_path = cfg.get_path
-    cfg.get_path = lambda key: monkeypatch_data_dir if key == "data" else original_get_path(key)
-    try:
-        mig = WorkPackageSkeletonMigration(jira_client=MagicMock(), op_client=MagicMock())
-    finally:
-        cfg.get_path = original_get_path
+    monkeypatch.setattr(
+        cfg,
+        "get_path",
+        lambda key: monkeypatch_data_dir if key == "data" else original_get_path(key),
+    )
+    mig = WorkPackageSkeletonMigration(jira_client=MagicMock(), op_client=MagicMock())
 
     assert mig.work_package_mapping == seeded
 
