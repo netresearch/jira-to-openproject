@@ -197,3 +197,67 @@ def test_run_succeeds_when_all_discovered_are_skipped_or_unmappable(
     assert result.details["status"] == "success"
     # The unmappable count should be surfaced somewhere in the details
     assert result.details.get("unmappable", 0) == 1 or "unmappable" in str(result.message)
+
+
+def test_run_net_actionable_clamped_to_zero_when_counts_inconsistent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _mock_mappings: None,
+) -> None:
+    """net_actionable must not go negative when skipped+unmappable exceeds discovered.
+
+    Inconsistent upstream counts (e.g. provenance snapshot larger than the
+    current discovery run) must not produce a negative net_actionable that
+    would mislead the gating logic.  Clamping to max(0, …) ensures success.
+    """
+    mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
+
+    mig = _make_mig(tmp_path, monkeypatch, rails_present=True)
+
+    # discovered=3 but skipped=5 → raw net_actionable would be 3-0-5 = -2
+    mig.time_entry_migrator.migrate_time_entries_for_issues.return_value = {
+        "status": "success",
+        "jira_work_logs": {"discovered": 3},
+        "tempo_time_entries": {"discovered": 0},
+        "total_time_entries": {"migrated": 0, "failed": 0},
+        "unmappable": 0,
+        "skipped": 5,
+    }
+
+    result = mig.run()
+
+    # net_actionable is clamped to 0 → zero-created gate must NOT trip → success
+    assert result.success is True, (
+        f"Negative net_actionable must be clamped to 0, not trigger failure: {result.message!r}"
+    )
+
+
+def test_run_zero_created_failure_message_includes_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _mock_mappings: None,
+) -> None:
+    """The zero-created failure message must include the key counts for operator triage."""
+    mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
+
+    mig = _make_mig(tmp_path, monkeypatch, rails_present=True)
+
+    mig.time_entry_migrator.migrate_time_entries_for_issues.return_value = {
+        "status": "failed",
+        "jira_work_logs": {"discovered": 7},
+        "tempo_time_entries": {"discovered": 0},
+        "total_time_entries": {"migrated": 0, "failed": 3},
+        "unmappable": 1,
+        "skipped": 0,
+    }
+
+    result = mig.run()
+
+    assert result.success is False
+    assert result.details["reason"] == "zero_created_with_input"
+    # Message must be operator-actionable and include key counts
+    msg = result.message
+    assert "discovered=" in msg, f"Message should include discovered count: {msg!r}"
+    assert "failed" in msg, f"Message should mention failures: {msg!r}"

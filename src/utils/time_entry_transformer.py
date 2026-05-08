@@ -318,16 +318,16 @@ class TimeEntryTransformer:
                         continue
                     entry = self.transform_jira_work_log(work_log, issue_key)
 
-                # Drop entries that have neither a resolved user nor a resolved
-                # work package.  These cannot be created in OpenProject and
-                # would produce a batch failure that triggers the zero-created
-                # gate even on otherwise clean re-runs (e.g. deleted Jira user
-                # or stale Tempo data that no longer maps to any issue).
+                # Drop entries that are missing ANY required ID embedding.
+                # batch_create_time_entries treats a missing workPackage OR a
+                # missing user as a per-entry failure, so an entry with only one
+                # of the two resolved would still fail inside the migrator and
+                # trigger the zero-created gate on otherwise clean re-runs.
+                # Use OR so that a partial resolve also results in a drop here.
                 embedded = entry.get("_embedded", {})
-                if not embedded.get("user") and not embedded.get("workPackage"):
+                if not embedded.get("user") or not embedded.get("workPackage"):
                     logger.warning(
-                        "Dropping unmappable %s entry (no user and no work package resolved): "
-                        "worklog_id=%s issue_key=%s",
+                        "Dropping unmappable %s entry (missing user or work package): worklog_id=%s issue_key=%s",
                         source_type,
                         entry.get("_meta", {}).get(
                             "tempo_worklog_id" if source_type == "tempo" else "jira_work_log_id"

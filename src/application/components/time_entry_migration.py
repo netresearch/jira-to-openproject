@@ -199,14 +199,19 @@ class TimeEntryMigration(BaseMigration):
             # prevents the zero-created gate from tripping on an otherwise clean re-run.
             total_unmappable = int(result.get("unmappable", 0))
             total_skipped = int(result.get("skipped", 0))
-            net_actionable = total_discovered - total_unmappable - total_skipped
+            net_actionable = max(0, total_discovered - total_unmappable - total_skipped)
 
             # Zero-created gating: only fail loud when there are real (actionable)
             # entries that were neither migrated nor accounted for.
             if net_actionable > 0 and total_migrated == 0:
                 return ComponentResult(
                     success=False,
-                    message=("Time entry migration discovered entries but created zero; failed loud"),
+                    message=(
+                        f"Time entry migration: discovered={total_discovered}, "
+                        f"unmappable={total_unmappable}, skipped={total_skipped}, "
+                        f"migrated=0, {total_failed} failed"
+                        " — investigate the insert failures."
+                    ),
                     details={
                         "status": "failed",
                         "reason": "zero_created_with_input",

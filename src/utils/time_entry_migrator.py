@@ -762,6 +762,7 @@ class TimeEntryMigrator:
                 processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
                 self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
                 self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
+                self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
                 self.migration_results["processing_time_seconds"] += processing_time
                 self.logger.success(
                     "Migration completed (batch): %d successful, %d failed in %.2fs",
@@ -886,6 +887,7 @@ class TimeEntryMigrator:
         processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
         self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
         self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
+        self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
         self.migration_results["processing_time_seconds"] += processing_time
         self.logger.success(
             "Migration completed: %d successful, %d failed in %.2fs",
