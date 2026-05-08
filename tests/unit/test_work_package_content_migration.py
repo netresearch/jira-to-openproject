@@ -79,7 +79,7 @@ def test_load_work_package_mapping_builds_jira_key_lookup(
         "1001": {"jira_key": "PROJ-1", "openproject_id": 5001},
         "1002": {"jira_key": "PROJ-2", "openproject_id": 5002},
     }
-    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping))
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
 
     mig = _build_mig(tmp_path)
     # Re-trigger load against the seeded file.
@@ -96,7 +96,7 @@ def test_load_work_package_mapping_skips_bare_int_legacy_rows(
         "1001": {"jira_key": "PROJ-1", "openproject_id": 5001},
         "1002": 9999,  # legacy bare-int row
     }
-    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping))
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
 
     mig = _build_mig(tmp_path)
     assert mig._load_work_package_mapping() is True
@@ -116,7 +116,7 @@ def test_convert_jira_links_rewrites_known_keys(
     embedded in the output — the exact decoration is a converter concern.
     """
     mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
-    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping))
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
 
     mig = _build_mig(tmp_path)
     mig._load_work_package_mapping()
@@ -142,7 +142,7 @@ def test_run_returns_success_on_clean_migration(
     only assert the run() wrapper produces the expected ComponentResult shape.
     """
     mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
-    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping))
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
 
     mig = _build_mig(tmp_path)
     mig._load_work_package_mapping()

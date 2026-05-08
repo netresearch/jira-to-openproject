@@ -46,6 +46,15 @@ def _make_mig(
     # Patch TimeEntryMigrator so __init__ doesn't probe the OP client.
     monkeypatch.setattr(tem, "TimeEntryMigrator", MagicMock())
 
+    # Isolate from any J2O_JIRA_PROJECTS env override the developer may have
+    # set: TimeEntryMigration._load_migrated_work_packages() filters by
+    # config.jira_config['projects'] when non-empty, which can silently drop
+    # the seeded PROJ-1 mapping and route the test through the
+    # "no_migrated_work_packages" skip path.
+    import src.config as cfg
+
+    monkeypatch.setitem(cfg.jira_config, "projects", [])
+
     jira = MagicMock()
     op = MagicMock()
     if rails_present:
@@ -98,7 +107,7 @@ def test_run_zero_created_with_input_fails_loud(
     mapping = {
         "1001": {"jira_key": "PROJ-1", "openproject_id": 5001},
     }
-    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping))
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
 
     mig = _make_mig(tmp_path, monkeypatch, rails_present=True)
 
@@ -124,7 +133,7 @@ def test_run_returns_success_when_migrator_creates_entries(
 ) -> None:
     """Happy path: migrator reports migrated entries → success."""
     mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
-    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping))
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
 
     mig = _make_mig(tmp_path, monkeypatch, rails_present=True)
     mig.time_entry_migrator.migrate_time_entries_for_issues.return_value = {

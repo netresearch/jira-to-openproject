@@ -121,8 +121,18 @@ def test_reporting_migration_end_to_end_creates_query_and_wiki(_mock_mappings: N
 
 def test_reporting_migration_dashboard_without_share_uses_reporting_project(
     _mock_mappings: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Dashboard with no share + ensure_reporting_project succeeds → falls back to reporting project."""
+    # Isolate from any developer .env.local that pre-configures
+    # reporting_wiki_project / reporting_wiki_project_name in
+    # config.openproject_config — those would override the
+    # ensure_reporting_project() fallback (555) and break the assertion.
+    import src.config as cfg
+
+    monkeypatch.setitem(cfg.openproject_config, "reporting_wiki_project", "")
+    monkeypatch.setitem(cfg.openproject_config, "reporting_wiki_project_name", "")
+
     dashboards = [{"id": 30, "name": "Lonely", "sharePermissions": []}]
     op = DummyOp()
     mig = ReportingMigration(
