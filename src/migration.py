@@ -41,6 +41,18 @@ from src.application.components.link_type_migration import LinkTypeMigration
 from src.application.components.native_tags_migration import NativeTagsMigration
 from src.application.components.priority_migration import PriorityMigration
 from src.application.components.project_migration import ProjectMigration
+
+# Re-exports for backward compatibility — see migration-py-split-plan.md (Phase 1).
+# Tests and src/main.py import these names from src.migration; the registry is
+# their canonical home but src.migration must keep resolving them.
+from src.application.components.registry import (
+    DEFAULT_COMPONENT_SEQUENCE,
+    PREDEFINED_PROFILES,  # noqa: F401  (re-exported for src/main.py and tests)
+    build_factories,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
+    known_components,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
+    register_component,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
+    register_factory,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
+)
 from src.application.components.relation_migration import RelationMigration
 from src.application.components.remote_links_migration import RemoteLinksMigration
 from src.application.components.reporting_migration import ReportingMigration
@@ -73,98 +85,10 @@ from src.utils import data_handler
 
 console = Console()
 
-# Two-Phase Migration Sequence for Proper Attachment URL Conversion
-# ==================================================================
-# Phase 1 (work_packages_skeleton): Creates WP structure without content
-# Phase 2 (attachments): Uploads files and creates attachment_mapping.json
-# Phase 3 (work_packages_content): Populates descriptions/comments with resolved attachment URLs
-#
-# This ensures !image.png! references in Jira convert to proper OP API URLs:
-# /api/v3/attachments/{id}/content
-#
-DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
-    # === Foundation: Users & Groups ===
-    "users",
-    # Retroactively pull missing Jira identities into the user mapping
-    # before any consumer tries to resolve them. Sources: previous
-    # migration_results' ``unmapped_users`` lists + cached issue
-    # author/assignee/reporter/watcher fields. Idempotent — re-runs
-    # only add what's not already mapped.
-    "user_mapping_backfill",
-    "groups",
-    # === Metadata: Field Definitions ===
-    "custom_fields",
-    "priorities",
-    "link_types",
-    "issue_types",
-    "status_types",
-    "resolutions",
-    # === Organization: Companies & Accounts (Tempo) ===
-    "companies",
-    "accounts",
-    # === Structure: Projects ===
-    "projects",
-    # === Agile: Workflows, Boards, Sprints ===
-    "workflows",
-    "agile_boards",
-    "sprint_epic",
-    # === Phase 1: Work Package Skeletons (no content) ===
-    "work_packages_skeleton",
-    # === Phase 2: Attachments (creates mapping for URL conversion) ===
-    "attachments",
-    "attachment_provenance",
-    # Re-attempt attachments missing in OP after the main attachments
-    # run (transient mid-batch errors leave the partial-success
-    # classifier green; the original migration is idempotent
-    # Rails-side, so re-running it for the affected jira_keys fills
-    # the gap). Idempotent: no-op when OP already has every file.
-    "attachment_recovery",
-    # === Phase 3: Work Package Content (with resolved attachment URLs) ===
-    "work_packages_content",
-    # Backfill assignee + provenance CFs on existing WPs (closes Bug A
-    # for pre-#175 WPs and the under-populated CF warnings flagged by
-    # the audit; idempotent — only sets fields where the OP value is
-    # currently null/blank).
-    "wp_metadata_backfill",
-    # === Post-WP Data: Versions, Components, Labels ===
-    "versions",
-    "components",
-    "labels",
-    "native_tags",
-    # === WP Metadata: Estimates, Story Points, Security ===
-    "story_points",
-    "estimates",
-    "security_levels",
-    "affects_versions",
-    "customfields_generic",
-    # === WP Relationships ===
-    "relations",
-    "remote_links",
-    "inline_refs",
-    # === WP Engagement: Watchers, Votes ===
-    "watchers",
-    "votes_reactions",
-    # === Time Tracking ===
-    "time_entries",
-    # === Finalization ===
-    "category_defaults",
-    "admin_schemes",
-    "reporting",
-]
-
-PREDEFINED_PROFILES: dict[str, list[ComponentName]] = {
-    "full": DEFAULT_COMPONENT_SEQUENCE.copy(),
-    "metadata_refresh": [
-        "projects",
-        "issue_types",
-        "status_types",
-        "workflows",
-        "agile_boards",
-        "sprint_epic",
-        "admin_schemes",
-        "reporting",
-    ],
-}
+# DEFAULT_COMPONENT_SEQUENCE and PREDEFINED_PROFILES live in
+# ``src.application.components.registry`` (see Phase 1 of the
+# migration.py split plan). They are re-exported above so callers that
+# still import from ``src.migration`` keep working.
 
 
 def _ensure_provenance_bootstrap(op_client: Any, logger: Any) -> None:
