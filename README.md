@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 
-A robust, modular migration toolset for transferring project management data from Jira Server 9.x to OpenProject 15+/16.x. Built with Python 3.14, this tool handles users, projects, work packages, custom fields, statuses, workflows, and attachments.
+A robust, modular migration toolset for transferring project management data from Jira Server 9.x to OpenProject 17.3+. Built with Python 3.14, this tool handles users, projects, work packages, custom fields, statuses, workflows, and attachments.
 
 ## Features
 
@@ -39,23 +39,31 @@ A robust, modular migration toolset for transferring project management data fro
 ### Supported Targets
 
 - Jira Server/Data Center 9.x (validated on 9.11)
-- OpenProject 16.x (validated on 16.0)
+- OpenProject 17.3+ (currently tested against 17.3)
 
 Earlier or later releases may work, but they are not part of the supported/tested matrix.
 
 ### Installation
 
+The project uses [uv](https://docs.astral.sh/uv/) for dependency management and Python 3.14+.
+
 ```bash
-# Clone and setup
-git clone <repository-url>
-cd jira-to-openproject-migration
-python -m venv .venv
-source .venv/bin/activate  # or activate.sh
-pip install -e .
+# Clone
+git clone https://github.com/netresearch/jira-to-openproject.git
+cd jira-to-openproject
+
+# Install dependencies (creates .venv automatically)
+uv sync --frozen --extra dev --extra test
 
 # Configure environment
 cp .env.example .env
 # Edit .env with your Jira and OpenProject credentials
+
+# Verify installation
+uv run pytest tests/unit -q          # ~1600 unit tests
+uv run ruff check .                  # lint
+uv run mypy src/                     # type check
+uv run lint-imports                  # architecture contract
 ```
 
 ### Development Environment
@@ -154,6 +162,19 @@ OpenProject Container
 OpenProject Application
 ```
 
+### Source Layout (Cosmic Python layers)
+
+The Python source follows a [Cosmic Python](https://www.cosmicpython.com/) layered structure, enforced in CI by [import-linter](https://import-linter.readthedocs.io/):
+
+| Layer | Path | Responsibility |
+|---|---|---|
+| Entrypoints | `src/main.py`, `src/dashboard/` | CLI and FastAPI dashboard — argument parsing, request handling |
+| Services | `src/application/components/`, `src/application/transformers/` | Migration orchestration, ETL pipelines, pure data transformations |
+| Adapters | `src/infrastructure/jira/`, `src/infrastructure/openproject/`, `src/infrastructure/persistence/` | I/O: Jira/OpenProject clients, SSH, Rails console, persistence |
+| Models | `src/domain/`, `src/models/` | Domain abstractions (Protocols, IDs, results) and data classes |
+
+The `architecture` job in CI (`uv run lint-imports`) enforces the dependency direction: higher layers may import from lower layers, never the reverse.
+
 ### Client Components
 
 - **OpenProjectClient**: High-level orchestration and API
@@ -223,6 +244,7 @@ logging:
 - **[Configuration Guide](docs/configuration.md)** - Detailed configuration options
 - **[Workflow & Status Guide](docs/WORKFLOW_STATUS_GUIDE.md)** - Status migration and workflow setup
 - **[Architecture Decisions](docs/adr/)** - ADRs documenting key technical decisions
+- **[Decision Records](docs/decisions/)** - Long-form rationale for non-trivial design choices
 
 ### Quick Reference
 
@@ -251,7 +273,8 @@ python src/main.py migrate --components all --verbose
 
 ### Prerequisites
 
-- **Python 3.13+**
+- **Python 3.14+**
+- **uv** (`pip install uv` or [install instructions](https://docs.astral.sh/uv/getting-started/installation/))
 - **Docker & Docker Compose** (for development environment)
 - **SSH access** to OpenProject server (for production migration)
 - **tmux** (for Rails console interaction)
@@ -281,11 +304,12 @@ tests/
 | Command | Description |
 |---------|-------------|
 | `make dev-test` | Unit tests locally (fastest feedback) |
-| `make container-test` | Unit tests in Docker (full deps, ~79 tests) |
-| `make container-test-integration` | Integration tests in Docker (~156 tests, mocked) |
+| `make container-test` | Unit tests in Docker (full deps, ~1600 tests) |
+| `make container-test-integration` | Integration tests in Docker (live-service-gated, mostly skipped without env flags) |
 | `make test-slow` | Integration + E2E tests in Docker |
 | `make test-verbose` | Tests with verbose output |
 | `make lint` | Run linting (ruff + mypy) |
+| `make check-architecture` | Enforce Cosmic Python layered architecture (import-linter) |
 
 **Test environment variables:**
 - `J2O_RUN_INTEGRATION=true` — Enable integration tests locally

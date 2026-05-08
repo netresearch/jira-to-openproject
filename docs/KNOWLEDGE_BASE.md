@@ -26,7 +26,7 @@
 **→ [Quick Start Guide](QUICK_START.md)** - Developer onboarding and first migration
 
 **Prerequisites**:
-- Python 3.13+
+- Python 3.14+
 - Docker & Docker Compose
 - SSH access to OpenProject server
 - tmux for Rails console
@@ -70,7 +70,7 @@ uv run python -m src.main migrate --components users --dry-run --no-confirm
 
 **Architecture Diagrams**:
 ```
-Local Migration Tool (Python 3.13)
+Local Migration Tool (Python 3.14)
     ↓ SSH Connection
 Remote OpenProject Server
     ↓ Docker Commands
@@ -732,7 +732,7 @@ pytest -k "test_jira_client"
 **Official Documentation**:
 - [Jira Server REST API](https://docs.atlassian.com/software/jira/docs/api/REST/)
 - [OpenProject API](https://www.openproject.org/docs/api/)
-- [Python 3.13 Documentation](https://docs.python.org/3.13/)
+- [Python 3.14 Documentation](https://docs.python.org/3.14/)
 
 **Related Projects**:
 - [tmux](https://github.com/tmux/tmux/wiki)

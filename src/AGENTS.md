@@ -93,7 +93,7 @@
 - Flagged cleanup script as legacy to steer new work toward migration abstractions.
 - Limited mypy coverage to `src/config_loader.py` pending broader cleanup of type errors across migrations and clients.
 - Host sandbox lacks PyPI connectivity, so run pytest targets inside the project containers instead of locally.
-- Target environment tested against Jira Server 9.x and OpenProject 15+/16.x; other versions are "best effort".
+- Target environment tested against Jira Server 9.x and OpenProject 17.3+; other versions are "best effort".
 - Journal creation changed from `journals.create!` to `journal_notes`/`journal_user` + `save!` for OP 15+ compatibility (2026-01).
 - Watcher migration rewritten to use batch `insert_all` with pre-fetched ID sets (`pluck(:id).to_set`) for 100x+ speedup (2026-01).
 - Rails runner timeout increased from 120s to 300s for large projects like ADKP (872 WPs) (2026-01).
