@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit install-irbrc start-rails attach-rails
+.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit install-irbrc start-rails attach-rails check-architecture
 
 # Default target
 help: ## Show this help message
@@ -246,6 +246,9 @@ local-test-live-ssh: ## Run tests locally with live SSH connections
 local-lint: ## Run linting locally
 	ruff check --fix src tests || uvx ruff check --fix src tests
 	mypy src || uvx mypy src
+
+check-architecture: ## Enforce Cosmic Python layered architecture (import-linter)
+	uv run lint-imports
 
 local-format: ## Format code locally
 	ruff format src tests || uvx ruff format src tests
