@@ -361,6 +361,69 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 h.update(chunk)
         return h.hexdigest()
 
+    def _prepare_op_from_item(
+        self,
+        *,
+        item: dict[str, Any],
+        jira_key: str,
+        work_package_id: int,
+    ) -> dict[str, Any] | None:
+        """Validate, download, hash a single Jira attachment item.
+
+        Returns the prepared op dict (with ``jira_key``,
+        ``work_package_id``, ``local_path``, ``filename``, ``digest``)
+        on success, or ``None`` when the item should be skipped. Each
+        skip-class increments a named ``_loss_counters`` bucket so the
+        per-stage breakdown stays accurate.
+
+        Extracted out of ``_map`` and ``_process_batch_end_to_end``
+        which had a near-identical 20-line block — Sonar flagged the
+        duplicated body on PR #224. Keeping the helper here on the
+        instance (instead of a free function) so it can update
+        ``self._loss_counters`` directly without threading.
+        """
+        raw_filename = item.get("filename")
+        raw_url = item.get("url")
+        # Validate BEFORE coercing to string — ``str(None)``
+        # produces the truthy literal ``"None"``, which would bypass
+        # the ``if not …`` guard and silently let an invalid item
+        # through. Per PR #211 review.
+        if not raw_filename or not raw_url:
+            self._loss_counters["map_missing_filename_or_url"] += 1
+            return None
+        filename = str(raw_filename)
+        url = str(raw_url)
+        # Disambiguate per-attachment on the local filesystem so two
+        # attachments sharing a Jira filename (common across issues
+        # — ``image.png`` everywhere) don't overwrite each other on
+        # disk before ``_load`` can transfer them. The Jira attachment
+        # id is immutable + unique, so it's a stable disambiguator.
+        # The op's ``filename`` field stays the original Jira filename
+        # so the Rails attach script writes the user-visible name
+        # correctly. Per PR #222 review.
+        aid = item.get("id") or ""
+        safe_name = filename.replace("/", "_")
+        local_path = self.attachment_dir / f"{aid}_{safe_name}" if aid else self.attachment_dir / safe_name
+        try:
+            self._download_attachment(url, local_path)
+        except Exception:
+            # ``_download_attachment`` swallows exceptions and logs a
+            # warning, but a bad return path could still raise.
+            # Catching here keeps the per-item loop resilient.
+            self._loss_counters["map_download_failed"] += 1
+            return None
+        if not local_path.exists():
+            self._loss_counters["map_download_failed"] += 1
+            return None
+        digest = self._sha256_of(local_path)
+        return {
+            "jira_key": jira_key,
+            "work_package_id": int(work_package_id),
+            "local_path": local_path.as_posix(),
+            "filename": filename,
+            "digest": digest,
+        }
+
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         att_by_key: dict[str, list[dict[str, Any]]] = data.get("attachments", {}) if isinstance(data, dict) else {}
@@ -383,52 +446,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
             for item in items:
                 try:
-                    raw_filename = item.get("filename")
-                    raw_url = item.get("url")
-                    # Validate BEFORE coercing to string — ``str(None)``
-                    # produces the truthy literal ``"None"``, which would
-                    # bypass the ``if not …`` guard and silently let an
-                    # invalid item through. Caught by PR #211 review.
-                    if not raw_filename or not raw_url:
-                        self._loss_counters["map_missing_filename_or_url"] += 1
+                    op = self._prepare_op_from_item(item=item, jira_key=key, work_package_id=int(wp_id))
+                    if op is None:
                         continue
-                    filename = str(raw_filename)
-                    url = str(raw_url)
-                    # Disambiguate per-attachment on the local filesystem
-                    # so two attachments sharing a Jira filename
-                    # (common across issues — ``image.png`` everywhere)
-                    # don't overwrite each other on disk before
-                    # ``_load`` can transfer them. Use the Jira
-                    # attachment id (immutable, unique) as a prefix
-                    # in the local path; the ``filename`` field on the
-                    # op stays the original Jira filename so OP's
-                    # attach script writes the user-visible name
-                    # correctly. Per PR #222 review.
-                    aid = item.get("id") or ""
-                    safe_name = filename.replace("/", "_")
-                    local_path = self.attachment_dir / f"{aid}_{safe_name}" if aid else self.attachment_dir / safe_name
-                    # Download and hash
-                    self._download_attachment(url, local_path)
-                    if not local_path.exists():
-                        # ``_download_attachment`` already logs a
-                        # warning; record here so the operator sees
-                        # the count alongside the other buckets.
-                        self._loss_counters["map_download_failed"] += 1
-                        continue
-                    digest = self._sha256_of(local_path)
-                    if digest in seen_digests:
-                        # Dedup local-only; still may attach same file to multiple WPs
-                        pass
-                    seen_digests.add(digest)
-                    ops.append(
-                        {
-                            "jira_key": key,
-                            "work_package_id": int(wp_id),
-                            "local_path": local_path.as_posix(),
-                            "filename": filename,
-                            "digest": digest,
-                        },
-                    )
+                    seen_digests.add(op["digest"])
+                    ops.append(op)
                 except Exception:
                     self._loss_counters["map_per_item_exception"] += 1
                     continue
@@ -907,37 +929,11 @@ puts end_marker
 
             for item in items:
                 try:
-                    raw_filename = item.get("filename")
-                    raw_url = item.get("url")
-                    # See ``_map`` — same ``str(None)`` gotcha.
-                    if not raw_filename or not raw_url:
-                        self._loss_counters["map_missing_filename_or_url"] += 1
+                    op = self._prepare_op_from_item(item=item, jira_key=key, work_package_id=int(wp_id))
+                    if op is None:
                         continue
-                    filename = str(raw_filename)
-                    url = str(raw_url)
-                    # Same per-attachment-id local path scheme as
-                    # ``_map`` — keeps duplicate filenames from
-                    # overwriting each other on disk. Per PR #222
-                    # review.
-                    aid = item.get("id") or ""
-                    safe_name = filename.replace("/", "_")
-                    local_path = self.attachment_dir / f"{aid}_{safe_name}" if aid else self.attachment_dir / safe_name
-                    # Download
-                    self._download_attachment(url, local_path)
-                    if not local_path.exists():
-                        self._loss_counters["map_download_failed"] += 1
-                        continue
-                    digest = self._sha256_of(local_path)
-                    seen_digests.add(digest)
-                    ops.append(
-                        {
-                            "jira_key": key,
-                            "work_package_id": int(wp_id),
-                            "local_path": local_path.as_posix(),
-                            "filename": filename,
-                            "digest": digest,
-                        },
-                    )
+                    seen_digests.add(op["digest"])
+                    ops.append(op)
                 except Exception:
                     self._loss_counters["map_per_item_exception"] += 1
                     continue
