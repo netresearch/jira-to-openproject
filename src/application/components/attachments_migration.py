@@ -404,14 +404,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         aid = item.get("id") or ""
         safe_name = filename.replace("/", "_")
         local_path = self.attachment_dir / f"{aid}_{safe_name}" if aid else self.attachment_dir / safe_name
-        try:
-            self._download_attachment(url, local_path)
-        except Exception:
-            # ``_download_attachment`` swallows exceptions and logs a
-            # warning, but a bad return path could still raise.
-            # Catching here keeps the per-item loop resilient.
-            self._loss_counters["map_download_failed"] += 1
-            return None
+        # ``_download_attachment`` already swallows transport
+        # exceptions and logs a warning — the next-line ``exists()``
+        # check is the canonical "did the download produce a file"
+        # signal. Adding an outer try/except here would mask
+        # genuine programming errors (e.g., the helper itself
+        # raising on a bug in this module) by lumping them under
+        # ``map_download_failed``; the per-item ``except Exception``
+        # in the *caller* still catches anything truly unexpected
+        # and routes it to ``map_per_item_exception``. Per PR #225
+        # review.
+        self._download_attachment(url, local_path)
         if not local_path.exists():
             self._loss_counters["map_download_failed"] += 1
             return None
@@ -433,7 +436,6 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         key_to_wp_id = self._wp_lookup_by_jira_key()
 
         ops: list[dict[str, Any]] = []
-        seen_digests: set[str] = set()
 
         for key, items in att_by_key.items():
             wp_id = key_to_wp_id.get(key)
@@ -449,7 +451,6 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     op = self._prepare_op_from_item(item=item, jira_key=key, work_package_id=int(wp_id))
                     if op is None:
                         continue
-                    seen_digests.add(op["digest"])
                     ops.append(op)
                 except Exception:
                     self._loss_counters["map_per_item_exception"] += 1
@@ -918,7 +919,6 @@ puts end_marker
 
         # Download attachments and prepare ops
         ops: list[dict[str, Any]] = []
-        seen_digests: set[str] = set()
 
         for key, items in att_by_key.items():
             # Find work package ID from reverse lookup
@@ -932,7 +932,6 @@ puts end_marker
                     op = self._prepare_op_from_item(item=item, jira_key=key, work_package_id=int(wp_id))
                     if op is None:
                         continue
-                    seen_digests.add(op["digest"])
                     ops.append(op)
                 except Exception:
                     self._loss_counters["map_per_item_exception"] += 1
