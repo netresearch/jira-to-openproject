@@ -1111,37 +1111,9 @@ class TestStrikethroughCLIFlagFalsePositives:
     dash) is not treated as strikethrough.
     """
 
-    # --- Negative regressions: PR #242's existing compound-word fixes must hold ---
-
-    def test_compound_word_concourse_ci_not_struck(self) -> None:
-        """concourse-ci must not produce ~~."""
-        converter = MarkdownConverter()
-        result = converter.convert("concourse-ci")
-        assert "~~" not in result
-        assert result == "concourse-ci"
-
-    def test_compound_word_non_trivial_fix_not_struck(self) -> None:
-        """non-trivial-fix must not produce ~~."""
-        converter = MarkdownConverter()
-        result = converter.convert("non-trivial-fix")
-        assert "~~" not in result
-        assert result == "non-trivial-fix"
-
-    def test_date_not_struck(self) -> None:
-        """2023-12-31 must not produce ~~."""
-        converter = MarkdownConverter()
-        result = converter.convert("2023-12-31")
-        assert "~~" not in result
-        assert result == "2023-12-31"
-
-    def test_multi_segment_compound_word_not_struck(self) -> None:
-        """multi-line-string must not produce ~~."""
-        converter = MarkdownConverter()
-        result = converter.convert("multi-line-string")
-        assert "~~" not in result
-        assert result == "multi-line-string"
-
-    # --- NEW negatives: CLI flag patterns (the live-verified bug) ---
+    # Compound-word, date, and multi-segment cases are already covered by
+    # ``TestStrikethroughFalsePositives`` (PR #242) so we don't duplicate them
+    # here. This class focuses on CLI-flag patterns that PR #242 missed.
 
     def test_double_dash_flags_not_struck(self) -> None:
         """--diff -f 30 --skip-tags must not produce any ~~."""
