@@ -218,3 +218,34 @@ def test_snapshot_path_still_warns_for_genuine_failure(
         r for r in caplog.records if r.levelno >= logging.WARNING and "snapshot" in r.getMessage().lower()
     ]
     assert warning_records, "Expected at least one WARNING-level log about snapshot failure for genuine I/O error"
+
+
+def test_snapshot_path_warns_for_non_value_error_migration_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A transient network error wrapped in ``MigrationError`` MUST still produce a WARNING.
+
+    ``_get_cached_entities`` wraps ALL exceptions from
+    ``_get_current_entities_for_type`` in ``MigrationError``.  Only those
+    whose ``__cause__`` is a ``ValueError`` are transformation-only by design.
+    A ``RuntimeError`` (e.g. "connection refused") indicates a real transient
+    failure and must NOT be silenced at DEBUG — it must log at WARNING so the
+    operator knows the snapshot was skipped due to an actual error, not by
+    design.
+    """
+    runner = _make_runner_for_snapshot_test(
+        entity_fetch_exc=RuntimeError("connection refused"),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="test_change_aware_runner_log_levels"):
+        result = runner.run("issues")
+
+    assert result.success, "Migration result must still be successful despite snapshot failure"
+
+    warning_records = [
+        r for r in caplog.records if r.levelno >= logging.WARNING and "snapshot" in r.getMessage().lower()
+    ]
+    assert warning_records, (
+        "Expected at least one WARNING-level log about snapshot failure for "
+        "a non-ValueError MigrationError (transient network/server error)"
+    )

@@ -160,17 +160,27 @@ class ChangeAwareRunner:
                     },
                 )
             except MigrationError as e:
-                # MigrationError means the entity fetch failed because this
-                # migration is transformation-only and does not support change
-                # detection.  Snapshots are therefore not possible by design —
-                # this is not a failure.  Log at debug to avoid spurious
-                # WARNINGs on every run for watchers, time_entries,
-                # wp_metadata_backfill, etc.
-                self.logger.debug(
-                    "Skipping snapshot for %s (transformation-only migration): %s",
-                    entity_type,
-                    e,
-                )
+                if isinstance(e.__cause__, ValueError):
+                    # The entity fetch raised ``ValueError``, which is the
+                    # documented signal that this migration is
+                    # transformation-only and does not support change detection.
+                    # Snapshots are therefore not possible by design — this is
+                    # not a failure.  Log at debug to avoid spurious WARNINGs
+                    # on every run for watchers, time_entries,
+                    # wp_metadata_backfill, etc.
+                    self.logger.debug(
+                        "Skipping snapshot for %s (transformation-only migration): %s",
+                        entity_type,
+                        e,
+                    )
+                else:
+                    # Any other MigrationError (e.g. network timeout, 500
+                    # response wrapped by ``_get_cached_entities``) is a real
+                    # failure and must stay visible.
+                    self.logger.warning(
+                        "Failed to create snapshot after successful migration: %s",
+                        e,
+                    )
             except Exception as e:
                 self.logger.warning(
                     "Failed to create snapshot after successful migration: %s",
