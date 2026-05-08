@@ -27,7 +27,10 @@ if "jira" not in sys.modules:
     exceptions_module = types.ModuleType("jira.exceptions")
 
     class _CTestJIRAError(Exception):
-        pass
+        def __init__(self, text=None, status_code=None, url=None, **kwargs):
+            super().__init__(text)
+            self.status_code = status_code
+            self.url = url
 
     exceptions_module.JIRAError = _CTestJIRAError
     jira_module.exceptions = exceptions_module
