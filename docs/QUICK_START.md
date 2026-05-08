@@ -2,7 +2,7 @@
 
 **Target Audience**: Developers new to the j2o migration tool
 **Time**: 30-45 minutes
-**Prerequisites**: Python 3.13+, Docker, SSH access to OpenProject
+**Prerequisites**: Python 3.14+, Docker, SSH access to OpenProject
 
 ---
 
@@ -33,7 +33,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync --frozen
 
 # Verify installation
-uv run python --version  # Should show Python 3.13+
+uv run python --version  # Should show Python 3.14+
 ```
 
 ### Step 2: Configure Environment
