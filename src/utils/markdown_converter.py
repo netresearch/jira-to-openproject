@@ -58,8 +58,10 @@ class MarkdownConverter:
     def _compile_patterns(self) -> None:
         """Compile regex patterns for efficient text processing."""
         # Basic formatting patterns - be careful not to match markdown formatting
-        # Bold text: *text* — parentheses ARE valid in bold spans (e.g. *note (see below)*).
-        self.bold_pattern = re.compile(r"(?<!\*)\*(\w[^*\n]*)\*(?!\*)")
+        # Bold text: *text* — parentheses ARE valid in bold spans (e.g. *note (see below)*),
+        # and symbol-led spans like *"quoted"* or *#value* are also valid Jira bold.
+        # Excludes whitespace, ( and * as the leading character to avoid false positives.
+        self.bold_pattern = re.compile(r"(?<!\*)\*([^\s\(\*][^*\n]*)\*(?!\*)")
         # Italic text: _text_ (but not if inside parentheses or already markdown)
         self.italic_pattern = re.compile(r"(?<!\()\b_([^_\n]+)_\b(?!\))")
         # Underline: +text+ -> <u>text</u>
@@ -110,14 +112,24 @@ class MarkdownConverter:
         self.image_pattern = re.compile(r"!([^!|\s]+)(?:\|([^!]*))?!")
         # Pattern for [title|filename.ext] format.
         # Matches any file with a dot-extension that is NOT a URL (http/https/ftp).
+        # re.IGNORECASE ensures HTTPS:// and FTP:// are excluded alongside lowercase forms,
+        # and allows filenames with mixed-case extensions (e.g. .PDF, .Docx).
+        # Spaces are permitted in filenames (e.g. "some report.pdf").
         self.attachment_pattern = re.compile(
-            r"\[([^\|\]]+)\|(?!https?://|ftp://)([^\]\s|]+\.[a-zA-Z0-9]{1,10})\]",
+            r"\[([^\|\]]+)\|(?!https?://|ftp://)([^\]|]+\.[a-zA-Z0-9]{1,10})\]",
+            re.IGNORECASE,
         )
         # Pattern for [^filename.ext] format (Jira attachment reference).
         # Matches any filename with a dot-extension (not just the original whitelist).
+        # re.IGNORECASE allows mixed-case extensions; spaces permitted in filenames.
         self.attachment_ref_pattern = re.compile(
-            r"\[\^([^\]\s]+\.[a-zA-Z0-9]{1,10})\]",
+            r"\[\^([^\]]+\.[a-zA-Z0-9]{1,10})\]",
+            re.IGNORECASE,
         )
+
+        # Pattern to protect already-converted markdown links [text](url) and images
+        # ![alt](url) from issue-ref substitution in _convert_issue_references.
+        self.protected_markdown_link_pattern = re.compile(r"(!?\[[^\]]*\]\([^)]*\))")
 
         # Table patterns
         self.table_header_pattern = re.compile(r"^\|\|(.+)\|\|$", re.MULTILINE)
@@ -341,8 +353,7 @@ class MarkdownConverter:
         # Protect already-converted markdown links [text](url) and images ![alt](url)
         # from issue-ref substitution.  Split on those constructs, convert only the
         # plain-text segments, then reassemble.
-        protected_re = re.compile(r"(!?\[[^\]]*\]\([^)]*\))")
-        parts = protected_re.split(text)
+        parts = self.protected_markdown_link_pattern.split(text)
         result = []
         for i, part in enumerate(parts):
             if i % 2 == 1:
@@ -586,9 +597,20 @@ class MarkdownConverter:
 
                 if is_header_row:
                     # Jira header row: ||col1||col2||col3|| — split on || separator.
-                    # Strip leading/trailing | chars then split on ||, discarding empty
-                    # fragments that result from leading/trailing ||.
-                    cells = [c.strip() for c in stripped.strip("|").split("||") if c.strip() != ""]
+                    # Strip the outer leading/trailing | characters introduced by the
+                    # mandatory || delimiters, then split on ||.  Empty strings that
+                    # arise from the leading/trailing || are pruned by stripping the
+                    # string BEFORE splitting; intentionally empty interior cells
+                    # (e.g. ||col1|| ||col3||) are preserved so column alignment
+                    # is not silently corrupted.
+                    raw = stripped.strip("|")
+                    raw_cells = raw.split("||")
+                    # Prune only the edge fragments that are empty due to leading/trailing ||
+                    if raw_cells and raw_cells[0].strip() == "":
+                        raw_cells = raw_cells[1:]
+                    if raw_cells and raw_cells[-1].strip() == "":
+                        raw_cells = raw_cells[:-1]
+                    cells = [c.strip() for c in raw_cells]
                 else:
                     # Normal data row: |cell1|cell2| — split on single |
                     cells = [cell.strip() for cell in line.strip("|").split("|")]
