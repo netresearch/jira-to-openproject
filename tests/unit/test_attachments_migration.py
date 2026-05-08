@@ -694,3 +694,102 @@ def test_disambiguate_per_wp_only(monkeypatch: pytest.MonkeyPatch):
     out = mig._disambiguate_duplicate_filenames(ops)
     names = [o["filename"] for o in out]
     assert names == ["a.png", "a.png", "a (2).png"], names
+
+
+# --- Regression tests for PR #224 fixes (added 2026-05-08) ---
+
+
+def test_load_treats_non_dict_data_as_failure_not_silent_pass(tmp_path: Path):
+    """When Rails returns ``data`` that isn't a dict (e.g. a string
+    or null after a malformed runner output), ``_load`` must:
+
+    * count the whole batch as failed (`failed == len(container_ops)`),
+    * report `success=False`,
+    * increment ``load_rails_malformed_data`` by ``len(container_ops)``.
+
+    Prior to PR #224 the path coerced to ``[]`` and silently
+    reported a green batch — that hid real Rails-side breakage from
+    the operator. Per PR #224 review.
+    """
+
+    class _MalformedDataOp(DummyOp):
+        def execute_script_with_data(self, script_content: str, data: object):
+            self.last_input = list(data) if isinstance(data, list) else []
+            return {
+                "status": "success",
+                "message": "ok",
+                "data": "not-a-dict",  # malformed
+                "output": "<dummy>",
+            }
+
+    op = _MalformedDataOp()
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    att_data = {
+        "PRJ-1": [
+            {"id": "1", "filename": "a.txt", "size": 1, "url": "http://example/a"},
+            {"id": "2", "filename": "b.txt", "size": 1, "url": "http://example/b"},
+        ],
+    }
+    ex = ComponentResult(success=True, data={"attachments": att_data})
+    mp = mig._map(ex)
+    result = mig._load(mp)
+    assert result.success is False
+    assert result.failed == 2  # both ops counted as failed
+    assert mig._loss_counters["load_rails_malformed_data"] == 2
+
+
+def test_load_treats_non_list_results_as_failure_not_silent_pass(tmp_path: Path):
+    """``data['results']`` / ``data['errors']`` of a wrong type
+    (dict / string / None) must also count the batch as failed
+    instead of silently passing. Per PR #224 review.
+    """
+
+    class _MalformedListsOp(DummyOp):
+        def execute_script_with_data(self, script_content: str, data: object):
+            self.last_input = list(data) if isinstance(data, list) else []
+            return {
+                "status": "success",
+                "message": "ok",
+                "data": {"results": "should-be-a-list", "errors": None},
+                "output": "<dummy>",
+            }
+
+    op = _MalformedListsOp()
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    att_data = {
+        "PRJ-1": [{"id": "1", "filename": "a.txt", "size": 1, "url": "http://example/a"}],
+    }
+    ex = ComponentResult(success=True, data={"attachments": att_data})
+    mp = mig._map(ex)
+    result = mig._load(mp)
+    assert result.success is False
+    assert result.failed == 1
+    assert mig._loss_counters["load_rails_malformed_data"] == 1
+
+
+def test_prepare_op_uses_attachment_id_to_disambiguate_local_path(tmp_path: Path):
+    """Two Jira attachments sharing a ``filename`` but with distinct
+    ``id`` values must produce distinct ``local_path`` values. Without
+    the per-id prefix the second download would overwrite the first
+    on disk before ``_load`` could transfer them, attaching the wrong
+    bytes. Per PR #224 review.
+    """
+    op = DummyOp()
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    mig.attachment_dir = tmp_path
+
+    item_a = {"id": "100", "filename": "image.png", "size": 1, "url": "http://example/a"}
+    item_b = {"id": "200", "filename": "image.png", "size": 1, "url": "http://example/b"}
+
+    op_a = mig._prepare_op_from_item(item=item_a, jira_key="K-1", work_package_id=1)
+    op_b = mig._prepare_op_from_item(item=item_b, jira_key="K-2", work_package_id=2)
+    assert op_a is not None and op_b is not None
+    assert op_a["local_path"] != op_b["local_path"], (op_a["local_path"], op_b["local_path"])
+    # The user-visible filename stays the original — only the local
+    # path differs. The Rails attach script writes the filename
+    # column from the op's ``filename`` field, not the path.
+    assert op_a["filename"] == "image.png"
+    assert op_b["filename"] == "image.png"
+    # Each path carries the source id as a prefix.
+    assert "/100_" in op_a["local_path"], op_a["local_path"]
+    assert "/200_" in op_b["local_path"], op_b["local_path"]
