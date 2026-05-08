@@ -42,16 +42,16 @@ from src.application.components.native_tags_migration import NativeTagsMigration
 from src.application.components.priority_migration import PriorityMigration
 from src.application.components.project_migration import ProjectMigration
 
-# Re-exports for backward compatibility — see migration-py-split-plan.md (Phase 1).
-# Tests and src/main.py import these names from src.migration; the registry is
-# their canonical home but src.migration must keep resolving them.
+# Re-exports for backward compatibility. Tests and src/main.py historically
+# import these names from src.migration; the registry is now their canonical
+# home but src.migration must keep resolving them until callers migrate.
+# Only the data constants are re-exported — register_component / build_factories
+# are intentionally NOT re-exported here, to keep components importing them
+# from the canonical src.application.components.registry path and avoid
+# circular-import risk through this legacy module.
 from src.application.components.registry import (
     DEFAULT_COMPONENT_SEQUENCE,
     PREDEFINED_PROFILES,  # noqa: F401  (re-exported for src/main.py and tests)
-    build_factories,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
-    known_components,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
-    register_component,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
-    register_factory,  # noqa: F401  (scaffolding re-export, consumed in Phase 2)
 )
 from src.application.components.relation_migration import RelationMigration
 from src.application.components.remote_links_migration import RemoteLinksMigration

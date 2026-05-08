@@ -2,27 +2,29 @@
 
 Phase 1 scaffold: this module provides a registration API alongside the
 existing direct-import factory in :mod:`src.migration`. Components are
-not yet decorated with ``@register_component`` — that happens in Phase 2.
+not yet decorated with ``@register_component`` — that happens in a
+follow-up phase, once the registry is in place and tests confirm it
+sequences identically to the existing factory.
 
 For now ``DEFAULT_COMPONENT_SEQUENCE`` and ``PREDEFINED_PROFILES`` live
-here so future orchestrator extraction can import them from the
+here so a future orchestrator extraction can import them from the
 application layer rather than the legacy ``src.migration`` god-file.
 ``src.migration`` re-exports both names for backward compatibility.
-
-See ``claudedocs/refactoring/migration-py-split-plan.md`` for the full
-phased plan.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-from src.application.components.base_migration import BaseMigration
-from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.type_definitions import ComponentName
 
-ComponentFactory = Callable[[JiraClient, OpenProjectClient], BaseMigration]
+if TYPE_CHECKING:
+    from src.application.components.base_migration import BaseMigration
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+
+ComponentFactory = Callable[["JiraClient", "OpenProjectClient"], "BaseMigration"]
 
 _REGISTRY: dict[ComponentName, ComponentFactory] = {}
 
