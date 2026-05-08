@@ -58,14 +58,18 @@ class MarkdownConverter:
     def _compile_patterns(self) -> None:
         """Compile regex patterns for efficient text processing."""
         # Basic formatting patterns - be careful not to match markdown formatting
-        # Bold text: *text* (but not if already inside markdown ** format)
-        self.bold_pattern = re.compile(r"(?<!\*)\*([^*\n\(\)]+)\*(?!\*)")
+        # Bold text: *text* — parentheses ARE valid in bold spans (e.g. *note (see below)*),
+        # and symbol-led spans like *"quoted"* or *#value* are also valid Jira bold.
+        # Excludes whitespace, ( and * as the leading character to avoid false positives.
+        self.bold_pattern = re.compile(r"(?<!\*)\*([^\s\(\*][^*\n]*)\*(?!\*)")
         # Italic text: _text_ (but not if inside parentheses or already markdown)
         self.italic_pattern = re.compile(r"(?<!\()\b_([^_\n]+)_\b(?!\))")
         # Underline: +text+ -> <u>text</u>
         self.underline_pattern = re.compile(r"\+([^+\n]+)\+")
-        # Strikethrough: -text- (but avoid table separators and bullets)
-        self.strikethrough_pattern = re.compile(r"(?<![\|\s])-([^-\n\|]+)-(?![\|\s\-])")
+        # Strikethrough: -text- — requires non-word, non-dash context on both sides.
+        # This prevents false matches in compound words (ansible-core), dates (2023-12-31),
+        # CLI flags (--diff), and the issue-ref fallback ~~KEY~~ text.
+        self.strikethrough_pattern = re.compile(r"(?<![\w\-])-([^-\n|]+)-(?!\w)")
         # Monospace: {{text}} -> `text`
         self.monospace_pattern = re.compile(r"\{\{([^}]+)\}\}")
 
@@ -106,17 +110,26 @@ class MarkdownConverter:
 
         # Attachment and embedded content patterns
         self.image_pattern = re.compile(r"!([^!|\s]+)(?:\|([^!]*))?!")
-        # Pattern for [title|filename.ext] format
+        # Pattern for [title|filename.ext] format.
+        # Matches any file with a dot-extension that is NOT a URL (http/https/ftp).
+        # re.IGNORECASE ensures HTTPS:// and FTP:// are excluded alongside lowercase forms,
+        # and allows filenames with mixed-case extensions (e.g. .PDF, .Docx).
+        # Spaces are permitted in filenames (e.g. "some report.pdf").
         self.attachment_pattern = re.compile(
-            r"\[([^\|\]]+)\|([^\]]*\."
-            r"(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|7z))\]",
+            r"\[([^\|\]]+)\|(?!https?://|ftp://)([^\]|]+\.[a-zA-Z0-9]{1,10})\]",
             re.IGNORECASE,
         )
-        # Pattern for [^filename.ext] format (Jira attachment reference)
+        # Pattern for [^filename.ext] format (Jira attachment reference).
+        # Matches any filename with a dot-extension (not just the original whitelist).
+        # re.IGNORECASE allows mixed-case extensions; spaces permitted in filenames.
         self.attachment_ref_pattern = re.compile(
-            r"\[\^([^\]]+\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|7z))\]",
+            r"\[\^([^\]]+\.[a-zA-Z0-9]{1,10})\]",
             re.IGNORECASE,
         )
+
+        # Pattern to protect already-converted markdown links [text](url) and images
+        # ![alt](url) from issue-ref substitution in _convert_issue_references.
+        self.protected_markdown_link_pattern = re.compile(r"(!?\[[^\]]*\]\([^)]*\))")
 
         # Table patterns
         self.table_header_pattern = re.compile(r"^\|\|(.+)\|\|$", re.MULTILINE)
@@ -205,11 +218,14 @@ class MarkdownConverter:
         )  # Convert lists before headings to avoid conflicts
         text = self._convert_headings(text)
         text = self._convert_block_quotes(text)
+        # Images and attachments must run BEFORE issue_references so that Jira issue keys
+        # embedded in filenames (e.g. [^log-NRS-123.log]) are not corrupted by the
+        # issue-ref substitution before the attachment pattern has a chance to match.
+        text = self._convert_images(text)
+        text = self._convert_attachments(text)  # Must be before _convert_links to handle [^file] pattern
         text = self._convert_issue_references(text)
         text = self._convert_user_mentions(text)  # Convert user mentions before links
         text = self._convert_emoticons(text)  # Convert Jira emoticons to UTF-8
-        text = self._convert_images(text)
-        text = self._convert_attachments(text)  # Must be before _convert_links to handle [^file] pattern
         text = self._convert_links(text)
         text = self._convert_horizontal_rules(text)
         text = self._convert_text_formatting(text)
@@ -317,7 +333,12 @@ class MarkdownConverter:
         return self.link_pattern.sub(replace_link, text)
 
     def _convert_issue_references(self, text: str) -> str:
-        """Convert Jira issue references to OpenProject work package references."""
+        """Convert Jira issue references to OpenProject work package references.
+
+        Skips substitution inside already-converted markdown links and images
+        so that Jira issue keys embedded in filenames (e.g. log-NRS-123.log)
+        are not corrupted after attachment/image conversion has already run.
+        """
 
         def replace_issue_ref(match: re.Match[str]) -> str:
             jira_key = match.group(1)
@@ -329,7 +350,18 @@ class MarkdownConverter:
             # Fallback: preserve original reference with notation
             return f"~~{jira_key}~~ *(migrated issue)*"
 
-        return self.issue_ref_pattern.sub(replace_issue_ref, text)
+        # Protect already-converted markdown links [text](url) and images ![alt](url)
+        # from issue-ref substitution.  Split on those constructs, convert only the
+        # plain-text segments, then reassemble.
+        parts = self.protected_markdown_link_pattern.split(text)
+        result = []
+        for i, part in enumerate(parts):
+            if i % 2 == 1:
+                # Odd index → a protected markdown link/image; leave untouched
+                result.append(part)
+            else:
+                result.append(self.issue_ref_pattern.sub(replace_issue_ref, part))
+        return "".join(result)
 
     def extract_mentioned_user_ids(self, jira_markup: str) -> set[int]:
         """Extract OpenProject user IDs from Jira markup text.
@@ -555,14 +587,33 @@ class MarkdownConverter:
         table_rows = []
 
         for line in lines:
-            if self.table_row_pattern.match(line):
-                # This is a table row
+            stripped = line.strip()
+            is_header_row = stripped.startswith("||")
+            if is_header_row or self.table_row_pattern.match(line):
+                # This is a table row (header or data)
                 if not in_table:
                     in_table = True
                     table_rows = []
 
-                # Extract cells from the row
-                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                if is_header_row:
+                    # Jira header row: ||col1||col2||col3|| — split on || separator.
+                    # Strip the outer leading/trailing | characters introduced by the
+                    # mandatory || delimiters, then split on ||.  Empty strings that
+                    # arise from the leading/trailing || are pruned by stripping the
+                    # string BEFORE splitting; intentionally empty interior cells
+                    # (e.g. ||col1|| ||col3||) are preserved so column alignment
+                    # is not silently corrupted.
+                    raw = stripped.strip("|")
+                    raw_cells = raw.split("||")
+                    # Prune only the edge fragments that are empty due to leading/trailing ||
+                    if raw_cells and raw_cells[0].strip() == "":
+                        raw_cells = raw_cells[1:]
+                    if raw_cells and raw_cells[-1].strip() == "":
+                        raw_cells = raw_cells[:-1]
+                    cells = [c.strip() for c in raw_cells]
+                else:
+                    # Normal data row: |cell1|cell2| — split on single |
+                    cells = [cell.strip() for cell in line.strip("|").split("|")]
                 table_rows.append(cells)
 
             else:
