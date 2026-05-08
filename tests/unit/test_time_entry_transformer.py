@@ -445,3 +445,186 @@ class TestTimeEntryTransformer:
         # Should only process the one with issue_key
         assert len(results) == 1
         assert results[0]["_meta"]["jira_issue_key"] == "TEST-123"
+
+
+class TestUnmappableTempoEntries:
+    """TDD: unmappable Tempo entries (no user, no WP) must not pass through transformer."""
+
+    @pytest.fixture
+    def transformer_no_mappings(self):
+        """Transformer with empty mappings — simulates deleted-user / stale-Tempo scenario."""
+        return TimeEntryTransformer(
+            user_mapping={},
+            work_package_mapping={},
+            activity_mapping={},
+            default_activity_id=None,
+        )
+
+    def test_batch_transform_drops_tempo_entry_with_none_username_and_no_wp(
+        self,
+        transformer_no_mappings: TimeEntryTransformer,
+    ) -> None:
+        """Reproduce production failure: Tempo entry with username=None + empty WP identifiers.
+
+        The entry ``{"author": {"name": None}, "issue": {"key": ""}, ...}``
+        has no resolvable user AND no resolvable work package.  It must NOT
+        appear in the transformed output; the unmappable count is exposed via
+        ``transformer_no_mappings.last_unmappable_count`` (not on the returned list).
+        """
+        unmappable_tempo_entry = {
+            "tempoWorklogId": 99001,
+            "jiraWorklogId": None,
+            "author": {"name": None},  # username is None — matches production log
+            "issue": {"key": ""},  # empty issue key
+            "description": "Stale Tempo entry",
+            "dateStarted": "2024-01-15",
+            "timeSpentSeconds": 3600,
+        }
+
+        result = transformer_no_mappings.batch_transform_work_logs(
+            [unmappable_tempo_entry],
+            source_type="tempo",
+        )
+
+        # The bad entry must NOT appear in transformed output
+        assert result == [], "Expected unmappable Tempo entry to be dropped, but it was returned as transformed"
+        assert transformer_no_mappings.last_unmappable_count == 1
+
+    def test_batch_transform_unmappable_count_returned(
+        self,
+        transformer_no_mappings: TimeEntryTransformer,
+    ) -> None:
+        """batch_transform_work_logs exposes unmappable count via transformer.last_unmappable_count."""
+        unmappable_entry_1 = {
+            "tempoWorklogId": 99002,
+            "author": {"name": None},
+            "issue": {"key": ""},
+            "dateStarted": "2024-01-15",
+            "timeSpentSeconds": 1800,
+        }
+        unmappable_entry_2 = {
+            "tempoWorklogId": 99003,
+            # author.name absent (no mapping), WP also missing — second unmappable
+            "author": {"name": None},
+            "issue": {"key": ""},
+            "dateStarted": "2024-01-16",
+            "timeSpentSeconds": 900,
+        }
+
+        result = transformer_no_mappings.batch_transform_work_logs(
+            [unmappable_entry_1, unmappable_entry_2],
+            source_type="tempo",
+        )
+
+        # Both unmappable — output list is empty
+        assert result == [], "Both entries are unmappable; transformed list must be empty"
+        assert transformer_no_mappings.last_unmappable_count == 2, (
+            "last_unmappable_count must reflect both dropped entries"
+        )
+
+    def test_batch_transform_mixes_mappable_and_unmappable_tempo(self) -> None:
+        """One mappable + one unmappable Tempo entry: only the mappable passes through."""
+        transformer = TimeEntryTransformer(
+            user_mapping={"jane.smith": 456},
+            work_package_mapping={"TEST-123": 789},
+        )
+
+        mappable = {
+            "tempoWorklogId": 1,
+            "author": {"name": "jane.smith"},
+            "issue": {"key": "TEST-123"},
+            "dateStarted": "2024-02-01",
+            "timeSpentSeconds": 3600,
+        }
+        unmappable = {
+            "tempoWorklogId": 2,
+            "author": {"name": None},  # no user
+            "issue": {"key": ""},  # no WP
+            "dateStarted": "2024-02-01",
+            "timeSpentSeconds": 1800,
+        }
+
+        result = transformer.batch_transform_work_logs(
+            [mappable, unmappable],
+            source_type="tempo",
+        )
+
+        assert len(result) == 1, "Only the mappable entry should be in output"
+        assert result[0]["_meta"]["tempo_worklog_id"] == 1
+
+    def test_batch_transform_drops_entry_with_valid_user_but_no_wp(self) -> None:
+        """Entry with a resolved user but NO resolved work package must be dropped.
+
+        Before the AND→OR fix this entry leaked through because the old condition
+        required BOTH user AND workPackage to be absent before dropping.
+        """
+        transformer = TimeEntryTransformer(
+            user_mapping={"jane.smith": 456},
+            work_package_mapping={},  # no WP mappings → issue key can't resolve
+        )
+
+        entry_no_wp = {
+            "tempoWorklogId": 77001,
+            "author": {"name": "jane.smith"},  # resolves to user_id 456
+            "issue": {"key": "MISSING-1"},  # not in WP mapping
+            "dateStarted": "2024-03-01",
+            "timeSpentSeconds": 3600,
+        }
+
+        result = transformer.batch_transform_work_logs(
+            [entry_no_wp],
+            source_type="tempo",
+        )
+
+        assert result == [], "Entry with valid user but missing WP must be dropped"
+        assert transformer.last_unmappable_count == 1
+
+    def test_batch_transform_drops_entry_with_valid_wp_but_no_user(self) -> None:
+        """Entry with a resolved work package but NO resolved user must be dropped.
+
+        Before the AND→OR fix this entry leaked through and would cause a
+        per-entry failure inside batch_create_time_entries.
+        """
+        transformer = TimeEntryTransformer(
+            user_mapping={},  # no user mappings
+            work_package_mapping={"TEST-1": 101},
+        )
+
+        entry_no_user = {
+            "tempoWorklogId": 77002,
+            "author": {"name": None},  # cannot resolve
+            "issue": {"key": "TEST-1"},  # resolves to WP 101
+            "dateStarted": "2024-03-02",
+            "timeSpentSeconds": 1800,
+        }
+
+        result = transformer.batch_transform_work_logs(
+            [entry_no_user],
+            source_type="tempo",
+        )
+
+        assert result == [], "Entry with missing user but valid WP must be dropped"
+        assert transformer.last_unmappable_count == 1
+
+    def test_batch_transform_keeps_entry_with_both_user_and_wp(self) -> None:
+        """Entry that resolves both user AND work package must pass through unchanged."""
+        transformer = TimeEntryTransformer(
+            user_mapping={"jane.smith": 456},
+            work_package_mapping={"TEST-1": 101},
+        )
+
+        good_entry = {
+            "tempoWorklogId": 77003,
+            "author": {"name": "jane.smith"},
+            "issue": {"key": "TEST-1"},
+            "dateStarted": "2024-03-03",
+            "timeSpentSeconds": 3600,
+        }
+
+        result = transformer.batch_transform_work_logs(
+            [good_entry],
+            source_type="tempo",
+        )
+
+        assert len(result) == 1, "Fully-resolved entry must not be dropped"
+        assert transformer.last_unmappable_count == 0
