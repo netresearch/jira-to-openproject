@@ -88,8 +88,7 @@ def _make_owner(
         markdown_converter=markdown_converter,
         _mentioned_users_by_project=mentioned_users_by_project if mentioned_users_by_project is not None else {},
         _current_project_id=current_project_id,
-        _get_or_create_version=version_resolver
-        or (lambda name, project_id: None),
+        _get_or_create_version=version_resolver or (lambda name, project_id: None),
         logger=logger or _RecordingLogger(),
     )
     return owner
@@ -783,7 +782,7 @@ class TestSanitizeWpDict:
 
     def test_escapes_subject_and_description(self) -> None:
         wp: dict[str, Any] = {
-            "subject": 'with "quote" and \'apostrophe\'',
+            "subject": "with \"quote\" and 'apostrophe'",
             "description": 'desc with "x"',
         }
 

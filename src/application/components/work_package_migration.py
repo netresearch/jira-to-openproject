@@ -423,23 +423,21 @@ class WorkPackageMigration(BaseMigration):
     # (bypassing ``__init__``) and call these delegates directly. To keep
     # those tests working, the transformer is created lazily on first
     # access via the :pyattr:`_transformer` property.
-    #
-    # See ``claudedocs/refactoring/work-package-migration-decomposition-plan.md``.
     # ------------------------------------------------------------------ #
 
     @property
     def _transformer(self) -> IssueTransformer:
         """Lazily-created :class:`IssueTransformer` bound to this owner."""
-        cached = self.__dict__.get("_transformer_cache")
+        cached = getattr(self, "_transformer_cache", None)
         if cached is None:
             cached = IssueTransformer(owner=self)
-            self.__dict__["_transformer_cache"] = cached
+            self._transformer_cache = cached
         return cached
 
     @_transformer.setter
     def _transformer(self, value: IssueTransformer) -> None:
         """Allow ``__init__`` to seed the cached transformer eagerly."""
-        self.__dict__["_transformer_cache"] = value
+        self._transformer_cache = value
 
     def _resolve_journal_author_id(
         self,
