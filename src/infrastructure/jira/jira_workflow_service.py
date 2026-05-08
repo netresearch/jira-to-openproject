@@ -27,6 +27,31 @@ from src.infrastructure.jira.jira_client import (
 )
 
 
+def _is_workflow_404(exc: BaseException) -> bool:
+    """Return True if *exc* or any exception in its ``__cause__`` chain is a Jira 404.
+
+    In production ``JiraClient._patch_jira_client`` wraps every exception
+    (including ``JIRAError``) into ``JiraApiError`` so the outer exception is
+    never a ``JIRAError`` directly.  The original ``JIRAError(status_code=404)``
+    is stored as ``exc.__cause__``.  Walking the chain makes the check work
+    for both the bare-``JIRAError`` path (unit-test stub, some alternate code
+    paths) and the production-wrapping path.
+
+    The *seen* set guards against pathological cycles where ``__cause__`` is
+    set to the exception itself.
+    """
+    from jira.exceptions import JIRAError as _JIRAError
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _JIRAError) and getattr(current, "status_code", None) == HTTP_NOT_FOUND:
+            return True
+        current = current.__cause__
+    return False
+
+
 class JiraWorkflowService:
     """Workflow-domain queries for ``JiraClient``."""
 
@@ -191,9 +216,12 @@ class JiraWorkflowService:
             # never fires for real 404s.  Catch it here instead and suppress at
             # DEBUG level — these endpoints do not exist on many Server/DC versions
             # and 404 is expected, not an error worth alarming on.
-            from jira.exceptions import JIRAError as _JIRAError
-
-            if isinstance(exc, _JIRAError) and getattr(exc, "status_code", None) == HTTP_NOT_FOUND:
+            #
+            # In production JiraClient._patch_jira_client wraps every exception
+            # into JiraApiError, so exc is never a JIRAError directly — the
+            # original JIRAError(status_code=404) lives in exc.__cause__.
+            # _is_workflow_404 walks the __cause__ chain to handle both paths.
+            if _is_workflow_404(exc):
                 self._logger.debug(
                     "Workflow '%s' transitions endpoint returned 404 (not available on this server); treating as empty",
                     workflow_name,
@@ -244,9 +272,12 @@ class JiraWorkflowService:
             # never fires for real 404s.  Catch it here instead and suppress at
             # DEBUG level — these endpoints do not exist on many Server/DC versions
             # and 404 is expected, not an error worth alarming on.
-            from jira.exceptions import JIRAError as _JIRAError
-
-            if isinstance(exc, _JIRAError) and getattr(exc, "status_code", None) == HTTP_NOT_FOUND:
+            #
+            # In production JiraClient._patch_jira_client wraps every exception
+            # into JiraApiError, so exc is never a JIRAError directly — the
+            # original JIRAError(status_code=404) lives in exc.__cause__.
+            # _is_workflow_404 walks the __cause__ chain to handle both paths.
+            if _is_workflow_404(exc):
                 self._logger.debug(
                     "Workflow '%s' definition endpoint returned 404 (not available on this server); treating as empty",
                     workflow_name,

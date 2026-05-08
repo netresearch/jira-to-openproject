@@ -16,10 +16,18 @@ straight into the ``except Exception as exc`` handler which calls
 ``self._logger.exception(...)`` — printing a full traceback at ERROR
 level for each of the 55 workflows.
 
-Fix: catch ``JIRAError`` explicitly in the ``except`` block; when
+Fix (initial): catch ``JIRAError`` explicitly in the ``except`` block; when
 ``exc.status_code == 404`` log at DEBUG and return ``[]``. For all other
 status codes / exception types keep the existing raise behaviour so real
 failures are still visible.
+
+Fix (production-complete): In production ``JiraClient._patch_jira_client``
+wraps the ``jira`` SDK session so that *all* exceptions (including
+``JIRAError``) are re-raised as ``JiraApiError`` with the original
+``JIRAError`` stored as ``exc.__cause__``. Therefore the ``isinstance(exc,
+JIRAError)`` check is always ``False`` in production. The fix must walk the
+``__cause__`` chain so that a ``JiraApiError`` whose cause is a
+``JIRAError(status_code=404)`` is also treated silently.
 """
 
 from __future__ import annotations
@@ -65,7 +73,7 @@ def _make_service_returning(status_code: int = 200, json_body: Any | None = None
 
 
 def _make_service_raising_jira_error(status_code: int) -> JiraWorkflowService:
-    """Session raises JIRAError with the given status_code — the real production path."""
+    """Session raises JIRAError directly — bare path (no production wrapping)."""
     from jira.exceptions import JIRAError
 
     fake_session = MagicMock()
@@ -74,6 +82,42 @@ def _make_service_raising_jira_error(status_code: int) -> JiraWorkflowService:
         status_code=status_code,
         url="https://jira.example.com/rest/api/2/workflow/Some%20Workflow",
     )
+
+    fake_jira = MagicMock()
+    fake_jira._session = fake_session
+
+    fake_client = MagicMock()
+    fake_client.jira = fake_jira
+    fake_client.base_url = "https://jira.example.com"
+
+    return JiraWorkflowService(fake_client)
+
+
+def _make_service_raising_wrapped_jira_error(status_code: int) -> JiraWorkflowService:
+    """Session raises JiraApiError whose __cause__ is a JIRAError.
+
+    This simulates the PRODUCTION path: ``JiraClient._patch_jira_client``
+    installs a ``patched_request`` shim that catches *all* exceptions and
+    re-raises them as ``JiraApiError(msg) from original_exc``.  So the
+    ``JIRAError(status_code=404)`` raised by the ``jira`` SDK's
+    ``ResilientSession`` never reaches the service directly — instead the
+    service sees a ``JiraApiError`` with the original ``JIRAError`` stored
+    as ``__cause__``.
+    """
+    from jira.exceptions import JIRAError
+
+    from src.infrastructure.jira.jira_client import JiraApiError
+
+    cause = JIRAError(
+        text="Not Found",
+        status_code=status_code,
+        url="https://jira.example.com/rest/api/2/workflow/Some%20Workflow",
+    )
+    wrapper = JiraApiError(f"Error during API request: {cause!s}")
+    wrapper.__cause__ = cause
+
+    fake_session = MagicMock()
+    fake_session.get.side_effect = wrapper
 
     fake_jira = MagicMock()
     fake_jira._session = fake_session
@@ -133,6 +177,65 @@ def test_get_workflow_statuses_raises_on_jira_500(
     from src.infrastructure.jira.jira_client import JiraApiError
 
     service = _make_service_raising_jira_error(status_code=500)
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(JiraApiError):
+            service.get_workflow_statuses("X")
+
+
+# ---------------------------------------------------------------------------
+# Tests: production path — JiraApiError wrapping a JIRAError(status_code=404)
+#
+# In production JiraClient._patch_jira_client wraps the SDK session so every
+# exception (including JIRAError) is re-raised as JiraApiError with the
+# original JIRAError stored as __cause__.  The isinstance(exc, JIRAError)
+# check is therefore always False in production.  _is_workflow_404 must walk
+# the __cause__ chain to detect this case.
+# ---------------------------------------------------------------------------
+
+
+def test_get_workflow_transitions_no_error_log_when_wrapped_404(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """JiraApiError wrapping JIRAError(404) must be handled quietly — no ERROR log, returns []."""
+    service = _make_service_raising_wrapped_jira_error(status_code=404)
+    with caplog.at_level(logging.DEBUG):
+        result = service.get_workflow_transitions("Sales + Accounting: Customer Epic")
+    assert result == [], "expected empty list on production-wrapped 404"
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records == [], f"Got unexpected ERROR log entries: {error_records}"
+
+
+def test_get_workflow_statuses_no_error_log_when_wrapped_404(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """JiraApiError wrapping JIRAError(404) must be handled quietly — no ERROR log, returns []."""
+    service = _make_service_raising_wrapped_jira_error(status_code=404)
+    with caplog.at_level(logging.DEBUG):
+        result = service.get_workflow_statuses("DXP: Management tasks workflow")
+    assert result == [], "expected empty list on production-wrapped 404"
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records == [], f"Got unexpected ERROR log entries: {error_records}"
+
+
+def test_get_workflow_transitions_raises_on_wrapped_500(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """JiraApiError wrapping JIRAError(500) must still propagate — real failures must surface."""
+    from src.infrastructure.jira.jira_client import JiraApiError
+
+    service = _make_service_raising_wrapped_jira_error(status_code=500)
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(JiraApiError):
+            service.get_workflow_transitions("X")
+
+
+def test_get_workflow_statuses_raises_on_wrapped_500(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """JiraApiError wrapping JIRAError(500) must still propagate — real failures must surface."""
+    from src.infrastructure.jira.jira_client import JiraApiError
+
+    service = _make_service_raising_wrapped_jira_error(status_code=500)
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(JiraApiError):
             service.get_workflow_statuses("X")
