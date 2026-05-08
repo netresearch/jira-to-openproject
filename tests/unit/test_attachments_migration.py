@@ -724,6 +724,11 @@ def test_load_treats_non_dict_data_as_failure_not_silent_pass(tmp_path: Path):
 
     op = _MalformedDataOp()
     mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    # Bind ``attachment_dir`` to the per-test ``tmp_path`` so the
+    # ``_map`` call writes its scratch files under pytest's
+    # auto-cleaned tmp tree, not the repo's default ``data/attachments``
+    # directory. Per PR #226 review.
+    mig.attachment_dir = tmp_path
     att_data = {
         "PRJ-1": [
             {"id": "1", "filename": "a.txt", "size": 1, "url": "http://example/a"},
@@ -756,6 +761,7 @@ def test_load_treats_non_list_results_as_failure_not_silent_pass(tmp_path: Path)
 
     op = _MalformedListsOp()
     mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    mig.attachment_dir = tmp_path  # see parallel comment in the previous test
     att_data = {
         "PRJ-1": [{"id": "1", "filename": "a.txt", "size": 1, "url": "http://example/a"}],
     }
