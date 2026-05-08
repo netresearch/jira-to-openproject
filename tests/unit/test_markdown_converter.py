@@ -714,9 +714,9 @@ Contact [~developer] for help."""
 
 
 class TestStrikethroughFalsePositives:
-    """Regression tests for strikethrough false positives (real-world NRS-4391 data).
+    r"""Regression tests for strikethrough false positives (real-world NRS-4391 data).
 
-    Bug: the old pattern (?<![|s])-([^-n|]+)-(?![|s-]) greedily spans
+    Bug: the old pattern (?<![|\s])-([^-\n|]+)-(?![|\s-]) greedily spans
     across spaces and the ~~ in issue-ref fallback text, corrupting compound
     words, dates, CLI flags, and multi-word phrases.
     """
@@ -928,21 +928,21 @@ class TestAttachmentExtensionWhitelist:
         """[Google|https://google.com] must NOT be treated as an attachment."""
         converter = MarkdownConverter()
         result = converter.convert("[Google|https://google.com]")
-        # Should remain as a markdown link with full URL, not as filename
-        assert "https://google.com" in result
+        # Should produce a markdown link preserving the full URL, not a bare filename
+        assert "[Google](https://google.com)" in result
         assert "[^" not in result
 
     def test_http_url_link_not_matched_as_attachment(self) -> None:
         """[Example|http://example.com] must NOT be treated as an attachment."""
         converter = MarkdownConverter()
         result = converter.convert("[Example|http://example.com]")
-        assert "http://example.com" in result
+        assert "[Example](http://example.com)" in result
 
 
 class TestBoldWithParentheses:
     r"""Regression tests for bold text containing parentheses.
 
-    Bug: bold_pattern excluded ( and ) from content via [^*n()]+,
+    Bug: bold_pattern excluded ( and ) from content via [^*\n()]+,
     so *important (note)* was not bolded. Real Jira content routinely
     uses parenthetical notes inside bold spans.
     """
@@ -973,3 +973,121 @@ class TestBoldWithParentheses:
         converter = MarkdownConverter()
         result = converter.convert("The *important (note)* here.")
         assert "**important (note)**" in result
+
+
+class TestBoldWithSymbols:
+    r"""Regression tests: bold spans led by punctuation/symbols (#7).
+
+    Bold pattern previously required a word character (\w) as the first char
+    of the bold span, blocking valid Jira bold like *!important!* or *"quoted"*.
+    The fix widens the leading-char constraint to exclude only whitespace, ( and *.
+    """
+
+    def test_bold_with_hash_lead(self) -> None:
+        """*#important* must convert to **#important**."""
+        converter = MarkdownConverter()
+        assert converter.convert("*#important*") == "**#important**"
+
+    def test_bold_with_quoted_lead(self) -> None:
+        r"""*\"quoted\"* must convert to **"quoted"**."""
+        converter = MarkdownConverter()
+        assert converter.convert('*"quoted"*') == '**"quoted"**'
+
+    def test_bold_parenthetical_still_excluded(self) -> None:
+        """*(parenthetical)* must NOT be bolded (leading ( stays excluded)."""
+        converter = MarkdownConverter()
+        result = converter.convert("*(parenthetical)*")
+        assert "**" not in result
+
+    def test_bold_space_lead_excluded(self) -> None:
+        """* leading space* must NOT be bolded (leading space stays excluded)."""
+        converter = MarkdownConverter()
+        result = converter.convert("* leading space*")
+        # Should be treated as an unordered list item, not bold
+        assert result != "** leading space**"
+
+    def test_bold_word_lead_still_works(self) -> None:
+        """*word* must still convert to **word**."""
+        converter = MarkdownConverter()
+        assert converter.convert("*word*") == "**word**"
+
+
+class TestAttachmentSpacesAndCase:
+    """Regression tests: spaces in filenames and case-insensitive URL exclusion (#6/#8/#9).
+
+    attachment_pattern and attachment_ref_pattern previously excluded spaces in
+    filenames and lacked re.IGNORECASE, breaking real-world filenames like
+    "some doc.pdf" and failing to exclude "HTTPS://example.com/file.pdf".
+    """
+
+    def test_attachment_with_space_in_filename(self) -> None:
+        """[link|some doc.pdf] must be converted as an attachment, not a link."""
+        converter = MarkdownConverter()
+        result = converter.convert("[link|some doc.pdf]")
+        assert result == "[link](some doc.pdf)"
+
+    def test_attachment_with_space_and_mapping(self) -> None:
+        """[link|some doc.pdf] with attachment mapping must resolve to OP URL."""
+        attachment_mapping = {"PROJ-1": {"some doc.pdf": 42}}
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+        result = converter.convert("[link|some doc.pdf]", jira_key="PROJ-1")
+        assert result == "[link](/api/v3/attachments/42/content)"
+
+    def test_attachment_ref_with_space_in_filename(self) -> None:
+        """[^another file.csv] must be converted as an attachment reference."""
+        converter = MarkdownConverter()
+        result = converter.convert("[^another file.csv]")
+        assert "[^" not in result
+        assert "another file.csv" in result
+
+    def test_attachment_ref_with_space_and_mapping(self) -> None:
+        """[^another file.csv] with attachment mapping must resolve to OP URL."""
+        attachment_mapping = {"PROJ-2": {"another file.csv": 99}}
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+        result = converter.convert("[^another file.csv]", jira_key="PROJ-2")
+        assert result == "[another file.csv](/api/v3/attachments/99/content)"
+
+    def test_uppercase_https_url_not_treated_as_attachment(self) -> None:
+        """[link|HTTPS://example.com/file.pdf] must NOT be converted as an attachment."""
+        converter = MarkdownConverter()
+        result = converter.convert("[link|HTTPS://example.com/file.pdf]")
+        # Must preserve the URL, not treat it as a local filename
+        assert "HTTPS://example.com/file.pdf" in result or "https://example.com/file.pdf" in result.lower()
+        # Must not strip the URL down to just a filename fragment
+        assert result != "[link](file.pdf)"
+
+    def test_uppercase_ftp_url_not_treated_as_attachment(self) -> None:
+        """[link|FTP://files.example.com/archive.zip] must NOT be treated as an attachment."""
+        converter = MarkdownConverter()
+        result = converter.convert("[link|FTP://files.example.com/archive.zip]")
+        assert result != "[link](archive.zip)"
+
+
+class TestTableEmptyHeaderCells:
+    """Regression tests: empty cells in Jira table headers (#10).
+
+    The header cell parser previously discarded empty cells via
+    `if c.strip() != ""`, causing misalignment when a header row
+    intentionally contained empty columns like ||col1|| ||col3||.
+    """
+
+    def test_table_header_with_empty_cell(self) -> None:
+        """||col1|| ||col3|| must produce a header with 3 cells, not 2."""
+        converter = MarkdownConverter()
+        result = converter.convert("||col1|| ||col3||")
+        lines = [ln for ln in result.split("\n") if ln.strip()]
+        # The first non-empty line is the markdown header row
+        header_line = lines[0]
+        # Split on | and count non-separator cells
+        parts = [p for p in header_line.split("|") if p != ""]
+        # Should have 3 cells: "col1", " " (or ""), "col3"
+        assert len(parts) == 3, f"Expected 3 cells, got {len(parts)}: {parts!r}"
+
+    def test_table_header_all_populated_unchanged(self) -> None:
+        """||col1||col2||col3|| with all cells populated must still produce 3 cells."""
+        converter = MarkdownConverter()
+        result = converter.convert("||col1||col2||col3||")
+        lines = [ln for ln in result.split("\n") if ln.strip()]
+        header_line = lines[0]
+        parts = [p.strip() for p in header_line.split("|") if p.strip()]
+        assert len(parts) == 3
