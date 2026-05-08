@@ -33,6 +33,10 @@ class TimeEntryTransformer:
         self.work_package_mapping = work_package_mapping or {}
         self.activity_mapping = activity_mapping or {}
         self.default_activity_id = default_activity_id
+        # Count of entries dropped in the last batch_transform_work_logs call
+        # because neither user nor work package could be resolved.  Callers
+        # (TimeEntryMigrator) read this after the call to surface the count.
+        self.last_unmappable_count: int = 0
 
         # Common activity name mappings
         self.default_activity_mappings = {
@@ -279,16 +283,24 @@ class TimeEntryTransformer:
     ) -> list[dict[str, Any]]:
         """Transform multiple work logs in batch.
 
+        Entries where BOTH the user and the work package could not be resolved
+        from the mapping tables are classified as *unmappable* and dropped
+        before returning.  They are never passed to the migrator, so they do
+        not cause batch-create failures.  The count of dropped entries is
+        stored in ``self.last_unmappable_count`` for the caller to read.
+
         Args:
             work_logs: List of work log dictionaries
             source_type: Either "jira" or "tempo"
 
         Returns:
-            List of transformed OpenProject time entries
+            List of transformed OpenProject time entries (unmappable entries
+            excluded).
 
         """
         transformed_entries = []
         failed_count = 0
+        unmappable_count = 0
 
         for work_log in work_logs:
             try:
@@ -306,6 +318,25 @@ class TimeEntryTransformer:
                         continue
                     entry = self.transform_jira_work_log(work_log, issue_key)
 
+                # Drop entries that are missing ANY required ID embedding.
+                # batch_create_time_entries treats a missing workPackage OR a
+                # missing user as a per-entry failure, so an entry with only one
+                # of the two resolved would still fail inside the migrator and
+                # trigger the zero-created gate on otherwise clean re-runs.
+                # Use OR so that a partial resolve also results in a drop here.
+                embedded = entry.get("_embedded", {})
+                if not embedded.get("user") or not embedded.get("workPackage"):
+                    logger.warning(
+                        "Dropping unmappable %s entry (missing user or work package): worklog_id=%s issue_key=%s",
+                        source_type,
+                        entry.get("_meta", {}).get(
+                            "tempo_worklog_id" if source_type == "tempo" else "jira_work_log_id"
+                        ),
+                        entry.get("_meta", {}).get("jira_issue_key"),
+                    )
+                    unmappable_count += 1
+                    continue
+
                 transformed_entries.append(entry)
 
             except Exception:
@@ -313,10 +344,12 @@ class TimeEntryTransformer:
                 failed_count += 1
                 continue
 
+        self.last_unmappable_count = unmappable_count
         logger.info(
-            "Transformed %d work logs, %d failed",
+            "Transformed %d work logs, %d failed, %d unmappable",
             len(transformed_entries),
             failed_count,
+            unmappable_count,
         )
         return transformed_entries
 
