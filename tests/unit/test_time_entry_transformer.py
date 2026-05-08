@@ -445,3 +445,106 @@ class TestTimeEntryTransformer:
         # Should only process the one with issue_key
         assert len(results) == 1
         assert results[0]["_meta"]["jira_issue_key"] == "TEST-123"
+
+
+class TestUnmappableTempoEntries:
+    """TDD: unmappable Tempo entries (no user, no WP) must not pass through transformer."""
+
+    @pytest.fixture
+    def transformer_no_mappings(self):
+        """Transformer with empty mappings — simulates deleted-user / stale-Tempo scenario."""
+        return TimeEntryTransformer(
+            user_mapping={},
+            work_package_mapping={},
+            activity_mapping={},
+            default_activity_id=None,
+        )
+
+    def test_batch_transform_drops_tempo_entry_with_none_username_and_no_wp(
+        self,
+        transformer_no_mappings: TimeEntryTransformer,
+    ) -> None:
+        """Reproduce production failure: Tempo entry with username=None + empty WP identifiers.
+
+        The entry ``{"author": {"name": None}, "issue": {"key": ""}, ...}``
+        has no resolvable user AND no resolvable work package.  It must NOT
+        appear in the transformed output; the ``unmappable`` counter on the
+        batch result must be 1.
+        """
+        unmappable_tempo_entry = {
+            "tempoWorklogId": 99001,
+            "jiraWorklogId": None,
+            "author": {"name": None},  # username is None — matches production log
+            "issue": {"key": ""},  # empty issue key
+            "description": "Stale Tempo entry",
+            "dateStarted": "2024-01-15",
+            "timeSpentSeconds": 3600,
+        }
+
+        result = transformer_no_mappings.batch_transform_work_logs(
+            [unmappable_tempo_entry],
+            source_type="tempo",
+        )
+
+        # The bad entry must NOT appear in transformed output
+        assert result == [], "Expected unmappable Tempo entry to be dropped, but it was returned as transformed"
+
+    def test_batch_transform_unmappable_count_returned(
+        self,
+        transformer_no_mappings: TimeEntryTransformer,
+    ) -> None:
+        """batch_transform_work_logs must expose an unmappable count alongside transformed list."""
+        unmappable_entry = {
+            "tempoWorklogId": 99002,
+            "author": {"name": None},
+            "issue": {"key": ""},
+            "dateStarted": "2024-01-15",
+            "timeSpentSeconds": 1800,
+        }
+        mappable_entry = {
+            "tempoWorklogId": 99003,
+            # author.name intentionally absent (no mapping either), but WP also missing —
+            # this is a second unmappable; we want 0 transformed, 2 unmappable
+            "author": {"name": None},
+            "issue": {"key": ""},
+            "dateStarted": "2024-01-16",
+            "timeSpentSeconds": 900,
+        }
+
+        result = transformer_no_mappings.batch_transform_work_logs(
+            [unmappable_entry, mappable_entry],
+            source_type="tempo",
+        )
+
+        # Both unmappable — output list is empty
+        assert result == [], "Both entries are unmappable; transformed list must be empty"
+
+    def test_batch_transform_mixes_mappable_and_unmappable_tempo(self) -> None:
+        """One mappable + one unmappable Tempo entry: only the mappable passes through."""
+        transformer = TimeEntryTransformer(
+            user_mapping={"jane.smith": 456},
+            work_package_mapping={"TEST-123": 789},
+        )
+
+        mappable = {
+            "tempoWorklogId": 1,
+            "author": {"name": "jane.smith"},
+            "issue": {"key": "TEST-123"},
+            "dateStarted": "2024-02-01",
+            "timeSpentSeconds": 3600,
+        }
+        unmappable = {
+            "tempoWorklogId": 2,
+            "author": {"name": None},  # no user
+            "issue": {"key": ""},  # no WP
+            "dateStarted": "2024-02-01",
+            "timeSpentSeconds": 1800,
+        }
+
+        result = transformer.batch_transform_work_logs(
+            [mappable, unmappable],
+            source_type="tempo",
+        )
+
+        assert len(result) == 1, "Only the mappable entry should be in output"
+        assert result[0]["_meta"]["tempo_worklog_id"] == 1

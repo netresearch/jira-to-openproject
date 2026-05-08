@@ -160,3 +160,40 @@ def test_get_current_entities_for_type_raises_value_error(
 
     with pytest.raises(ValueError, match="transformation-only"):
         mig._get_current_entities_for_type("time_entries")
+
+
+def test_run_succeeds_when_all_discovered_are_skipped_or_unmappable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _mock_mappings: None,
+) -> None:
+    """discovered=6, unmappable=1, skipped=5, migrated=0, failed=0 → success=True.
+
+    This is the exact production scenario: 5 Jira entries already migrated
+    (provenance match → skipped) + 1 Tempo entry with no user/WP mapping
+    (unmappable).  Zero real failures → component must NOT fail loud.
+    """
+    mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
+
+    mig = _make_mig(tmp_path, monkeypatch, rails_present=True)
+
+    # Migrator reports: 5 jira discovered (all skipped by provenance), 1 tempo discovered
+    # (unmappable), 0 real failures, 0 actually migrated.
+    mig.time_entry_migrator.migrate_time_entries_for_issues.return_value = {
+        "status": "success",
+        "jira_work_logs": {"discovered": 5},
+        "tempo_time_entries": {"discovered": 1},
+        "total_time_entries": {"migrated": 0, "failed": 0},
+        # NEW key introduced by the fix: counts entries dropped at the transformer
+        "unmappable": 1,
+        # skipped_entries from the migrator (provenance dedup)
+        "skipped": 5,
+    }
+
+    result = mig.run()
+
+    assert result.success is True, f"Expected success but got: {result.message!r}"
+    assert result.details["status"] == "success"
+    # The unmappable count should be surfaced somewhere in the details
+    assert result.details.get("unmappable", 0) == 1 or "unmappable" in str(result.message)

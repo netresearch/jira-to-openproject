@@ -192,16 +192,28 @@ class TimeEntryMigration(BaseMigration):
                 "tempo_time_entries",
                 {},
             ).get("discovered", 0)
+            # Entries accounted for by known-benign skip classes:
+            #   • unmappable: dropped at the transformer (no user + no WP in mapping tables)
+            #   • skipped: already present in OP (provenance dedup)
+            # These are NOT real failures; subtracting them from the denominator
+            # prevents the zero-created gate from tripping on an otherwise clean re-run.
+            total_unmappable = int(result.get("unmappable", 0))
+            total_skipped = int(result.get("skipped", 0))
+            net_actionable = total_discovered - total_unmappable - total_skipped
 
-            # Zero-created gating: discovered > 0 but migrated == 0 should fail
-            if total_discovered > 0 and total_migrated == 0:
+            # Zero-created gating: only fail loud when there are real (actionable)
+            # entries that were neither migrated nor accounted for.
+            if net_actionable > 0 and total_migrated == 0:
                 return ComponentResult(
                     success=False,
-                    message=("Time entry migration discovered entries but created zero; failing per gating policy"),
+                    message=("Time entry migration discovered entries but created zero; failed loud"),
                     details={
                         "status": "failed",
                         "reason": "zero_created_with_input",
                         "total_discovered": total_discovered,
+                        "unmappable": total_unmappable,
+                        "skipped": total_skipped,
+                        "net_actionable": net_actionable,
                         "time": (datetime.now(tz=UTC) - start_time).total_seconds(),
                     },
                     success_count=0,
@@ -218,6 +230,8 @@ class TimeEntryMigration(BaseMigration):
                     "jira_work_logs": result.get("jira_work_logs", {}),
                     "tempo_time_entries": result.get("tempo_time_entries", {}),
                     "total_time_entries": result.get("total_time_entries", {}),
+                    "unmappable": total_unmappable,
+                    "skipped": total_skipped,
                     "time": (datetime.now(tz=UTC) - start_time).total_seconds(),
                 },
                 success_count=total_migrated,

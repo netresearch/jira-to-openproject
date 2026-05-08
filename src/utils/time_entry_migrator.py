@@ -111,6 +111,7 @@ class TimeEntryMigrationResult(TypedDict):
     successful_migrations: int
     failed_migrations: int
     skipped_entries: int
+    unmappable_entries: int
     errors: list[str]
     warnings: list[str]
     processing_time_seconds: float
@@ -160,6 +161,7 @@ class TimeEntryMigrator:
             "successful_migrations": 0,
             "failed_migrations": 0,
             "skipped_entries": 0,
+            "unmappable_entries": 0,
             "errors": [],
             "warnings": [],
             "processing_time_seconds": 0.0,
@@ -492,6 +494,7 @@ class TimeEntryMigrator:
                     self.migration_results["successful_transformations"] += len(
                         jira_transformed,
                     )
+                    self.migration_results["unmappable_entries"] += self.transformer.last_unmappable_count
 
                 except Exception as e:
                     error_msg = f"Failed to transform Jira work logs: {e}"
@@ -513,6 +516,7 @@ class TimeEntryMigrator:
                 self.migration_results["successful_transformations"] += len(
                     tempo_transformed,
                 )
+                self.migration_results["unmappable_entries"] += self.transformer.last_unmappable_count
 
             except Exception as e:
                 error_msg = f"Failed to transform Tempo entries: {e}"
@@ -966,6 +970,7 @@ class TimeEntryMigrator:
             migrated_count = self.migration_results.get("successful_migrations", 0)
             failed_count = self.migration_results.get("failed_migrations", 0)
 
+            unmappable_count = self.migration_results.get("unmappable_entries", 0)
             return {
                 "status": ("success" if failed_count == 0 else ("partial_success" if migrated_count > 0 else "failed")),
                 "jira_work_logs": {
@@ -978,6 +983,8 @@ class TimeEntryMigrator:
                     "migrated": migrated_count,
                     "failed": failed_count,
                 },
+                "unmappable": unmappable_count,
+                "skipped": self.migration_results.get("skipped_entries", 0),
                 "time": (datetime.now(tz=UTC) - overall_start_time).total_seconds(),
             }
 
