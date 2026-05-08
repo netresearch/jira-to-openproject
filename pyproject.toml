@@ -70,6 +70,8 @@ dev = [
     "types-PyYAML>=6.0.12.20260408",
     "types-aiofiles>=25.1.0.20260409",
     "types-requests>=2.33.0.20260408",
+    # Architecture enforcement: see .importlinter for Cosmic Python layer contracts.
+    "import-linter>=2.11,<3",
 ]
 
 [project.scripts]

@@ -1,0 +1,87 @@
+; Import-Linter contracts enforcing Cosmic Python layered architecture.
+;
+; Layer mapping (from architecture audit finding #7):
+;   models       -> src.domain, src.models
+;   adapters     -> src.infrastructure
+;   services     -> src.application (components + services)
+;   entrypoints  -> src.main, src.dashboard
+;
+; Cross-cutting (intentionally NOT layered):
+;   src.utils, src.config, src.mappings, src.display, src.migration
+;
+; The cross-cutting modules are leaf-level utilities or top-level orchestrators
+; that legitimately need to be imported from any layer; constraining them now
+; would force an unrelated refactor. Revisit once the migration.py god-file is
+; broken up.
+
+[importlinter]
+root_packages =
+    src
+
+; ---------------------------------------------------------------------------
+; Contract 1: Models cannot depend on adapters, services, or entrypoints.
+; The domain/model layer must remain framework-free and pure.
+; ---------------------------------------------------------------------------
+[importlinter:contract:models-isolated]
+name = Models layer must not depend on adapters, services, or entrypoints
+type = forbidden
+source_modules =
+    src.domain
+    src.models
+forbidden_modules =
+    src.infrastructure
+    src.application
+    src.dashboard
+    src.main
+
+; ---------------------------------------------------------------------------
+; Contract 2: Infrastructure cannot depend on application or entrypoints.
+; Adapters provide capabilities upward; they must not call into services.
+; ---------------------------------------------------------------------------
+[importlinter:contract:infra-no-application]
+name = Infrastructure must not depend on services or entrypoints
+type = forbidden
+source_modules =
+    src.infrastructure
+forbidden_modules =
+    src.application
+    src.dashboard
+    src.main
+
+; ---------------------------------------------------------------------------
+; Contract 3: Application cannot depend on dashboard or CLI entrypoints.
+; Services are reusable; they must not know about delivery mechanisms.
+; ---------------------------------------------------------------------------
+[importlinter:contract:app-no-dashboard]
+name = Application services must not depend on entrypoints
+type = forbidden
+source_modules =
+    src.application
+forbidden_modules =
+    src.dashboard
+    src.main
+
+; ---------------------------------------------------------------------------
+; Contract 4: Declarative layered contract (top-down).
+; Higher layers may import from lower layers, never the reverse.
+;
+; Delimiter semantics (per import-linter docs):
+;   "|"  -> peers at the same level that MUST remain independent of each other
+;   ":"  -> peers at the same level that MAY freely import from each other
+;
+; src.dashboard and src.main are the entrypoints; we keep them independent
+; because the FastAPI dashboard and the CLI must not couple to one another.
+;
+; src.domain and src.models legitimately reference each other today
+; (e.g. src.domain.results imports src.models.component_results, and
+; several src.models.* modules import src.domain.ids). Treat them as a
+; non-independent peer pair until the model/domain split is resolved.
+; ---------------------------------------------------------------------------
+[importlinter:contract:layers]
+name = Cosmic Python layered architecture
+type = layers
+layers =
+    src.dashboard | src.main
+    src.application
+    src.infrastructure
+    src.domain : src.models
