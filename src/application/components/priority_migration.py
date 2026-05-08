@@ -123,7 +123,7 @@ class PriorityMigration(BaseMigration):
         updates: list[dict[str, Any]] = []
 
         # Get Jira issues by keys present in wp_map
-        jira_keys = [str(k) for k in wp_map]
+        jira_keys = self._jira_keys_from_wp_map(wp_map)
         if not jira_keys:
             return ComponentResult(success=True, updated=0)
 
@@ -139,7 +139,10 @@ class PriorityMigration(BaseMigration):
                 if not wp_id:
                     continue
 
-                issue = iss_map.get(key)
+                # The outer key may be a numeric Jira ID; iss_map is keyed by
+                # the human-readable Jira key returned by the API.
+                jira_key = self._inner_jira_key(key, wp_entry) or key
+                issue = iss_map.get(jira_key)
                 if not issue:
                     continue
                 fields = JiraIssueFields.from_issue_any(issue)

@@ -91,3 +91,53 @@ def test_versions_migration_end_to_end():
     assert mp.success is True
     assert ld.success is True
     assert ld.updated >= 1
+
+
+def test_versions_migration_load_with_numeric_outer_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_load must update WPs even when wp_map has numeric outer keys.
+
+    Production mappings look like:
+        {"144952": {"jira_key": "PRJ-1", "openproject_id": 2001}, ...}
+
+    Before the fix, _load iterated wp_map.items() and called issues.get(key)
+    with the numeric outer key ("144952"). Since issues is keyed by the
+    human-readable Jira key ("PRJ-1"), every lookup returned None and zero
+    work packages were updated — silent data loss.
+    """
+    import src.config as cfg
+
+    numeric_wp_map = {
+        "144952": {"jira_key": "PRJ-1", "openproject_id": 2001},
+        "144953": {"jira_key": "PRJ-2", "openproject_id": 2002},
+    }
+
+    class NumericMappings:
+        def __init__(self) -> None:
+            self._m = {
+                "work_package": numeric_wp_map,
+                "project": {
+                    "PRJ": {"openproject_id": 11},
+                },
+            }
+
+        def get_mapping(self, name: str):
+            return self._m.get(name, {})
+
+        def set_mapping(self, name: str, mapping):
+            self._m[name] = mapping
+
+    monkeypatch.setattr(cfg, "mappings", NumericMappings(), raising=False)
+
+    op = DummyOp()
+    mig = VersionsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    ex = mig._extract()
+    mp = mig._map(ex)
+    ld = mig._load(mp)
+
+    assert ld.success is True
+    # Both WPs (PRJ-1 → op_id 2001, PRJ-2 → op_id 2002) must have been updated.
+    # A zero updated count means every issues.get(numeric_key) returned None.
+    assert ld.updated == 2, (
+        f"Expected 2 WPs updated but got {ld.updated}. "
+        "Likely cause: _load looked up issues with numeric outer key instead of jira_key."
+    )

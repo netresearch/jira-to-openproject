@@ -31,7 +31,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract issues for which we have work package mappings."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map]
+        jira_keys = self._jira_keys_from_wp_map(wp_map)
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"issues": {}})
 

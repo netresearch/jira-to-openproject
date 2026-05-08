@@ -56,7 +56,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         :class:`JiraVersionRef` to iterate.
         """
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map]
+        jira_keys = self._jira_keys_from_wp_map(wp_map)
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"by_project": {}})
 
@@ -188,7 +188,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            jira_keys = [str(k) for k in wp_map]
+            jira_keys = self._jira_keys_from_wp_map(wp_map)
             issues = self._merge_batch_issues(jira_keys)
 
         updates: list[dict[str, Any]] = []
@@ -203,7 +203,10 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 if not wp_id:
                     continue
 
-                issue = issues.get(key)
+                # The outer key may be a numeric Jira ID; issues is keyed by
+                # the human-readable Jira key returned by the API.
+                jira_key = self._inner_jira_key(key, wp_entry) or key
+                issue = issues.get(jira_key)
                 if not issue:
                     continue
                 fields = JiraIssueFields.from_issue_any(issue)
@@ -214,7 +217,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 if not name:
                     continue
 
-                jproj = self._issue_project_key(key)
+                jproj = self._issue_project_key(jira_key)
                 proj_entry = proj_map.get(jproj)
                 op_pid = None
                 if isinstance(proj_entry, dict):

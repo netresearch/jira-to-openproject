@@ -41,7 +41,7 @@ class VotesMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Extract Jira votes count per issue mapped to a WP."""
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map]
+        keys = self._jira_keys_from_wp_map(wp_map)
         issues = self._merge_batch_issues(keys)
 
         votes_by_key: dict[str, int] = {}
