@@ -766,9 +766,7 @@ class TestStrikethroughFalsePositives:
         """
         converter = MarkdownConverter()
         # No WP mapping so issue ref becomes fallback ~~KEY~~ *(migrated issue)*
-        result = converter.convert(
-            "NRS-4388 bumped the toolchain to community Ansible 13 (ansible-core 2.20)."
-        )
+        result = converter.convert("NRS-4388 bumped the toolchain to community Ansible 13 (ansible-core 2.20).")
         # Must preserve the ~~NRS-4388~~ from the issue-ref fallback
         assert "~~NRS-4388~~ *(migrated issue)*" in result
         # Must NOT add extra ~~ inside the key
@@ -784,7 +782,7 @@ class TestStrikethroughFalsePositives:
         assert result == "~~strikethrough text~~"
 
     def test_legitimate_inline_strikethrough(self) -> None:
-        """text -strike this- done SHOULD produce text ~~strike this~~ done."""
+        """Text -strike this- done SHOULD produce text ~~strike this~~ done."""
         converter = MarkdownConverter()
         result = converter.convert("text -strike this- done")
         assert result == "text ~~strike this~~ done"
@@ -836,9 +834,7 @@ class TestTableHeaderDoubleColumnBug:
         assert len(lines) >= 2  # at least header + 1 data row
         header_cols = len([c for c in lines[0].split("|") if c.strip()])
         data_cols = len([c for c in lines[1].split("|") if c.strip()])
-        assert header_cols == data_cols, (
-            f"Header has {header_cols} cols but data row has {data_cols}"
-        )
+        assert header_cols == data_cols, f"Header has {header_cols} cols but data row has {data_cols}"
 
     def test_header_without_trailing_pipes(self) -> None:
         """||col1||col2||col3 (no trailing ||) should also work correctly."""
@@ -944,9 +940,9 @@ class TestAttachmentExtensionWhitelist:
 
 
 class TestBoldWithParentheses:
-    """Regression tests for bold text containing parentheses.
+    r"""Regression tests for bold text containing parentheses.
 
-    Bug: bold_pattern excluded ( and ) from content via [^*\\n\\(\\)]+,
+    Bug: bold_pattern excluded ( and ) from content via [^*n()]+,
     so *important (note)* was not bolded. Real Jira content routinely
     uses parenthetical notes inside bold spans.
     """
