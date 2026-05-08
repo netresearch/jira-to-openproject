@@ -24,12 +24,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from src.display import configure_logging
+from src.config import logger
 
 if TYPE_CHECKING:
     from jira import Issue
-
-logger = configure_logging("INFO", None)
 
 
 @runtime_checkable

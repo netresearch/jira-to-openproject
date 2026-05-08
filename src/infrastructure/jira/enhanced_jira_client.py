@@ -22,10 +22,8 @@ import requests
 if TYPE_CHECKING:
     from jira import Issue
 
-from src.display import configure_logging
+from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
-
-logger = configure_logging("INFO", None)
 
 
 class EnhancedJiraClient(JiraClient):
