@@ -118,14 +118,9 @@ class TestGet:
             result = repo.get("jira_custom_fields")
 
         assert result == {}
-        warning_records = [
-            r
-            for r in caplog.records
-            if r.name == repo_logger and r.levelno >= logging.WARNING
-        ]
+        warning_records = [r for r in caplog.records if r.name == repo_logger and r.levelno >= logging.WARNING]
         assert warning_records == [], (
-            f"Unexpected WARNING(s) from {repo_logger}: "
-            f"{[r.message for r in warning_records]}"
+            f"Unexpected WARNING(s) from {repo_logger}: {[r.message for r in warning_records]}"
         )
 
     def test_non_dict_top_level_returns_empty_and_logs_at_debug(
