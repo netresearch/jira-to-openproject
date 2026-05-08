@@ -694,10 +694,12 @@ class WorkPackageContentMigration(BaseMigration):
                 if body:
                     converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
                     author_id = self._resolve_comment_author_id(comment, jira_issue.key)
-                    collected["comments"].append({
-                        "comment": converted_body,
-                        "user_id": author_id,
-                    })
+                    collected["comments"].append(
+                        {
+                            "comment": converted_body,
+                            "user_id": author_id,
+                        }
+                    )
         except Exception:
             pass
 

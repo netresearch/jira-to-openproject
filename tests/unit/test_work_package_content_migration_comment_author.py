@@ -271,15 +271,13 @@ class TestUnmappableAuthorFallback:
         assert user_id_used != anonymous_user_id, (
             f"Got anonymous user_id={anonymous_user_id}; expected fallback {expected_fallback}"
         )
-        assert user_id_used == expected_fallback, (
-            f"Expected BUG32 fallback {expected_fallback}, got {user_id_used}"
-        )
+        assert user_id_used == expected_fallback, f"Expected BUG32 fallback {expected_fallback}, got {user_id_used}"
 
         # Must log a WARNING mentioning the unresolved author
         warning_texts = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any(
-            "unknown_user" in t for t in warning_texts
-        ), f"No WARNING mentioning 'unknown_user' in: {warning_texts}"
+        assert any("unknown_user" in t for t in warning_texts), (
+            f"No WARNING mentioning 'unknown_user' in: {warning_texts}"
+        )
 
     def test_unmappable_author_emits_warning_for_single_issue_path(
         self,
@@ -309,6 +307,4 @@ class TestUnmappableAuthorFallback:
         assert payload["user_id"] == expected_fallback
 
         warning_texts = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any(
-            "ghost_user" in t for t in warning_texts
-        ), f"No WARNING mentioning 'ghost_user' in: {warning_texts}"
+        assert any("ghost_user" in t for t in warning_texts), f"No WARNING mentioning 'ghost_user' in: {warning_texts}"
