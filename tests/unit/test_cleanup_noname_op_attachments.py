@@ -32,7 +32,9 @@ def test_build_script_dry_run_includes_apply_false() -> None:
     # the ``will_delete`` gate still requires apply.
     assert "false && eligible" in script
     # Project identifier is read from input_data, not interpolated.
-    assert "input_data['identifier']" in script
+    # ``input_data`` is a list (the runner convention), so the script
+    # reads the first element. Per PR #222 review.
+    assert "input_data.is_a?(Array)" in script
     assert "Project.find_by(identifier: identifier)" in script
 
 

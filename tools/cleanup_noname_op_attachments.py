@@ -61,7 +61,12 @@ def _build_script(*, apply: bool) -> str:
     return f"""
 require 'json'
 data = (lambda do
-  identifier = input_data['identifier']
+  # ``execute_script_with_data`` JSON-parses ``data`` into Ruby's
+  # ``input_data``; the runner convention is for ``data`` to be a
+  # *list* (the per-row payload elsewhere in the codebase). The CLI
+  # passes a single-element list ``[{{identifier: ...}}]`` so the
+  # Ruby reads the first element. Per PR #222 review.
+  identifier = (input_data.is_a?(Array) ? input_data.first : input_data)['identifier']
   proj = Project.find_by(identifier: identifier)
   next {{ error: "project not found", identifier: identifier }} unless proj
 

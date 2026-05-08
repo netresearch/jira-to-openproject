@@ -232,16 +232,20 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         """Return the same URL with each ``%2F`` / ``%2C`` re-encoded
         as ``%252F`` / ``%252C``.
 
-        The replace runs over the *whole* URL — for Jira attachment
-        URLs the offending ``%2F`` / ``%2C`` only ever appear inside
-        the filename component of the path (Jira percent-encodes them
-        when building the URL from the attachment metadata), so a
-        plain string replace is safe in practice; if a future caller
-        passes URLs whose query string also contains those encodings,
-        the behaviour will still be correct because the recipient (Jira)
-        decodes them the same way regardless of position. Per PR #217
-        review (the previous docstring claimed "path-only" while the
-        code does a whole-URL replace — clarify rather than narrow).
+        The replace runs over the *whole* URL string. For Jira
+        attachment URLs the offending ``%2F`` / ``%2C`` only ever
+        appear inside the filename component of the path (Jira
+        percent-encodes them when building the URL from the
+        attachment metadata), so a plain string replace is safe in
+        practice. **Caveat**: if a future caller passes a URL whose
+        *query string* contains ``%2F`` or ``%2C``, double-encoding
+        them would change the decoded query parameter values
+        (servers decode query and path with the same rules but the
+        post-decode tokens carry different semantic meaning depending
+        on the parameter). Today's only caller —
+        ``_download_attachment`` — only retries with this transform
+        on a Jira attachment download URL, which is path-only by
+        construction. Per PR #217/#223 review.
 
         Tomcat (Jira's web server) blocks URLs whose path contains a
         literal encoded slash (``%2F``) by default — it returns
@@ -311,7 +315,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     pass
                 raise
 
-        def _is_http_400(exc: BaseException) -> bool:
+        def _is_http_400(exc: Exception) -> bool:
             # Prefer the structured status code over substring
             # matching against ``str(exc)``: ``requests.HTTPError``
             # carries the ``Response`` it was raised from, and
@@ -390,8 +394,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         continue
                     filename = str(raw_filename)
                     url = str(raw_url)
+                    # Disambiguate per-attachment on the local filesystem
+                    # so two attachments sharing a Jira filename
+                    # (common across issues — ``image.png`` everywhere)
+                    # don't overwrite each other on disk before
+                    # ``_load`` can transfer them. Use the Jira
+                    # attachment id (immutable, unique) as a prefix
+                    # in the local path; the ``filename`` field on the
+                    # op stays the original Jira filename so OP's
+                    # attach script writes the user-visible name
+                    # correctly. Per PR #222 review.
+                    aid = item.get("id") or ""
                     safe_name = filename.replace("/", "_")
-                    local_path = self.attachment_dir / safe_name
+                    local_path = self.attachment_dir / f"{aid}_{safe_name}" if aid else self.attachment_dir / safe_name
                     # Download and hash
                     self._download_attachment(url, local_path)
                     if not local_path.exists():
@@ -579,18 +594,46 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     failed = len(container_ops)
                     self._loss_counters["load_rails_status_not_success"] += len(container_ops)
                 else:
-                    data = envelope.get("data") or {}
-                    if not isinstance(data, dict):
-                        data = {}
-                    # Defensive type validation — a malformed Rails
-                    # response could send back a string/null/dict here,
-                    # which the downstream ``len()`` and iteration
-                    # would crash on without rescue. Per PR #211
+                    data = envelope.get("data")
+                    # Defensive type validation. A malformed Rails
+                    # response shouldn't crash on ``len()``/iteration,
+                    # but it ALSO shouldn't silently report a green
+                    # batch — count the whole batch as failed and
+                    # surface a named bucket so the operator can tell
+                    # this from a normal per-op error. Per PR #211/#223
                     # review.
-                    raw_results = data.get("results", [])
-                    raw_errors = data.get("errors", [])
-                    results = raw_results if isinstance(raw_results, list) else []
-                    errors = raw_errors if isinstance(raw_errors, list) else []
+                    if not isinstance(data, dict):
+                        logger.warning(
+                            "_load: Rails returned non-dict ``data`` (%r) — counting batch as failed",
+                            type(data).__name__,
+                        )
+                        failed = len(container_ops)
+                        self._loss_counters["load_rails_malformed_data"] += len(container_ops)
+                        return ComponentResult(
+                            success=False,
+                            updated=updated,
+                            failed=failed,
+                            data={"attachment_mapping": attachment_mapping},
+                        )
+                    raw_results = data.get("results")
+                    raw_errors = data.get("errors")
+                    if not isinstance(raw_results, list) or not isinstance(raw_errors, list):
+                        logger.warning(
+                            "_load: Rails ``results``/``errors`` shape unexpected"
+                            " (results=%r, errors=%r) — counting batch as failed",
+                            type(raw_results).__name__,
+                            type(raw_errors).__name__,
+                        )
+                        failed = len(container_ops)
+                        self._loss_counters["load_rails_malformed_data"] += len(container_ops)
+                        return ComponentResult(
+                            success=False,
+                            updated=updated,
+                            failed=failed,
+                            data={"attachment_mapping": attachment_mapping},
+                        )
+                    results = raw_results
+                    errors = raw_errors
                     # Build attachment mapping: {jira_key: {filename: attachment_id}}
                     for r in results:
                         if not isinstance(r, dict):
@@ -872,8 +915,13 @@ puts end_marker
                         continue
                     filename = str(raw_filename)
                     url = str(raw_url)
+                    # Same per-attachment-id local path scheme as
+                    # ``_map`` — keeps duplicate filenames from
+                    # overwriting each other on disk. Per PR #222
+                    # review.
+                    aid = item.get("id") or ""
                     safe_name = filename.replace("/", "_")
-                    local_path = self.attachment_dir / safe_name
+                    local_path = self.attachment_dir / f"{aid}_{safe_name}" if aid else self.attachment_dir / safe_name
                     # Download
                     self._download_attachment(url, local_path)
                     if not local_path.exists():
