@@ -1,8 +1,9 @@
-"""Pure mapping logic extracted from :mod:`work_package_migration`.
+"""Pure mapping logic extracted from :mod:`src.application.components.work_package_migration`.
 
 This module is **Phase 1** of the ``WorkPackageMigration`` god-class
-decomposition (see
-``claudedocs/refactoring/work-package-migration-decomposition-plan.md``).
+decomposition: pure Jira → OpenProject data shape transformations live
+here so they can be tested in isolation, while the service module keeps
+its orchestration role.
 
 Sixteen methods that perform Jira → OpenProject data shape transformations
 have been moved here verbatim. The original
@@ -87,7 +88,7 @@ class IssueTransformer:
 
     def resolve_journal_author_id(
         self,
-        author_data: dict[str, Any],
+        author_data: dict[str, Any] | None,
         jira_key: str,
         kind: JournalEntryType,
     ) -> int:
@@ -276,7 +277,7 @@ class IssueTransformer:
                 continue
         return None
 
-    def derive_snapshot_timestamp(self, snapshot: list[dict[str, Any]]) -> datetime | None:
+    def derive_snapshot_timestamp(self, snapshot: list[dict[str, Any]] | None) -> datetime | None:
         """Derive the most recent migration timestamp from existing OpenProject rows."""
         latest: datetime | None = None
         for entry in snapshot or []:
