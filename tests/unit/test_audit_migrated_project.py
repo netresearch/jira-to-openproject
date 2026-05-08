@@ -988,16 +988,23 @@ def test_jira_watcher_count_within_tolerance_passes() -> None:
     assert not any("watcher" in f.lower() and "jira" in f.lower() for f in failures), failures
 
 
-def test_jira_watcher_count_above_tolerance_is_failure() -> None:
-    # OP=50 baseline, Jira=80 → 60% high → fails
-    failures, _warnings = _classify(_baseline_metrics(jira_watcher_count=80))
-    assert any("watcher" in f.lower() and "jira" in f.lower() for f in failures), failures
+def test_jira_watcher_count_above_tolerance_is_warning() -> None:
+    # OP=50 baseline, Jira=80 → 60% high → warning (not failure).
+    # Watcher mismatch is a warning, not a failure: count comparison
+    # has known noise sources (permission scope on ``watchCount``,
+    # author/auto-subscription overlap, cross-project drift) that
+    # prevent exact reconciliation. See ``_WATCHER_TOLERANCE`` docstring.
+    failures, warnings = _classify(_baseline_metrics(jira_watcher_count=80))
+    assert not any("watcher" in f.lower() for f in failures), failures
+    assert any("watcher" in w.lower() and "jira" in w.lower() for w in warnings), warnings
 
 
-def test_jira_watcher_count_below_tolerance_is_failure() -> None:
-    # OP=50 baseline, Jira=10 → 80% low → fails
-    failures, _warnings = _classify(_baseline_metrics(jira_watcher_count=10))
-    assert any("watcher" in f.lower() and "jira" in f.lower() for f in failures), failures
+def test_jira_watcher_count_below_tolerance_is_warning() -> None:
+    # OP=50 baseline, Jira=10 → 80% low → warning (not failure).
+    # Same rationale as the above-tolerance case.
+    failures, warnings = _classify(_baseline_metrics(jira_watcher_count=10))
+    assert not any("watcher" in f.lower() for f in failures), failures
+    assert any("watcher" in w.lower() and "jira" in w.lower() for w in warnings), warnings
 
 
 def test_jira_watcher_count_zero_jira_zero_op_passes() -> None:
@@ -1624,7 +1631,7 @@ def test_watcher_count_subtracts_author_auto_subscriptions() -> None:
         jira=2895 → delta=-214 → still flags (genuine loss).
     Without it, the +338 surface delta misled the operator.
     """
-    failures, _warnings = _classify(
+    failures, warnings = _classify(
         _baseline_metrics(
             wp_total=4082,
             wp_with_subject=4082,
@@ -1644,12 +1651,15 @@ def test_watcher_count_subtracts_author_auto_subscriptions() -> None:
             jira_watcher_count=2895,
         ),
     )
-    watcher_failures = [f for f in failures if "watcher" in f.lower()]
-    assert watcher_failures, failures
+    # Watcher mismatch surfaces as a warning, not a failure (count
+    # comparison has known noise sources — see ``_WATCHER_TOLERANCE``).
+    watcher_warnings = [w for w in warnings if "watcher" in w.lower()]
+    assert watcher_warnings, warnings
+    assert not any("watcher" in f.lower() for f in failures), failures
     # The reported numbers must reflect the corrected view (2681 non-author),
     # not the raw 3233 — so an operator can read the message and act on it.
-    assert "2681" in watcher_failures[0], watcher_failures
-    assert "552" in watcher_failures[0], watcher_failures
+    assert "2681" in watcher_warnings[0], watcher_warnings
+    assert "552" in watcher_warnings[0], watcher_warnings
 
 
 def test_watcher_count_clean_after_author_subtraction() -> None:
