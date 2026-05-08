@@ -10,21 +10,22 @@ value dict:
     }
 
 Before the fix, migrations that iterated ``[str(k) for k in wp_map]`` would
-pass numeric strings ("144952") to ``_merge_batch_issues`` → ``batch_get_issues``
-→ ``_fetch_issues_batch``, which builds ``key in ("144952")`` JQL. Jira
-rejects that with HTTP 400: "The issue key '144952' for field 'key' is
-invalid." — because Jira issue *keys* look like "TEST-123", not bare numbers.
+pass numeric strings ("144952") to ``_merge_batch_issues`` → ``batch_get_issues``,
+which builds ``key in ("144952")`` JQL.  Jira rejects that with HTTP 400:
+"The issue key '144952' for field 'key' is invalid."
 
 Each test below:
 1. Mounts a production-format wp_map (numeric outer keys).
-2. Captures what JQL string ``search_issues`` is called with.
-3. Asserts the JQL never contains a bare numeric value after ``key in (``
-   — i.e. only real keys like "TEST-1" appear.
+2. Verifies that ``batch_get_issues`` is called with human-readable keys only
+   (e.g. "TEST-1"), never with bare numeric strings.
+3. Asserts that the keys present in the extracted result data (e.g.
+   ``result.data["votes"]``) are the human-readable Jira keys so that
+   downstream ``_load`` and ``_map`` phases can correlate back to wp_map
+   via the ``jira_key`` field rather than the numeric outer key.
 """
 
 from __future__ import annotations
 
-import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -53,25 +54,6 @@ class _DummyMappings:
         self._m[name] = mapping
 
 
-# ── helper to assert no numeric IDs sneak into JQL ─────────────────────────
-
-_NUMERIC_ID_PATTERN = re.compile(r"key\s+in\s+\(([^)]+)\)", re.IGNORECASE)
-
-
-def _assert_no_numeric_keys_in_jql(jql: str) -> None:
-    """Assert that no bare numeric value appears in the ``key in (...)`` clause."""
-    match = _NUMERIC_ID_PATTERN.search(jql)
-    if not match:
-        return  # no ``key in (...)`` clause at all — acceptable
-    clause = match.group(1)
-    for token in clause.split(","):
-        token = token.strip().strip('"').strip("'")
-        assert not token.isdigit(), (
-            f"Numeric ID {token!r} found in JQL 'key in (...)' clause — "
-            f"this will cause HTTP 400 from Jira. Full JQL: {jql!r}"
-        )
-
-
 # ── DummyOp used by most migration tests ───────────────────────────────────
 
 
@@ -96,22 +78,14 @@ class _DummyOp:
 
 
 class _DummyJira:
-    """Captures JQL strings passed to search_issues and returns minimal stubs."""
+    """Returns minimal issue stubs for batch_get_issues calls."""
 
     def __init__(self) -> None:
-        self.jql_calls: list[str] = []
         self._issues = {
             "TEST-1": _make_issue("TEST-1"),
             "TEST-2": _make_issue("TEST-2"),
             "TEST-3": _make_issue("TEST-3"),
         }
-
-    def search_issues(self, jql: str, maxResults: int = 50, expand: str = ""):
-        self.jql_calls.append(jql)
-        # Check the JQL isn't using numeric IDs as keys
-        _assert_no_numeric_keys_in_jql(jql)
-        # Return issues whose keys appear in the JQL
-        return [v for k, v in self._issues.items() if k in jql]
 
     def batch_get_issues(self, keys: list[str]) -> dict:
         result = {}
@@ -125,17 +99,37 @@ class _DummyJira:
         return []
 
 
+class _SimpleRef:
+    """Minimal Jira ref stub with a real ``name`` attribute (not a MagicMock name)."""
+
+    def __init__(self, name: str, ref_id: str = "1") -> None:
+        self.name = name
+        self.id = ref_id
+
+
+class _VotesRef:
+    def __init__(self, count: int) -> None:
+        self.votes = count
+
+
 def _make_issue(key: str):
-    """Build a minimal Jira issue stub."""
+    """Build a minimal Jira issue stub whose fields survive JiraIssueFields.from_issue_any.
+
+    Uses plain objects for resolution/security/priority/votes so that
+    _str_attr can return real strings (not None from MagicMock internals).
+    """
     issue = MagicMock()
     issue.key = key
     issue.id = key  # simplified
     fields = MagicMock()
-    fields.votes = MagicMock(votes=3)
-    fields.resolution = MagicMock(name="Fixed")
+    # Use real string-attribute objects so _jira_ref produces non-None names
+    fields.votes = _VotesRef(3)
+    fields.resolution = _SimpleRef("Fixed")
+    fields.security = _SimpleRef("Internal")
     fields.labels = ["tag-a"]
-    fields.priority = MagicMock(name="High")
+    fields.priority = _SimpleRef("High")
     fields.fixVersions = []
+    fields.versions = []
     fields.components = []
     fields.customfield_10016 = None  # story points
     fields.customfield_10020 = None  # sprint
@@ -149,7 +143,13 @@ def _make_issue(key: str):
 
 
 def test_votes_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """VotesMigration._extract must NOT pass numeric IDs to batch_get_issues."""
+    """VotesMigration._extract must pass human-readable keys and produce usable result data.
+
+    Verifies:
+    - batch_get_issues is called with human-readable keys (not numeric IDs).
+    - The extracted ``votes`` dict is keyed by human-readable Jira keys, enabling
+      downstream _load to correlate entries back to wp_map via the jira_key field.
+    """
     from src.application.components.votes_migration import VotesMigration
 
     monkeypatch.setattr(cfg, "mappings", _DummyMappings(NUMERIC_ID_WP_MAP), raising=False)
@@ -174,13 +174,21 @@ def test_votes_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyPatch)
     assert all_keys, "No keys were fetched"
     for k in all_keys:
         assert not k.isdigit(), f"Numeric ID {k!r} slipped through to batch_get_issues"
+    # Verify the extracted data keys are human-readable so _load can look them
+    # up in wp_map via the jira_key field.
+    votes: dict = (result.data or {}).get("votes", {})
+    assert votes, "No votes data extracted"
+    for k in votes:
+        assert not str(k).isdigit(), (
+            f"Extracted votes dict has numeric key {k!r} — _load would fail to correlate it back to wp_map entries."
+        )
 
 
 # ── ResolutionMigration ─────────────────────────────────────────────────────
 
 
 def test_resolution_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ResolutionMigration._extract must NOT pass numeric IDs to batch_get_issues."""
+    """ResolutionMigration._extract must pass human-readable keys and produce usable result data."""
     from src.application.components.resolution_migration import ResolutionMigration
 
     monkeypatch.setattr(cfg, "mappings", _DummyMappings(NUMERIC_ID_WP_MAP), raising=False)
@@ -200,13 +208,20 @@ def test_resolution_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyP
     assert captured_keys, "batch_get_issues was never called"
     for k in [k for batch in captured_keys for k in batch]:
         assert not k.isdigit(), f"Numeric ID {k!r} passed to batch_get_issues"
+    resolution: dict = (result.data or {}).get("resolution", {})
+    assert resolution, "No resolution data extracted"
+    for k in resolution:
+        assert not str(k).isdigit(), (
+            f"Extracted resolution dict has numeric key {k!r} — _load would fail to "
+            "correlate it back to wp_map entries."
+        )
 
 
 # ── LabelsMigration ─────────────────────────────────────────────────────────
 
 
 def test_labels_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """LabelsMigration._extract must NOT pass numeric IDs to batch_get_issues."""
+    """LabelsMigration._extract must pass human-readable keys and produce usable result data."""
     from src.application.components.labels_migration import LabelsMigration
 
     monkeypatch.setattr(cfg, "mappings", _DummyMappings(NUMERIC_ID_WP_MAP), raising=False)
@@ -226,13 +241,19 @@ def test_labels_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyPatch
     assert captured_keys, "batch_get_issues was never called"
     for k in [k for batch in captured_keys for k in batch]:
         assert not k.isdigit(), f"Numeric ID {k!r} passed to batch_get_issues"
+    labels: dict = (result.data or {}).get("labels", {})
+    assert labels, "No labels data extracted"
+    for k in labels:
+        assert not str(k).isdigit(), (
+            f"Extracted labels dict has numeric key {k!r} — _load would fail to correlate it back to wp_map entries."
+        )
 
 
 # ── NativeTagsMigration ─────────────────────────────────────────────────────
 
 
 def test_native_tags_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """NativeTagsMigration._extract must NOT pass numeric IDs to batch_get_issues."""
+    """NativeTagsMigration._extract must pass human-readable keys and produce usable result data."""
     from src.application.components.native_tags_migration import NativeTagsMigration
 
     monkeypatch.setattr(cfg, "mappings", _DummyMappings(NUMERIC_ID_WP_MAP), raising=False)
@@ -252,13 +273,19 @@ def test_native_tags_migration_extract_uses_jira_keys(monkeypatch: pytest.Monkey
     assert captured_keys, "batch_get_issues was never called"
     for k in [k for batch in captured_keys for k in batch]:
         assert not k.isdigit(), f"Numeric ID {k!r} passed to batch_get_issues"
+    by_key: dict = (result.data or {}).get("by_key", {})
+    assert by_key, "No by_key data extracted"
+    for k in by_key:
+        assert not str(k).isdigit(), (
+            f"Extracted by_key dict has numeric key {k!r} — _map would fail to correlate it back to wp_map entries."
+        )
 
 
 # ── SecurityLevelsMigration ─────────────────────────────────────────────────
 
 
 def test_security_levels_migration_extract_uses_jira_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SecurityLevelsMigration._extract must NOT pass numeric IDs to batch_get_issues."""
+    """SecurityLevelsMigration._extract must pass human-readable keys and produce usable result data."""
     from src.application.components.security_levels_migration import SecurityLevelsMigration
 
     monkeypatch.setattr(cfg, "mappings", _DummyMappings(NUMERIC_ID_WP_MAP), raising=False)
@@ -278,3 +305,9 @@ def test_security_levels_migration_extract_uses_jira_keys(monkeypatch: pytest.Mo
     assert captured_keys, "batch_get_issues was never called"
     for k in [k for batch in captured_keys for k in batch]:
         assert not k.isdigit(), f"Numeric ID {k!r} passed to batch_get_issues"
+    security: dict = (result.data or {}).get("security", {})
+    assert security, "No security data extracted"
+    for k in security:
+        assert not str(k).isdigit(), (
+            f"Extracted security dict has numeric key {k!r} — _load would fail to correlate it back to wp_map entries."
+        )

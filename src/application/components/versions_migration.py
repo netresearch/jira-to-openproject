@@ -203,7 +203,10 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 if not wp_id:
                     continue
 
-                issue = issues.get(key)
+                # The outer key may be a numeric Jira ID; issues is keyed by
+                # the human-readable Jira key returned by the API.
+                jira_key = self._inner_jira_key(key, wp_entry) or key
+                issue = issues.get(jira_key)
                 if not issue:
                     continue
                 fields = JiraIssueFields.from_issue_any(issue)
@@ -214,7 +217,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 if not name:
                     continue
 
-                jproj = self._issue_project_key(key)
+                jproj = self._issue_project_key(jira_key)
                 proj_entry = proj_map.get(jproj)
                 op_pid = None
                 if isinstance(proj_entry, dict):

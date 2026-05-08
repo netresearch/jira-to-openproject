@@ -139,7 +139,10 @@ class PriorityMigration(BaseMigration):
                 if not wp_id:
                     continue
 
-                issue = iss_map.get(key)
+                # The outer key may be a numeric Jira ID; iss_map is keyed by
+                # the human-readable Jira key returned by the API.
+                jira_key = self._inner_jira_key(key, wp_entry) or key
+                issue = iss_map.get(jira_key)
                 if not issue:
                     continue
                 fields = JiraIssueFields.from_issue_any(issue)

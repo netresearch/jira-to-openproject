@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
@@ -455,8 +456,48 @@ class BaseMigration:
             issues = result
         return issues
 
-    @staticmethod
-    def _jira_keys_from_wp_map(wp_map: dict[str, Any]) -> list[str]:
+    # Pattern that all valid Jira issue keys must match: e.g. "TEST-123", "ABC_DEF-1"
+    _JIRA_KEY_RE: ClassVar[re.Pattern[str]] = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+
+    @classmethod
+    def _inner_jira_key(cls, outer_key: str, raw_entry: Any) -> str | None:
+        """Return the human-readable Jira key for one wp_map entry.
+
+        Prefers the ``jira_key`` field inside the entry dict.  Falls back to
+        ``outer_key`` only when it already looks like a Jira key (e.g. legacy
+        or test mappings that were stored with the real key as the outer key).
+
+        Returns ``None`` when the entry is corrupt (digit-only outer key AND
+        no ``jira_key`` field), so callers can skip or warn.
+
+        Args:
+            outer_key: The dict key from wp_map (may be a numeric Jira ID
+                string such as "144952" or a human-readable key "TEST-1").
+            raw_entry: The dict value from wp_map.
+
+        Returns:
+            Human-readable Jira issue key, or None if the data is corrupt.
+
+        """
+        if isinstance(raw_entry, dict):
+            inner = raw_entry.get("jira_key")
+            if inner:
+                return str(inner)
+        # No inner jira_key — only fall back to outer_key when it looks like
+        # a real Jira key.  A digit-only outer key means the data is corrupt.
+        if cls._JIRA_KEY_RE.match(outer_key):
+            return outer_key
+        from src.config import logger  # local import to avoid circular at module level
+
+        logger.warning(
+            "wp_map entry with outer key %r has no jira_key field and the outer key "
+            "is not a valid Jira key — skipping this entry",
+            outer_key,
+        )
+        return None
+
+    @classmethod
+    def _jira_keys_from_wp_map(cls, wp_map: dict[str, Any]) -> list[str]:
         """Extract Jira issue *keys* from a work-package mapping dict.
 
         Production work-package mappings are stored with the numeric Jira
@@ -475,20 +516,25 @@ class BaseMigration:
 
         This helper always returns the human-readable Jira key, falling back
         to the outer key only for legacy/test mappings that were already
-        keyed by the real Jira key.
+        keyed by the real Jira key (validated via :attr:`_JIRA_KEY_RE`).
+        Entries whose outer key is digit-only and that lack an inner
+        ``jira_key`` field are skipped with a warning.
 
         Args:
             wp_map: The raw work_package mapping dict.
 
         Returns:
-            Deduplicated list of Jira issue keys suitable for key in (...)
+            Deduplicated list of Jira issue keys suitable for ``key in (...)``
             JQL queries.
 
         """
+        seen: set[str] = set()
         keys: list[str] = []
         for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            keys.append(str(inner_jira_key or outer_key))
+            jira_key = cls._inner_jira_key(outer_key, raw_entry)
+            if jira_key and jira_key not in seen:
+                seen.add(jira_key)
+                keys.append(jira_key)
         return keys
 
     @staticmethod
