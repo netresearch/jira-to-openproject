@@ -111,14 +111,22 @@ class TestGet:
             encoding="utf-8",
         )
 
-        with caplog.at_level(logging.WARNING):
+        # Scope the caplog assertion to the mapping_repo logger so unrelated
+        # WARNINGs from other libraries / fixtures cannot make this test flaky.
+        repo_logger = "src.infrastructure.persistence.mapping_repo"
+        with caplog.at_level(logging.WARNING, logger=repo_logger):
             result = repo.get("jira_custom_fields")
 
         assert result == {}
-        # Must not emit a WARNING — only DEBUG is acceptable for a
-        # list-shaped file that simply isn't a mapping dict.
-        warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        assert warning_records == [], f"Unexpected WARNING(s) emitted: {[r.message for r in warning_records]}"
+        warning_records = [
+            r
+            for r in caplog.records
+            if r.name == repo_logger and r.levelno >= logging.WARNING
+        ]
+        assert warning_records == [], (
+            f"Unexpected WARNING(s) from {repo_logger}: "
+            f"{[r.message for r in warning_records]}"
+        )
 
     def test_non_dict_top_level_returns_empty_and_logs_at_debug(
         self,
