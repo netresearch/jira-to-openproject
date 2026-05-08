@@ -159,6 +159,18 @@ class ChangeAwareRunner:
                         ),
                     },
                 )
+            except MigrationError as e:
+                # MigrationError means the entity fetch failed because this
+                # migration is transformation-only and does not support change
+                # detection.  Snapshots are therefore not possible by design —
+                # this is not a failure.  Log at debug to avoid spurious
+                # WARNINGs on every run for watchers, time_entries,
+                # wp_metadata_backfill, etc.
+                self.logger.debug(
+                    "Skipping snapshot for %s (transformation-only migration): %s",
+                    entity_type,
+                    e,
+                )
             except Exception as e:
                 self.logger.warning(
                     "Failed to create snapshot after successful migration: %s",
