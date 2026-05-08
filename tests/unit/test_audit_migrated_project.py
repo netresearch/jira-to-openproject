@@ -59,6 +59,7 @@ def _baseline_metrics(**overrides: Any) -> dict[str, Any]:
         "wp_journal_total": 100,
         "wp_attachment_total": 0,
         "wp_watcher_total": 50,
+        "wp_watcher_author_auto": 0,
         "te_total": 10,
         "te_with_worklog_key": 10,
         "te_hours_sum": 12.5,
@@ -1605,3 +1606,75 @@ def test_assignee_no_jira_count_low_coverage_warns_only() -> None:
     )
     assert not any("assignee" in f.lower() for f in failures), failures
     assert any("assignee" in w.lower() for w in warnings), warnings
+
+
+# --- Watcher author auto-subscription correction (added 2026-05-08) ---
+
+
+def test_watcher_count_subtracts_author_auto_subscriptions() -> None:
+    """OP auto-subscribes a WP's author as a watcher. The audit must
+    subtract these from ``wp_watcher_total`` before comparing to
+    Jira's ``watchCount`` — otherwise the comparison conflates two
+    different effects.
+
+    Live 2026-05-08 NRS audit caught a +338 raw watcher delta that
+    was actually 552 OP author auto-subscriptions masking a -214
+    real undercount. With the correction:
+        op_total=3233, author_auto=552, op_non_author=2681,
+        jira=2895 → delta=-214 → still flags (genuine loss).
+    Without it, the +338 surface delta misled the operator.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            wp_total=4082,
+            wp_with_subject=4082,
+            wp_with_description=4082,
+            wp_with_assignee=12,
+            wp_with_author=4082,
+            wp_with_type=4082,
+            wp_with_status=4082,
+            wp_with_priority=4082,
+            wp_journal_total=4082,
+            wp_provenance_cfs={
+                k: {"exists": True, "populated": 4082} for k in _baseline_metrics()["wp_provenance_cfs"]
+            },
+            wp_watcher_total=3233,
+            wp_watcher_author_auto=552,
+            jira_assignee_count=12,
+            jira_watcher_count=2895,
+        ),
+    )
+    watcher_failures = [f for f in failures if "watcher" in f.lower()]
+    assert watcher_failures, failures
+    # The reported numbers must reflect the corrected view (2681 non-author),
+    # not the raw 3233 — so an operator can read the message and act on it.
+    assert "2681" in watcher_failures[0], watcher_failures
+    assert "552" in watcher_failures[0], watcher_failures
+
+
+def test_watcher_count_clean_after_author_subtraction() -> None:
+    """When OP's non-author watcher count matches Jira within
+    tolerance, no failure should fire even if the raw total looks
+    higher because of auto-subscriptions.
+    """
+    failures, _warnings = _classify(
+        _baseline_metrics(
+            wp_total=1000,
+            wp_with_subject=1000,
+            wp_with_description=1000,
+            wp_with_assignee=1000,
+            wp_with_author=1000,
+            wp_with_type=1000,
+            wp_with_status=1000,
+            wp_with_priority=1000,
+            wp_journal_total=1000,
+            wp_provenance_cfs={
+                k: {"exists": True, "populated": 1000} for k in _baseline_metrics()["wp_provenance_cfs"]
+            },
+            wp_watcher_total=600,
+            wp_watcher_author_auto=200,  # 600 - 200 = 400 non-author
+            jira_assignee_count=1000,
+            jira_watcher_count=400,  # matches the non-author count
+        ),
+    )
+    assert not any("watcher" in f.lower() for f in failures), failures

@@ -308,6 +308,18 @@ def _build_audit_script(jira_project_key: str) -> str:
     'wp_journal_total' => Journal.where(journable_type: 'WorkPackage', journable_id: wp_id_scope).count,
     'wp_attachment_total' => Attachment.where(container_type: 'WorkPackage', container_id: wp_id_scope).count,
     'wp_watcher_total' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_id_scope).count,
+    # OpenProject auto-subscribes a WP's author as a watcher (the
+    # default ``Setting.notification_*`` behaviour). These rows are
+    # not Jira-side watchers and the migration didn't create them —
+    # subtracting them out lets the watcher count comparison
+    # actually compare like-for-like with Jira's ``watchCount``.
+    # NRS audit (2026-05-08): 552 of 3233 OP watchers were author
+    # auto-subscriptions; the +338 "loss" surfaced by the raw count
+    # was actually a -214 undercount masked by them.
+    'wp_watcher_author_auto' => Watcher.where(watchable_type: 'WorkPackage', watchable_id: wp_id_scope)
+      .joins("INNER JOIN work_packages wp ON wp.id = watchers.watchable_id")
+      .where("wp.author_id = watchers.user_id")
+      .count,
     'te_total' => te.count,
     'te_with_worklog_key' => te_with_worklog_key,
     'te_hours_sum' => te.sum(:hours).to_f,
@@ -595,7 +607,17 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 "Jira watcher source comparison unavailable — check skipped",
             )
         else:
-            op_watch = _metric_int(metrics, "wp_watcher_total")
+            op_watch_total = _metric_int(metrics, "wp_watcher_total")
+            # Subtract the author auto-subscriptions OP creates by
+            # default — they're not Jira-side watchers and the
+            # migration didn't add them. Without this correction the
+            # comparison conflates two different effects: real Jira
+            # watcher drops (bug class to fix) and OP's intrinsic
+            # auto-subscribe behaviour (out of scope). Live NRS
+            # audit caught a +338 raw delta that was actually
+            # 552 author auto-watchers minus 214 real undercount.
+            author_auto = _metric_int(metrics, "wp_watcher_author_auto")
+            op_watch = op_watch_total - author_auto
             jira_watch_int = int(jira_watch)
             if jira_watch_int == 0:
                 tolerance_ok = op_watch == 0
@@ -606,8 +628,9 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 failures.append(
                     f"Jira→OP watcher count mismatch beyond ±5%:"
                     f" Jira reports {jira_watch_int}, OP has {op_watch}"
-                    f" ({op_watch - jira_watch_int:+d}) — watch records dropped"
-                    " or duplicated during migration",
+                    f" non-author watchers (raw {op_watch_total} − {author_auto}"
+                    f" author auto-subscriptions) — net delta"
+                    f" {op_watch - jira_watch_int:+d}",
                 )
 
     # Jira source comparison: relation (issue-link) count, ±5%
