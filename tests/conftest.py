@@ -29,6 +29,7 @@ if "jira" not in sys.modules:
     class _CTestJIRAError(Exception):
         def __init__(self, text=None, status_code=None, url=None, **kwargs):
             super().__init__(text)
+            self.text = text
             self.status_code = status_code
             self.url = url
 

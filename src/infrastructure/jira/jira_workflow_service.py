@@ -27,27 +27,55 @@ from src.infrastructure.jira.jira_client import (
 )
 
 
-def _is_workflow_404(exc: BaseException) -> bool:
-    """Return True if *exc* or any exception in its ``__cause__`` chain is a Jira 404.
+def _is_workflow_unfetchable(exc: BaseException) -> bool:
+    """Return True if *exc* represents a workflow endpoint that cannot be fetched.
 
+    Two cases are treated as "unfetchable" and suppressed at DEBUG level
+    (instead of raising at ERROR) because they indicate a server-side
+    configuration limitation rather than a real programming error:
+
+    1. **HTTP 404** — the ``/rest/api/2/workflow/<name>`` endpoint simply does
+       not exist on this Jira Server/DC version.  This is the original case
+       that PR #240 addressed.
+
+    2. **HTTP 400 with "Invalid URI" / "encoded slash"** — Apache Tomcat
+       rejects percent-encoded slash characters (``%2F``) in URL path segments
+       by default (``ALLOW_ENCODED_SLASH`` is ``false``).  A workflow name that
+       contains a literal ``/`` (e.g. ``"NREDIT: Blog/CS Workflow"``) is
+       URL-encoded as ``%2F`` by ``urllib.parse.quote``; Tomcat then returns
+       HTTP 400 with an HTML body containing "Invalid URI" and a message about
+       the encoded slash.  The URL is structurally unfetchable — no retry
+       strategy can work around a server-side Tomcat configuration default.
+       Treating it like a 404 (silent DEBUG, empty result) is correct.
+
+    Implementation notes
+    --------------------
     In production ``JiraClient._patch_jira_client`` wraps every exception
     (including ``JIRAError``) into ``JiraApiError`` so the outer exception is
-    never a ``JIRAError`` directly.  The original ``JIRAError(status_code=404)``
-    is stored as ``exc.__cause__``.  Walking the chain makes the check work
-    for both the bare-``JIRAError`` path (unit-test stub, some alternate code
-    paths) and the production-wrapping path.
+    never a ``JIRAError`` directly.  The original ``JIRAError`` is stored as
+    ``exc.__cause__``.  Walking the chain makes the check work for both the
+    bare-``JIRAError`` path (unit-test stub, some alternate code paths) and
+    the production-wrapping path.
 
     The *seen* set guards against pathological cycles where ``__cause__`` is
     set to the exception itself.
     """
     from jira.exceptions import JIRAError as _JIRAError
 
+    _ENCODED_SLASH_MARKERS = ("invalid uri", "encoded slash")
+
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, _JIRAError) and getattr(current, "status_code", None) == HTTP_NOT_FOUND:
-            return True
+        status = getattr(current, "status_code", None)
+        if isinstance(current, _JIRAError):
+            if status == HTTP_NOT_FOUND:
+                return True
+            if status == 400:
+                text = (getattr(current, "text", "") or "").lower()
+                if any(marker in text for marker in _ENCODED_SLASH_MARKERS):
+                    return True
         current = current.__cause__
     return False
 
@@ -219,11 +247,14 @@ class JiraWorkflowService:
             #
             # In production JiraClient._patch_jira_client wraps every exception
             # into JiraApiError, so exc is never a JIRAError directly — the
-            # original JIRAError(status_code=404) lives in exc.__cause__.
-            # _is_workflow_404 walks the __cause__ chain to handle both paths.
-            if _is_workflow_404(exc):
+            # original JIRAError lives in exc.__cause__.
+            # _is_workflow_unfetchable walks the __cause__ chain and handles:
+            #   • HTTP 404 — endpoint not available on this Server/DC version
+            #   • HTTP 400 "Invalid URI" — Tomcat rejects %2F in URL path
+            #     (workflow name contains "/" and ALLOW_ENCODED_SLASH=false)
+            if _is_workflow_unfetchable(exc):
                 self._logger.debug(
-                    "Workflow '%s' transitions endpoint returned 404 (not available on this server); treating as empty",
+                    "Workflow '%s' transitions endpoint unfetchable (404 not-found or Tomcat encoded-slash 400); treating as empty",
                     workflow_name,
                 )
                 return []
@@ -275,11 +306,14 @@ class JiraWorkflowService:
             #
             # In production JiraClient._patch_jira_client wraps every exception
             # into JiraApiError, so exc is never a JIRAError directly — the
-            # original JIRAError(status_code=404) lives in exc.__cause__.
-            # _is_workflow_404 walks the __cause__ chain to handle both paths.
-            if _is_workflow_404(exc):
+            # original JIRAError lives in exc.__cause__.
+            # _is_workflow_unfetchable walks the __cause__ chain and handles:
+            #   • HTTP 404 — endpoint not available on this Server/DC version
+            #   • HTTP 400 "Invalid URI" — Tomcat rejects %2F in URL path
+            #     (workflow name contains "/" and ALLOW_ENCODED_SLASH=false)
+            if _is_workflow_unfetchable(exc):
                 self._logger.debug(
-                    "Workflow '%s' definition endpoint returned 404 (not available on this server); treating as empty",
+                    "Workflow '%s' definition endpoint unfetchable (404 not-found or Tomcat encoded-slash 400); treating as empty",
                     workflow_name,
                 )
                 return []
