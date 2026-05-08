@@ -27,6 +27,31 @@ from src.infrastructure.jira.jira_client import (
 )
 
 
+def _is_workflow_404(exc: BaseException) -> bool:
+    """Return True if *exc* or any exception in its ``__cause__`` chain is a Jira 404.
+
+    In production ``JiraClient._patch_jira_client`` wraps every exception
+    (including ``JIRAError``) into ``JiraApiError`` so the outer exception is
+    never a ``JIRAError`` directly.  The original ``JIRAError(status_code=404)``
+    is stored as ``exc.__cause__``.  Walking the chain makes the check work
+    for both the bare-``JIRAError`` path (unit-test stub, some alternate code
+    paths) and the production-wrapping path.
+
+    The *seen* set guards against pathological cycles where ``__cause__`` is
+    set to the exception itself.
+    """
+    from jira.exceptions import JIRAError as _JIRAError
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _JIRAError) and getattr(current, "status_code", None) == HTTP_NOT_FOUND:
+            return True
+        current = current.__cause__
+    return False
+
+
 class JiraWorkflowService:
     """Workflow-domain queries for ``JiraClient``."""
 
@@ -163,11 +188,11 @@ class JiraWorkflowService:
 
         try:
             response = client.jira._session.get(url)
-            # The per-workflow transitions endpoint isn't part of the public
-            # Jira REST API in many Server/DC versions and returns 404. The
-            # caller treats absence as an empty list, so don't raise (would
-            # only generate noise). Other HTTP errors still raise normally.
-            if getattr(response, "status_code", None) == 404:
+            # Defensive check for callers that return a response object
+            # with status_code rather than raising.  The ``jira`` library's
+            # ResilientSession raises JIRAError before reaching this point,
+            # so this branch is a belt-and-suspenders guard only.
+            if getattr(response, "status_code", None) == HTTP_NOT_FOUND:
                 self._logger.debug(
                     "Workflow '%s' returned 404 for transitions; treating as empty",
                     workflow_name,
@@ -186,6 +211,22 @@ class JiraWorkflowService:
             )
             return transitions
         except Exception as exc:
+            # The ``jira`` library's ResilientSession raises JIRAError(status_code=404)
+            # before returning any response object, so the status-code check above
+            # never fires for real 404s.  Catch it here instead and suppress at
+            # DEBUG level — these endpoints do not exist on many Server/DC versions
+            # and 404 is expected, not an error worth alarming on.
+            #
+            # In production JiraClient._patch_jira_client wraps every exception
+            # into JiraApiError, so exc is never a JIRAError directly — the
+            # original JIRAError(status_code=404) lives in exc.__cause__.
+            # _is_workflow_404 walks the __cause__ chain to handle both paths.
+            if _is_workflow_404(exc):
+                self._logger.debug(
+                    "Workflow '%s' transitions endpoint returned 404 (not available on this server); treating as empty",
+                    workflow_name,
+                )
+                return []
             error_msg = f"Failed to fetch transitions for workflow '{workflow_name}': {exc!s}"
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
@@ -203,11 +244,11 @@ class JiraWorkflowService:
 
         try:
             response = client.jira._session.get(url)
-            # See ``get_workflow_transitions``: the per-workflow definition
-            # endpoint is not part of the public Jira REST API in many
-            # Server/DC versions and returns 404. Caller already tolerates
-            # an empty list, so suppress 404 silently.
-            if getattr(response, "status_code", None) == 404:
+            # Defensive check for callers that return a response object
+            # with status_code rather than raising.  The ``jira`` library's
+            # ResilientSession raises JIRAError before reaching this point,
+            # so this branch is a belt-and-suspenders guard only.
+            if getattr(response, "status_code", None) == HTTP_NOT_FOUND:
                 self._logger.debug(
                     "Workflow '%s' returned 404 for definition; treating as empty",
                     workflow_name,
@@ -226,6 +267,22 @@ class JiraWorkflowService:
             )
             return []
         except Exception as exc:
+            # The ``jira`` library's ResilientSession raises JIRAError(status_code=404)
+            # before returning any response object, so the status-code check above
+            # never fires for real 404s.  Catch it here instead and suppress at
+            # DEBUG level — these endpoints do not exist on many Server/DC versions
+            # and 404 is expected, not an error worth alarming on.
+            #
+            # In production JiraClient._patch_jira_client wraps every exception
+            # into JiraApiError, so exc is never a JIRAError directly — the
+            # original JIRAError(status_code=404) lives in exc.__cause__.
+            # _is_workflow_404 walks the __cause__ chain to handle both paths.
+            if _is_workflow_404(exc):
+                self._logger.debug(
+                    "Workflow '%s' definition endpoint returned 404 (not available on this server); treating as empty",
+                    workflow_name,
+                )
+                return []
             error_msg = f"Failed to fetch workflow definition for '{workflow_name}': {exc!s}"
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
