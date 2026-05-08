@@ -66,10 +66,24 @@ class MarkdownConverter:
         self.italic_pattern = re.compile(r"(?<!\()\b_([^_\n]+)_\b(?!\))")
         # Underline: +text+ -> <u>text</u>
         self.underline_pattern = re.compile(r"\+([^+\n]+)\+")
-        # Strikethrough: -text- — requires non-word, non-dash context on both sides.
-        # This prevents false matches in compound words (ansible-core), dates (2023-12-31),
-        # CLI flags (--diff), and the issue-ref fallback ~~KEY~~ text.
-        self.strikethrough_pattern = re.compile(r"(?<![\w\-])-([^-\n|]+)-(?!\w)")
+        # Strikethrough: -text- — requires non-word, non-dash context on both sides,
+        # and the inner span must not start or end with whitespace.
+        #
+        # Pattern breakdown:
+        #   (?<![\w\-])   opening dash NOT preceded by a word char or dash
+        #                 → prevents compound-word matches (ansible-core, 2023-12-31)
+        #   -(?!\s)       opening dash NOT followed by whitespace
+        #                 → prevents '- list item' from opening a span
+        #   ([^-\n|]+?)   content: lazy, no dashes / newlines / pipes
+        #   (?<!\s)-      closing dash NOT preceded by whitespace
+        #                 → prevents 'text -' (e.g. CLI flag suffix) from closing a span
+        #   (?![\w\-])    closing dash NOT followed by a word char OR another dash
+        #                 → prevents compound-word AND double-dash (--flag) from closing
+        #
+        # PR #242 fixed compound words by adding (?<![\w\-]) on the open side.
+        # This fix additionally excludes '-' from the closing lookahead, which
+        # stops '--skip-tags' from acting as a closing delimiter for '-f 30 '.
+        self.strikethrough_pattern = re.compile(r"(?<![\w\-])-(?!\s)([^-\n|]+?)(?<!\s)-(?![\w\-])")
         # Monospace: {{text}} -> `text`
         self.monospace_pattern = re.compile(r"\{\{([^}]+)\}\}")
 
