@@ -261,6 +261,10 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         """
 
         def _fetch(target_url: str) -> None:
+            # Always wrap the response in a ``with`` block so the
+            # underlying connection is returned to the pool even on
+            # iteration errors mid-stream — without this, a partial
+            # read can leak the keep-alive socket. Per PR #217 review.
             session = getattr(self.jira_client.jira, "_session", None)
             if session is None:
                 import requests
@@ -268,28 +272,57 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 logger.warning("Jira session not available, attempting unauthenticated download")
                 with requests.get(target_url, stream=True, timeout=60) as r:
                     r.raise_for_status()
-                    with dest_path.open("wb") as f:
-                        for chunk in r.iter_content(chunk_size=65536):
-                            if chunk:
-                                f.write(chunk)
+                    _stream_to(r, dest_path)
                 return
-            response = session.get(target_url, stream=True)
-            response.raise_for_status()
-            with dest_path.open("wb") as f:
-                for chunk in response.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
+            with session.get(target_url, stream=True) as response:
+                response.raise_for_status()
+                _stream_to(response, dest_path)
+
+        def _stream_to(response: Any, target_path: Path) -> None:
+            # Stream-write into a tempfile + rename so a mid-stream
+            # error never leaves a truncated file behind for callers
+            # that only check ``local_path.exists()``. Per PR #217 review.
+            tmp_path = target_path.with_name(target_path.name + ".part")
+            try:
+                with tmp_path.open("wb") as f:
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+                tmp_path.replace(target_path)
+            except Exception:
+                # Clean up the partial file on failure so the caller
+                # sees ``not local_path.exists()`` and counts it under
+                # ``map_download_failed`` instead of misinterpreting
+                # an N-byte fragment as a successful download.
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+
+        def _is_http_400(exc: BaseException) -> bool:
+            # Prefer the structured status code over substring
+            # matching against ``str(exc)``: ``requests.HTTPError``
+            # carries the ``Response`` it was raised from, and
+            # ``response.status_code`` is the canonical signal. Fall
+            # through to substring match only for non-``HTTPError``
+            # cases (e.g. tests with custom exception classes that
+            # mirror the surface but don't carry ``response``).
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            if isinstance(status, int):
+                return status == 400
+            err_text = str(exc)
+            return "400" in err_text or "Bad Request" in err_text
 
         try:
             _fetch(url)
         except Exception as e:
-            # Retry with double-encoded slashes/commas if the failure
-            # smells like Tomcat's encoded-slash block. Cheap to attempt
-            # — at most one extra HTTP call per legitimately-failing
-            # download, and the recovery is decisive (no silent loss).
+            # Retry with double-encoded slashes/commas if Tomcat
+            # rejected the URL with HTTP 400. At most one extra HTTP
+            # call per genuinely-failing download.
             retried = False
-            err_text = str(e)
-            if "400" in err_text or "Bad Request" in err_text:
+            if _is_http_400(e):
                 fallback = self._double_encode_slashes(url)
                 if fallback:
                     try:
@@ -335,11 +368,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
             for item in items:
                 try:
-                    filename = str(item.get("filename"))
-                    url = str(item.get("url"))
-                    if not filename or not url:
+                    raw_filename = item.get("filename")
+                    raw_url = item.get("url")
+                    # Validate BEFORE coercing to string — ``str(None)``
+                    # produces the truthy literal ``"None"``, which would
+                    # bypass the ``if not …`` guard and silently let an
+                    # invalid item through. Caught by PR #211 review.
+                    if not raw_filename or not raw_url:
                         self._loss_counters["map_missing_filename_or_url"] += 1
                         continue
+                    filename = str(raw_filename)
+                    url = str(raw_url)
                     safe_name = filename.replace("/", "_")
                     local_path = self.attachment_dir / safe_name
                     # Download and hash
@@ -470,15 +509,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             "        next\n"
             "      end\n"
             "      path = op['container_path']\n"
-            "      file = File.open(path, 'rb')\n"
             "      author = User.where(admin: true).first\n"
             "      att = Attachment.new(container: wp, author: author)\n"
-            "      # Assign file using Paperclip-style API.\n"
-            "      if att.respond_to?(:file=)\n"
-            "        att.file = file\n"
+            "      # Assign file using Paperclip-style API. Wrap the\n"
+            "      # ``File.open`` in a block so the descriptor is\n"
+            "      # always closed, even if ``att.save!`` raises mid-\n"
+            "      # batch — without this the Rails runner process\n"
+            "      # could leak FDs across hundreds of ops in a single\n"
+            "      # bulk call. Per PR #210 / #217 review.\n"
+            "      File.open(path, 'rb') do |file|\n"
+            "        att.file = file if att.respond_to?(:file=)\n"
+            "        att.filename = fname if att.respond_to?(:filename=)\n"
+            "        att.save!\n"
             "      end\n"
-            "      att.filename = fname if att.respond_to?(:filename=)\n"
-            "      att.save!\n"
             "      # Filename-fidelity guard: bypass any AR callbacks and\n"
             "      # write the exact byte string. Without this, OP's\n"
             "      # filename sanitiser strips selected internal\n"
@@ -599,10 +642,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 continue
             # Find a free suffix. The base name + extension live on
             # either side of the LAST dot (no dot → bare name, append
-            # at end).
+            # at end). Dotfiles (``.bashrc`` → stem="", ext="bashrc")
+            # would otherwise become ``" (2).bashrc"`` (leading space,
+            # base lost) — treat them as bare-name + ext-less so the
+            # suffix lands at the end. Per PR #216 review.
             stem, dot, ext = name.rpartition(".")
-            base = stem if dot else name
-            tail = (dot + ext) if dot else ""
+            if dot and stem:
+                base = stem
+                tail = dot + ext
+            else:
+                base = name
+                tail = ""
             counter = n + 1
             while True:
                 candidate = f"{base} ({counter}){tail}"
@@ -794,11 +844,14 @@ puts end_marker
 
             for item in items:
                 try:
-                    filename = str(item.get("filename"))
-                    url = str(item.get("url"))
-                    if not filename or not url:
+                    raw_filename = item.get("filename")
+                    raw_url = item.get("url")
+                    # See ``_map`` — same ``str(None)`` gotcha.
+                    if not raw_filename or not raw_url:
                         self._loss_counters["map_missing_filename_or_url"] += 1
                         continue
+                    filename = str(raw_filename)
+                    url = str(raw_url)
                     safe_name = filename.replace("/", "_")
                     local_path = self.attachment_dir / safe_name
                     # Download
