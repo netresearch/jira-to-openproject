@@ -993,7 +993,8 @@ def test_jira_watcher_count_above_tolerance_is_warning() -> None:
     # Watcher mismatch is a warning, not a failure: count comparison
     # has known noise sources (permission scope on ``watchCount``,
     # author/auto-subscription overlap, cross-project drift) that
-    # prevent exact reconciliation. See ``_WATCHER_TOLERANCE`` docstring.
+    # prevent exact reconciliation. See the comment block above
+    # ``_WATCHER_TOLERANCE`` for the noise-source rationale.
     failures, warnings = _classify(_baseline_metrics(jira_watcher_count=80))
     assert not any("watcher" in f.lower() for f in failures), failures
     assert any("watcher" in w.lower() and "jira" in w.lower() for w in warnings), warnings

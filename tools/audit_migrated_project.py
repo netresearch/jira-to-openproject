@@ -810,6 +810,13 @@ def _fetch_jira_assignee_count(jira_project_key: str) -> int | None:
     assignee, so the migration's 12 isn't a loss).
     """
     if not _JIRA_PROJECT_KEY_RE.match(jira_project_key):
+        # Mirror the other Jira fetch helpers' behaviour: surface a
+        # warning on stderr so an operator can tell "skipped" from
+        # "buggy". Per PR #218 review.
+        sys.stderr.write(
+            f"[audit] Jira assignee comparison skipped — invalid project key"
+            f" {jira_project_key!r} (expected uppercase Jira key like 'NRS')\n",
+        )
         return None
     try:
         from src.infrastructure.jira.jira_client import JiraClient
@@ -820,16 +827,21 @@ def _fetch_jira_assignee_count(jira_project_key: str) -> int | None:
         return None
     try:
         jira = JiraClient()
-        # ``get_issue_count`` accepts a free-form JQL extension; the
-        # project filter and ``assignee is not EMPTY`` together count
-        # exactly the rows we need to compare against OP's
-        # ``assigned_to_id IS NOT NULL`` count.
+        # Build the JQL directly (the project-key + ``assignee is not
+        # EMPTY`` filter) and read ``.total``. The previous comment
+        # claimed ``get_issue_count`` accepts a free-form JQL
+        # extension — that's wrong; ``get_issue_count`` only takes a
+        # project key. Per PR #218 review.
         jql = f'project = "{jira_project_key}" AND assignee is not EMPTY'
         return int(jira.jira.search_issues(jql, maxResults=0).total)  # type: ignore[attr-defined]
     except Exception as exc:
+        # Surface the same forensic trail the other Jira helpers
+        # provide — stderr line + traceback so operators can tell
+        # "no creds" (expected) from a real bug. Per PR #218 review.
         sys.stderr.write(
             f"[audit] Jira assignee comparison skipped — {type(exc).__name__}: {exc}\n",
         )
+        sys.stderr.write(traceback.format_exc())
         return None
 
 
