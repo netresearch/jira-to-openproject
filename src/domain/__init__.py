@@ -8,6 +8,7 @@ runtime behaviour until call sites are updated.
 
 from __future__ import annotations
 
+from src.domain.enums import JournalEntryType
 from src.domain.ids import (
     JiraAccountId,
     JiraIssueKey,
@@ -37,6 +38,7 @@ __all__ = [
     "JiraIssueKey",
     "JiraProjectKey",
     "JiraUserKey",
+    "JournalEntryType",
     "MappingRepository",
     "OpCustomFieldId",
     "OpPriorityId",

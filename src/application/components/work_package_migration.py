@@ -35,6 +35,7 @@ from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
 from src.display import ProgressTracker
+from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -402,7 +403,7 @@ class WorkPackageMigration(BaseMigration):
         self,
         author_data: dict[str, Any],
         jira_key: str,
-        kind: str,
+        kind: JournalEntryType,
     ) -> int:
         """Resolve a journal-entry author to an OpenProject user id.
 
@@ -419,8 +420,9 @@ class WorkPackageMigration(BaseMigration):
                 changelog entry. Tolerates ``None``/empty inputs by
                 resolving to the fallback user.
             jira_key: Jira issue key, used purely for log context.
-            kind: Free-form label (``"comment"`` / ``"changelog"``)
-                that distinguishes the warning message between callers.
+            kind: Discriminator for the journal entry (``COMMENT`` or
+                ``CHANGELOG``) used to distinguish the warning message
+                between callers.
 
         Returns:
             The resolved ``openproject_id`` (int) or the BUG #32
@@ -1051,7 +1053,7 @@ class WorkPackageMigration(BaseMigration):
             for comment in comments:
                 all_journal_entries.append(
                     {
-                        "type": "comment",
+                        "type": JournalEntryType.COMMENT,
                         "timestamp": comment.get("created", ""),
                         "data": comment,
                     },
@@ -1061,7 +1063,7 @@ class WorkPackageMigration(BaseMigration):
             for entry in changelog_entries:
                 all_journal_entries.append(
                     {
-                        "type": "changelog",
+                        "type": JournalEntryType.CHANGELOG,
                         "timestamp": entry.get("created", ""),
                         "data": entry,
                     },
@@ -1130,7 +1132,7 @@ class WorkPackageMigration(BaseMigration):
                 entry_data = journal_entry["data"]
 
                 # For comments, check if already exists
-                if journal_entry["type"] == "comment":
+                if journal_entry["type"] == JournalEntryType.COMMENT:
                     comment_body = entry_data.get("body", "")
                     if not comment_body or comment_body in existing_notes:
                         continue
@@ -1153,7 +1155,7 @@ class WorkPackageMigration(BaseMigration):
                     entry_author_id = 1  # Fallback to admin
 
                 # Build journal notes based on entry type
-                if entry_type == "comment":
+                if entry_type == JournalEntryType.COMMENT:
                     raw_body = entry_data.get("body", "")
                     # Convert Jira wiki markup to OpenProject markdown
                     if raw_body and hasattr(self, "markdown_converter") and self.markdown_converter:
@@ -1398,7 +1400,7 @@ class WorkPackageMigration(BaseMigration):
             for comment in comments:
                 all_entries.append(
                     {
-                        "type": "comment",
+                        "type": JournalEntryType.COMMENT,
                         "timestamp": comment.get("created", ""),
                         "data": comment,
                     },
@@ -1406,7 +1408,7 @@ class WorkPackageMigration(BaseMigration):
             for entry in changelog_entries:
                 all_entries.append(
                     {
-                        "type": "changelog",
+                        "type": JournalEntryType.CHANGELOG,
                         "timestamp": entry.get("created", ""),
                         "data": entry,
                     },
@@ -1489,7 +1491,7 @@ class WorkPackageMigration(BaseMigration):
                 field_changes: dict[str, Any] = {}
                 notes = ""
 
-                if entry_type == "comment":
+                if entry_type == JournalEntryType.COMMENT:
                     # Comments have no field changes, just notes
                     raw_body = entry_data.get("body", "")
                     # Convert Jira markup to markdown if converter available
@@ -2571,7 +2573,7 @@ class WorkPackageMigration(BaseMigration):
             for comment in comments:
                 all_journal_entries.append(
                     {
-                        "type": "comment",
+                        "type": JournalEntryType.COMMENT,
                         "timestamp": comment.get("created", ""),
                         "data": comment,
                     },
@@ -2581,7 +2583,7 @@ class WorkPackageMigration(BaseMigration):
             for entry in changelog_entries:
                 all_journal_entries.append(
                     {
-                        "type": "changelog",
+                        "type": JournalEntryType.CHANGELOG,
                         "timestamp": entry.get("created", ""),
                         "data": entry,
                     },
@@ -2674,13 +2676,13 @@ class WorkPackageMigration(BaseMigration):
                     entry_data = entry.get("data", {})
                     entry_timestamp = entry.get("timestamp", "")
 
-                    if entry_type == "comment":
+                    if entry_type == JournalEntryType.COMMENT:
                         # Bug #32 fix: Enhanced user attribution - probe multiple author fields.
                         author_data = entry_data.get("author") or {}
                         comment_author_id = self._resolve_journal_author_id(
                             author_data,
                             jira_key,
-                            "comment",
+                            JournalEntryType.COMMENT,
                         )
                         raw_comment_body = entry_data.get("body", "")
                         # Convert Jira wiki markup to OpenProject markdown
@@ -2703,13 +2705,13 @@ class WorkPackageMigration(BaseMigration):
                         self.logger.debug(
                             f"[BUG23] {jira_key}: Added comment operation, total operations: {len(work_package['_rails_operations'])}",
                         )
-                    elif entry_type == "changelog":
+                    elif entry_type == JournalEntryType.CHANGELOG:
                         # Bug #32 fix: Enhanced user attribution - probe multiple author fields.
                         author_data = entry_data.get("author") or {}
                         changelog_author_id = self._resolve_journal_author_id(
                             author_data,
                             jira_key,
-                            "changelog",
+                            JournalEntryType.CHANGELOG,
                         )
 
                         # Bug #28 fix: Process field changes as structured data
