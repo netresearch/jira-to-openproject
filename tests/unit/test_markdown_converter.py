@@ -711,3 +711,269 @@ Contact [~developer] for help."""
 
         # Check user mention
         assert "@123" in result
+
+
+class TestStrikethroughFalsePositives:
+    """Regression tests for strikethrough false positives (real-world NRS-4391 data).
+
+    Bug: the old pattern (?<![|s])-([^-n|]+)-(?![|s-]) greedily spans
+    across spaces and the ~~ in issue-ref fallback text, corrupting compound
+    words, dates, CLI flags, and multi-word phrases.
+    """
+
+    def test_compound_word_not_struck_two_segments(self) -> None:
+        """ansible-core must not become ansible~~core~~."""
+        converter = MarkdownConverter()
+        assert converter.convert("ansible-core 2.20") == "ansible-core 2.20"
+
+    def test_compound_word_not_struck_multi_segment(self) -> None:
+        """ansible-role-concourse-ci must not be partially struck through."""
+        converter = MarkdownConverter()
+        result = converter.convert("ansible-role-concourse-ci")
+        assert "~~" not in result
+        assert result == "ansible-role-concourse-ci"
+
+    def test_compound_word_non_trivial_fix(self) -> None:
+        """non-trivial-fix must not become non~~trivial~~fix."""
+        converter = MarkdownConverter()
+        result = converter.convert("non-trivial-fix")
+        assert "~~" not in result
+
+    def test_compound_word_pre_existing(self) -> None:
+        """pre-existing must not become pre~~existing~~ (negative case)."""
+        converter = MarkdownConverter()
+        assert converter.convert("pre-existing") == "pre-existing"
+
+    def test_date_not_struck(self) -> None:
+        """2023-12-31 must not produce 2023~~12~~31."""
+        converter = MarkdownConverter()
+        result = converter.convert("2023-12-31")
+        assert "~~" not in result
+        assert result == "2023-12-31"
+
+    def test_cli_flags_not_struck(self) -> None:
+        """ansible-playbook --check --diff -f 30 must not be struck through."""
+        converter = MarkdownConverter()
+        result = converter.convert("ansible-playbook --check --diff -f 30")
+        assert "~~" not in result
+
+    def test_issue_ref_fallback_plus_compound_word_not_struck(self) -> None:
+        """Regression: issue-ref fallback output followed by compound word.
+
+        NRS-4388 -> '~~NRS-4388~~ *(migrated issue)*' then text_formatting
+        used to match '-4388~~ ...ansible-' as a single greedy span,
+        producing '~~NRS~~4388~~ ...' and 'ansible~~core~~'.
+        """
+        converter = MarkdownConverter()
+        # No WP mapping so issue ref becomes fallback ~~KEY~~ *(migrated issue)*
+        result = converter.convert(
+            "NRS-4388 bumped the toolchain to community Ansible 13 (ansible-core 2.20)."
+        )
+        # Must preserve the ~~NRS-4388~~ from the issue-ref fallback
+        assert "~~NRS-4388~~ *(migrated issue)*" in result
+        # Must NOT add extra ~~ inside the key
+        assert "~~NRS~~4388~~" not in result
+        # ansible-core compound word must not be struck
+        assert "ansible~~core~~" not in result
+        assert "ansible-core" in result
+
+    def test_legitimate_strikethrough_with_spaces(self) -> None:
+        """-strikethrough text- (space-bounded dashes) SHOULD produce ~~strikethrough text~~."""
+        converter = MarkdownConverter()
+        result = converter.convert("-strikethrough text-")
+        assert result == "~~strikethrough text~~"
+
+    def test_legitimate_inline_strikethrough(self) -> None:
+        """text -strike this- done SHOULD produce text ~~strike this~~ done."""
+        converter = MarkdownConverter()
+        result = converter.convert("text -strike this- done")
+        assert result == "text ~~strike this~~ done"
+
+    def test_url_hyphens_not_struck(self) -> None:
+        """Hyphens inside a URL path must not be struck through."""
+        converter = MarkdownConverter()
+        url = "https://git.example.de/provision/ansible-role-concourse-ci/-/merge_requests/28"
+        result = converter.convert(f"[Link|{url}]")
+        # The link should remain intact; no ~~ injected
+        assert "~~" not in result
+
+
+class TestTableHeaderDoubleColumnBug:
+    """Regression tests for Jira || header rows producing doubled columns.
+
+    Bug: ||col1||col2|| is parsed by splitting on '|' giving empty cells
+    between each header cell, so a 4-column table becomes 7 columns.
+    """
+
+    def test_header_row_correct_column_count(self) -> None:
+        """||role||file:line||type||fix pattern|| must produce exactly 4 columns (no empty slots)."""
+        converter = MarkdownConverter()
+        jira_table = "||role||file:line||type||fix pattern||\n|concourse-ci|defaults/main.yml:5|Jinja|test|"
+        result = converter.convert(jira_table)
+        lines = [l for l in result.split("\n") if l.strip()]
+        # Header row: strip leading/trailing | then split on | to get all cells (including empty)
+        header_line = lines[0]
+        all_cells = [c.strip() for c in header_line.strip("|").split("|")]
+        assert all_cells == ["role", "file:line", "type", "fix pattern"], (
+            f"Expected exactly 4 columns with no empty slots, got: {all_cells}"
+        )
+
+    def test_header_row_no_empty_cells(self) -> None:
+        """No empty cells (|  |) should appear in the converted header."""
+        converter = MarkdownConverter()
+        jira_table = "||Name||Status||Priority||\n|Task A|Open|High|"
+        result = converter.convert(jira_table)
+        header_line = result.split("\n")[0]
+        # The header line should not contain '|  |' (empty cell markers)
+        assert "|  |" not in header_line, f"Empty cells found in header: {header_line!r}"
+
+    def test_data_rows_match_header_column_count(self) -> None:
+        """Data rows must have the same column count as the header row."""
+        converter = MarkdownConverter()
+        jira_table = "||A||B||C||\n|1|2|3|"
+        result = converter.convert(jira_table)
+        lines = [l.strip() for l in result.split("\n") if l.strip() and not l.startswith("| ---")]
+        assert len(lines) >= 2  # at least header + 1 data row
+        header_cols = len([c for c in lines[0].split("|") if c.strip()])
+        data_cols = len([c for c in lines[1].split("|") if c.strip()])
+        assert header_cols == data_cols, (
+            f"Header has {header_cols} cols but data row has {data_cols}"
+        )
+
+    def test_header_without_trailing_pipes(self) -> None:
+        """||col1||col2||col3 (no trailing ||) should also work correctly."""
+        converter = MarkdownConverter()
+        jira_table = "||role||file:line||type\n|docker_swarm|tasks/ufw.yml|INJECT_FACTS|"
+        result = converter.convert(jira_table)
+        lines = [l for l in result.split("\n") if l.strip()]
+        header_line = lines[0]
+        cols = [c.strip() for c in header_line.split("|") if c.strip()]
+        assert cols == ["role", "file:line", "type"], f"Expected 3 header columns, got: {cols}"
+
+    def test_real_nrs4391_table_header(self) -> None:
+        """Regression test using the exact table from NRS-4391 description."""
+        converter = MarkdownConverter()
+        jira_table = (
+            "||role||file:line||type||fix pattern||\n"
+            "|concourse-ci|defaults/main.yml:5|Jinja embedded template|test pattern|"
+        )
+        result = converter.convert(jira_table)
+        lines = [l.strip() for l in result.split("\n") if l.strip()]
+        # First line must be the header with correct columns
+        header_line = lines[0]
+        cols = [c.strip() for c in header_line.split("|") if c.strip()]
+        assert len(cols) == 4, f"Expected 4 columns, got {len(cols)}: {cols}"
+        assert "role" in cols
+        assert "file:line" in cols
+        assert "type" in cols
+        assert "fix pattern" in cols
+
+
+class TestAttachmentExtensionWhitelist:
+    """Regression tests for attachment extension whitelist being too narrow.
+
+    Bug: only pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|7z extensions matched,
+    so [^maintenance.log] and similar references were silently left unconverted.
+    All real NRS-4391 attachments are .log files — none were converted.
+    """
+
+    def test_log_attachment_ref_pattern(self) -> None:
+        """[^file.log] must be converted to a markdown link."""
+        converter = MarkdownConverter()
+        result = converter.convert("[^maintenance-NRS-4391-20260506-111231.log]")
+        # Should become a markdown link, not remain as raw [^...] Jira syntax
+        assert result.startswith("[")
+        assert "[^" not in result, f"Raw Jira attachment syntax not converted: {result!r}"
+        assert "maintenance-NRS-4391-20260506-111231.log" in result
+
+    def test_log_attachment_with_mapping(self) -> None:
+        """[^file.log] with attachment mapping must resolve to OP URL."""
+        attachment_mapping = {
+            "NRS-4391": {"maintenance-NRS-4391-20260506-111231.log": 116987},
+        }
+        converter = MarkdownConverter(attachment_mapping=attachment_mapping)
+        result = converter.convert(
+            "[^maintenance-NRS-4391-20260506-111231.log]",
+            jira_key="NRS-4391",
+        )
+        assert "[maintenance-NRS-4391-20260506-111231.log](/api/v3/attachments/116987/content)" in result
+
+    def test_csv_attachment_ref(self) -> None:
+        """[^export.csv] must be converted (CSV not in old whitelist)."""
+        converter = MarkdownConverter()
+        result = converter.convert("[^export.csv]")
+        assert "[^" not in result
+
+    def test_msg_attachment_ref(self) -> None:
+        """[^email.msg] must be converted."""
+        converter = MarkdownConverter()
+        result = converter.convert("[^email.msg]")
+        assert "[^" not in result
+
+    def test_eml_attachment_ref(self) -> None:
+        """[^message.eml] must be converted."""
+        converter = MarkdownConverter()
+        result = converter.convert("[^message.eml]")
+        assert "[^" not in result
+
+    def test_named_csv_attachment(self) -> None:
+        """[Export Data|data.csv] must be converted."""
+        converter = MarkdownConverter()
+        result = converter.convert("[Export Data|data.csv]")
+        assert result == "[Export Data](data.csv)"
+
+    def test_named_log_attachment(self) -> None:
+        """[Check Log|run.log] must be converted."""
+        converter = MarkdownConverter()
+        result = converter.convert("[Check Log|run.log]")
+        assert result == "[Check Log](run.log)"
+
+    def test_url_link_not_matched_as_attachment(self) -> None:
+        """[Google|https://google.com] must NOT be treated as an attachment."""
+        converter = MarkdownConverter()
+        result = converter.convert("[Google|https://google.com]")
+        # Should remain as a markdown link with full URL, not as filename
+        assert "https://google.com" in result
+        assert "[^" not in result
+
+    def test_http_url_link_not_matched_as_attachment(self) -> None:
+        """[Example|http://example.com] must NOT be treated as an attachment."""
+        converter = MarkdownConverter()
+        result = converter.convert("[Example|http://example.com]")
+        assert "http://example.com" in result
+
+
+class TestBoldWithParentheses:
+    """Regression tests for bold text containing parentheses.
+
+    Bug: bold_pattern excluded ( and ) from content via [^*\\n\\(\\)]+,
+    so *important (note)* was not bolded. Real Jira content routinely
+    uses parenthetical notes inside bold spans.
+    """
+
+    def test_bold_with_parentheses(self) -> None:
+        """*important (note)* must convert to **important (note)**."""
+        converter = MarkdownConverter()
+        assert converter.convert("*important (note)*") == "**important (note)**"
+
+    def test_bold_with_parens_complex(self) -> None:
+        """*defaults/main.yml:5 (see task)* must convert correctly."""
+        converter = MarkdownConverter()
+        result = converter.convert("*defaults/main.yml:5 (see task)*")
+        assert result == "**defaults/main.yml:5 (see task)**"
+
+    def test_bold_without_parens_still_works(self) -> None:
+        """Plain *bold text* must still convert to **bold text**."""
+        converter = MarkdownConverter()
+        assert converter.convert("*bold text*") == "**bold text**"
+
+    def test_markdown_double_star_not_affected(self) -> None:
+        """**already bold** must not get extra stars."""
+        converter = MarkdownConverter()
+        assert converter.convert("**already bold**") == "**already bold**"
+
+    def test_bold_with_parens_in_sentence(self) -> None:
+        """Sentence containing *bold (phrase)* converts only that span."""
+        converter = MarkdownConverter()
+        result = converter.convert("The *important (note)* here.")
+        assert "**important (note)**" in result
