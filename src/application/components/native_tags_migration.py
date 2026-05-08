@@ -39,7 +39,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         a typed ``list[str]`` for labels — no more attribute walking.
         """
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map]
+        keys = self._jira_keys_from_wp_map(wp_map)
         if not keys:
             return ComponentResult(success=True, data={"by_key": {}})
         issues = self._merge_batch_issues(keys)

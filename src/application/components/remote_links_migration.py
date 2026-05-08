@@ -41,7 +41,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
 
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = [str(k) for k in wp_map]
+        keys = self._jira_keys_from_wp_map(wp_map)
         if not keys:
             return ComponentResult(success=True, data={"links": {}})
         issues = self._merge_batch_issues(keys)

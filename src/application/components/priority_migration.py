@@ -123,7 +123,7 @@ class PriorityMigration(BaseMigration):
         updates: list[dict[str, Any]] = []
 
         # Get Jira issues by keys present in wp_map
-        jira_keys = [str(k) for k in wp_map]
+        jira_keys = self._jira_keys_from_wp_map(wp_map)
         if not jira_keys:
             return ComponentResult(success=True, updated=0)
 

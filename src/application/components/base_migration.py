@@ -456,6 +456,42 @@ class BaseMigration:
         return issues
 
     @staticmethod
+    def _jira_keys_from_wp_map(wp_map: dict[str, Any]) -> list[str]:
+        """Extract Jira issue *keys* from a work-package mapping dict.
+
+        Production work-package mappings are stored with the numeric Jira
+        *ID* as the outer dict key and the human-readable issue key
+        (e.g. "TEST-123") inside the value dict under the "jira_key"
+        field::
+
+            {
+                "144952": {"jira_key": "TEST-1", "openproject_id": 10},
+                ...
+            }
+
+        Callers that iterate [str(k) for k in wp_map] silently pass
+        numeric IDs to the Jira API, which rejects them with HTTP 400
+        ("The issue key '144952' for field 'key' is invalid.").
+
+        This helper always returns the human-readable Jira key, falling back
+        to the outer key only for legacy/test mappings that were already
+        keyed by the real Jira key.
+
+        Args:
+            wp_map: The raw work_package mapping dict.
+
+        Returns:
+            Deduplicated list of Jira issue keys suitable for key in (...)
+            JQL queries.
+
+        """
+        keys: list[str] = []
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            keys.append(str(inner_jira_key or outer_key))
+        return keys
+
+    @staticmethod
     def _issue_project_key(issue_key: str) -> str:
         """Extract the project key from a Jira issue key (e.g. 'PROJ-123' -> 'PROJ')."""
         try:

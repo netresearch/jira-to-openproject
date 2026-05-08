@@ -56,7 +56,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         :class:`JiraVersionRef` to iterate.
         """
         wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = [str(k) for k in wp_map]
+        jira_keys = self._jira_keys_from_wp_map(wp_map)
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"by_project": {}})
 
@@ -188,7 +188,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            jira_keys = [str(k) for k in wp_map]
+            jira_keys = self._jira_keys_from_wp_map(wp_map)
             issues = self._merge_batch_issues(jira_keys)
 
         updates: list[dict[str, Any]] = []
