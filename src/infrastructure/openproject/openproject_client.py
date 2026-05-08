@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src import config
-from src.display import configure_logging
+from src.config import logger
 from src.infrastructure.exceptions import (
     ClientConnectionError,
     JsonParseError,
@@ -27,14 +27,6 @@ from src.utils.file_manager import FileManager
 from src.utils.idempotency_decorators import batch_idempotent
 from src.utils.performance_optimizer import PerformanceOptimizer
 from src.utils.rate_limiter import create_openproject_rate_limiter
-
-try:
-    # Prefer shared logger configured at startup
-    from src.config import logger
-except Exception:
-    # Fallback to local configuration if config logger is unavailable
-    logger = configure_logging("INFO", None)
-
 
 # Module-level constants
 BATCH_SIZE_DEFAULT = 50

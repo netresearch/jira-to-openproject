@@ -21,7 +21,7 @@ else:
     # At runtime, avoid importing jira to prevent stub issues
     AtlassianJIRAError = Exception  # type: ignore[misc,assignment]
 from src import config
-from src.display import configure_logging
+from src.config import logger
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
 from src.utils.performance_optimizer import (
     PerformanceOptimizer,
@@ -31,11 +31,6 @@ from src.utils.rate_limiter import create_jira_rate_limiter
 HTTP_OK = 200
 HTTP_BAD_REQUEST_MIN = 400
 HTTP_NOT_FOUND = 404
-
-try:
-    from src.config import logger
-except Exception:
-    logger = configure_logging("INFO", None)
 
 
 class JiraError(Exception):

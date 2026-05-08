@@ -27,10 +27,8 @@ from typing import Any
 
 import requests
 
-from src.display import configure_logging
+from src.config import logger
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-
-logger = configure_logging("INFO", None)
 
 
 class EnhancedOpenProjectClient(OpenProjectClient):
