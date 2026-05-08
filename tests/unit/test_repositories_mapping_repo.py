@@ -87,15 +87,52 @@ class TestGet:
         assert result == {}
         assert any("malformed JSON" in record.message for record in caplog.records)
 
-    def test_non_dict_top_level_returns_empty_and_warns(
+    def test_non_dict_top_level_returns_empty_without_warning(
         self,
         repo: JsonFileMappingRepository,
         data_dir: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
+        """List-shaped JSON files in the data dir must not emit a WARNING.
+
+        The mapping repository shares its data directory with raw API
+        cache files (e.g. ``jira_custom_fields.json``) that are
+        legitimately list-shaped.  When ``Mappings.get_all_mappings()``
+        enumerates all names via ``all_names()`` it will call ``get()``
+        on every stem, including those raw-cache stems.  A WARNING here
+        causes a flood of 16 identical log lines on every startup.
+
+        The correct behaviour is: return ``{}`` (already the case) and
+        log only at DEBUG so operators can diagnose unexpected files
+        without being spammed on normal runs.
+        """
+        (data_dir / "jira_custom_fields.json").write_text(
+            '[{"id": 1, "name": "cf"}]',
+            encoding="utf-8",
+        )
+
+        # Scope the caplog assertion to the mapping_repo logger so unrelated
+        # WARNINGs from other libraries / fixtures cannot make this test flaky.
+        repo_logger = "src.infrastructure.persistence.mapping_repo"
+        with caplog.at_level(logging.WARNING, logger=repo_logger):
+            result = repo.get("jira_custom_fields")
+
+        assert result == {}
+        warning_records = [r for r in caplog.records if r.name == repo_logger and r.levelno >= logging.WARNING]
+        assert warning_records == [], (
+            f"Unexpected WARNING(s) from {repo_logger}: {[r.message for r in warning_records]}"
+        )
+
+    def test_non_dict_top_level_returns_empty_and_logs_at_debug(
+        self,
+        repo: JsonFileMappingRepository,
+        data_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """List-shaped files log the shape mismatch at DEBUG, not WARNING."""
         (data_dir / "list_mapping.json").write_text("[1, 2, 3]", encoding="utf-8")
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG):
             result = repo.get("list_mapping")
 
         assert result == {}

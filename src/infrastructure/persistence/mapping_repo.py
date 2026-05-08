@@ -206,7 +206,15 @@ class JsonFileMappingRepository:
             return {}
 
         if not isinstance(raw, dict):
-            self._logger.warning(
+            # Log at DEBUG, not WARNING. The data directory is shared
+            # with raw API cache files (jira_custom_fields.json,
+            # jira_groups.json, …) that are legitimately list-shaped.
+            # When Mappings.get_all_mappings() enumerates all_names() it
+            # calls get() on every stem, including those raw-cache stems.
+            # A WARNING here produces a flood of 16 identical lines on
+            # every startup; DEBUG is sufficient for diagnostics because
+            # the caller already handles the returned empty-dict safely.
+            self._logger.debug(
                 "Mapping file %s has unexpected top-level shape %s; expected dict.",
                 path,
                 type(raw).__name__,
