@@ -1091,3 +1091,72 @@ class TestTableEmptyHeaderCells:
         header_line = lines[0]
         parts = [p.strip() for p in header_line.split("|") if p.strip()]
         assert len(parts) == 3
+
+
+class TestStrikethroughCLIFlagFalsePositives:
+    r"""Regression tests for strikethrough false positives on CLI flag patterns.
+
+    Bug: the PR #242 pattern (?<![\w\-])-([^-\n|]+)-(?!\w) fixed compound words
+    but still matched CLI flag sequences like '--diff -f 30 --skip-tags' because
+    the closing lookahead only excluded \w (word chars), not another dash.
+    This allowed '-f 30 -' to match with the standalone '-' before 'f' as the
+    opening dash and the '-' of '--skip' as the closing dash.
+
+    Live evidence (NRS-4391):
+      INPUT:  ansible-playbook site.yml --diff -f 30 --skip-tags acme-setup
+      OUTPUT: ansible-playbook site.yml --diff ~~f 30 ~~-skip-tags acme-setup
+
+    Fix: extend the closing lookahead to also exclude '-', and add whitespace
+    constraints around the inner span so that ' -text -' (space before closing
+    dash) is not treated as strikethrough.
+    """
+
+    # Compound-word, date, and multi-segment cases are already covered by
+    # ``TestStrikethroughFalsePositives`` (PR #242) so we don't duplicate them
+    # here. This class focuses on CLI-flag patterns that PR #242 missed.
+
+    def test_double_dash_flags_not_struck(self) -> None:
+        """--diff -f 30 --skip-tags must not produce any ~~."""
+        converter = MarkdownConverter()
+        result = converter.convert("--diff -f 30 --skip-tags")
+        assert "~~" not in result
+
+    def test_single_char_flags_sequence_not_struck(self) -> None:
+        """Cmd -x -y -z must not produce any ~~."""
+        converter = MarkdownConverter()
+        result = converter.convert("cmd -x -y -z")
+        assert "~~" not in result
+
+    def test_flag_with_value_not_struck(self) -> None:
+        """--flag -value must not produce any ~~."""
+        converter = MarkdownConverter()
+        result = converter.convert("--flag -value")
+        assert "~~" not in result
+
+    def test_nrs4391_full_ansible_command_not_struck(self) -> None:
+        """Exact NRS-4391 live input must not introduce any ~~ and must be preserved verbatim."""
+        converter = MarkdownConverter()
+        jira_input = "ansible-playbook site.yml --diff -f 30 --skip-tags acme-setup"
+        result = converter.convert(jira_input)
+        assert "~~" not in result, f"Unexpected strikethrough in: {result!r}"
+        assert result == jira_input, f"Input was mutated: {result!r}"
+
+    # --- Positive regressions: legitimate Jira strikethrough must still work ---
+
+    def test_legitimate_standalone_strikethrough(self) -> None:
+        """-strikethrough text- must produce ~~strikethrough text~~."""
+        converter = MarkdownConverter()
+        result = converter.convert("-strikethrough text-")
+        assert result == "~~strikethrough text~~"
+
+    def test_legitimate_inline_strikethrough(self) -> None:
+        """Here is -gone text- now must produce here is ~~gone text~~ now."""
+        converter = MarkdownConverter()
+        result = converter.convert("here is -gone text- now")
+        assert result == "here is ~~gone text~~ now"
+
+    def test_legitimate_parenthetical_strikethrough(self) -> None:
+        """Parenthetical span: (this -is also- removed) must produce (this ~~is also~~ removed)."""
+        converter = MarkdownConverter()
+        result = converter.convert("(this -is also- removed)")
+        assert result == "(this ~~is also~~ removed)"
