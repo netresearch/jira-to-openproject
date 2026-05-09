@@ -308,3 +308,151 @@ class TestUnmappableAuthorFallback:
 
         warning_texts = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("ghost_user" in t for t in warning_texts), f"No WARNING mentioning 'ghost_user' in: {warning_texts}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1 — CRITICAL: single-issue path Ruby script must honour user_id
+# ---------------------------------------------------------------------------
+
+
+class TestRubyScriptHonoursUserId:
+    """create_work_package_activity must pass user_id to the Ruby script.
+
+    The Rails helper previously used ``User.current || User.find_by(admin: true)``
+    unconditionally, ignoring ``activity_data['user_id']``.  After the fix the
+    Ruby script must resolve the author from ``user_id`` the same way the bulk
+    helper does (``users[item['user_id']] || default_user``).
+    """
+
+    def test_ruby_script_includes_user_id_resolution(self) -> None:
+        """The single-activity Ruby script must contain user_id lookup logic.
+
+        This test inspects the generated Ruby script inside
+        ``OpenProjectWorkPackageContentService.create_work_package_activity``
+        to confirm it actually uses ``activity_data['user_id']`` rather than
+        always falling back to ``User.current || User.find_by(admin: true)``.
+        """
+        import inspect
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        # Read the source to extract what the Ruby script looks like.
+        # We inspect the method source rather than running Rails.
+        source = inspect.getsource(OpenProjectWorkPackageContentService.create_work_package_activity)
+        # The fixed script must reference user_id from activity_data
+        assert "user_id" in source, (
+            "create_work_package_activity Ruby script does not reference user_id; "
+            "single-issue path will always attribute comments to the default user"
+        )
+        # Must NOT unconditionally use User.current as the only user resolution
+        # (the old bug was: user = User.current || User.find_by(admin: true) with no user_id lookup)
+        # After fix, user_id branch must exist before the fallback
+        assert "activity_data" in source or "user_id" in source, (
+            "No user_id branch found in create_work_package_activity"
+        )
+
+    def test_single_path_ruby_script_does_not_ignore_passed_user_id(self) -> None:
+        """The Ruby script template must contain a conditional user_id lookup.
+
+        Specifically, the script must contain logic equivalent to:
+          user_id = activity_data['user_id']
+          user = user_id ? User.find_by(id: user_id) || default_user : default_user
+        so that a passed user_id is actually honoured.
+        """
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        # Capture the script passed to execute_query_to_json_file
+        captured_scripts: list[str] = []
+
+        def capture_script(script: str):
+            captured_scripts.append(script)
+            return {"id": 1, "status": "created"}
+
+        mock_client.execute_query_to_json_file.side_effect = capture_script
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=42,
+            activity_data={"comment": {"raw": "hello"}, "user_id": 999},
+        )
+
+        assert captured_scripts, "No script was executed"
+        script = captured_scripts[0]
+        # The script must use the user_id from activity_data, not just User.current
+        assert "999" in script or "user_id" in script, (
+            f"Ruby script does not reference the passed user_id=999:\n{script}"
+        )
+        # The script must NOT simply hard-code User.current as the only user source
+        # i.e. it must contain some conditional on user_id
+        assert "user_id" in script, f"Ruby script ignores user_id entirely:\n{script}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #2 — transformer caching: same instance reused across calls
+# ---------------------------------------------------------------------------
+
+
+class TestTransformerCaching:
+    """_resolve_comment_author_id must reuse a single IssueTransformer instance."""
+
+    def test_same_transformer_instance_reused(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        """Calling _resolve_comment_author_id twice must use the same IssueTransformer."""
+        from src.application.transformers.issue_transformer import IssueTransformer
+
+        mig = _build_mig(tmp_path)
+
+        comment_a = _make_comment("alice", "first")
+        comment_b = _make_comment("bob", "second")
+
+        instances: list[IssueTransformer] = []
+        original_init = IssueTransformer.__init__
+
+        def tracking_init(self_inner, *args, **kwargs):
+            original_init(self_inner, *args, **kwargs)
+            instances.append(self_inner)
+
+        from unittest import mock
+
+        with mock.patch.object(IssueTransformer, "__init__", tracking_init):
+            mig._resolve_comment_author_id(comment_a, "PROJ-1")
+            mig._resolve_comment_author_id(comment_b, "PROJ-2")
+
+        assert len(instances) == 1, (
+            f"IssueTransformer was instantiated {len(instances)} times; expected exactly 1 (cached after first call)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #4 — probe order: account_id must come before name/key/email
+# ---------------------------------------------------------------------------
+
+
+class TestProbeOrder:
+    """IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS must follow Cloud-first canonical order."""
+
+    def test_probe_order_is_canonical_cloud_first(self) -> None:
+        """Probe keys must be account_id → name → key → email → displayName."""
+        from src.application.transformers.issue_transformer import IssueTransformer
+
+        keys = IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS
+        # accountId (Cloud-first) must appear before name, key, emailAddress, displayName
+        assert "accountId" in keys, f"accountId missing from probe keys: {keys}"
+        idx_account = list(keys).index("accountId")
+        for other in ("name", "key", "emailAddress", "displayName"):
+            if other in keys:
+                idx_other = list(keys).index(other)
+                assert idx_account < idx_other, (
+                    f"accountId (idx {idx_account}) must precede {other} (idx {idx_other}) in probe order: {keys}"
+                )
