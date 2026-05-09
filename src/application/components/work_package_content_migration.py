@@ -57,6 +57,8 @@ from pydantic import ValidationError
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.transformers.issue_transformer import IssueTransformer
+from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, JiraUser, WorkPackageMappingEntry
@@ -459,6 +461,61 @@ class WorkPackageContentMigration(BaseMigration):
 
         return True
 
+    @property
+    def _transformer(self) -> IssueTransformer:
+        """Lazily-created :class:`IssueTransformer` bound to this owner.
+
+        Mirrors :attr:`WorkPackageMigration._transformer` — the instance is
+        created on first access and cached so the hot path inside
+        ``_resolve_comment_author_id`` does not pay construction cost on
+        every comment.
+        """
+        cached = getattr(self, "_transformer_cache", None)
+        if cached is None:
+            cached = IssueTransformer(owner=self)
+            self._transformer_cache = cached
+        return cached
+
+    def _resolve_comment_author_id(
+        self,
+        comment: object,
+        jira_key: str,
+    ) -> int:
+        """Resolve a Jira comment's author to an OpenProject user id.
+
+        Delegates to :meth:`IssueTransformer.resolve_journal_author_id` using
+        the canonical BUG #32 probe order (accountId → name → key →
+        emailAddress → displayName).  Returns the BUG #32 fallback user id
+        and emits a WARNING when the author cannot be mapped so operators can
+        audit unresolved authors from production logs.
+
+        Args:
+            comment: A Jira comment object (from jira.comments()).
+            jira_key: The Jira issue key — used in the warning message only.
+
+        Returns:
+            Resolved OpenProject user id (int).
+
+        """
+        author = getattr(comment, "author", None)
+        if author is None:
+            author_data: dict[str, object] = {}
+        elif isinstance(author, dict):
+            author_data = author
+        else:
+            author_data = {
+                "accountId": getattr(author, "accountId", None),
+                "name": getattr(author, "name", None),
+                "key": getattr(author, "key", None),
+                "emailAddress": getattr(author, "emailAddress", None),
+                "displayName": getattr(author, "displayName", None),
+            }
+        return self._transformer.resolve_journal_author_id(
+            author_data,
+            jira_key,
+            JournalEntryType.COMMENT,
+        )
+
     def _populate_comments(
         self,
         jira_issue: Issue,
@@ -491,11 +548,16 @@ class WorkPackageContentMigration(BaseMigration):
             # Convert comment body with link resolution and attachment URLs
             converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
 
+            author_id = self._resolve_comment_author_id(comment, jira_issue.key)
+
             try:
-                # Create activity/journal in OpenProject
+                # Create activity/journal in OpenProject with resolved author
                 self.op_client.create_work_package_activity(
                     wp_id,
-                    {"comment": {"raw": converted_body}},
+                    {
+                        "comment": {"raw": converted_body},
+                        "user_id": author_id,
+                    },
                 )
                 migrated += 1
             except Exception as e:
@@ -635,14 +697,23 @@ class WorkPackageContentMigration(BaseMigration):
                         value = self._convert_jira_links(value, jira_key=jira_issue.key)
                     collected["custom_field_updates"][f"customField{op_cf_id}"] = value
 
-        # Collect comments
+        # Collect comments — preserve author id so _bulk_process_collected_content
+        # can include user_id in every activity dict sent to the Rails script.
+        # Without user_id the Rails script falls back to the default_user
+        # (Anonymous, user_id=2) for every comment (regression confirmed on WP 5040).
         try:
             comments = self.jira_client.jira.comments(jira_issue.key)
             for comment in comments:
                 body = getattr(comment, "body", None)
                 if body:
                     converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
-                    collected["comments"].append(converted_body)
+                    author_id = self._resolve_comment_author_id(comment, jira_issue.key)
+                    collected["comments"].append(
+                        {
+                            "comment": converted_body,
+                            "user_id": author_id,
+                        }
+                    )
         except Exception:
             pass
 
@@ -718,13 +789,17 @@ class WorkPackageContentMigration(BaseMigration):
                 self.logger.debug("Bulk custom field update failed: %s", e)
 
         # Batch 3: Comments (using bulk_create_work_package_activities)
+        # Each entry in item["comments"] is a dict: {"comment": str, "user_id": int}.
+        # We forward user_id so the Rails script attributes journals to the real
+        # Jira author rather than falling back to the default_user (Anonymous).
         all_comments = []
         for item in collected_items:
-            for comment_text in item["comments"]:
+            for comment_entry in item["comments"]:
                 all_comments.append(
                     {
                         "work_package_id": item["wp_id"],
-                        "comment": comment_text,
+                        "comment": comment_entry["comment"],
+                        "user_id": comment_entry["user_id"],
                     },
                 )
 

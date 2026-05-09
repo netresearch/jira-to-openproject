@@ -219,6 +219,10 @@ J2O_DATA
         Args:
             work_package_id: The work package ID
             activity_data: Dict with 'comment' key containing {'raw': 'comment text'}
+                and optional 'user_id' key (int) to attribute the journal entry
+                to a specific OpenProject user.  When ``user_id`` is absent or
+                the user cannot be found the Rails default user is used as a
+                fallback (mirrors ``bulk_create_work_package_activities``).
 
         Returns:
             Created journal data or None on failure
@@ -244,11 +248,18 @@ J2O_DATA
         # Escape single quotes for Ruby
         escaped_comment = escape_ruby_single_quoted(comment_text)
 
+        # Resolve the author user_id, defaulting to nil so Ruby falls back to
+        # default_user (mirrors the bulk helper's ``users[item['user_id']] || default_user``).
+        raw_user_id = activity_data.get("user_id")
+        ruby_user_id = int(raw_user_id) if raw_user_id is not None else "nil"
+
         # OpenProject 15+ requires using journal_notes/journal_user + save!
         script = f"""
         begin
           wp = WorkPackage.find({wp_id})
-          user = User.current || User.find_by(admin: true)
+          default_user = User.current || User.find_by(admin: true)
+          user_id = {ruby_user_id}
+          user = user_id ? (User.find_by(id: user_id) || default_user) : default_user
           wp.journal_notes = '{escaped_comment}'
           wp.journal_user = user
           wp.save!
