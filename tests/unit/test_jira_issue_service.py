@@ -209,3 +209,68 @@ def test_fetch_issues_batch_empty_input_returns_empty_dict() -> None:
 
     assert result == {}
     client.jira.search_issues.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Deduplication
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_fetch_issues_batch_deduplicates_keys() -> None:
+    """Duplicate keys in the input must be collapsed to unique keys before the
+    JQL query is built, so ``search_issues`` is called exactly once with only
+    the distinct keys.
+    """
+    captured_jql: list[str] = []
+
+    def _search(jql: str, **_kw: object) -> list[SimpleNamespace]:
+        captured_jql.append(jql)
+        import re
+
+        return [_make_issue(k) for k in re.findall(r'"([^"]+)"', jql)]
+
+    client = _make_client(search_side_effect=_search)
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    result = service._fetch_issues_batch(["TEST-1", "TEST-1", "TEST-2"])
+
+    # Only one search_issues call (two unique keys fit in a single chunk).
+    assert client.jira.search_issues.call_count == 1
+    # Result contains exactly the two unique keys.
+    assert set(result.keys()) == {"TEST-1", "TEST-2"}
+    # The JQL must not repeat any key.
+    jql = captured_jql[0]
+    assert jql.count('"TEST-1"') == 1, "TEST-1 must appear exactly once in JQL"
+    assert jql.count('"TEST-2"') == 1, "TEST-2 must appear exactly once in JQL"
+
+
+# ---------------------------------------------------------------------------
+# batch_num in error log
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_fetch_single_chunk_includes_batch_num_in_error_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When ``_fetch_single_chunk`` fails, the error log must include the
+    ``batch_num`` kwarg so operators can correlate errors across concurrent
+    batches.
+    """
+    import logging
+
+    client = _make_client(search_side_effect=RuntimeError("simulated failure"))
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.ERROR):
+        result = service._fetch_single_chunk(
+            ["PROJ-10", "PROJ-11"],
+            chunk_index=0,
+            batch_num=7,
+        )
+
+    assert result == {}, "Failed chunk must return empty dict"
+    # batch_num=7 must appear somewhere in the captured log output.
+    combined = "\n".join(r.getMessage() for r in caplog.records)
+    assert "7" in combined, f"batch_num=7 not found in log output: {combined!r}"
