@@ -522,7 +522,8 @@ class TestOrphanAnonymousDeletion:
 
     def test_flag_set_wp_with_only_anon_no_extra_deletions(self) -> None:
         """WP with only anonymous journals (no real) + flag → no orphan deletions
-        (existing text-based logic only — no real author present to displace them)."""
+        (existing text-based logic only — no real author present to displace them).
+        """
         from scripts.cleanup_anonymous_comment_duplicates import run
 
         ANON = 2
@@ -574,7 +575,8 @@ class TestOrphanAnonymousDeletion:
     def test_flag_not_set_uses_only_text_based_dedup(self) -> None:
         """Without --also-delete-orphan-anonymous, the divergent-text anon journals
         are NOT deleted (existing behaviour).  Only exact-match (after marker strip)
-        duplicates are removed."""
+        duplicates are removed.
+        """
         from scripts.cleanup_anonymous_comment_duplicates import run
 
         ANON = 2
@@ -632,6 +634,7 @@ class TestOrphanAnonymousDeletion:
         # Delete call must contain ids 10 and 11, NOT 12
         delete_script: str = mock_op.execute_query_to_json_file.call_args_list[1][0][0]
         import json as _json
+
         start = delete_script.find("[")
         end = delete_script.find("]", start) + 1
         ids = _json.loads(delete_script[start:end])

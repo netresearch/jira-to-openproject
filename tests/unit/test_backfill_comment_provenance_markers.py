@@ -13,10 +13,7 @@ Specifically:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, call, patch
-
-import pytest
-
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Helpers – minimal fake objects that mimic the data shapes the script uses.
@@ -160,7 +157,8 @@ class TestPairJournalsWithComments:
 
     def test_already_marked_journals_excluded(self) -> None:
         """Journals already carrying a provenance marker are excluded from pairing
-        (they are already idempotent — nothing to do)."""
+        (they are already idempotent — nothing to do).
+        """
         m = _import_module()
         user_mapping = {"acc-bjoern": 61}
         jira_comments = [
@@ -239,16 +237,15 @@ class TestBackfillRunFunction:
         # The fetch query may be called, but the update query must NOT be called
         for call_args in mock_op.execute_query_to_json_file.call_args_list:
             script: str = call_args[0][0]
-            assert "update_columns" not in script, (
-                "dry_run=True must never emit an update_columns Rails call"
-            )
+            assert "update_columns" not in script, "dry_run=True must never emit an update_columns Rails call"
 
         assert stats["updated"] == 0
         assert stats["would_update"] == 4
 
     def test_apply_mode_fires_update_columns(self) -> None:
         """dry_run=False (apply) must call execute_query_to_json_file with
-        update_columns for each WP that needs markers."""
+        update_columns for each WP that needs markers.
+        """
         m = _import_module()
         mock_op = MagicMock()
         mock_jira = MagicMock()
@@ -401,7 +398,8 @@ class TestBackfillRunFunction:
 
     def test_update_script_contains_journal_ids_and_markers(self) -> None:
         """The update_columns Rails script must reference the journal IDs and
-        embed the correct provenance marker strings."""
+        embed the correct provenance marker strings.
+        """
         m = _import_module()
         mock_op = MagicMock()
         mock_jira = MagicMock()
@@ -441,6 +439,5 @@ class TestBackfillRunFunction:
         assert "jc42" in script
         # Must NOT use .save or wp.save (would create a new journal version)
         assert ".save" not in script.replace("update_columns", ""), (
-            "Marker backfill must use update_columns, not save/save! "
-            "(save creates new journal versions)"
+            "Marker backfill must use update_columns, not save/save! (save creates new journal versions)"
         )
