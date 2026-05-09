@@ -53,11 +53,18 @@ class IssueTransformer:
     _BUG32_FALLBACK_USER_ID = 148941
 
     # Probe order for resolving Jira changelog/comment authors against the
-    # owner's ``user_mapping``. Mirrors the multi-key fallback documented in
-    # BUG #32 — the user_mapping is augmented with secondary indices on
-    # ``name`` / ``displayName`` / ``emailAddress`` (and others) so any of
-    # these raw Jira fields will resolve to the same OP user when present.
-    _JOURNAL_AUTHOR_PROBE_KEYS: tuple[str, ...] = ("name", "displayName", "emailAddress")
+    # owner's ``user_mapping``.  Canonical Cloud-first order mirrors
+    # ``_resolve_watcher_user_id`` and ``WorkPackageMigration._map_user``:
+    # accountId (Cloud) → name (Server) → key (Server/DC) → emailAddress → displayName.
+    # The user_mapping is augmented with secondary indices on all of these
+    # fields so any present raw Jira field resolves to the same OP user.
+    _JOURNAL_AUTHOR_PROBE_KEYS: tuple[str, ...] = (
+        "accountId",
+        "name",
+        "key",
+        "emailAddress",
+        "displayName",
+    )
 
     def __init__(self, owner: Any) -> None:
         """Bind the transformer to its owning migration service.
