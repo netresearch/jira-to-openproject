@@ -160,16 +160,17 @@ class ChangeAwareRunner:
                     },
                 )
             except MigrationError as e:
-                if isinstance(e.__cause__, ValueError):
-                    # The entity fetch raised ``ValueError``, which is the
-                    # documented signal that this migration is
-                    # transformation-only and does not support change detection.
-                    # Snapshots are therefore not possible by design — this is
-                    # not a failure.  Log at debug to avoid spurious WARNINGs
-                    # on every run for watchers, time_entries,
-                    # wp_metadata_backfill, etc.
+                if isinstance(e.__cause__, (ValueError, NotImplementedError)):
+                    # The entity fetch raised ``ValueError`` (transformation-only
+                    # convention) or ``NotImplementedError`` (``BaseMigration``'s
+                    # default when the subclass never overrode
+                    # ``_get_current_entities_for_type``).  Both signal "snapshot
+                    # not supported by design" — this is not a failure.  Log at
+                    # debug to avoid spurious WARNINGs on every run for
+                    # WorkPackageContentMigration, watchers, time_entries,
+                    # wp_metadata_backfill, category_defaults, etc.
                     self.logger.debug(
-                        "Skipping snapshot for %s (transformation-only migration): %s",
+                        "Skipping snapshot for %s (no change-detection support): %s",
                         entity_type,
                         e,
                     )
@@ -244,11 +245,30 @@ class ChangeAwareRunner:
             return should_skip, change_report
 
         except Exception as e:
-            self.logger.warning(
-                "Change detection failed for %s: %s. Proceeding with migration.",
-                entity_type,
-                e,
-            )
+            # Mirror the snapshot path's policy: ValueError (transformation-only
+            # convention) and NotImplementedError (BaseMigration default for
+            # subclasses that don't override _get_current_entities_for_type)
+            # both signal "change detection isn't supported by design" — log at
+            # DEBUG so successful runs aren't noisy. Real failures stay WARNING.
+            #
+            # The exception may surface either directly (when ``cache_func`` is
+            # not set and ``_get_current_entities_for_type`` is called inline)
+            # or wrapped in ``MigrationError`` by ``_get_cached_entities``.
+            # Inspect both ``e`` itself and ``e.__cause__`` so the policy
+            # applies identically in both code paths.
+            no_support = (ValueError, NotImplementedError)
+            if isinstance(e, no_support) or isinstance(e.__cause__, no_support):
+                self.logger.debug(
+                    "Change detection skipped for %s (no change-detection support): %s. Proceeding with migration.",
+                    entity_type,
+                    e,
+                )
+            else:
+                self.logger.warning(
+                    "Change detection failed for %s: %s. Proceeding with migration.",
+                    entity_type,
+                    e,
+                )
             return False, None
 
     def detect_changes(
