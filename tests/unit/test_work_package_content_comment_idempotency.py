@@ -1,0 +1,845 @@
+"""Tests for idempotent comment creation via provenance marker.
+
+Root cause: every re-run of work_packages_content added a fresh set of
+comments to OpenProject work packages.  WP 5040 accumulated 12 journals
+(8 Anonymous from broken May-7 runs + 4 correct ones) because
+bulk_create_work_package_activities blindly INSERT-ed without checking
+for prior existence.
+
+Fix: embed ``<!-- j2o:jira-comment-id:{id} -->`` at the end of each
+migrated comment body.  The Rails script pre-fetches existing markers and
+skips any activity whose marker is already present.
+
+Coverage:
+1. _build_comment_with_marker — marker appended when id present, no-op otherwise.
+2. bulk_create_work_package_activities — jira_comment_id forwarded in JSON payload.
+3. bulk_create_work_package_activities — Ruby script contains Set-based marker
+   dedup logic (static inspection).
+4. _collect_content_for_issue — jira_comment_id captured from Jira comment.
+5. _bulk_process_collected_content — jira_comment_id forwarded to bulk helper.
+6. Single-issue _populate_comments — jira_comment_id forwarded to single helper.
+7. create_work_package_activity — jira_comment_id forwarded to Ruby script.
+8. fetch_migrated_comment_ids — returns set of (wp_id, jira_comment_id) pairs.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Helpers shared across tests
+# ---------------------------------------------------------------------------
+
+
+def _build_mig(tmp_path: Path):
+    from src.application.components.work_package_content_migration import (
+        WorkPackageContentMigration,
+    )
+
+    jira = MagicMock()
+    op = MagicMock()
+    mig = WorkPackageContentMigration(jira_client=jira, op_client=op)
+    mig.data_dir = tmp_path
+    mig.work_package_mapping_file = tmp_path / mig.WORK_PACKAGE_MAPPING_FILE
+    mig.attachment_mapping_file = tmp_path / mig.ATTACHMENT_MAPPING_FILE
+    return mig
+
+
+@pytest.fixture
+def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
+    import src.config as cfg
+
+    class DummyMappings:
+        def __init__(self) -> None:
+            self._m = {
+                "project": {"PROJ": {"openproject_id": 11}},
+                "user": {"alice": {"openproject_id": 201}},
+                "custom_field": {},
+            }
+
+        def get_mapping(self, name: str):
+            return self._m.get(name, {})
+
+        def set_mapping(self, name: str, value):
+            self._m[name] = value
+
+    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
+
+
+def _make_comment(author_name: str, body: str, comment_id: str = "cid-1"):
+    c = MagicMock()
+    c.body = body
+    c.id = comment_id
+    c.author = SimpleNamespace(
+        name=author_name,
+        displayName=author_name.capitalize(),
+        emailAddress=f"{author_name}@example.com",
+        accountId=None,
+        key=None,
+    )
+    return c
+
+
+# ---------------------------------------------------------------------------
+# 1. _build_comment_with_marker unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCommentWithMarker:
+    def test_marker_appended_when_id_present(self) -> None:
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _build_comment_with_marker,
+        )
+
+        result = _build_comment_with_marker("Hello world", "597766")
+        assert "<!-- j2o:jira-comment-id:597766 -->" in result
+        assert result.startswith("Hello world")
+
+    def test_no_marker_when_id_is_none(self) -> None:
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _build_comment_with_marker,
+        )
+
+        result = _build_comment_with_marker("Hello world", None)
+        assert result == "Hello world"
+        assert "j2o:" not in result
+
+    def test_no_marker_when_id_is_empty_string(self) -> None:
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _build_comment_with_marker,
+        )
+
+        result = _build_comment_with_marker("Hello world", "")
+        assert result == "Hello world"
+
+    def test_marker_on_new_line(self) -> None:
+        """Marker must be on its own line, not inline with last word."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _build_comment_with_marker,
+        )
+
+        result = _build_comment_with_marker("Line one\nLine two", "42")
+        lines = result.split("\n")
+        assert any("<!-- j2o:jira-comment-id:42 -->" in line for line in lines)
+        # Marker must not be on the same line as text content
+        assert lines[-1].strip() == "<!-- j2o:jira-comment-id:42 -->"
+
+
+# ---------------------------------------------------------------------------
+# 2. bulk_create_work_package_activities — jira_comment_id in JSON payload
+# ---------------------------------------------------------------------------
+
+
+class TestBulkCreateActivitiesPayload:
+    def test_jira_comment_id_forwarded_in_json_payload(self) -> None:
+        """The JSON data sent to Rails must include jira_comment_id for each activity."""
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured_scripts: list[str] = []
+
+        def capture_script(script: str):
+            captured_scripts.append(script)
+            return {"created": 1, "skipped": 0, "failed": 0, "success": True}
+
+        mock_client.execute_query_to_json_file.side_effect = capture_script
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.bulk_create_work_package_activities(
+            [
+                {
+                    "work_package_id": 5040,
+                    "comment": "First comment",
+                    "user_id": 100,
+                    "jira_comment_id": "597766",
+                }
+            ]
+        )
+
+        assert captured_scripts, "No Rails script was generated"
+        script = captured_scripts[0]
+
+        # The JSON payload embedded in the script must contain the jira_comment_id
+        # Extract JSON from script (between J2O_DATA markers)
+        start = script.find("\n", script.find("J2O_DATA")) + 1
+        end = script.find("J2O_DATA", start)
+        payload_json = script[start:end].strip()
+        payload = json.loads(payload_json)
+
+        assert len(payload) == 1
+        assert payload[0]["jira_comment_id"] == "597766"
+
+    def test_null_jira_comment_id_when_not_provided(self) -> None:
+        """When no jira_comment_id is supplied, null is sent (legacy path still works)."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured_scripts: list[str] = []
+
+        def capture_script(script: str):
+            captured_scripts.append(script)
+            return {"created": 1, "skipped": 0, "failed": 0, "success": True}
+
+        mock_client.execute_query_to_json_file.side_effect = capture_script
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.bulk_create_work_package_activities([{"work_package_id": 1, "comment": "Legacy comment", "user_id": 5}])
+
+        script = captured_scripts[0]
+        start = script.find("\n", script.find("J2O_DATA")) + 1
+        end = script.find("J2O_DATA", start)
+        payload = json.loads(script[start:end].strip())
+        assert payload[0]["jira_comment_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# 3. Ruby script contains Set-based idempotency dedup logic
+# ---------------------------------------------------------------------------
+
+
+class TestBulkCreateRubyScriptIdempotency:
+    def test_ruby_script_fetches_migrated_pairs(self) -> None:
+        """The Ruby script must query existing Journal notes for the provenance marker."""
+        import inspect
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        source = inspect.getsource(OpenProjectWorkPackageContentService.bulk_create_work_package_activities)
+        # Must contain the pre-fetch query for existing markers
+        assert "j2o:jira-comment-id" in source, "Ruby script does not search for existing provenance markers"
+        # Must contain the idempotency skip check
+        assert "migrated_pairs" in source, "Ruby script missing migrated_pairs set for idempotency check"
+        assert "skipped" in source, "Ruby script must increment skipped counter for already-migrated comments"
+
+    def test_ruby_script_uses_set_for_dedup(self) -> None:
+        """The Ruby script must use a Set (not Array#include?) for O(1) lookups."""
+        import inspect
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        source = inspect.getsource(OpenProjectWorkPackageContentService.bulk_create_work_package_activities)
+        # Set.new must be used for the migrated_pairs collection
+        assert "Set.new" in source, "Ruby script must use Set.new for O(1) idempotency lookups"
+
+    def test_result_dict_includes_skipped_key(self) -> None:
+        """bulk_create_work_package_activities must return a 'skipped' count."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        mock_client.execute_query_to_json_file.return_value = {
+            "created": 1,
+            "skipped": 1,
+            "failed": 0,
+            "success": True,
+        }
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        result = svc.bulk_create_work_package_activities(
+            [
+                {"work_package_id": 1, "comment": "a", "user_id": 1, "jira_comment_id": "111"},
+                {"work_package_id": 1, "comment": "a", "user_id": 1, "jira_comment_id": "111"},
+            ]
+        )
+        assert "skipped" in result, f"Expected 'skipped' key in result: {result}"
+        assert result["skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 4. _collect_content_for_issue — jira_comment_id captured
+# ---------------------------------------------------------------------------
+
+
+class TestCollectContentCapturesCommentId:
+    def test_jira_comment_id_present_in_collected_comments(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        """Each collected comment must carry jira_comment_id from the Jira comment."""
+        mig = _build_mig(tmp_path)
+
+        issue = MagicMock()
+        issue.key = "PROJ-1"
+        issue.fields.description = None
+        issue.raw = {"fields": {}}
+        mig.jira_client.jira.comments.return_value = [
+            _make_comment("alice", "First comment", comment_id="597766"),
+            _make_comment("alice", "Second comment", comment_id="597767"),
+        ]
+        mig.jira_client.get_issue_watchers.return_value = []
+
+        collected = mig._collect_content_for_issue(issue, wp_id=5040)
+        comments = collected["comments"]
+
+        assert len(comments) == 2
+        assert comments[0]["jira_comment_id"] == "597766"
+        assert comments[1]["jira_comment_id"] == "597767"
+
+    def test_none_comment_id_when_jira_comment_has_no_id(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        """When comment has no .id attribute, jira_comment_id should be None."""
+        mig = _build_mig(tmp_path)
+
+        issue = MagicMock()
+        issue.key = "PROJ-1"
+        issue.fields.description = None
+        issue.raw = {"fields": {}}
+
+        # Comment without an id attribute
+        comment = MagicMock(spec=["body", "author"])
+        comment.body = "No id comment"
+        comment.author = SimpleNamespace(
+            name="alice",
+            displayName="Alice",
+            emailAddress="alice@example.com",
+            accountId=None,
+            key=None,
+        )
+        mig.jira_client.jira.comments.return_value = [comment]
+        mig.jira_client.get_issue_watchers.return_value = []
+
+        collected = mig._collect_content_for_issue(issue, wp_id=1)
+        assert collected["comments"][0]["jira_comment_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# 5. _bulk_process_collected_content — jira_comment_id forwarded to bulk helper
+# ---------------------------------------------------------------------------
+
+
+class TestBulkProcessForwardsCommentId:
+    def test_jira_comment_id_in_activity_payload_sent_to_op(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        """_bulk_process_collected_content must forward jira_comment_id to the op_client call."""
+        mig = _build_mig(tmp_path)
+
+        collected_items = [
+            {
+                "wp_id": 5040,
+                "jira_key": "PROJ-1",
+                "description_update": None,
+                "custom_field_updates": {},
+                "comments": [
+                    {"comment": "First", "user_id": 201, "jira_comment_id": "597766"},
+                    {"comment": "Second", "user_id": 201, "jira_comment_id": "597767"},
+                ],
+                "watchers": [],
+            }
+        ]
+
+        mig.op_client.bulk_create_work_package_activities.return_value = {
+            "created": 2,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        mig._bulk_process_collected_content(collected_items)
+
+        call_args = mig.op_client.bulk_create_work_package_activities.call_args
+        assert call_args is not None
+        activities = call_args[0][0]
+        assert len(activities) == 2
+
+        # Both entries must carry jira_comment_id
+        assert activities[0]["jira_comment_id"] == "597766"
+        assert activities[1]["jira_comment_id"] == "597767"
+
+    def test_none_jira_comment_id_forwarded_when_absent(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        """When jira_comment_id is absent from collected entry, None is forwarded."""
+        mig = _build_mig(tmp_path)
+
+        collected_items = [
+            {
+                "wp_id": 1,
+                "jira_key": "PROJ-1",
+                "description_update": None,
+                "custom_field_updates": {},
+                "comments": [
+                    # Legacy entry without jira_comment_id key
+                    {"comment": "Legacy comment", "user_id": 201},
+                ],
+                "watchers": [],
+            }
+        ]
+
+        mig.op_client.bulk_create_work_package_activities.return_value = {
+            "created": 1,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        mig._bulk_process_collected_content(collected_items)
+
+        activities = mig.op_client.bulk_create_work_package_activities.call_args[0][0]
+        assert activities[0]["jira_comment_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# 6. Single-issue _populate_comments — jira_comment_id forwarded
+# ---------------------------------------------------------------------------
+
+
+class TestPopulateCommentsForwardsCommentId:
+    def test_jira_comment_id_in_single_activity_payload(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        """_populate_comments must include jira_comment_id in every create_work_package_activity call."""
+        mig = _build_mig(tmp_path)
+
+        issue = MagicMock()
+        issue.key = "PROJ-1"
+        mig.jira_client.jira.comments.return_value = [
+            _make_comment("alice", "alice's note", comment_id="597766"),
+        ]
+
+        mig._populate_comments(issue, wp_id=5040)
+
+        calls = mig.op_client.create_work_package_activity.call_args_list
+        assert len(calls) == 1
+        payload = calls[0][0][1]
+        assert "jira_comment_id" in payload, f"jira_comment_id missing from payload: {payload}"
+        assert payload["jira_comment_id"] == "597766"
+
+    def test_multiple_comments_each_have_their_own_id(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        """Each comment gets its own distinct jira_comment_id."""
+        mig = _build_mig(tmp_path)
+
+        issue = MagicMock()
+        issue.key = "PROJ-1"
+        mig.jira_client.jira.comments.return_value = [
+            _make_comment("alice", "comment one", comment_id="100"),
+            _make_comment("alice", "comment two", comment_id="101"),
+            _make_comment("alice", "comment three", comment_id="102"),
+        ]
+
+        mig._populate_comments(issue, wp_id=99)
+
+        calls = mig.op_client.create_work_package_activity.call_args_list
+        assert len(calls) == 3
+        sent_ids = [c[0][1]["jira_comment_id"] for c in calls]
+        assert sent_ids == ["100", "101", "102"]
+
+
+# ---------------------------------------------------------------------------
+# 7. create_work_package_activity — jira_comment_id forwarded to Ruby script
+# ---------------------------------------------------------------------------
+
+
+class TestSingleActivityRubyIdempotency:
+    def test_marker_embedded_in_single_activity_ruby_script(self) -> None:
+        """create_work_package_activity must embed the provenance marker in the Ruby script."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured_scripts: list[str] = []
+
+        def capture_script(script: str):
+            captured_scripts.append(script)
+            return {"id": 1, "status": "created"}
+
+        mock_client.execute_query_to_json_file.side_effect = capture_script
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=5040,
+            activity_data={
+                "comment": {"raw": "Hello, comment body"},
+                "user_id": 100,
+                "jira_comment_id": "597766",
+            },
+        )
+
+        assert captured_scripts
+        script = captured_scripts[0]
+        # The provenance marker must appear in the Ruby script
+        assert "j2o:jira-comment-id:597766" in script, f"Provenance marker not found in Ruby script:\n{script}"
+
+    def test_idempotency_check_in_single_activity_ruby_script(self) -> None:
+        """create_work_package_activity must include a skip-if-exists check in Ruby."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured_scripts: list[str] = []
+
+        def capture_script(script: str):
+            captured_scripts.append(script)
+            return {"id": 1, "status": "created"}
+
+        mock_client.execute_query_to_json_file.side_effect = capture_script
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=42,
+            activity_data={
+                "comment": {"raw": "idempotency test"},
+                "user_id": 5,
+                "jira_comment_id": "999",
+            },
+        )
+
+        script = captured_scripts[0]
+        # The script must contain a skip-if-exists guard
+        assert "skipped" in script or "existing_journal" in script, (
+            f"No idempotency guard found in single-activity Ruby script:\n{script}"
+        )
+
+    def test_no_idempotency_check_without_jira_comment_id(self) -> None:
+        """When jira_comment_id is absent no idempotency guard should be injected."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured_scripts: list[str] = []
+
+        def capture_script(script: str):
+            captured_scripts.append(script)
+            return {"id": 1, "status": "created"}
+
+        mock_client.execute_query_to_json_file.side_effect = capture_script
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=42,
+            activity_data={"comment": {"raw": "no id comment"}, "user_id": 5},
+        )
+
+        script = captured_scripts[0]
+        assert "existing_journal" not in script, (
+            "Idempotency guard should NOT be present when jira_comment_id is absent"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 8. fetch_migrated_comment_ids — returns set of (wp_id, jira_comment_id) pairs
+# ---------------------------------------------------------------------------
+
+
+class TestFetchMigratedCommentIds:
+    def test_returns_empty_set_for_no_wp_ids(self) -> None:
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        svc = OpenProjectWorkPackageContentService(mock_client)
+
+        result = svc.fetch_migrated_comment_ids([])
+        assert result == set()
+        mock_client.execute_query_to_json_file.assert_not_called()
+
+    def test_returns_pairs_from_rails_result(self) -> None:
+        """fetch_migrated_comment_ids converts Rails [[wp_id, jira_id], ...] to set of tuples."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        mock_client.execute_query_to_json_file.return_value = [
+            [5040, "597766"],
+            [5040, "597767"],
+            [5041, "597770"],
+        ]
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        result = svc.fetch_migrated_comment_ids([5040, 5041])
+
+        assert result == {(5040, "597766"), (5040, "597767"), (5041, "597770")}
+
+    def test_returns_empty_set_on_rails_error(self) -> None:
+        """On Rails failure, returns empty set (non-fatal; callers treat as 'none migrated yet')."""
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        mock_client.execute_query_to_json_file.side_effect = RuntimeError("Rails down")
+
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        result = svc.fetch_migrated_comment_ids([1, 2, 3])
+        assert result == set()
+
+    def test_ruby_script_queries_notes_column(self) -> None:
+        """The Rails query must target the notes column with the j2o marker pattern."""
+        import inspect
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        source = inspect.getsource(OpenProjectWorkPackageContentService.fetch_migrated_comment_ids)
+        assert "j2o:jira-comment-id:" in source
+        assert "notes" in source
+        assert "pluck" in source
+
+
+# ---------------------------------------------------------------------------
+# 9. Ruby `return` at top level — would cause LocalJumpError
+# ---------------------------------------------------------------------------
+
+
+class TestSingleActivityNoTopLevelReturn:
+    """create_work_package_activity must not use bare `return` at the top level
+    of the Ruby script string.  A bare `return` outside a method/block raises
+    LocalJumpError in Ruby when the script is eval'd via the Rails console.
+    """
+
+    def _capture_script(self) -> str:
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured: list[str] = []
+        mock_client.execute_query_to_json_file.side_effect = lambda s: (
+            captured.append(s) or {"id": 1, "status": "created"}
+        )
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=1,
+            activity_data={"comment": "test", "user_id": 1, "jira_comment_id": "42"},
+        )
+        assert captured
+        return captured[0]
+
+    def test_no_bare_return_at_top_level(self) -> None:
+        """The Ruby script must not contain a bare `return` statement outside
+        a method or block — that would raise LocalJumpError.
+
+        The idempotency skip must use an `if/else` structure instead.
+        """
+        script = self._capture_script()
+        # A bare `return` followed by whitespace/brace is the problem pattern.
+        # `return` inside a rescue block or as part of a hash key is fine
+        # but the provenance-marker early-return pattern is NOT inside a method.
+        import re
+
+        bare_returns = re.findall(r"\breturn\b", script)
+        assert bare_returns == [], (
+            f"Ruby script contains {len(bare_returns)} bare `return` keyword(s) "
+            f"which would raise LocalJumpError when eval'd at top level:\n{script}"
+        )
+
+    def test_idempotency_uses_if_else_structure(self) -> None:
+        """When jira_comment_id is given the script must use if/else for
+        the skip branch, not a trailing `return ... if existing_journal`.
+        """
+        script = self._capture_script()
+        # Must still contain the idempotency check
+        assert "existing_journal" in script, "Idempotency check is missing entirely"
+        # Must contain an else or end for the conditional structure
+        assert "else" in script or script.count("end") >= 2, (
+            "Expected if/else structure for idempotency but found neither 'else' nor sufficient 'end' keywords"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 10. _normalize_comment_id — edge-value behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeCommentId:
+    """_normalize_comment_id must treat None, 0, '', '  ' as absent and
+    return None; non-empty strings and non-zero ints must be returned as
+    stripped strings.
+    """
+
+    def _normalize(self, value):
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _normalize_comment_id,
+        )
+
+        return _normalize_comment_id(value)
+
+    def test_none_returns_none(self) -> None:
+        assert self._normalize(None) is None
+
+    def test_zero_int_returns_none(self) -> None:
+        assert self._normalize(0) is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert self._normalize("") is None
+
+    def test_whitespace_only_string_returns_none(self) -> None:
+        assert self._normalize("  ") is None
+
+    def test_string_id_returned_as_stripped_string(self) -> None:
+        assert self._normalize("123") == "123"
+
+    def test_int_id_returned_as_string(self) -> None:
+        assert self._normalize(123) == "123"
+
+    def test_padded_string_stripped(self) -> None:
+        assert self._normalize("  42  ") == "42"
+
+
+class TestBuildCommentWithMarkerNormalization:
+    """_build_comment_with_marker must behave consistently for all edge values
+    of jira_comment_id after normalization is applied.
+    """
+
+    def _build(self, cid):
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _build_comment_with_marker,
+        )
+
+        return _build_comment_with_marker("text", cid)
+
+    def test_none_no_marker(self) -> None:
+        assert self._build(None) == "text"
+
+    def test_zero_int_no_marker(self) -> None:
+        # int(0) is falsy — must NOT add marker
+        assert self._build(0) == "text"
+
+    def test_empty_string_no_marker(self) -> None:
+        assert self._build("") == "text"
+
+    def test_whitespace_string_no_marker(self) -> None:
+        assert self._build("  ") == "text"
+
+    def test_valid_string_id_adds_marker(self) -> None:
+        result = self._build("123")
+        assert "j2o:jira-comment-id:123" in result
+
+    def test_valid_int_id_adds_marker(self) -> None:
+        result = self._build(123)
+        assert "j2o:jira-comment-id:123" in result
+
+
+class TestCreateWorkPackageActivityNormalization:
+    """create_work_package_activity must apply consistent normalization —
+    int(0) and whitespace-only strings must not inject an idempotency check.
+    """
+
+    def _capture_script(self, jira_comment_id) -> str:
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured: list[str] = []
+        mock_client.execute_query_to_json_file.side_effect = lambda s: (
+            captured.append(s) or {"id": 1, "status": "created"}
+        )
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=1,
+            activity_data={"comment": "hi", "user_id": 1, "jira_comment_id": jira_comment_id},
+        )
+        return captured[0] if captured else ""
+
+    def test_zero_id_no_idempotency_guard(self) -> None:
+        script = self._capture_script(0)
+        assert "existing_journal" not in script, "int(0) jira_comment_id must NOT inject idempotency guard"
+
+    def test_whitespace_id_no_idempotency_guard(self) -> None:
+        script = self._capture_script("  ")
+        assert "existing_journal" not in script, "whitespace jira_comment_id must NOT inject idempotency guard"
+
+    def test_valid_int_id_adds_idempotency_guard(self) -> None:
+        script = self._capture_script(42)
+        assert "existing_journal" in script, "valid int jira_comment_id must inject idempotency guard"
+
+
+class TestBulkPayloadNormalization:
+    """bulk_create_work_package_activities must normalize jira_comment_id in the
+    JSON payload: empty strings must become null, not '""'.
+    """
+
+    def _payload(self, jira_comment_id) -> dict:
+        import json
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured: list[str] = []
+        mock_client.execute_query_to_json_file.side_effect = lambda s: (
+            captured.append(s) or {"created": 1, "skipped": 0, "failed": 0, "success": True}
+        )
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.bulk_create_work_package_activities(
+            [{"work_package_id": 1, "comment": "hi", "user_id": 1, "jira_comment_id": jira_comment_id}]
+        )
+        script = captured[0]
+        start = script.find("\n", script.find("J2O_DATA")) + 1
+        end = script.find("J2O_DATA", start)
+        return json.loads(script[start:end].strip())[0]
+
+    def test_empty_string_becomes_null_in_payload(self) -> None:
+        item = self._payload("")
+        assert item["jira_comment_id"] is None, (
+            "empty string jira_comment_id must be serialised as null in the Ruby payload"
+        )
+
+    def test_whitespace_string_becomes_null_in_payload(self) -> None:
+        item = self._payload("  ")
+        assert item["jira_comment_id"] is None
+
+    def test_zero_int_becomes_null_in_payload(self) -> None:
+        item = self._payload(0)
+        assert item["jira_comment_id"] is None
+
+    def test_valid_string_preserved_in_payload(self) -> None:
+        item = self._payload("597766")
+        assert item["jira_comment_id"] == "597766"
+
+    def test_valid_int_becomes_string_in_payload(self) -> None:
+        item = self._payload(597766)
+        assert item["jira_comment_id"] == "597766"

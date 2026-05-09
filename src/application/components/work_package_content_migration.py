@@ -549,6 +549,9 @@ class WorkPackageContentMigration(BaseMigration):
             converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
 
             author_id = self._resolve_comment_author_id(comment, jira_issue.key)
+            # Capture Jira comment id for provenance marker — enables idempotency
+            # on re-runs (the Ruby helper skips activities whose marker already exists).
+            jira_comment_id = getattr(comment, "id", None)
 
             try:
                 # Create activity/journal in OpenProject with resolved author
@@ -557,6 +560,7 @@ class WorkPackageContentMigration(BaseMigration):
                     {
                         "comment": {"raw": converted_body},
                         "user_id": author_id,
+                        "jira_comment_id": jira_comment_id,
                     },
                 )
                 migrated += 1
@@ -697,10 +701,11 @@ class WorkPackageContentMigration(BaseMigration):
                         value = self._convert_jira_links(value, jira_key=jira_issue.key)
                     collected["custom_field_updates"][f"customField{op_cf_id}"] = value
 
-        # Collect comments — preserve author id so _bulk_process_collected_content
-        # can include user_id in every activity dict sent to the Rails script.
-        # Without user_id the Rails script falls back to the default_user
-        # (Anonymous, user_id=2) for every comment (regression confirmed on WP 5040).
+        # Collect comments — preserve author id and Jira comment id so
+        # _bulk_process_collected_content can include both in every activity
+        # dict sent to the Rails script.  user_id prevents fallback to
+        # Anonymous (regression confirmed on WP 5040); jira_comment_id enables
+        # provenance-based idempotency across re-runs.
         try:
             comments = self.jira_client.jira.comments(jira_issue.key)
             for comment in comments:
@@ -708,10 +713,12 @@ class WorkPackageContentMigration(BaseMigration):
                 if body:
                     converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
                     author_id = self._resolve_comment_author_id(comment, jira_issue.key)
+                    jira_comment_id = getattr(comment, "id", None)
                     collected["comments"].append(
                         {
                             "comment": converted_body,
                             "user_id": author_id,
+                            "jira_comment_id": jira_comment_id,
                         }
                     )
         except Exception:
@@ -789,9 +796,11 @@ class WorkPackageContentMigration(BaseMigration):
                 self.logger.debug("Bulk custom field update failed: %s", e)
 
         # Batch 3: Comments (using bulk_create_work_package_activities)
-        # Each entry in item["comments"] is a dict: {"comment": str, "user_id": int}.
-        # We forward user_id so the Rails script attributes journals to the real
-        # Jira author rather than falling back to the default_user (Anonymous).
+        # Each entry in item["comments"] is a dict with keys:
+        #   "comment": str, "user_id": int, "jira_comment_id": str|None.
+        # We forward all three: user_id preserves authorship; jira_comment_id
+        # enables provenance-based idempotency so re-runs skip already-migrated
+        # comments instead of duplicating them.
         all_comments = []
         for item in collected_items:
             for comment_entry in item["comments"]:
@@ -800,6 +809,7 @@ class WorkPackageContentMigration(BaseMigration):
                         "work_package_id": item["wp_id"],
                         "comment": comment_entry["comment"],
                         "user_id": comment_entry["user_id"],
+                        "jira_comment_id": comment_entry.get("jira_comment_id"),
                     },
                 )
 
