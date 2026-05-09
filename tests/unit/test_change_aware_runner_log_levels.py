@@ -249,3 +249,41 @@ def test_snapshot_path_warns_for_non_value_error_migration_error(
         "Expected at least one WARNING-level log about snapshot failure for "
         "a non-ValueError MigrationError (transient network/server error)"
     )
+
+
+def test_snapshot_path_no_warning_for_not_implemented_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``NotImplementedError`` from BaseMigration's default must NOT produce a WARNING.
+
+    When a migration class (e.g. ``WorkPackageContentMigration``) does not
+    override ``_get_current_entities_for_type``, ``BaseMigration``'s default
+    raises ``NotImplementedError``.  This is the same "no snapshot support by
+    design" signal as ``ValueError`` (transformation-only convention) — the
+    migration simply never registered an entity-type implementation.
+
+    ``_get_cached_entities`` wraps the ``NotImplementedError`` into
+    ``MigrationError``, and the snapshot block must treat that at DEBUG, NOT
+    WARNING.  Without this fix, WPCm (and wp_metadata_backfill, category_defaults,
+    user_mapping_backfill) emit a spurious WARNING on every successful run.
+    """
+    runner = _make_runner_for_snapshot_test(
+        entity_fetch_exc=NotImplementedError(
+            "Subclass WorkPackageContentMigration must implement "
+            "_get_current_entities_for_type() to support change detection for "
+            "entity type: work_packages_content. Proceeding with migration."
+        ),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="test_change_aware_runner_log_levels"):
+        result = runner.run("work_packages_content")
+
+    assert result.success, "Migration result must still be successful"
+
+    warning_records = [
+        r for r in caplog.records if r.levelno >= logging.WARNING and "snapshot" in r.getMessage().lower()
+    ]
+    assert warning_records == [], (
+        f"Expected no WARNING-level snapshot log when _get_current_entities_for_type raises "
+        f"NotImplementedError (BaseMigration default), got: {warning_records}"
+    )

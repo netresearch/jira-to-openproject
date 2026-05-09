@@ -160,16 +160,17 @@ class ChangeAwareRunner:
                     },
                 )
             except MigrationError as e:
-                if isinstance(e.__cause__, ValueError):
-                    # The entity fetch raised ``ValueError``, which is the
-                    # documented signal that this migration is
-                    # transformation-only and does not support change detection.
-                    # Snapshots are therefore not possible by design — this is
-                    # not a failure.  Log at debug to avoid spurious WARNINGs
-                    # on every run for watchers, time_entries,
-                    # wp_metadata_backfill, etc.
+                if isinstance(e.__cause__, (ValueError, NotImplementedError)):
+                    # The entity fetch raised ``ValueError`` (transformation-only
+                    # convention) or ``NotImplementedError`` (``BaseMigration``'s
+                    # default when the subclass never overrode
+                    # ``_get_current_entities_for_type``).  Both signal "snapshot
+                    # not supported by design" — this is not a failure.  Log at
+                    # debug to avoid spurious WARNINGs on every run for
+                    # WorkPackageContentMigration, watchers, time_entries,
+                    # wp_metadata_backfill, category_defaults, etc.
                     self.logger.debug(
-                        "Skipping snapshot for %s (transformation-only migration): %s",
+                        "Skipping snapshot for %s (no change-detection support): %s",
                         entity_type,
                         e,
                     )
