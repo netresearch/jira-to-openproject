@@ -287,3 +287,65 @@ def test_snapshot_path_no_warning_for_not_implemented_error(
         f"Expected no WARNING-level snapshot log when _get_current_entities_for_type raises "
         f"NotImplementedError (BaseMigration default), got: {warning_records}"
     )
+
+
+def test_should_skip_no_warning_for_value_error_cause(caplog: pytest.LogCaptureFixture) -> None:
+    """should_skip must log at DEBUG (not WARNING) when ValueError signals transformation-only.
+
+    Per Gemini review on PR #248: the pre-run change-detection path needs the
+    same severity routing as the post-success snapshot path. Otherwise
+    transformation-only and BaseMigration-default migrations emit a noisy
+    WARNING for every successful run.
+    """
+    runner = _make_runner_with_failing_migration(
+        ValueError("TimeEntryMigration is transformation-only ..."),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="test_change_aware_runner_log_levels"):
+        skipped, report = runner.should_skip("time_entries")
+
+    assert skipped is False
+    assert report is None
+    warning_records = [
+        r for r in caplog.records if r.levelno >= logging.WARNING and "Change detection failed" in r.getMessage()
+    ]
+    assert warning_records == [], (
+        f"Expected no WARNING-level Change-detection-failed log for ValueError cause, got: {warning_records}"
+    )
+
+
+def test_should_skip_no_warning_for_not_implemented_error_cause(caplog: pytest.LogCaptureFixture) -> None:
+    """should_skip must log at DEBUG when NotImplementedError signals no change-detection support."""
+    runner = _make_runner_with_failing_migration(
+        NotImplementedError(
+            "Subclass WorkPackageContentMigration must implement "
+            "_get_current_entities_for_type() to support change detection ..."
+        ),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="test_change_aware_runner_log_levels"):
+        skipped, report = runner.should_skip("work_packages_content")
+
+    assert skipped is False
+    assert report is None
+    warning_records = [
+        r for r in caplog.records if r.levelno >= logging.WARNING and "Change detection failed" in r.getMessage()
+    ]
+    assert warning_records == [], (
+        f"Expected no WARNING-level Change-detection-failed log for NotImplementedError cause, got: {warning_records}"
+    )
+
+
+def test_should_skip_still_warns_for_genuine_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """should_skip MUST still log at WARNING for real failures (network etc)."""
+    runner = _make_runner_with_failing_migration(RuntimeError("connection refused"))
+
+    with caplog.at_level(logging.DEBUG, logger="test_change_aware_runner_log_levels"):
+        skipped, report = runner.should_skip("work_packages")
+
+    assert skipped is False
+    assert report is None
+    warning_records = [
+        r for r in caplog.records if r.levelno >= logging.WARNING and "Change detection failed" in r.getMessage()
+    ]
+    assert len(warning_records) == 1, f"Expected exactly one WARNING for genuine failure, got: {warning_records}"

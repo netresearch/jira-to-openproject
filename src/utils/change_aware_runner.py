@@ -245,11 +245,30 @@ class ChangeAwareRunner:
             return should_skip, change_report
 
         except Exception as e:
-            self.logger.warning(
-                "Change detection failed for %s: %s. Proceeding with migration.",
-                entity_type,
-                e,
-            )
+            # Mirror the snapshot path's policy: ValueError (transformation-only
+            # convention) and NotImplementedError (BaseMigration default for
+            # subclasses that don't override _get_current_entities_for_type)
+            # both signal "change detection isn't supported by design" — log at
+            # DEBUG so successful runs aren't noisy. Real failures stay WARNING.
+            #
+            # The exception may surface either directly (when ``cache_func`` is
+            # not set and ``_get_current_entities_for_type`` is called inline)
+            # or wrapped in ``MigrationError`` by ``_get_cached_entities``.
+            # Inspect both ``e`` itself and ``e.__cause__`` so the policy
+            # applies identically in both code paths.
+            no_support = (ValueError, NotImplementedError)
+            if isinstance(e, no_support) or isinstance(e.__cause__, no_support):
+                self.logger.debug(
+                    "Change detection skipped for %s (no change-detection support): %s. Proceeding with migration.",
+                    entity_type,
+                    e,
+                )
+            else:
+                self.logger.warning(
+                    "Change detection failed for %s: %s. Proceeding with migration.",
+                    entity_type,
+                    e,
+                )
             return False, None
 
     def detect_changes(
