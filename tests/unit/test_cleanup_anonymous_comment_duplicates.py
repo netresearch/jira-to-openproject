@@ -669,3 +669,126 @@ class TestOrphanAnonymousDeletion:
         assert any("Anonymous-orphan" in c for c in info_calls), (
             "Expected at least one log message containing 'Anonymous-orphan'"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #5: Tightened orphan-Anonymous heuristic
+# ---------------------------------------------------------------------------
+
+
+class TestOrphanAnonymousTightenedHeuristic:
+    """Regression for review comment #5.
+
+    The tightened rule: only delete Anonymous journals that are OLDER than
+    the earliest real-author journal on the same WP.
+
+    Rationale: if an Anonymous journal is NEWER than all real-author journals
+    it may be a legitimately-authored Anonymous comment (deactivated/unmapped
+    user) and must be kept.
+    """
+
+    def _make_logger(self) -> MagicMock:
+        logger = MagicMock()
+        logger.info = MagicMock()
+        logger.error = MagicMock()
+        logger.warning = MagicMock()
+        return logger
+
+    def test_anon_older_than_real_is_deleted(self) -> None:
+        """3 Anonymous (2026-05-07) + 2 real-author (2026-05-09).
+
+        All 3 anonymous journals are OLDER than the earliest real-author
+        journal → tightened rule deletes them.
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        journals = [
+            _journal(1, 5040, ANON, "Anon A", "2026-05-07T10:00:00Z"),
+            _journal(2, 5040, ANON, "Anon B", "2026-05-07T11:00:00Z"),
+            _journal(3, 5040, ANON, "Anon C", "2026-05-07T12:00:00Z"),
+            _journal(4, 5040, 61, "Real A", "2026-05-09T09:00:00Z"),
+            _journal(5, 5040, 281, "Real B", "2026-05-09T10:00:00Z"),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        delete_ids = {j["id"] for j in to_delete}
+        # All 3 anon journals are older than earliest real (2026-05-09T09:00:00Z)
+        assert delete_ids == {1, 2, 3}, f"Expected anon journals 1,2,3 deleted (older than real), got: {delete_ids}"
+
+    def test_anon_newer_than_real_is_kept(self) -> None:
+        """1 Anonymous (2026-05-09 12:00) + 1 real-author (2026-05-09 11:00).
+
+        The Anonymous journal is NEWER than the only real-author journal →
+        tightened rule keeps it (may be a legitimate Anonymous comment).
+        Aggressive rule would delete it — tightened rule must not.
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        journals = [
+            _journal(1, 5040, 61, "Real comment", "2026-05-09T11:00:00Z"),
+            _journal(2, 5040, ANON, "Anon comment", "2026-05-09T12:00:00Z"),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        # The anon journal is newer → must NOT be deleted by tightened rule
+        delete_ids = {j["id"] for j in to_delete}
+        assert 2 not in delete_ids, (
+            "Anonymous journal newer than earliest real-author must NOT be deleted "
+            "(tightened heuristic — may be a legitimate Anonymous comment)"
+        )
+
+    def test_anon_same_timestamp_as_real_is_kept(self) -> None:
+        """Anonymous with same timestamp as earliest real-author must be kept (boundary)."""
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        ts = "2026-05-09T10:00:00Z"
+        journals = [
+            _journal(1, 5040, 61, "Real comment", ts),
+            _journal(2, 5040, ANON, "Anon comment", ts),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        delete_ids = {j["id"] for j in to_delete}
+        assert 2 not in delete_ids, "Anonymous journal at same timestamp as earliest real-author must NOT be deleted"
+
+    def test_wp_with_only_anon_not_touched(self) -> None:
+        """WP with only Anonymous journals: heuristic does not apply."""
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        journals = [
+            _journal(1, 5040, ANON, "Anon A", "2026-05-07T10:00:00Z"),
+            _journal(2, 5040, ANON, "Anon B", "2026-05-07T11:00:00Z"),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        assert to_delete == [], "No real-author journals → heuristic must not delete anything"
+
+    def test_run_respects_tightened_heuristic(self) -> None:
+        """run() with also_delete_orphan_anonymous keeps newer Anonymous journals."""
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                # Real-author journal at 11:00
+                _journal(1, 5040, 61, "Real comment", "2026-05-09T11:00:00Z"),
+                # Anon journal at 12:00 — NEWER than real → must be KEPT
+                _journal(2, 5040, ANON, "Anon comment", "2026-05-09T12:00:00Z"),
+            ],
+        }
+
+        stats = run(
+            "NRS",
+            apply=False,
+            logger=self._make_logger(),
+            op_client=mock_op,
+            also_delete_orphan_anonymous=True,
+        )
+
+        # The anon is newer → must not be scheduled for deletion
+        assert stats["to_delete"] == 0, (
+            f"Expected 0 deletions (anon is newer than real-author), got {stats['to_delete']}"
+        )

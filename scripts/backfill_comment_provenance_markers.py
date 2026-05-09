@@ -76,7 +76,13 @@ _DEFAULT_DATA_DIR = Path("var/data")
 def _setup_logging(log_path: Path) -> logging.Logger:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("backfill_comment_provenance")
+    # Guard against duplicate handlers on re-invocation (e.g. repeated calls
+    # from tests or reloads).  If handlers are already attached, skip adding
+    # new ones to avoid log-line duplication.
+    if logger.handlers:
+        return logger
     logger.setLevel(logging.DEBUG)
+    logger.propagate = False
     fmt = logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s")
 
     ch = logging.StreamHandler(sys.stdout)
@@ -104,8 +110,10 @@ def _pair_journals_with_comments(
 ) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], str | None]:
     """Pair OP journals with Jira comments by chronological order.
 
-    Pre-filters already-marked journals from ``op_journals`` before pairing
-    so the function is idempotent on WPs that are partially backfilled.
+    All-or-nothing semantics: if any OP journal already carries a provenance
+    marker the whole WP is considered partially backfilled and skipped.
+    Partial backfill cannot be safely completed by positional pairing because
+    the already-marked journal's position shifts all subsequent pairings.
 
     Args:
         op_journals: OP journal dicts with keys ``id``, ``wp_id``,
@@ -121,12 +129,22 @@ def _pair_journals_with_comments(
         on success or a descriptive string when the WP must be skipped.
         When ``skip_reason`` is set ``pairs`` is always ``[]``.
     """
-    # Exclude already-marked journals — they need no update.
+    marked = [j for j in op_journals if _MARKER_RE.search(j["notes"])]
     unmarked = [j for j in op_journals if not _MARKER_RE.search(j["notes"])]
 
     # If all journals are already marked: nothing to do, not an error.
     if not unmarked:
         return [], None
+
+    # Partial backfill: some marked, some not.  Cannot safely pair by position
+    # because the marked journal occupies a slot in the ordinal sequence.
+    # Skip with a clear diagnostic rather than a misleading "count mismatch".
+    if marked:
+        return [], (
+            f"partially backfilled: {len(marked)} journal(s) already marked, "
+            f"{len(unmarked)} unmarked — skipping (all-or-nothing policy); "
+            f"re-run after manually removing or verifying existing markers"
+        )
 
     # Count check: we need a 1:1 match.
     if len(unmarked) != len(jira_comments):
@@ -217,30 +235,48 @@ end
 # ---------------------------------------------------------------------------
 
 
-def _default_fetch_jira_comments(jira_issue_key: str) -> list[dict[str, Any]]:
-    """Fetch Jira comments for an issue key using the configured JiraClient.
+def _make_jira_fetcher(jira_client: Any) -> Any:
+    """Return a ``fetch_jira_comments`` callable bound to the given JiraClient.
 
-    Returns a list of dicts with keys ``id``, ``author_account_id``, ``body``.
+    The returned callable has the signature
+    ``(jira_issue_key: str) -> list[dict]`` expected by :func:`run`.
+    Constructing the client once and binding it here avoids per-call
+    reconnection overhead.
+    """
+
+    def _fetch(jira_issue_key: str) -> list[dict[str, Any]]:
+        raw_comments = jira_client.jira.comments(jira_issue_key)
+        result = []
+        for c in raw_comments:
+            author = getattr(c, "author", None)
+            account_id = ""
+            if author is not None:
+                account_id = getattr(author, "accountId", "") or ""
+            result.append(
+                {
+                    "id": getattr(c, "id", ""),
+                    "author_account_id": account_id,
+                    "body": getattr(c, "body", ""),
+                }
+            )
+        return result
+
+    return _fetch
+
+
+def _default_fetch_jira_comments(jira_issue_key: str) -> list[dict[str, Any]]:
+    """Fetch Jira comments for an issue key, constructing a JiraClient each call.
+
+    .. deprecated::
+        Prefer :func:`_make_jira_fetcher` with a shared client instance.
+        This function exists for backward compatibility; ``main()`` uses
+        :func:`_make_jira_fetcher` to avoid per-call reconnection overhead.
     """
     # Lazy import to avoid side effects during tests.
     from src.infrastructure.jira.jira_client import JiraClient  # noqa: PLC0415
 
     client = JiraClient()
-    raw_comments = client.jira.comments(jira_issue_key)
-    result = []
-    for c in raw_comments:
-        author = getattr(c, "author", None)
-        account_id = ""
-        if author is not None:
-            account_id = getattr(author, "accountId", "") or ""
-        result.append(
-            {
-                "id": getattr(c, "id", ""),
-                "author_account_id": account_id,
-                "body": getattr(c, "body", ""),
-            }
-        )
-    return result
+    return _make_jira_fetcher(client)(jira_issue_key)
 
 
 # ---------------------------------------------------------------------------
@@ -273,19 +309,22 @@ def run(
 
     Returns:
         Dict with keys: ``wps_processed``, ``wps_skipped``,
-        ``would_update`` (dry-run), ``updated`` (apply),
-        ``skipped``, ``errors``.
+        ``would_update`` (dry-run), ``updated`` (apply), ``errors``.
     """
     mode = "DRY-RUN" if dry_run else "APPLY"
     logger.info("Backfill provenance markers  Mode: %s  WPs: %d", mode, len(wp_mapping))
 
     stats: dict[str, int] = {
         "wps_processed": 0,
-        "skipped": 0,
+        "wps_skipped": 0,
         "would_update": 0,
         "updated": 0,
         "errors": 0,
     }
+
+    # Accumulate all (journal_id, new_notes) pairs across WPs for a single
+    # batched Rails write at the end (issue #4 — reduce Rails round-trips).
+    all_updates: list[tuple[int, str]] = []
 
     for entry in wp_mapping:
         jira_key: str = entry["jira_key"]
@@ -328,7 +367,7 @@ def run(
                 jira_key,
                 skip_reason,
             )
-            stats["skipped"] += 1
+            stats["wps_skipped"] += 1
             continue
 
         if not pairs:
@@ -357,21 +396,35 @@ def run(
             stats["would_update"] += len(updates)
             continue
 
-        # --- Apply updates ---
-        update_script = _build_update_markers_script(updates)
-        try:
-            update_result = op_client.execute_query_to_json_file(update_script)
-            n = update_result.get("updated", 0) if isinstance(update_result, dict) else 0
-            stats["updated"] += n
-            logger.info("WP#%d (%s): updated %d journal(s)", op_wp_id, jira_key, n)
-        except Exception as exc:
-            logger.error("WP#%d (%s): update failed: %s", op_wp_id, jira_key, exc)
-            stats["errors"] += 1
+        # Accumulate updates for a batched Rails write (see below).
+        all_updates.extend(updates)
+
+    # --- Apply accumulated updates in one batched Rails call ---
+    # Batching reduces the number of Rails console round-trips from O(WPs) to
+    # O(ceil(total_journals / batch_size)).
+    if not dry_run and all_updates:
+        _batch_size = 200
+        for i in range(0, len(all_updates), _batch_size):
+            batch = all_updates[i : i + _batch_size]
+            update_script = _build_update_markers_script(batch)
+            try:
+                update_result = op_client.execute_query_to_json_file(update_script)
+                n = update_result.get("updated", 0) if isinstance(update_result, dict) else 0
+                stats["updated"] += n
+                logger.info(
+                    "Batch update %d–%d: updated %d journal(s)",
+                    i + 1,
+                    i + len(batch),
+                    n,
+                )
+            except Exception as exc:
+                logger.error("Batch update %d–%d failed: %s", i + 1, i + len(batch), exc)
+                stats["errors"] += 1
 
     logger.info(
         "Done.  processed=%d  skipped=%d  would_update=%d  updated=%d  errors=%d",
         stats["wps_processed"],
-        stats["skipped"],
+        stats["wps_skipped"],
         stats["would_update"],
         stats["updated"],
         stats["errors"],
@@ -422,7 +475,24 @@ def _load_wp_mapping(data_dir: Path, project_key: str) -> list[dict[str, Any]]:
 
 
 def _load_user_mapping(data_dir: Path) -> dict[str, int]:
-    """Load user_mapping.json and return ``{jira_account_id: op_user_id}``."""
+    """Load user_mapping.json and return a multi-keyed ``{identifier: op_user_id}`` dict.
+
+    ``user_mapping.json`` is keyed by display name (outer key), but Jira
+    comment authors are identified by Jira Server *key* (e.g. ``JIRAUSER12345``
+    or ``ID12021``), login name, email address, or display name.
+
+    This function builds a lookup indexed by every probe field present on each
+    entry, following the canonical probe order from
+    ``IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS``:
+    ``jira_key`` → ``jira_name`` → ``jira_display_name`` → ``jira_email``.
+
+    The outer key (display name or jira_key) is also indexed so that mappings
+    whose outer key happens to be the jira_key (e.g. ``"JIRAUSER13400"``) are
+    still resolvable.
+
+    Later insertions do not overwrite earlier ones so the higher-priority probe
+    fields win in the rare case two entries share a secondary field value.
+    """
     mapping_path = data_dir / "user_mapping.json"
     if not mapping_path.exists():
         return {}
@@ -430,12 +500,36 @@ def _load_user_mapping(data_dir: Path) -> dict[str, int]:
     with mapping_path.open("r", encoding="utf-8") as fh:
         raw: dict[str, Any] = json.load(fh)
 
+    # Probe fields in priority order (mirrors IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS
+    # mapped to the user_mapping.json entry field names).
+    _PROBE_ENTRY_FIELDS: tuple[str, ...] = (
+        "jira_key",  # Server/DC key (e.g. JIRAUSER12345, ID12021)
+        "jira_name",  # Server login name (e.g. anne.geissler)
+        "jira_display_name",  # Display name
+        "jira_email",  # Email address
+    )
+
     result: dict[str, int] = {}
-    for jira_id, entry in raw.items():
-        if isinstance(entry, dict):
-            op_id = entry.get("openproject_id")
-            if op_id:
-                result[str(jira_id)] = int(op_id)
+
+    for outer_key, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        op_id = entry.get("openproject_id")
+        if not op_id:
+            continue
+        op_user_id = int(op_id)
+
+        # Index by each probe field in priority order; skip already-set keys
+        # so higher-priority fields win over lower-priority ones.
+        for field in _PROBE_ENTRY_FIELDS:
+            value = entry.get(field)
+            if value and str(value) not in result:
+                result[str(value)] = op_user_id
+
+        # Also index by the outer key (may be display name or jira_key).
+        if outer_key and outer_key not in result:
+            result[outer_key] = op_user_id
+
     return result
 
 
@@ -492,15 +586,19 @@ def main(argv: list[str] | None = None) -> int:
     user_mapping = _load_user_mapping(data_dir)
     logger.info("Loaded %d user mapping entries", len(user_mapping))
 
+    from src.infrastructure.jira.jira_client import JiraClient  # noqa: PLC0415
     from src.infrastructure.openproject.openproject_client import OpenProjectClient  # noqa: PLC0415
 
+    # Construct clients once; binding the Jira client to a fetcher closure
+    # avoids per-WP reconnection overhead.
+    jira_client = JiraClient()
     op_client = OpenProjectClient()
 
     try:
         stats = run(
             wp_mapping=wp_mapping,
             user_mapping=user_mapping,
-            fetch_jira_comments=_default_fetch_jira_comments,
+            fetch_jira_comments=_make_jira_fetcher(jira_client),
             op_client=op_client,
             dry_run=not args.apply,
             logger=logger,

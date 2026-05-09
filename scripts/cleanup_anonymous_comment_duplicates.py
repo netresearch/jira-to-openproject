@@ -28,10 +28,14 @@ This script deduplicates those journals **safely**:
 
 Additionally, when ``--also-delete-orphan-anonymous`` is passed: for every
 work package that has **both** real-author journals AND Anonymous journals,
-ALL of the Anonymous journals are deleted regardless of content similarity.
-This handles the case where the broken-run renderer produced different text
-(e.g. ``concourse~~ci`` vs ``concourse-ci``) so text-based dedup would not
-catch the duplicate.
+Anonymous journals that are **older** than the earliest real-author journal
+are deleted regardless of content similarity.  Anonymous journals that
+post-date (or share the timestamp of) the earliest real-author journal are
+kept — they may be legitimate comments from deactivated or unmapped Jira
+users.  This tightened heuristic handles the case where the broken-run
+renderer produced different text (e.g. ``concourse~~ci`` vs ``concourse-ci``)
+so text-based dedup would not catch the duplicate, while avoiding false
+deletions of legitimate newer Anonymous comments.
 
 Defaults to ``--dry-run``.  Deletion requires explicit ``--apply``.
 ``--also-delete-orphan-anonymous`` is opt-in (not the default).
@@ -157,17 +161,21 @@ def _plan_deletions(
 def _plan_orphan_anonymous_deletions(
     journals: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Return all Anonymous journals from a WP that also has real-author journals.
+    """Return Anonymous journals from a WP that are OLDER than the earliest real-author journal.
 
-    This heuristic handles the case where broken-run Anonymous journals have
-    *different* text from the correctly-migrated real-author journals (e.g.
-    the old converter rendered ``concourse~~ci`` instead of ``concourse-ci``).
-    Text-based dedup misses these because the normalised notes don't match.
+    This tightened heuristic handles the case where broken-run Anonymous
+    journals have *different* text from the correctly-migrated real-author
+    journals (e.g. the old converter rendered ``concourse~~ci`` instead of
+    ``concourse-ci``).  Text-based dedup misses these because the normalised
+    notes don't match.
 
     The heuristic is sound because:
     - If a WP already has real-author journals the correct migration has run.
-    - Anonymous journals on such a WP are artifacts of pre-fix broken runs.
-    - It is safe to delete ALL Anonymous journals from such a WP.
+    - Anonymous journals that PRE-DATE the earliest real-author journal are
+      artifacts of the pre-fix broken runs and can safely be deleted.
+    - Anonymous journals that POST-DATE (or share the same timestamp as) the
+      earliest real-author journal may be legitimate comments from deactivated
+      or unmapped Jira users — they are KEPT.
 
     When a WP has NO real-author journals the heuristic does not apply —
     those Anonymous journals may be legitimately the only copies.
@@ -175,10 +183,15 @@ def _plan_orphan_anonymous_deletions(
     Returns:
         List of Anonymous journals to delete (may be empty).
     """
-    has_real = any(j["user_id"] != ANONYMOUS_USER_ID for j in journals)
-    if not has_real:
+    real_timestamps = [j["created_at"] for j in journals if j["user_id"] != ANONYMOUS_USER_ID]
+    if not real_timestamps:
+        # No real-author journals → heuristic does not apply.
         return []
-    return [j for j in journals if j["user_id"] == ANONYMOUS_USER_ID]
+
+    earliest_real = min(real_timestamps)
+    # Only delete Anonymous journals that are strictly older than the earliest
+    # real-author journal.  Journals at the same timestamp or newer are kept.
+    return [j for j in journals if j["user_id"] == ANONYMOUS_USER_ID and j["created_at"] < earliest_real]
 
 
 def _build_fetch_script(project_key: str) -> str:
@@ -242,9 +255,12 @@ def run(
         op_client: OpenProjectClient (or any object with
             ``execute_query_to_json_file``).
         also_delete_orphan_anonymous: When ``True``, for every WP that has
-            **both** real-author journals AND Anonymous journals, all Anonymous
-            journals are deleted regardless of whether their text matches a
-            real-author journal.  Defaults to ``False`` (opt-in).
+            **both** real-author journals AND Anonymous journals, Anonymous
+            journals that are **older** than the earliest real-author journal
+            are deleted regardless of whether their text matches a real-author
+            journal.  Anonymous journals newer-than or equal-to the earliest
+            real-author journal are kept (they may be legitimate comments from
+            deactivated/unmapped Jira users).  Defaults to ``False`` (opt-in).
 
     Returns:
         Dict with keys: ``wps_scanned``, ``duplicate_groups``, ``to_delete``,
@@ -420,7 +436,11 @@ def main(argv: list[str] | None = None) -> int:
         dest="also_delete_orphan_anonymous",
         help=(
             "For every WP that has both real-author journals AND Anonymous journals, "
-            "delete ALL Anonymous journals regardless of content similarity.  "
+            "delete Anonymous journals that are OLDER than the earliest real-author "
+            "journal, regardless of content similarity.  "
+            "Anonymous journals newer-than or equal-to the earliest real-author "
+            "journal are kept (may be legitimate comments from deactivated/unmapped "
+            "Jira users).  "
             "This handles the case where broken-run renderers produced different text "
             "so text-based dedup misses the duplicates.  "
             "Off by default — operator must explicitly opt in."
