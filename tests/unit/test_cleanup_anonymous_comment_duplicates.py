@@ -467,3 +467,328 @@ class TestDuplicateGroupMetric:
             f"Expected 3 duplicate groups (one per WP), got {stats['duplicate_groups']}. "
             f"duplicate_groups must count groups, not individual journals to delete."
         )
+
+
+# ---------------------------------------------------------------------------
+# --also-delete-orphan-anonymous flag
+# ---------------------------------------------------------------------------
+
+
+class TestOrphanAnonymousDeletion:
+    """Tests for the --also-delete-orphan-anonymous flag.
+
+    When a WP has *both* real-author journals AND Anonymous journals, the
+    Anonymous ones are artifacts of broken pre-fix migration runs.  When the
+    flag is set, every Anonymous journal in such a WP should be deleted
+    regardless of content similarity.
+
+    When the flag is NOT set the existing text-based dedup logic is the only
+    cleanup path (existing behaviour is unchanged).
+    """
+
+    def _make_logger(self) -> MagicMock:
+        logger = MagicMock()
+        logger.info = MagicMock()
+        logger.error = MagicMock()
+        logger.warning = MagicMock()
+        return logger
+
+    def test_flag_set_wp_with_real_and_anon_deletes_all_anon(self) -> None:
+        """WP with 1 real + 2 anonymous + flag → 2 deletions, 1 kept."""
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                _journal(1, 5040, ANON, "concourse~~ci", "2026-05-07T09:00:00Z"),
+                _journal(2, 5040, ANON, "concourse-ci -~~f 30 ~~", "2026-05-07T10:00:00Z"),
+                _journal(3, 5040, 61, "concourse-ci -f 30 -", "2026-05-09T10:00:00Z"),
+            ],
+        }
+
+        stats = run(
+            "NRS",
+            apply=False,
+            logger=self._make_logger(),
+            op_client=mock_op,
+            also_delete_orphan_anonymous=True,
+        )
+
+        assert stats["to_delete"] == 2
+        assert stats["deleted"] == 0  # dry-run
+
+    def test_flag_set_wp_with_only_anon_no_extra_deletions(self) -> None:
+        """WP with only anonymous journals (no real) + flag → no orphan deletions
+        (existing text-based logic only — no real author present to displace them).
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                _journal(1, 5040, ANON, "unique note A", "2026-05-07T09:00:00Z"),
+                _journal(2, 5040, ANON, "unique note B", "2026-05-07T10:00:00Z"),
+            ],
+        }
+
+        stats = run(
+            "NRS",
+            apply=False,
+            logger=self._make_logger(),
+            op_client=mock_op,
+            also_delete_orphan_anonymous=True,
+        )
+
+        # No real-author journals → orphan heuristic does NOT apply.
+        assert stats["to_delete"] == 0
+
+    def test_flag_set_wp_with_only_real_no_deletions(self) -> None:
+        """WP with only real-author journals + flag → no deletions."""
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        mock_op = MagicMock()
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                _journal(1, 5040, 61, "First real comment", "2026-05-09T09:00:00Z"),
+                _journal(2, 5040, 281, "Second real comment", "2026-05-09T10:00:00Z"),
+            ],
+        }
+
+        stats = run(
+            "NRS",
+            apply=False,
+            logger=self._make_logger(),
+            op_client=mock_op,
+            also_delete_orphan_anonymous=True,
+        )
+
+        assert stats["to_delete"] == 0
+
+    def test_flag_not_set_uses_only_text_based_dedup(self) -> None:
+        """Without --also-delete-orphan-anonymous, the divergent-text anon journals
+        are NOT deleted (existing behaviour).  Only exact-match (after marker strip)
+        duplicates are removed.
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                # These two anon notes differ from the real one — no text match.
+                _journal(1, 5040, ANON, "concourse~~ci", "2026-05-07T09:00:00Z"),
+                _journal(2, 5040, ANON, "concourse-ci -~~f 30 ~~", "2026-05-07T10:00:00Z"),
+                _journal(3, 5040, 61, "concourse-ci -f 30 -", "2026-05-09T10:00:00Z"),
+            ],
+        }
+
+        stats = run(
+            "NRS",
+            apply=False,
+            logger=self._make_logger(),
+            op_client=mock_op,
+            # flag NOT set (default)
+        )
+
+        # Without the flag, text-based dedup finds 3 distinct notes → 0 deletions.
+        assert stats["to_delete"] == 0
+
+    def test_flag_set_apply_deletes_orphan_anon_journals(self) -> None:
+        """With flag + --apply, orphan Anonymous journals are actually deleted."""
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+        fetch_result = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                _journal(10, 5040, ANON, "broken-render-A", "2026-05-07T09:00:00Z"),
+                _journal(11, 5040, ANON, "broken-render-B", "2026-05-07T10:00:00Z"),
+                _journal(12, 5040, 61, "correct render", "2026-05-09T10:00:00Z"),
+            ],
+        }
+        delete_result = {"deleted": 2}
+        mock_op.execute_query_to_json_file.side_effect = [fetch_result, delete_result]
+
+        stats = run(
+            "NRS",
+            apply=True,
+            logger=self._make_logger(),
+            op_client=mock_op,
+            also_delete_orphan_anonymous=True,
+        )
+
+        assert stats["to_delete"] == 2
+        assert stats["deleted"] == 2
+        # Delete call must contain ids 10 and 11, NOT 12
+        delete_script: str = mock_op.execute_query_to_json_file.call_args_list[1][0][0]
+        import json as _json
+
+        start = delete_script.find("[")
+        end = delete_script.find("]", start) + 1
+        ids = _json.loads(delete_script[start:end])
+        assert set(ids) == {10, 11}
+
+    def test_flag_set_logs_orphan_reason(self) -> None:
+        """Orphan deletions must be logged with the reason 'Anonymous-orphan ...'."""
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                _journal(1, 5040, ANON, "broken text", "2026-05-07T09:00:00Z"),
+                _journal(2, 5040, 61, "correct text", "2026-05-09T10:00:00Z"),
+            ],
+        }
+
+        logger = self._make_logger()
+        run(
+            "NRS",
+            apply=False,
+            logger=logger,
+            op_client=mock_op,
+            also_delete_orphan_anonymous=True,
+        )
+
+        # At least one info call must mention the orphan reason
+        info_calls = [str(call) for call in logger.info.call_args_list]
+        assert any("Anonymous-orphan" in c for c in info_calls), (
+            "Expected at least one log message containing 'Anonymous-orphan'"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #5: Tightened orphan-Anonymous heuristic
+# ---------------------------------------------------------------------------
+
+
+class TestOrphanAnonymousTightenedHeuristic:
+    """Regression for review comment #5.
+
+    The tightened rule: only delete Anonymous journals that are OLDER than
+    the earliest real-author journal on the same WP.
+
+    Rationale: if an Anonymous journal is NEWER than all real-author journals
+    it may be a legitimately-authored Anonymous comment (deactivated/unmapped
+    user) and must be kept.
+    """
+
+    def _make_logger(self) -> MagicMock:
+        logger = MagicMock()
+        logger.info = MagicMock()
+        logger.error = MagicMock()
+        logger.warning = MagicMock()
+        return logger
+
+    def test_anon_older_than_real_is_deleted(self) -> None:
+        """3 Anonymous (2026-05-07) + 2 real-author (2026-05-09).
+
+        All 3 anonymous journals are OLDER than the earliest real-author
+        journal → tightened rule deletes them.
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        journals = [
+            _journal(1, 5040, ANON, "Anon A", "2026-05-07T10:00:00Z"),
+            _journal(2, 5040, ANON, "Anon B", "2026-05-07T11:00:00Z"),
+            _journal(3, 5040, ANON, "Anon C", "2026-05-07T12:00:00Z"),
+            _journal(4, 5040, 61, "Real A", "2026-05-09T09:00:00Z"),
+            _journal(5, 5040, 281, "Real B", "2026-05-09T10:00:00Z"),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        delete_ids = {j["id"] for j in to_delete}
+        # All 3 anon journals are older than earliest real (2026-05-09T09:00:00Z)
+        assert delete_ids == {1, 2, 3}, f"Expected anon journals 1,2,3 deleted (older than real), got: {delete_ids}"
+
+    def test_anon_newer_than_real_is_kept(self) -> None:
+        """1 Anonymous (2026-05-09 12:00) + 1 real-author (2026-05-09 11:00).
+
+        The Anonymous journal is NEWER than the only real-author journal →
+        tightened rule keeps it (may be a legitimate Anonymous comment).
+        Aggressive rule would delete it — tightened rule must not.
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        journals = [
+            _journal(1, 5040, 61, "Real comment", "2026-05-09T11:00:00Z"),
+            _journal(2, 5040, ANON, "Anon comment", "2026-05-09T12:00:00Z"),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        # The anon journal is newer → must NOT be deleted by tightened rule
+        delete_ids = {j["id"] for j in to_delete}
+        assert 2 not in delete_ids, (
+            "Anonymous journal newer than earliest real-author must NOT be deleted "
+            "(tightened heuristic — may be a legitimate Anonymous comment)"
+        )
+
+    def test_anon_same_timestamp_as_real_is_kept(self) -> None:
+        """Anonymous with same timestamp as earliest real-author must be kept (boundary)."""
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        ts = "2026-05-09T10:00:00Z"
+        journals = [
+            _journal(1, 5040, 61, "Real comment", ts),
+            _journal(2, 5040, ANON, "Anon comment", ts),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        delete_ids = {j["id"] for j in to_delete}
+        assert 2 not in delete_ids, "Anonymous journal at same timestamp as earliest real-author must NOT be deleted"
+
+    def test_wp_with_only_anon_not_touched(self) -> None:
+        """WP with only Anonymous journals: heuristic does not apply."""
+        from scripts.cleanup_anonymous_comment_duplicates import _plan_orphan_anonymous_deletions
+
+        ANON = 2
+        journals = [
+            _journal(1, 5040, ANON, "Anon A", "2026-05-07T10:00:00Z"),
+            _journal(2, 5040, ANON, "Anon B", "2026-05-07T11:00:00Z"),
+        ]
+        to_delete = _plan_orphan_anonymous_deletions(journals)
+        assert to_delete == [], "No real-author journals → heuristic must not delete anything"
+
+    def test_run_respects_tightened_heuristic(self) -> None:
+        """run() with also_delete_orphan_anonymous keeps newer Anonymous journals."""
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 1,
+            "journals": [
+                # Real-author journal at 11:00
+                _journal(1, 5040, 61, "Real comment", "2026-05-09T11:00:00Z"),
+                # Anon journal at 12:00 — NEWER than real → must be KEPT
+                _journal(2, 5040, ANON, "Anon comment", "2026-05-09T12:00:00Z"),
+            ],
+        }
+
+        stats = run(
+            "NRS",
+            apply=False,
+            logger=self._make_logger(),
+            op_client=mock_op,
+            also_delete_orphan_anonymous=True,
+        )
+
+        # The anon is newer → must not be scheduled for deletion
+        assert stats["to_delete"] == 0, (
+            f"Expected 0 deletions (anon is newer than real-author), got {stats['to_delete']}"
+        )

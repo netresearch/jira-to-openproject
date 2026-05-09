@@ -26,13 +26,26 @@ This script deduplicates those journals **safely**:
 5. Log every deletion to stdout AND to
    ``var/logs/cleanup_anonymous_comment_duplicates_<ts>.log``.
 
+Additionally, when ``--also-delete-orphan-anonymous`` is passed: for every
+work package that has **both** real-author journals AND Anonymous journals,
+Anonymous journals that are **older** than the earliest real-author journal
+are deleted regardless of content similarity.  Anonymous journals that
+post-date (or share the timestamp of) the earliest real-author journal are
+kept — they may be legitimate comments from deactivated or unmapped Jira
+users.  This tightened heuristic handles the case where the broken-run
+renderer produced different text (e.g. ``concourse~~ci`` vs ``concourse-ci``)
+so text-based dedup would not catch the duplicate, while avoiding false
+deletions of legitimate newer Anonymous comments.
+
 Defaults to ``--dry-run``.  Deletion requires explicit ``--apply``.
+``--also-delete-orphan-anonymous`` is opt-in (not the default).
 
 Usage::
 
     .venv/bin/python -m scripts.cleanup_anonymous_comment_duplicates NRS
     .venv/bin/python -m scripts.cleanup_anonymous_comment_duplicates NRS --dry-run
     .venv/bin/python -m scripts.cleanup_anonymous_comment_duplicates NRS --apply
+    .venv/bin/python -m scripts.cleanup_anonymous_comment_duplicates NRS --apply --also-delete-orphan-anonymous
 
 """
 
@@ -145,6 +158,42 @@ def _plan_deletions(
     return to_keep, to_delete
 
 
+def _plan_orphan_anonymous_deletions(
+    journals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return Anonymous journals from a WP that are OLDER than the earliest real-author journal.
+
+    This tightened heuristic handles the case where broken-run Anonymous
+    journals have *different* text from the correctly-migrated real-author
+    journals (e.g. the old converter rendered ``concourse~~ci`` instead of
+    ``concourse-ci``).  Text-based dedup misses these because the normalised
+    notes don't match.
+
+    The heuristic is sound because:
+    - If a WP already has real-author journals the correct migration has run.
+    - Anonymous journals that PRE-DATE the earliest real-author journal are
+      artifacts of the pre-fix broken runs and can safely be deleted.
+    - Anonymous journals that POST-DATE (or share the same timestamp as) the
+      earliest real-author journal may be legitimate comments from deactivated
+      or unmapped Jira users — they are KEPT.
+
+    When a WP has NO real-author journals the heuristic does not apply —
+    those Anonymous journals may be legitimately the only copies.
+
+    Returns:
+        List of Anonymous journals to delete (may be empty).
+    """
+    real_timestamps = [j["created_at"] for j in journals if j["user_id"] != ANONYMOUS_USER_ID]
+    if not real_timestamps:
+        # No real-author journals → heuristic does not apply.
+        return []
+
+    earliest_real = min(real_timestamps)
+    # Only delete Anonymous journals that are strictly older than the earliest
+    # real-author journal.  Journals at the same timestamp or newer are kept.
+    return [j for j in journals if j["user_id"] == ANONYMOUS_USER_ID and j["created_at"] < earliest_real]
+
+
 def _build_fetch_script(project_key: str) -> str:
     """Ruby script to fetch all non-empty journals for WPs in the project."""
     safe_key = project_key.upper()
@@ -193,8 +242,25 @@ def run(
     apply: bool,
     logger: logging.Logger,
     op_client: Any,
+    also_delete_orphan_anonymous: bool = False,
 ) -> dict[str, int]:
     """Analyse and optionally clean up duplicate comment journals.
+
+    Args:
+        project_key: Jira/OP project key (e.g. ``NRS``).
+        apply: When ``True`` deletions are executed; when ``False`` (default)
+            the run is a dry-run — all analysis is performed but nothing is
+            deleted.
+        logger: Configured logger instance.
+        op_client: OpenProjectClient (or any object with
+            ``execute_query_to_json_file``).
+        also_delete_orphan_anonymous: When ``True``, for every WP that has
+            **both** real-author journals AND Anonymous journals, Anonymous
+            journals that are **older** than the earliest real-author journal
+            are deleted regardless of whether their text matches a real-author
+            journal.  Anonymous journals newer-than or equal-to the earliest
+            real-author journal are kept (they may be legitimate comments from
+            deactivated/unmapped Jira users).  Defaults to ``False`` (opt-in).
 
     Returns:
         Dict with keys: ``wps_scanned``, ``duplicate_groups``, ``to_delete``,
@@ -202,7 +268,8 @@ def run(
 
     """
     mode = "APPLY" if apply else "DRY-RUN"
-    logger.info("Project: %s  Mode: %s", project_key, mode)
+    orphan_flag = " +orphan-anon" if also_delete_orphan_anonymous else ""
+    logger.info("Project: %s  Mode: %s%s", project_key, mode, orphan_flag)
 
     # Step 1: Fetch all non-empty journals
     logger.info("Fetching journals from OpenProject via Rails …")
@@ -236,38 +303,68 @@ def run(
         by_wp.setdefault(wp_id, []).append(j)
 
     all_to_delete: list[dict[str, Any]] = []
+    # Track IDs already scheduled for deletion to avoid double-counting when
+    # both text-based dedup AND the orphan heuristic flag the same journal.
+    to_delete_ids: set[int] = set()
     duplicate_group_count = 0
 
     for wp_id, wp_journals in by_wp.items():
-        _kept, to_delete = _plan_deletions(wp_journals)
-        if to_delete:
-            # Count the number of duplicate *groups* for this WP (each unique
-            # normalised note text that has more than one copy is one group).
-            # This is distinct from len(to_delete) which counts journals to remove.
+        wp_to_delete: list[dict[str, Any]] = []
+
+        # --- text-based dedup (always active) ---
+        _kept, text_to_delete = _plan_deletions(wp_journals)
+        for j in text_to_delete:
+            if j["id"] not in to_delete_ids:
+                wp_to_delete.append(j)
+                to_delete_ids.add(j["id"])
+
+        # Count duplicate groups (unique note texts with >1 copy for this WP)
+        if text_to_delete:
             groups: dict[str, list[dict[str, Any]]] = {}
             for j in wp_journals:
                 key = _strip_marker(j["notes"])
                 groups.setdefault(key, []).append(j)
             duplicate_group_count += sum(1 for g in groups.values() if len(g) > 1)
-            for j in to_delete:
-                reason = "Anonymous-author duplicate" if j["user_id"] == ANONYMOUS_USER_ID else "duplicate"
-                logger.info(
-                    "  [%s] WP#%d  Journal#%d  user_id=%d  created_at=%s  reason=%s",
-                    "DELETE" if apply else "WOULD DELETE",
-                    wp_id,
-                    j["id"],
-                    j["user_id"],
-                    j["created_at"],
-                    reason,
-                )
-                all_to_delete.append(j)
+
+        # --- orphan-anonymous heuristic (opt-in) ---
+        if also_delete_orphan_anonymous:
+            orphans = _plan_orphan_anonymous_deletions(wp_journals)
+            for j in orphans:
+                if j["id"] not in to_delete_ids:
+                    wp_to_delete.append(j)
+                    to_delete_ids.add(j["id"])
+
+        for j in wp_to_delete:
+            if j["user_id"] == ANONYMOUS_USER_ID and also_delete_orphan_anonymous:
+                # Check whether this was already flagged by text-based dedup or
+                # only by the orphan heuristic.
+                text_delete_ids = {x["id"] for x in text_to_delete}
+                if j["id"] not in text_delete_ids:
+                    reason = "Anonymous-orphan (WP also has real-author journals)"
+                else:
+                    reason = "Anonymous-author duplicate"
+            elif j["user_id"] == ANONYMOUS_USER_ID:
+                reason = "Anonymous-author duplicate"
+            else:
+                reason = "duplicate"
+
+            logger.info(
+                "  [%s] WP#%d  Journal#%d  user_id=%d  created_at=%s  reason=%s",
+                "DELETE" if apply else "WOULD DELETE",
+                wp_id,
+                j["id"],
+                j["user_id"],
+                j["created_at"],
+                reason,
+            )
+            all_to_delete.append(j)
 
     total_journals = len(journals_raw)
     total_to_delete = len(all_to_delete)
     logger.info(
-        "Summary: %d journals scanned, %d WPs with duplicates, %d journals to delete",
+        "Summary: %d journals scanned, %d WPs with deletions planned, %d journals to delete",
         total_journals,
-        len([wp for wp in by_wp.values() if any(j in all_to_delete for j in wp)]),
+        len({j["wp_id"] for j in all_to_delete}),
         total_to_delete,
     )
 
@@ -332,6 +429,23 @@ def main(argv: list[str] | None = None) -> int:
         dest="dry_run",
         help="Analyse and report only; do not delete (this is the default).",
     )
+    parser.add_argument(
+        "--also-delete-orphan-anonymous",
+        action="store_true",
+        default=False,
+        dest="also_delete_orphan_anonymous",
+        help=(
+            "For every WP that has both real-author journals AND Anonymous journals, "
+            "delete Anonymous journals that are OLDER than the earliest real-author "
+            "journal, regardless of content similarity.  "
+            "Anonymous journals newer-than or equal-to the earliest real-author "
+            "journal are kept (may be legitimate comments from deactivated/unmapped "
+            "Jira users).  "
+            "This handles the case where broken-run renderers produced different text "
+            "so text-based dedup misses the duplicates.  "
+            "Off by default — operator must explicitly opt in."
+        ),
+    )
     args = parser.parse_args(argv)
 
     project_key = args.project_key.upper()
@@ -357,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
             apply=args.apply,
             logger=logger,
             op_client=op_client,
+            also_delete_orphan_anonymous=args.also_delete_orphan_anonymous,
         )
     except Exception as exc:
         logger.error("Fatal: %s", exc)
