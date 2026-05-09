@@ -32,6 +32,18 @@ if TYPE_CHECKING:
     from jira import Issue
     from src.infrastructure.jira.jira_client import JiraClient
 
+# Maximum number of issue keys per ``search_issues`` call.
+#
+# URL-length limits vary by server: Apache Tomcat defaults to 8 KB
+# (``maxHttpHeaderSize``); Traefik defaults to 64 KB; intermediate proxies may
+# impose stricter limits.  Each URL-encoded, double-quoted Jira key —
+# e.g. ``%22NRS-4311%22%2C`` — is roughly 25 bytes when percent-encoded.
+# 25 keys therefore produce ≈ 625 bytes of JQL argument on top of the
+# ~100-byte base URL, staying safely under the lowest common limit.
+# 100 keys (the ``BatchProcessor`` default) would produce ≈ 2 500 bytes of
+# JQL argument alone, risking rejection on servers with a tighter URL cap.
+_FETCH_BATCH_CHUNK_SIZE: int = 25
+
 
 class JiraIssueService:
     """Issue-domain queries for ``JiraClient``."""
@@ -251,10 +263,55 @@ class JiraIssueService:
         return merged
 
     def _fetch_issues_batch(self, issue_keys: list[str], **kwargs: object) -> dict[str, Issue]:
-        """Fetch a batch of issues from Jira API."""
-        if not issue_keys:
+        """Fetch a batch of issues from Jira API.
+
+        Deduplicates ``issue_keys`` (preserving order), then splits them into
+        sub-chunks of at most ``_FETCH_BATCH_CHUNK_SIZE`` keys before building
+        the JQL query.  This prevents the ``key in (...)`` clause from growing
+        past the URL length limit enforced by Apache Tomcat and reverse proxies,
+        which can cause a spurious HTTP 401 response before the auth layer is
+        consulted.
+        """
+        # Deduplicate while preserving insertion order so the caller's ordering
+        # is respected and duplicate keys don't inflate chunk count or JQL size.
+        unique_keys = list(dict.fromkeys(k for k in issue_keys if k))
+        if not unique_keys:
             return {}
 
+        # Split into URL-safe sub-chunks and merge results.  The loop handles
+        # any list size uniformly — no need for a separate single-chunk branch.
+        merged: dict[str, Issue] = {}
+        for chunk_idx in range(0, len(unique_keys), _FETCH_BATCH_CHUNK_SIZE):
+            chunk = unique_keys[chunk_idx : chunk_idx + _FETCH_BATCH_CHUNK_SIZE]
+            chunk_result = self._fetch_single_chunk(
+                chunk,
+                chunk_idx // _FETCH_BATCH_CHUNK_SIZE,
+                **kwargs,
+            )
+            merged.update(chunk_result)
+        return merged
+
+    def _fetch_single_chunk(
+        self,
+        issue_keys: list[str],
+        chunk_index: int,
+        **kwargs: object,
+    ) -> dict[str, Issue]:
+        """Fetch one URL-safe chunk of issue keys from the Jira search API.
+
+        Args:
+            issue_keys:  The sub-list of keys to fetch (length ≤ ``_FETCH_BATCH_CHUNK_SIZE``).
+            chunk_index: Zero-based index of this chunk within the enclosing
+                         batch; included in the error log so operators can
+                         identify which range of keys failed.
+            **kwargs:    Forwarded from :meth:`_fetch_issues_batch`; may contain
+                         ``batch_num`` supplied by ``BatchProcessor`` for
+                         cross-batch log correlation.
+
+        Returns:
+            ``dict[key → Issue]`` for the keys that were found; empty dict on error.
+
+        """
         # Quote each key so a key containing a JQL reserved word /
         # special char (e.g. issue-key collisions with Jira keywords)
         # doesn't break the query. The pre-extraction code joined
@@ -270,11 +327,34 @@ class JiraIssueService:
                 expand="changelog",
             )
             return {issue.key: issue for issue in issues}
-        except Exception:
-            self._logger.exception(
-                "Batch issue fetch failed for %d issues",
-                len(issue_keys),
+        except Exception as exc:
+            batch_num = kwargs.get("batch_num")
+            first_key = issue_keys[0] if issue_keys else "?"
+            last_key = issue_keys[-1] if issue_keys else "?"
+            # Inspect the root cause to distinguish a known URL-length rejection
+            # (HTTP 400/401/414 from Tomcat or a proxy) from an unexpected error.
+            cause = exc.__cause__
+            is_url_length_error = (
+                isinstance(cause, Exception) and hasattr(cause, "status_code") and cause.status_code in {400, 401, 414}
             )
+            if is_url_length_error:
+                self._logger.warning(
+                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
+                    " (possible URL-length rejection, status=%s)",
+                    batch_num,
+                    chunk_index,
+                    first_key,
+                    last_key,
+                    cause.status_code,  # type: ignore[union-attr]
+                )
+            else:
+                self._logger.exception(
+                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]",
+                    batch_num,
+                    chunk_index,
+                    first_key,
+                    last_key,
+                )
             return {}
 
     # ── streaming ────────────────────────────────────────────────────────
