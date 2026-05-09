@@ -153,26 +153,26 @@ def _build_fetch_script(project_key: str) -> str:
     return f"""
 require 'json'
 proj = Project.find_by(identifier: '{safe_key.lower()}')
-unless proj
-  next {{error: 'project not found', identifier: '{safe_key.lower()}'}}
-end
-
-wp_ids = WorkPackage.where(project_id: proj.id).pluck(:id)
-journals = Journal
-  .where(journable_type: 'WorkPackage', journable_id: wp_ids)
-  .where.not(notes: [nil, ''])
-  .order(:journable_id, :created_at)
-  .pluck(:id, :journable_id, :user_id, :notes, :created_at)
-  .map {{|id, wp_id, user_id, notes, created_at|
-    {{
-      id: id,
-      wp_id: wp_id,
-      user_id: user_id,
-      notes: notes,
-      created_at: created_at
+if proj
+  wp_ids = WorkPackage.where(project_id: proj.id).pluck(:id)
+  journals = Journal
+    .where(journable_type: 'WorkPackage', journable_id: wp_ids)
+    .where.not(notes: [nil, ''])
+    .order(:journable_id, :created_at)
+    .pluck(:id, :journable_id, :user_id, :notes, :created_at)
+    .map {{|id, wp_id, user_id, notes, created_at|
+      {{
+        id: id,
+        wp_id: wp_id,
+        user_id: user_id,
+        notes: notes,
+        created_at: created_at
+      }}
     }}
-  }}
-{{project_id: proj.id, wp_ids_count: wp_ids.length, journals: journals}}
+  {{project_id: proj.id, wp_ids_count: wp_ids.length, journals: journals}}
+else
+  {{error: 'project not found', identifier: '{safe_key.lower()}'}}
+end
 """
 
 
@@ -241,7 +241,14 @@ def run(
     for wp_id, wp_journals in by_wp.items():
         _kept, to_delete = _plan_deletions(wp_journals)
         if to_delete:
-            duplicate_group_count += len(to_delete)
+            # Count the number of duplicate *groups* for this WP (each unique
+            # normalised note text that has more than one copy is one group).
+            # This is distinct from len(to_delete) which counts journals to remove.
+            groups: dict[str, list[dict[str, Any]]] = {}
+            for j in wp_journals:
+                key = _strip_marker(j["notes"])
+                groups.setdefault(key, []).append(j)
+            duplicate_group_count += sum(1 for g in groups.values() if len(g) > 1)
             for j in to_delete:
                 reason = "Anonymous-author duplicate" if j["user_id"] == ANONYMOUS_USER_ID else "duplicate"
                 logger.info(

@@ -45,15 +45,34 @@ from src.infrastructure.openproject.openproject_client import OpenProjectClient
 _COMMENT_PROVENANCE_MARKER = "<!-- j2o:jira-comment-id:{jira_comment_id} -->"
 
 
+def _normalize_comment_id(jcid: str | int | None) -> str | None:
+    """Normalize a Jira comment id to a non-empty stripped string or ``None``.
+
+    Treats ``None``, ``0`` (int), ``""``, and whitespace-only strings all as
+    absent (returns ``None``).  Any other value is converted to ``str`` and
+    stripped.  This prevents ``int(0)`` (falsy) or ``"  "`` (truthy but
+    meaningless) from producing inconsistent marker/idempotency behaviour.
+    """
+    if jcid is None:
+        return None
+    # Treat numeric zero as absent — Jira comment IDs are positive integers.
+    if isinstance(jcid, int) and jcid == 0:
+        return None
+    s = str(jcid).strip()
+    return s or None
+
+
 def _build_comment_with_marker(comment_text: str, jira_comment_id: str | int | None) -> str:
     """Append the provenance marker to *comment_text* when *jira_comment_id* is set.
 
-    If *jira_comment_id* is ``None`` or empty the comment is returned unchanged
-    so callers that don't have a Jira comment id (e.g. legacy paths) still work.
+    If *jira_comment_id* normalizes to ``None`` (i.e. it is ``None``, ``0``,
+    ``""``, or whitespace-only) the comment is returned unchanged so callers
+    that don't have a Jira comment id (e.g. legacy paths) still work.
     """
-    if not jira_comment_id:
+    normalized = _normalize_comment_id(jira_comment_id)
+    if normalized is None:
         return comment_text
-    marker = _COMMENT_PROVENANCE_MARKER.format(jira_comment_id=jira_comment_id)
+    marker = _COMMENT_PROVENANCE_MARKER.format(jira_comment_id=normalized)
     # Append on a new line so it doesn't run into the last word of the comment.
     return f"{comment_text}\n{marker}"
 
@@ -294,17 +313,25 @@ J2O_DATA
 
         # Build the idempotency check expression for Ruby.
         # When jira_comment_id is present we grep existing journals for the
-        # provenance marker; if found we skip (idempotent re-run).
-        if jira_comment_id:
+        # provenance marker; if found we evaluate to a 'skipped' hash without
+        # using bare `return` (which raises LocalJumpError at the top level of
+        # a Rails console eval).  Instead we use if/else so the script always
+        # evaluates to a hash in both branches.
+        normalized_jira_id = _normalize_comment_id(jira_comment_id)
+        if normalized_jira_id is not None:
             escaped_marker = escape_ruby_single_quoted(
-                _COMMENT_PROVENANCE_MARKER.format(jira_comment_id=jira_comment_id)
+                _COMMENT_PROVENANCE_MARKER.format(jira_comment_id=normalized_jira_id)
             )
-            ruby_idempotency_check = (
+            ruby_idempotency_open = (
                 f"existing_journal = wp.journals.where(\"notes LIKE '%{escaped_marker}%'\").first\n"
-                "          return {{ id: existing_journal.id, status: 'skipped' }} if existing_journal"
+                "          if existing_journal\n"
+                "            {{ id: existing_journal.id, status: 'skipped' }}\n"
+                "          else"
             )
+            ruby_idempotency_close = "          end"
         else:
-            ruby_idempotency_check = ""
+            ruby_idempotency_open = ""
+            ruby_idempotency_close = ""
 
         # OpenProject 15+ requires using journal_notes/journal_user + save!
         script = f"""
@@ -313,11 +340,12 @@ J2O_DATA
           default_user = User.current || User.find_by(admin: true)
           user_id = {ruby_user_id}
           user = user_id ? (User.find_by(id: user_id) || default_user) : default_user
-          {ruby_idempotency_check}
+          {ruby_idempotency_open}
           wp.journal_notes = '{escaped_comment}'
           wp.journal_user = user
           wp.save!
           {{ id: wp.journals.last.id, status: 'created' }}
+          {ruby_idempotency_close}
         rescue => e
           {{ error: e.message }}
         end
@@ -413,14 +441,14 @@ J2O_DATA
             if isinstance(comment, dict):
                 comment = comment.get("raw", "")
             comment_str = str(comment)
-            jira_comment_id = act.get("jira_comment_id")
+            jira_comment_id = _normalize_comment_id(act.get("jira_comment_id"))
             comment_with_marker = _build_comment_with_marker(comment_str, jira_comment_id)
             data.append(
                 {
                     "work_package_id": int(act["work_package_id"]),
                     "comment": comment_with_marker,
                     "user_id": act.get("user_id"),
-                    "jira_comment_id": str(jira_comment_id) if jira_comment_id is not None else None,
+                    "jira_comment_id": jira_comment_id,
                 },
             )
 

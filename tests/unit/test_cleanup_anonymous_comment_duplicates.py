@@ -356,3 +356,114 @@ class TestRunFunction:
         total_calls = mock_op.execute_query_to_json_file.call_count
         assert total_calls == 3, f"Expected 3 calls (1 fetch + 2 batches), got {total_calls}"
         assert stats["to_delete"] == 149
+
+
+# ---------------------------------------------------------------------------
+# Ruby `next` at top level — would cause LocalJumpError
+# ---------------------------------------------------------------------------
+
+
+class TestFetchScriptNoTopLevelNext:
+    """_build_fetch_script must not use bare `next` at the top level of the
+    Ruby string.  `next` outside a block raises LocalJumpError in Ruby when
+    the script is eval'd via the Rails console.
+    """
+
+    def test_no_bare_next_in_fetch_script(self) -> None:
+        import re
+
+        from scripts.cleanup_anonymous_comment_duplicates import _build_fetch_script
+
+        script = _build_fetch_script("NRS")
+        # Find all occurrences of `next` not inside a `do…end` or `{…}` block.
+        # The simplest reliable check: assert no bare `next` keyword appears at
+        # all; the if/else replacement uses no `next`.
+        bare_next = re.findall(r"\bnext\b", script)
+        assert bare_next == [], (
+            f"Ruby fetch script contains {len(bare_next)} bare `next` keyword(s) "
+            f"which would raise LocalJumpError when eval'd at top level:\n{script}"
+        )
+
+    def test_fetch_script_uses_if_else_for_missing_project(self) -> None:
+        """The missing-project branch must use if/else so the script always
+        evaluates to a hash.
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import _build_fetch_script
+
+        script = _build_fetch_script("NRS")
+        # Must contain an if/else or unless/else structure for the error case
+        assert "if proj" in script or "unless proj" in script, (
+            "Expected if/else guard for missing project in fetch script"
+        )
+        assert "else" in script, "Expected `else` branch for the missing-project guard"
+
+    def test_fetch_script_evaluates_to_hash_in_both_branches(self) -> None:
+        """The script must end with a hash literal evaluating to the result in
+        both the project-found and project-not-found branches.
+        """
+        from scripts.cleanup_anonymous_comment_duplicates import _build_fetch_script
+
+        script = _build_fetch_script("NRS")
+        # Both branches must produce a hash; check that error hash is present
+        assert "error:" in script or "error: " in script, "Script must include an error hash for the not-found branch"
+        assert "project_id:" in script, "Script must include a project_id key for the found branch"
+
+
+# ---------------------------------------------------------------------------
+# Metric correctness: duplicate_groups vs journals_to_delete
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateGroupMetric:
+    """run() must report `duplicate_groups` as the number of *groups* that
+    had duplicates (one per unique note text per WP that needed cleanup),
+    not the total number of journals to delete.
+
+    Fixture: 3 WPs each contributing 1 duplicate group with varying journals
+    to delete → groups == 3, to_delete == 5.
+    """
+
+    def _make_logger(self) -> MagicMock:
+        logger = MagicMock()
+        logger.info = MagicMock()
+        logger.error = MagicMock()
+        logger.warning = MagicMock()
+        return logger
+
+    def test_duplicate_groups_counts_groups_not_journals(self) -> None:
+        from scripts.cleanup_anonymous_comment_duplicates import run
+
+        ANON = 2
+        mock_op = MagicMock()
+
+        # WP 1: 1 real keeper + 1 anon to delete  → 1 group, 1 deletion
+        # WP 2: 1 real keeper + 2 anon to delete  → 1 group, 2 deletions
+        # WP 3: 1 real keeper + 2 anon to delete  → 1 group, 2 deletions
+        # Total: 3 groups, 5 deletions
+        journals = [
+            # WP 1
+            _journal(1, 1001, ANON, "Note A", "2026-05-07T00:00:00Z"),
+            _journal(2, 1001, 100, "Note A\n<!-- j2o:jira-comment-id:10 -->", "2026-05-09T00:00:00Z"),
+            # WP 2
+            _journal(3, 1002, ANON, "Note B", "2026-05-07T00:00:00Z"),
+            _journal(4, 1002, ANON, "Note B", "2026-05-08T00:00:00Z"),
+            _journal(5, 1002, 100, "Note B\n<!-- j2o:jira-comment-id:11 -->", "2026-05-09T00:00:00Z"),
+            # WP 3
+            _journal(6, 1003, ANON, "Note C", "2026-05-07T00:00:00Z"),
+            _journal(7, 1003, ANON, "Note C", "2026-05-08T00:00:00Z"),
+            _journal(8, 1003, 100, "Note C\n<!-- j2o:jira-comment-id:12 -->", "2026-05-09T00:00:00Z"),
+        ]
+
+        mock_op.execute_query_to_json_file.return_value = {
+            "project_id": 1,
+            "wp_ids_count": 3,
+            "journals": journals,
+        }
+
+        stats = run("NRS", apply=False, logger=self._make_logger(), op_client=mock_op)
+
+        assert stats["to_delete"] == 5, f"Expected 5 journals to delete, got {stats['to_delete']}"
+        assert stats["duplicate_groups"] == 3, (
+            f"Expected 3 duplicate groups (one per WP), got {stats['duplicate_groups']}. "
+            f"duplicate_groups must count groups, not individual journals to delete."
+        )

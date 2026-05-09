@@ -617,3 +617,229 @@ class TestFetchMigratedCommentIds:
         assert "j2o:jira-comment-id:" in source
         assert "notes" in source
         assert "pluck" in source
+
+
+# ---------------------------------------------------------------------------
+# 9. Ruby `return` at top level — would cause LocalJumpError
+# ---------------------------------------------------------------------------
+
+
+class TestSingleActivityNoTopLevelReturn:
+    """create_work_package_activity must not use bare `return` at the top level
+    of the Ruby script string.  A bare `return` outside a method/block raises
+    LocalJumpError in Ruby when the script is eval'd via the Rails console.
+    """
+
+    def _capture_script(self) -> str:
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured: list[str] = []
+        mock_client.execute_query_to_json_file.side_effect = lambda s: (
+            captured.append(s) or {"id": 1, "status": "created"}
+        )
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=1,
+            activity_data={"comment": "test", "user_id": 1, "jira_comment_id": "42"},
+        )
+        assert captured
+        return captured[0]
+
+    def test_no_bare_return_at_top_level(self) -> None:
+        """The Ruby script must not contain a bare `return` statement outside
+        a method or block — that would raise LocalJumpError.
+
+        The idempotency skip must use an `if/else` structure instead.
+        """
+        script = self._capture_script()
+        # A bare `return` followed by whitespace/brace is the problem pattern.
+        # `return` inside a rescue block or as part of a hash key is fine
+        # but the provenance-marker early-return pattern is NOT inside a method.
+        import re
+
+        bare_returns = re.findall(r"\breturn\b", script)
+        assert bare_returns == [], (
+            f"Ruby script contains {len(bare_returns)} bare `return` keyword(s) "
+            f"which would raise LocalJumpError when eval'd at top level:\n{script}"
+        )
+
+    def test_idempotency_uses_if_else_structure(self) -> None:
+        """When jira_comment_id is given the script must use if/else for
+        the skip branch, not a trailing `return ... if existing_journal`.
+        """
+        script = self._capture_script()
+        # Must still contain the idempotency check
+        assert "existing_journal" in script, "Idempotency check is missing entirely"
+        # Must contain an else or end for the conditional structure
+        assert "else" in script or script.count("end") >= 2, (
+            "Expected if/else structure for idempotency but found neither 'else' nor sufficient 'end' keywords"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 10. _normalize_comment_id — edge-value behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeCommentId:
+    """_normalize_comment_id must treat None, 0, '', '  ' as absent and
+    return None; non-empty strings and non-zero ints must be returned as
+    stripped strings.
+    """
+
+    def _normalize(self, value):
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _normalize_comment_id,
+        )
+
+        return _normalize_comment_id(value)
+
+    def test_none_returns_none(self) -> None:
+        assert self._normalize(None) is None
+
+    def test_zero_int_returns_none(self) -> None:
+        assert self._normalize(0) is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert self._normalize("") is None
+
+    def test_whitespace_only_string_returns_none(self) -> None:
+        assert self._normalize("  ") is None
+
+    def test_string_id_returned_as_stripped_string(self) -> None:
+        assert self._normalize("123") == "123"
+
+    def test_int_id_returned_as_string(self) -> None:
+        assert self._normalize(123) == "123"
+
+    def test_padded_string_stripped(self) -> None:
+        assert self._normalize("  42  ") == "42"
+
+
+class TestBuildCommentWithMarkerNormalization:
+    """_build_comment_with_marker must behave consistently for all edge values
+    of jira_comment_id after normalization is applied.
+    """
+
+    def _build(self, cid):
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            _build_comment_with_marker,
+        )
+
+        return _build_comment_with_marker("text", cid)
+
+    def test_none_no_marker(self) -> None:
+        assert self._build(None) == "text"
+
+    def test_zero_int_no_marker(self) -> None:
+        # int(0) is falsy — must NOT add marker
+        assert self._build(0) == "text"
+
+    def test_empty_string_no_marker(self) -> None:
+        assert self._build("") == "text"
+
+    def test_whitespace_string_no_marker(self) -> None:
+        assert self._build("  ") == "text"
+
+    def test_valid_string_id_adds_marker(self) -> None:
+        result = self._build("123")
+        assert "j2o:jira-comment-id:123" in result
+
+    def test_valid_int_id_adds_marker(self) -> None:
+        result = self._build(123)
+        assert "j2o:jira-comment-id:123" in result
+
+
+class TestCreateWorkPackageActivityNormalization:
+    """create_work_package_activity must apply consistent normalization —
+    int(0) and whitespace-only strings must not inject an idempotency check.
+    """
+
+    def _capture_script(self, jira_comment_id) -> str:
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured: list[str] = []
+        mock_client.execute_query_to_json_file.side_effect = lambda s: (
+            captured.append(s) or {"id": 1, "status": "created"}
+        )
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.create_work_package_activity(
+            work_package_id=1,
+            activity_data={"comment": "hi", "user_id": 1, "jira_comment_id": jira_comment_id},
+        )
+        return captured[0] if captured else ""
+
+    def test_zero_id_no_idempotency_guard(self) -> None:
+        script = self._capture_script(0)
+        assert "existing_journal" not in script, "int(0) jira_comment_id must NOT inject idempotency guard"
+
+    def test_whitespace_id_no_idempotency_guard(self) -> None:
+        script = self._capture_script("  ")
+        assert "existing_journal" not in script, "whitespace jira_comment_id must NOT inject idempotency guard"
+
+    def test_valid_int_id_adds_idempotency_guard(self) -> None:
+        script = self._capture_script(42)
+        assert "existing_journal" in script, "valid int jira_comment_id must inject idempotency guard"
+
+
+class TestBulkPayloadNormalization:
+    """bulk_create_work_package_activities must normalize jira_comment_id in the
+    JSON payload: empty strings must become null, not '""'.
+    """
+
+    def _payload(self, jira_comment_id) -> dict:
+        import json
+        from unittest.mock import MagicMock
+
+        from src.infrastructure.openproject.openproject_work_package_content_service import (
+            OpenProjectWorkPackageContentService,
+        )
+
+        mock_client = MagicMock()
+        mock_client.logger = MagicMock()
+        captured: list[str] = []
+        mock_client.execute_query_to_json_file.side_effect = lambda s: (
+            captured.append(s) or {"created": 1, "skipped": 0, "failed": 0, "success": True}
+        )
+        svc = OpenProjectWorkPackageContentService(mock_client)
+        svc.bulk_create_work_package_activities(
+            [{"work_package_id": 1, "comment": "hi", "user_id": 1, "jira_comment_id": jira_comment_id}]
+        )
+        script = captured[0]
+        start = script.find("\n", script.find("J2O_DATA")) + 1
+        end = script.find("J2O_DATA", start)
+        return json.loads(script[start:end].strip())[0]
+
+    def test_empty_string_becomes_null_in_payload(self) -> None:
+        item = self._payload("")
+        assert item["jira_comment_id"] is None, (
+            "empty string jira_comment_id must be serialised as null in the Ruby payload"
+        )
+
+    def test_whitespace_string_becomes_null_in_payload(self) -> None:
+        item = self._payload("  ")
+        assert item["jira_comment_id"] is None
+
+    def test_zero_int_becomes_null_in_payload(self) -> None:
+        item = self._payload(0)
+        assert item["jira_comment_id"] is None
+
+    def test_valid_string_preserved_in_payload(self) -> None:
+        item = self._payload("597766")
+        assert item["jira_comment_id"] == "597766"
+
+    def test_valid_int_becomes_string_in_payload(self) -> None:
+        item = self._payload(597766)
+        assert item["jira_comment_id"] == "597766"
