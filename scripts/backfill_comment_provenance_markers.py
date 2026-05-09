@@ -103,6 +103,54 @@ def _setup_logging(log_path: Path) -> logging.Logger:
 # ---------------------------------------------------------------------------
 
 
+# Canonical probe order for resolving a Jira comment author to an OP user.
+# Mirrors ``IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS`` and the comment
+# dict fields populated by ``_make_jira_fetcher``:
+#   accountId  → author_account_id   (Cloud only)
+#   name       → author_name         (Server/DC login)
+#   key        → author_key          (Server/DC internal key, e.g. JIRAUSER12345)
+#   emailAddress → author_email
+#   displayName  → author_display_name
+_COMMENT_AUTHOR_PROBE_FIELDS: tuple[str, ...] = (
+    "author_account_id",
+    "author_name",
+    "author_key",
+    "author_email",
+    "author_display_name",
+)
+
+
+def _resolve_comment_author(
+    jira_comment: dict[str, Any],
+    user_mapping: dict[str, int],
+) -> int | None:
+    """Resolve a Jira comment's author to an OP user id.
+
+    Probes each author field in canonical order (Cloud ``accountId`` first,
+    then Server/DC ``name`` and ``key``, then ``emailAddress``,
+    ``displayName``).  Returns the first matching OP user id or ``None``
+    when the author cannot be resolved.
+
+    Args:
+        jira_comment: Comment dict as returned by :func:`_make_jira_fetcher`.
+            Must contain the ``author_*`` fields populated by that function.
+        user_mapping: Flat ``{identifier: op_user_id}`` dict built by
+            :func:`_load_user_mapping`.  Indexed by every probe value so a
+            single dict lookup per probe is O(1).
+
+    Returns:
+        The resolved ``openproject_id`` (int) or ``None``.
+    """
+    for field in _COMMENT_AUTHOR_PROBE_FIELDS:
+        value = jira_comment.get(field)
+        if not value:
+            continue
+        op_user_id = user_mapping.get(str(value))
+        if op_user_id is not None:
+            return op_user_id
+    return None
+
+
 def _pair_journals_with_comments(
     op_journals: list[dict[str, Any]],
     jira_comments: list[dict[str, Any]],
@@ -119,9 +167,13 @@ def _pair_journals_with_comments(
         op_journals: OP journal dicts with keys ``id``, ``wp_id``,
             ``user_id``, ``notes``, ``created_at``.
         jira_comments: Jira comment dicts with keys ``id``,
-            ``author_account_id``, ``body``.  Must be in chronological order
-            (Jira REST API default).
-        user_mapping: ``{jira_account_id: op_user_id}`` dict.
+            ``author_account_id``, ``author_name``, ``author_key``,
+            ``author_email``, ``author_display_name``, ``body``.  Must be in
+            chronological order (Jira REST API default).
+        user_mapping: Flat ``{identifier: op_user_id}`` dict built by
+            :func:`_load_user_mapping`.  Each Jira user is indexed by every
+            probe field (``jira_key``, ``jira_name``, ``jira_display_name``,
+            ``jira_email``) so a single dict lookup per probe is O(1).
 
     Returns:
         ``(pairs, skip_reason)`` where ``pairs`` is a list of
@@ -151,16 +203,21 @@ def _pair_journals_with_comments(
         return [], (f"count mismatch: {len(unmarked)} unmarked OP journals vs {len(jira_comments)} Jira comments")
 
     # Author validation: zip by position (both are in chronological order).
+    # Probe author fields in canonical order (Cloud accountId first, then
+    # Server/DC name/key, then emailAddress, displayName) so this works for
+    # both Jira Cloud and Jira Server deployments.
     pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for idx, (op_j, jira_c) in enumerate(zip(unmarked, jira_comments, strict=True)):
-        jira_account_id: str = jira_c.get("author_account_id", "")
-        expected_op_user_id = user_mapping.get(jira_account_id)
+        expected_op_user_id = _resolve_comment_author(jira_c, user_mapping)
         actual_op_user_id = op_j.get("user_id")
         if expected_op_user_id is None or expected_op_user_id != actual_op_user_id:
+            # Build a compact representation of the probed author fields for
+            # the diagnostic (mirrors the old "account {account_id!r}" line).
+            probed = {f: jira_c.get(f) for f in _COMMENT_AUTHOR_PROBE_FIELDS if jira_c.get(f)}
             return [], (
                 f"author mismatch at position {idx}: "
                 f"OP journal #{op_j['id']} has user_id={actual_op_user_id} "
-                f"but Jira comment {jira_c['id']} (account {jira_account_id!r}) "
+                f"but Jira comment {jira_c['id']} (author fields {probed!r}) "
                 f"maps to op_user_id={expected_op_user_id}"
             )
         pairs.append((op_j, jira_c))
@@ -242,6 +299,10 @@ def _make_jira_fetcher(jira_client: Any) -> Any:
     ``(jira_issue_key: str) -> list[dict]`` expected by :func:`run`.
     Constructing the client once and binding it here avoids per-call
     reconnection overhead.
+
+    The returned comment dicts carry all author-identifying fields so that
+    :func:`_pair_journals_with_comments` can probe them in canonical order
+    (``accountId`` first for Cloud, then ``name`` / ``key`` for Server/DC).
     """
 
     def _fetch(jira_issue_key: str) -> list[dict[str, Any]]:
@@ -250,12 +311,24 @@ def _make_jira_fetcher(jira_client: Any) -> Any:
         for c in raw_comments:
             author = getattr(c, "author", None)
             account_id = ""
+            name = ""
+            key = ""
+            email = ""
+            display_name = ""
             if author is not None:
                 account_id = getattr(author, "accountId", "") or ""
+                name = getattr(author, "name", "") or ""
+                key = getattr(author, "key", "") or ""
+                email = getattr(author, "emailAddress", "") or ""
+                display_name = getattr(author, "displayName", "") or ""
             result.append(
                 {
                     "id": getattr(c, "id", ""),
                     "author_account_id": account_id,
+                    "author_name": name,
+                    "author_key": key,
+                    "author_email": email,
+                    "author_display_name": display_name,
                     "body": getattr(c, "body", ""),
                 }
             )

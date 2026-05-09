@@ -768,3 +768,181 @@ class TestSetupLoggingIdempotent:
         for h in list(logger.handlers):
             h.close()
             logger.removeHandler(h)
+
+
+# ---------------------------------------------------------------------------
+# Issue: Jira Server uses name/key — not accountId — as canonical identifier
+# ---------------------------------------------------------------------------
+
+
+class TestJiraServerProbeOrder:
+    """Regression for the 98%-SKIP rate on NRS (Jira Server 9.12.3).
+
+    Live evidence (2026-05-09 dry-run on NRS):
+        WARNING  WP#806 (NRS-207): SKIP — author mismatch at position 0:
+                 OP journal #128549 has user_id=110 but Jira comment 39281
+                 (account '') maps to op_user_id=None
+
+    Root cause: Jira Server stores the canonical identifier in ``name`` /
+    ``key`` (e.g. ``bmarten``, ``JIRAUSER12345``), never in ``accountId``
+    (which is a Cloud-only field and is always empty/absent on Server).
+    The pairing logic must probe ``name`` and ``key`` as fallbacks when
+    ``accountId`` is empty, mirroring
+    ``IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS``.
+    """
+
+    def _write_user_mapping(self, path: Path, data: dict) -> None:
+        import json
+
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_server_name_field_resolves_to_op_user(self) -> None:
+        """Comment with only name='bmarten' (no accountId) must pair successfully.
+
+        This is the core regression: on Jira Server the comment author dict
+        has ``name`` but NOT ``accountId``.  The current code reads only
+        ``author_account_id`` (extracted from ``accountId``) and gets an
+        empty string, causing every comment to resolve to None → SKIP.
+        """
+        import tempfile
+
+        m = _import_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            self._write_user_mapping(
+                p / "user_mapping.json",
+                {
+                    "Björn Marten": {
+                        "jira_key": "JIRAUSER12345",
+                        "jira_name": "bmarten",
+                        "jira_email": "bjoern@netresearch.de",
+                        "jira_display_name": "Björn Marten",
+                        "openproject_id": 61,
+                    }
+                },
+            )
+            user_mapping = m._load_user_mapping(p)
+
+        # Jira Server comment: author has name but NOT accountId
+        jira_comments = [
+            {
+                "id": "39281",
+                "author_account_id": "",  # always empty on Jira Server
+                "author_name": "bmarten",  # Server login name
+                "author_key": "",
+                "author_email": "",
+                "author_display_name": "Björn Marten",
+                "body": "Some comment body",
+            }
+        ]
+        op_journals = [_op_journal(128549, 806, 61, "Some comment body")]
+
+        pairs, skip_reason = m._pair_journals_with_comments(
+            op_journals=op_journals,
+            jira_comments=jira_comments,
+            user_mapping=user_mapping,
+        )
+
+        assert skip_reason is None, (
+            f"Expected successful pairing for Jira Server comment (name='bmarten'), "
+            f"got skip_reason={skip_reason!r}. "
+            f"user_mapping keys: {list(user_mapping.keys())[:15]}"
+        )
+        assert len(pairs) == 1
+        assert pairs[0][0]["id"] == 128549
+        assert pairs[0][1]["id"] == "39281"
+
+    def test_server_key_field_resolves_to_op_user(self) -> None:
+        """Comment with only key='JIRAUSER12345' (no accountId) must pair successfully."""
+        import tempfile
+
+        m = _import_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            self._write_user_mapping(
+                p / "user_mapping.json",
+                {
+                    "Björn Marten": {
+                        "jira_key": "JIRAUSER12345",
+                        "jira_name": "bmarten",
+                        "jira_email": "bjoern@netresearch.de",
+                        "jira_display_name": "Björn Marten",
+                        "openproject_id": 61,
+                    }
+                },
+            )
+            user_mapping = m._load_user_mapping(p)
+
+        # Jira Server comment: author has key but NOT accountId
+        jira_comments = [
+            {
+                "id": "39281",
+                "author_account_id": "",
+                "author_name": "",
+                "author_key": "JIRAUSER12345",
+                "author_email": "",
+                "author_display_name": "",
+                "body": "Some comment body",
+            }
+        ]
+        op_journals = [_op_journal(128549, 806, 61, "Some comment body")]
+
+        pairs, skip_reason = m._pair_journals_with_comments(
+            op_journals=op_journals,
+            jira_comments=jira_comments,
+            user_mapping=user_mapping,
+        )
+
+        assert skip_reason is None, (
+            f"Expected successful pairing for Jira Server comment (key='JIRAUSER12345'), "
+            f"got skip_reason={skip_reason!r}."
+        )
+        assert len(pairs) == 1
+
+    def test_make_jira_fetcher_captures_server_fields(self) -> None:
+        """_make_jira_fetcher must extract name/key/emailAddress/displayName from
+        the Jira comment author — not only accountId.
+
+        This ensures that when _pair_journals_with_comments probes those fields
+        they are actually present in the comment dict.
+        """
+        m = _import_module()
+
+        # Simulate a Jira Server comment author object
+        author = type(
+            "Author",
+            (),
+            {
+                "accountId": "",
+                "name": "bmarten",
+                "key": "JIRAUSER12345",
+                "emailAddress": "bjoern@netresearch.de",
+                "displayName": "Björn Marten",
+            },
+        )()
+        comment = type(
+            "Comment",
+            (),
+            {
+                "id": "39281",
+                "author": author,
+                "body": "some body",
+            },
+        )()
+
+        class FakeJiraClient:
+            class jira:
+                @staticmethod
+                def comments(_key: str) -> list[Any]:
+                    return [comment]
+
+        result = m._make_jira_fetcher(FakeJiraClient())("NRS-207")
+        assert len(result) == 1
+        c = result[0]
+        assert c["author_name"] == "bmarten", (
+            f"Expected author_name='bmarten', got {c!r}. "
+            "_make_jira_fetcher must capture 'name' from Jira Server author objects."
+        )
+        assert c["author_key"] == "JIRAUSER12345"
+        assert c["author_email"] == "bjoern@netresearch.de"
+        assert c["author_display_name"] == "Björn Marten"
