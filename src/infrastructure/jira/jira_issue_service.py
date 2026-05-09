@@ -32,6 +32,18 @@ if TYPE_CHECKING:
     from jira import Issue
     from src.infrastructure.jira.jira_client import JiraClient
 
+# Maximum number of issue keys per ``search_issues`` call.
+#
+# Apache Tomcat (Jira's default servlet container) and many reverse proxies
+# (e.g. Traefik) reject HTTP requests whose URL exceeds ~8 KB.  Each
+# URL-encoded, double-quoted Jira key — e.g. ``%22NRS-4311%22%2C`` — is
+# roughly 20 bytes; 25 such keys therefore produce ≈ 500 bytes of JQL
+# argument on top of the ~100-byte base URL, staying well within the limit.
+# Setting this to 100 (the default ``BatchProcessor`` batch size) produces
+# ~2 000 bytes of JQL alone, pushing the full URL past 4 KB and triggering
+# a spurious HTTP 401 from Tomcat before the auth layer is consulted.
+_FETCH_BATCH_CHUNK_SIZE: int = 25
+
 
 class JiraIssueService:
     """Issue-domain queries for ``JiraClient``."""
@@ -251,10 +263,42 @@ class JiraIssueService:
         return merged
 
     def _fetch_issues_batch(self, issue_keys: list[str], **kwargs: object) -> dict[str, Issue]:
-        """Fetch a batch of issues from Jira API."""
+        """Fetch a batch of issues from Jira API.
+
+        Internally splits ``issue_keys`` into sub-chunks of at most
+        ``_FETCH_BATCH_CHUNK_SIZE`` keys before building the JQL query.
+        This prevents the ``key in (...)`` clause from growing past the URL
+        length limit enforced by Apache Tomcat and Traefik (≈ 8 KB), which
+        causes a spurious HTTP 401 response before the auth layer is
+        consulted.
+        """
         if not issue_keys:
             return {}
 
+        # Split into URL-safe sub-chunks and merge results.
+        if len(issue_keys) > _FETCH_BATCH_CHUNK_SIZE:
+            merged: dict[str, Issue] = {}
+            for chunk_idx in range(0, len(issue_keys), _FETCH_BATCH_CHUNK_SIZE):
+                chunk = issue_keys[chunk_idx : chunk_idx + _FETCH_BATCH_CHUNK_SIZE]
+                chunk_result = self._fetch_single_chunk(chunk, chunk_idx // _FETCH_BATCH_CHUNK_SIZE)
+                merged.update(chunk_result)
+            return merged
+
+        return self._fetch_single_chunk(issue_keys, 0)
+
+    def _fetch_single_chunk(self, issue_keys: list[str], chunk_index: int) -> dict[str, Issue]:
+        """Fetch one URL-safe chunk of issue keys from the Jira search API.
+
+        Args:
+            issue_keys:  The sub-list of keys to fetch (length ≤ ``_FETCH_BATCH_CHUNK_SIZE``).
+            chunk_index: Zero-based index of this chunk within the enclosing
+                         batch; included in the error log so operators can
+                         identify which range of keys failed.
+
+        Returns:
+            ``dict[key → Issue]`` for the keys that were found; empty dict on error.
+
+        """
         # Quote each key so a key containing a JQL reserved word /
         # special char (e.g. issue-key collisions with Jira keywords)
         # doesn't break the query. The pre-extraction code joined
@@ -272,8 +316,9 @@ class JiraIssueService:
             return {issue.key: issue for issue in issues}
         except Exception:
             self._logger.exception(
-                "Batch issue fetch failed for %d issues",
+                "Batch issue fetch failed for %d issues (chunk %d)",
                 len(issue_keys),
+                chunk_index,
             )
             return {}
 
