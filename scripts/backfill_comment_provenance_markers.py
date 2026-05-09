@@ -104,20 +104,26 @@ def _setup_logging(log_path: Path) -> logging.Logger:
 
 
 # Canonical probe order for resolving a Jira comment author to an OP user.
-# Mirrors ``IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS`` and the comment
-# dict fields populated by ``_make_jira_fetcher``:
-#   accountId  → author_account_id   (Cloud only)
-#   name       → author_name         (Server/DC login)
-#   key        → author_key          (Server/DC internal key, e.g. JIRAUSER12345)
+# Single source of truth: maps the internal comment-dict key to the
+# attribute name on the Jira SDK ``author`` object.  Used both to extract
+# fields in ``_make_jira_fetcher`` AND to probe in
+# ``_resolve_comment_author``, so adding a new probe key is a one-line
+# change.
+#
+# Order mirrors ``IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS``:
+#   accountId    → author_account_id   (Cloud only)
+#   name         → author_name         (Server/DC login)
+#   key          → author_key          (Server/DC internal key, e.g. JIRAUSER12345)
 #   emailAddress → author_email
 #   displayName  → author_display_name
-_COMMENT_AUTHOR_PROBE_FIELDS: tuple[str, ...] = (
-    "author_account_id",
-    "author_name",
-    "author_key",
-    "author_email",
-    "author_display_name",
+_COMMENT_AUTHOR_FIELDS: tuple[tuple[str, str], ...] = (
+    ("author_account_id", "accountId"),
+    ("author_name", "name"),
+    ("author_key", "key"),
+    ("author_email", "emailAddress"),
+    ("author_display_name", "displayName"),
 )
+_COMMENT_AUTHOR_PROBE_FIELDS: tuple[str, ...] = tuple(internal for internal, _ in _COMMENT_AUTHOR_FIELDS)
 
 
 def _resolve_comment_author(
@@ -310,28 +316,13 @@ def _make_jira_fetcher(jira_client: Any) -> Any:
         result = []
         for c in raw_comments:
             author = getattr(c, "author", None)
-            account_id = ""
-            name = ""
-            key = ""
-            email = ""
-            display_name = ""
-            if author is not None:
-                account_id = getattr(author, "accountId", "") or ""
-                name = getattr(author, "name", "") or ""
-                key = getattr(author, "key", "") or ""
-                email = getattr(author, "emailAddress", "") or ""
-                display_name = getattr(author, "displayName", "") or ""
-            result.append(
-                {
-                    "id": getattr(c, "id", ""),
-                    "author_account_id": account_id,
-                    "author_name": name,
-                    "author_key": key,
-                    "author_email": email,
-                    "author_display_name": display_name,
-                    "body": getattr(c, "body", ""),
-                }
-            )
+            entry: dict[str, Any] = {
+                "id": getattr(c, "id", ""),
+                "body": getattr(c, "body", ""),
+            }
+            for internal, attr in _COMMENT_AUTHOR_FIELDS:
+                entry[internal] = (getattr(author, attr, "") or "") if author is not None else ""
+            result.append(entry)
         return result
 
     return _fetch
