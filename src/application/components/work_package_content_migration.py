@@ -461,6 +461,21 @@ class WorkPackageContentMigration(BaseMigration):
 
         return True
 
+    @property
+    def _transformer(self) -> IssueTransformer:
+        """Lazily-created :class:`IssueTransformer` bound to this owner.
+
+        Mirrors :attr:`WorkPackageMigration._transformer` — the instance is
+        created on first access and cached so the hot path inside
+        ``_resolve_comment_author_id`` does not pay construction cost on
+        every comment.
+        """
+        cached = getattr(self, "_transformer_cache", None)
+        if cached is None:
+            cached = IssueTransformer(owner=self)
+            self._transformer_cache = cached
+        return cached
+
     def _resolve_comment_author_id(
         self,
         comment: object,
@@ -468,11 +483,11 @@ class WorkPackageContentMigration(BaseMigration):
     ) -> int:
         """Resolve a Jira comment's author to an OpenProject user id.
 
-        Delegates to :meth: using
-        the canonical BUG #32 probe order (name → displayName →
-        emailAddress).  Returns the BUG #32 fallback user id and emits a
-        WARNING when the author cannot be mapped so operators can audit
-        unresolved authors from production logs.
+        Delegates to :meth:`IssueTransformer.resolve_journal_author_id` using
+        the canonical BUG #32 probe order (accountId → name → key →
+        emailAddress → displayName).  Returns the BUG #32 fallback user id
+        and emits a WARNING when the author cannot be mapped so operators can
+        audit unresolved authors from production logs.
 
         Args:
             comment: A Jira comment object (from jira.comments()).
@@ -489,14 +504,13 @@ class WorkPackageContentMigration(BaseMigration):
             author_data = author
         else:
             author_data = {
-                "name": getattr(author, "name", None),
-                "displayName": getattr(author, "displayName", None),
-                "emailAddress": getattr(author, "emailAddress", None),
                 "accountId": getattr(author, "accountId", None),
+                "name": getattr(author, "name", None),
                 "key": getattr(author, "key", None),
+                "emailAddress": getattr(author, "emailAddress", None),
+                "displayName": getattr(author, "displayName", None),
             }
-        transformer = IssueTransformer(owner=self)
-        return transformer.resolve_journal_author_id(
+        return self._transformer.resolve_journal_author_id(
             author_data,
             jira_key,
             JournalEntryType.COMMENT,
