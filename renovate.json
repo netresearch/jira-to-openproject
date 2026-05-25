@@ -3,6 +3,7 @@
   "extends": [
     "config:recommended"
   ],
+  "timezone": "Europe/Berlin",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": [
