@@ -37,7 +37,9 @@ def test_get_user_by_email_queries_mail_column_not_email() -> None:
 
     result = service.get_user_by_email("User@Example.com")
 
-    client.find_record.assert_called_once_with("User", {"mail": "User@Example.com"})
+    # The address is normalised to lower-case for the query: OpenProject
+    # stores mails lower-cased, and this matches the cache key used above.
+    client.find_record.assert_called_once_with("User", {"mail": "user@example.com"})
     assert result == {"id": 7, "mail": "user@example.com"}
     # Successful lookups are cached under the normalised (lower-cased) key.
     assert client._users_by_email_cache["user@example.com"] == result
