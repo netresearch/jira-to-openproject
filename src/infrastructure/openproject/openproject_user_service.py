@@ -250,8 +250,12 @@ class OpenProjectUserService:
             if email_lower in client._users_by_email_cache:
                 return client._users_by_email_cache[email_lower]
 
-            # If still not found, try direct query
-            user = client.find_record("User", {"email": email})
+            # If still not found, try direct query. OpenProject's users table
+            # has no ``email`` column — the attribute is ``mail`` — so querying
+            # ``email`` raises PG::UndefinedColumn (issue #255). Query the
+            # normalised (lower-cased) address: stored mails are lower-case and
+            # this keeps the lookup consistent with the cache key above.
+            user = client.find_record("User", {"mail": email_lower})
             if user:
                 # Cache the result
                 client._users_by_email_cache[email_lower] = user
