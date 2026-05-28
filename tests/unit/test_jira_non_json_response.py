@@ -88,6 +88,17 @@ class TestLooksLikeHtml:
         r.text = "<html></html>"
         assert _looks_like_html(r)
 
+    def test_plain_dict_with_lowercase_key_still_matches(self) -> None:
+        """A plain ``dict`` (used in test doubles) with a lowercase
+        ``content-type`` key must still trigger detection — HTTP header names
+        are case-insensitive, so the lookup needs to be too.
+        """
+        r = MagicMock()
+        r.status_code = 200
+        r.headers = {"content-type": "text/html; charset=utf-8"}
+        r.text = "ignored"
+        assert _looks_like_html(r)
+
     def test_safe_with_non_mapping_headers(self) -> None:
         """A Mock or other object in place of headers must not crash detection."""
         r = MagicMock()

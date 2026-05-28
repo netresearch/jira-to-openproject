@@ -77,8 +77,7 @@ class JiraTempoService:
             return accounts
         except JiraServiceUnavailableError as e:
             self._logger.warning(
-                "Tempo accounts endpoint unavailable, skipping (Tempo may not "
-                "be installed on this Jira). Details: %s",
+                "Tempo accounts endpoint unavailable, skipping (Tempo may not be installed on this Jira). Details: %s",
                 e,
             )
             return []
@@ -114,8 +113,7 @@ class JiraTempoService:
             return customers
         except JiraServiceUnavailableError as e:
             self._logger.warning(
-                "Tempo customers endpoint unavailable, skipping (Tempo may not "
-                "be installed on this Jira). Details: %s",
+                "Tempo customers endpoint unavailable, skipping (Tempo may not be installed on this Jira). Details: %s",
                 e,
             )
             return []

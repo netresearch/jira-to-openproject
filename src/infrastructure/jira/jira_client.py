@@ -77,20 +77,38 @@ class JiraServiceUnavailableError(JiraError):
     """
 
 
+def _header_value(response: Response, name: str) -> str | None:
+    """Case-insensitive header lookup tolerant of mock-style test doubles.
+
+    ``requests.structures.CaseInsensitiveDict`` already handles case folding
+    in production, but tests and alternative environments sometimes pass a
+    plain ``dict`` with lowercase keys (or a Mock that doesn't implement
+    ``.get()`` at all). Walk the mapping ourselves to stay robust across
+    both paths.
+    """
+    headers = getattr(response, "headers", None)
+    if not isinstance(headers, Mapping):
+        return None
+    target = name.lower()
+    for key, value in headers.items():
+        if isinstance(key, str) and key.lower() == target and isinstance(value, str):
+            return value
+    return None
+
+
 def _looks_like_html(response: Response) -> bool:
     """Return ``True`` when a response body is HTML/XML rather than JSON.
 
     Two heuristics, OR-ed:
 
-    * ``Content-Type`` header contains ``html``.
+    * ``Content-Type`` header contains ``html`` (case-insensitive).
     * Body — after stripping leading whitespace — starts with ``<``.
 
     The second heuristic catches misconfigured servers that send
     ``text/plain`` or even ``application/json`` with an HTML body.
     """
-    headers = getattr(response, "headers", None)
-    raw_ctype = headers.get("Content-Type") if isinstance(headers, Mapping) else None
-    ctype = raw_ctype.lower() if isinstance(raw_ctype, str) else ""
+    raw_ctype = _header_value(response, "Content-Type")
+    ctype = raw_ctype.lower() if raw_ctype else ""
     if "html" in ctype:
         return True
     body = getattr(response, "text", "")
@@ -109,7 +127,7 @@ def _assert_json_response(response: Response, *, path: str) -> None:
     """
     if not _looks_like_html(response):
         return
-    ctype = (response.headers.get("Content-Type") or "unknown") if response.headers else "unknown"
+    ctype = _header_value(response, "Content-Type") or "unknown"
     msg = (
         f"Jira endpoint {path} returned a non-JSON response "
         f"(HTTP {response.status_code}, Content-Type {ctype!r}). "
