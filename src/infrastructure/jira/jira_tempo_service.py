@@ -32,6 +32,8 @@ from src.infrastructure.jira.jira_client import (
     JiraClient,
     JiraConnectionError,
     JiraResourceNotFoundError,
+    JiraServiceUnavailableError,
+    _assert_json_response,
 )
 from src.utils.timezone import UTC
 
@@ -65,6 +67,7 @@ class JiraTempoService:
         self._logger.info("Fetching Tempo accounts")
         try:
             response = self._client._make_request(path, params=params)
+            _assert_json_response(response, path=path)
             if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo accounts: HTTP {response.status_code}"
                 raise JiraApiError(msg)
@@ -72,6 +75,12 @@ class JiraTempoService:
             accounts = response.json()
             self._logger.info("Successfully retrieved %s Tempo accounts.", len(accounts))
             return accounts
+        except JiraServiceUnavailableError as e:
+            self._logger.warning(
+                "Tempo accounts endpoint unavailable, skipping (Tempo may not be installed on this Jira). Details: %s",
+                e,
+            )
+            return []
         except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise  # Re-raise specific exceptions
         except Exception as e:
@@ -94,6 +103,7 @@ class JiraTempoService:
 
         try:
             response = self._client._make_request(path)
+            _assert_json_response(response, path=path)
             if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo customers: HTTP {response.status_code}"
                 raise JiraApiError(msg)
@@ -101,6 +111,12 @@ class JiraTempoService:
             customers = response.json()
             self._logger.info("Successfully retrieved %s Tempo customers.", len(customers))
             return customers
+        except JiraServiceUnavailableError as e:
+            self._logger.warning(
+                "Tempo customers endpoint unavailable, skipping (Tempo may not be installed on this Jira). Details: %s",
+                e,
+            )
+            return []
         except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise  # Re-raise specific exceptions
         except Exception as e:
@@ -137,6 +153,8 @@ class JiraTempoService:
                 self._logger.warning("No account links found for project %s.", project_id)
                 return []
 
+            _assert_json_response(response, path=path)
+
             if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve account links: HTTP {response.status_code}"
                 raise JiraApiError(msg)
@@ -148,6 +166,13 @@ class JiraTempoService:
                 project_id,
             )
             return links
+        except JiraServiceUnavailableError as e:
+            self._logger.warning(
+                "Tempo account-links endpoint unavailable for project %s, skipping. Details: %s",
+                project_id,
+                e,
+            )
+            return []
         except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise  # Re-raise specific exceptions
         except JiraResourceNotFoundError:
@@ -214,6 +239,8 @@ class JiraTempoService:
                 params=params,
             )
 
+            _assert_json_response(response, path=path)
+
             if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo work logs: HTTP {response.status_code}"
                 self._logger.error(msg)
@@ -253,6 +280,13 @@ class JiraTempoService:
 
             return enhanced_work_logs
 
+        except JiraServiceUnavailableError as e:
+            self._logger.warning(
+                "Tempo work-logs endpoint unavailable, skipping (Tempo "
+                "Timesheets may not be installed on this Jira). Details: %s",
+                e,
+            )
+            return []
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo work logs: {e!s}"
             self._logger.exception(error_msg)
@@ -276,6 +310,8 @@ class JiraTempoService:
                 f"{self._client.base_url}{path}",
             )
 
+            _assert_json_response(response, path=path)
+
             if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo work attributes: HTTP {response.status_code}"
                 self._logger.error(msg)
@@ -289,6 +325,12 @@ class JiraTempoService:
 
             return attributes
 
+        except JiraServiceUnavailableError as e:
+            self._logger.warning(
+                "Tempo work-attributes endpoint unavailable, skipping (Tempo Timesheets may not be installed). Details: %s",
+                e,
+            )
+            return []
         except Exception as e:
             error_msg = f"Failed to retrieve Tempo work attributes: {e!s}"
             self._logger.exception(error_msg)
@@ -340,6 +382,8 @@ class JiraTempoService:
 
                 # Record response for rate limiting adaptation
                 self._client.rate_limiter.record_response(response_time, response.status_code)
+
+                _assert_json_response(response, path=path)
 
                 if response.status_code != HTTP_OK:
                     msg = f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
@@ -394,6 +438,14 @@ class JiraTempoService:
             )
             return all_work_logs
 
+        except JiraServiceUnavailableError as e:
+            self._logger.warning(
+                "Tempo work-logs endpoint unavailable for project %s, returning partial result (%d collected so far). Details: %s",
+                project_key,
+                len(all_work_logs),
+                e,
+            )
+            return all_work_logs
         except Exception as e:
             error_msg = f"Failed to retrieve all Tempo work logs for project {project_key}: {e!s}"
             self._logger.exception(error_msg)
@@ -424,6 +476,9 @@ class JiraTempoService:
             if response.status_code == HTTP_NOT_FOUND:
                 msg = f"Tempo work log {tempo_worklog_id} not found"
                 raise JiraResourceNotFoundError(msg)
+
+            _assert_json_response(response, path=path)
+
             if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo work log {tempo_worklog_id}: HTTP {response.status_code}"
                 self._logger.error(msg)

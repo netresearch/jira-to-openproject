@@ -8,7 +8,7 @@ caching, and parallel processing.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 from requests import Response
@@ -55,6 +55,88 @@ class JiraResourceNotFoundError(JiraError):
 
 class JiraCaptchaError(JiraError):
     """Error when Jira requires CAPTCHA resolution."""
+
+
+class JiraServiceUnavailableError(JiraError):
+    """A Jira endpoint returned a non-JSON response.
+
+    Causes vary across deployments:
+
+    * The plugin or endpoint is not installed (e.g. Tempo Timesheets /
+      Tempo Accounts missing on Jira Server) — the URL falls through to
+      Jira's HTML "page not found" view or a catch-all action.
+    * Authentication failed and Jira returned the login page at HTTP 200
+      instead of HTTP 401.
+    * A reverse proxy in front of Jira intercepted the request and
+      returned its own HTML page.
+    * A CAPTCHA or WebSudo challenge is active.
+
+    j2o callers that depend on optional services (e.g. Tempo, project
+    roles) should catch this exception and skip cleanly rather than
+    fail the whole migration component.
+    """
+
+
+def _header_value(response: Response, name: str) -> str | None:
+    """Case-insensitive header lookup tolerant of mock-style test doubles.
+
+    ``requests.structures.CaseInsensitiveDict`` already handles case folding
+    in production, but tests and alternative environments sometimes pass a
+    plain ``dict`` with lowercase keys (or a Mock that doesn't implement
+    ``.get()`` at all). Walk the mapping ourselves to stay robust across
+    both paths.
+    """
+    headers = getattr(response, "headers", None)
+    if not isinstance(headers, Mapping):
+        return None
+    target = name.lower()
+    for key, value in headers.items():
+        if isinstance(key, str) and key.lower() == target and isinstance(value, str):
+            return value
+    return None
+
+
+def _looks_like_html(response: Response) -> bool:
+    """Return ``True`` when a response body is HTML/XML rather than JSON.
+
+    Two heuristics, OR-ed:
+
+    * ``Content-Type`` header contains ``html`` (case-insensitive).
+    * Body — after stripping leading whitespace — starts with ``<``.
+
+    The second heuristic catches misconfigured servers that send
+    ``text/plain`` or even ``application/json`` with an HTML body.
+    """
+    raw_ctype = _header_value(response, "Content-Type")
+    ctype = raw_ctype.lower() if raw_ctype else ""
+    if "html" in ctype:
+        return True
+    body = getattr(response, "text", "")
+    if not isinstance(body, str):
+        return False
+    return body.lstrip().startswith("<")
+
+
+def _assert_json_response(response: Response, *, path: str) -> None:
+    """Raise ``JiraServiceUnavailableError`` when a response is not JSON.
+
+    Use this before calling ``response.json()`` on responses from optional
+    Jira endpoints (Tempo, project roles, etc.) so the caller gets a typed
+    signal it can handle as "skip cleanly" instead of a downstream
+    ``json.JSONDecodeError``.
+    """
+    if not _looks_like_html(response):
+        return
+    ctype = _header_value(response, "Content-Type") or "unknown"
+    msg = (
+        f"Jira endpoint {path} returned a non-JSON response "
+        f"(HTTP {response.status_code}, Content-Type {ctype!r}). "
+        "Likely causes: the plugin or endpoint is not installed; "
+        "authentication failed and Jira returned the login page; "
+        "a reverse proxy intercepted the request; or a CAPTCHA / "
+        "WebSudo challenge is active."
+    )
+    raise JiraServiceUnavailableError(msg)
 
 
 def _import_real_jira_module() -> Any:
@@ -439,6 +521,25 @@ class JiraClient:
 
         # Check for other error responses
         if response.status_code >= HTTP_BAD_REQUEST_MIN:
+            # If the body is HTML, the endpoint itself is unavailable (missing
+            # plugin, reverse-proxy interception, login page returned with
+            # a 4xx, CAPTCHA / WebSudo). Hand callers a typed signal they
+            # can treat as "skip cleanly" instead of a misleading
+            # status-specific exception (JiraResourceNotFoundError on 404
+            # was the production path the test fixture's stubbed
+            # `_make_request` happened to bypass).
+            if _looks_like_html(response):
+                ctype = _header_value(response, "Content-Type") or "unknown"
+                msg = (
+                    f"Jira returned a non-JSON response (HTTP "
+                    f"{response.status_code}, Content-Type {ctype!r}). "
+                    "Likely causes: the plugin or endpoint is not "
+                    "installed; authentication failed and Jira returned "
+                    "the login page; a reverse proxy intercepted the "
+                    "request; or a CAPTCHA / WebSudo challenge is active."
+                )
+                raise JiraServiceUnavailableError(msg) from None
+
             error_msg = f"HTTP Error {response.status_code}: {response.reason}"
             try:
                 error_json = response.json()
@@ -495,6 +596,7 @@ class JiraClient:
                 JiraCaptchaError,
                 JiraAuthenticationError,
                 JiraResourceNotFoundError,
+                JiraServiceUnavailableError,
             ):
                 raise  # Re-raise specific exceptions
             except Exception as e:
@@ -559,6 +661,7 @@ class JiraClient:
             JiraAuthenticationError,
             JiraResourceNotFoundError,
             JiraApiError,
+            JiraServiceUnavailableError,
         ):
             raise  # Re-raise specific exceptions
         except Exception as e:

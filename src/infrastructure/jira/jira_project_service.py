@@ -23,6 +23,8 @@ from src.infrastructure.jira.jira_client import (
     JiraCaptchaError,
     JiraClient,
     JiraConnectionError,
+    JiraServiceUnavailableError,
+    _assert_json_response,
 )
 from src.utils.performance_optimizer import cached
 
@@ -175,10 +177,10 @@ class JiraProjectService:
         client = self._client
         self._logger.debug("Fetching Jira project roles for '%s'", project_key)
 
+        role_map_path = f"/rest/api/2/project/{project_key}/role"
         try:
-            role_map_response = client._make_request(
-                f"/rest/api/2/project/{project_key}/role",
-            )
+            role_map_response = client._make_request(role_map_path)
+            _assert_json_response(role_map_response, path=role_map_path)
             if role_map_response.status_code != HTTP_OK:
                 msg = f"Failed to fetch Jira project roles for {project_key}: HTTP {role_map_response.status_code}"
                 raise JiraApiError(msg)
@@ -196,7 +198,17 @@ class JiraProjectService:
                 if not detail_path.startswith("/"):
                     detail_path = f"/{detail_path}"
 
-                detail_response = client._make_request(detail_path)
+                try:
+                    detail_response = client._make_request(detail_path)
+                    _assert_json_response(detail_response, path=detail_path)
+                except JiraServiceUnavailableError as exc:
+                    self._logger.warning(
+                        "Skipping Jira role '%s' for project '%s': endpoint unavailable. Details: %s",
+                        role_name,
+                        project_key,
+                        exc,
+                    )
+                    continue
                 if detail_response.status_code != HTTP_OK:
                     self._logger.warning(
                         "Skipping Jira role '%s' for project '%s' due to HTTP %s",
@@ -235,6 +247,15 @@ class JiraProjectService:
                 project_key,
             )
             return roles
+        except JiraServiceUnavailableError as e:
+            self._logger.warning(
+                "Jira project-roles endpoint unavailable for %s, returning empty "
+                "list (likely an auth/proxy issue rather than the plugin — this "
+                "is a Jira core endpoint). Details: %s",
+                project_key,
+                e,
+            )
+            return []
         except JiraCaptchaError, JiraAuthenticationError, JiraConnectionError:
             raise
         except Exception as e:
