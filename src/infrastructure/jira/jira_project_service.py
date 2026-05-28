@@ -198,7 +198,17 @@ class JiraProjectService:
                 if not detail_path.startswith("/"):
                     detail_path = f"/{detail_path}"
 
-                detail_response = client._make_request(detail_path)
+                try:
+                    detail_response = client._make_request(detail_path)
+                    _assert_json_response(detail_response, path=detail_path)
+                except JiraServiceUnavailableError as exc:
+                    self._logger.warning(
+                        "Skipping Jira role '%s' for project '%s': endpoint unavailable. Details: %s",
+                        role_name,
+                        project_key,
+                        exc,
+                    )
+                    continue
                 if detail_response.status_code != HTTP_OK:
                     self._logger.warning(
                         "Skipping Jira role '%s' for project '%s' due to HTTP %s",

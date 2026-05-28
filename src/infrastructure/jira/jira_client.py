@@ -521,6 +521,25 @@ class JiraClient:
 
         # Check for other error responses
         if response.status_code >= HTTP_BAD_REQUEST_MIN:
+            # If the body is HTML, the endpoint itself is unavailable (missing
+            # plugin, reverse-proxy interception, login page returned with
+            # a 4xx, CAPTCHA / WebSudo). Hand callers a typed signal they
+            # can treat as "skip cleanly" instead of a misleading
+            # status-specific exception (JiraResourceNotFoundError on 404
+            # was the production path the test fixture's stubbed
+            # `_make_request` happened to bypass).
+            if _looks_like_html(response):
+                ctype = _header_value(response, "Content-Type") or "unknown"
+                msg = (
+                    f"Jira returned a non-JSON response (HTTP "
+                    f"{response.status_code}, Content-Type {ctype!r}). "
+                    "Likely causes: the plugin or endpoint is not "
+                    "installed; authentication failed and Jira returned "
+                    "the login page; a reverse proxy intercepted the "
+                    "request; or a CAPTCHA / WebSudo challenge is active."
+                )
+                raise JiraServiceUnavailableError(msg) from None
+
             error_msg = f"HTTP Error {response.status_code}: {response.reason}"
             try:
                 error_json = response.json()
@@ -577,6 +596,7 @@ class JiraClient:
                 JiraCaptchaError,
                 JiraAuthenticationError,
                 JiraResourceNotFoundError,
+                JiraServiceUnavailableError,
             ):
                 raise  # Re-raise specific exceptions
             except Exception as e:
@@ -641,6 +661,7 @@ class JiraClient:
             JiraAuthenticationError,
             JiraResourceNotFoundError,
             JiraApiError,
+            JiraServiceUnavailableError,
         ):
             raise  # Re-raise specific exceptions
         except Exception as e:

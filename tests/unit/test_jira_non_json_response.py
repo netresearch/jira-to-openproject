@@ -225,6 +225,141 @@ class TestTempoServiceSkipsOnHtml:
 # ---------------------------------------------------------------------------
 
 
+class TestTempoServiceSkipsOnHtmlAdditionalEndpoints:
+    """Cover the four endpoints the first iteration of the PR missed:
+    account-links-for-project, work-attributes, all-work-logs-for-project,
+    and work-log-by-id. (work_log_by_id deliberately re-raises since it
+    fetches a single record — callers decide.)
+    """
+
+    def test_get_tempo_account_links_for_project_returns_empty_on_html(
+        self,
+        tempo_client: tuple[object, MagicMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client, resp = tempo_client
+        _set_html_response(resp)
+        with caplog.at_level(logging.WARNING):
+            result = client.tempo.get_tempo_account_links_for_project(42)
+        assert result == []
+        assert any("unavailable" in r.getMessage().lower() for r in caplog.records)
+
+    def test_get_tempo_work_attributes_returns_empty_on_html(
+        self,
+        tempo_client: tuple[object, MagicMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client, resp = tempo_client
+        _set_html_response(resp)
+        with caplog.at_level(logging.WARNING):
+            result = client.tempo.get_tempo_work_attributes()
+        assert result == []
+
+    def test_get_tempo_all_work_logs_for_project_returns_partial_on_html(
+        self,
+        tempo_client: tuple[object, MagicMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When the second page returns HTML, return whatever was collected."""
+        client, resp = tempo_client
+        _set_html_response(resp)
+        with caplog.at_level(logging.WARNING):
+            result = client.tempo.get_tempo_all_work_logs_for_project("TK")
+        assert result == []
+
+    def test_get_tempo_work_log_by_id_raises_on_html(
+        self,
+        tempo_client: tuple[object, MagicMock],
+    ) -> None:
+        """Single-record fetch deliberately re-raises — caller decides
+        whether the missing service is fatal.
+        """
+        from src.infrastructure.jira.jira_client import JiraApiError
+
+        client, resp = tempo_client
+        _set_html_response(resp)
+        # The outer try wraps in JiraApiError, but JiraServiceUnavailableError
+        # passes through to the caller via _client.jira._session.get usage.
+        with pytest.raises((JiraServiceUnavailableError, JiraApiError)):
+            client.tempo.get_tempo_work_log_by_id("X-1")
+
+
+class TestHandleResponseDetectsHtmlOn4xx:
+    """In production, ``JiraClient._handle_response`` runs inside the
+    patched session and converts 4xx into status-specific exceptions
+    *before* the caller's ``_assert_json_response`` ever runs. For
+    HTML 4xx bodies (Tempo not installed → catch-all HTML 404) we want
+    the typed ``JiraServiceUnavailableError`` instead of the misleading
+    ``JiraResourceNotFoundError``.
+    """
+
+    def _client(self, monkeypatch: pytest.MonkeyPatch) -> JiraClient:
+        import time
+
+        from src.utils.rate_limiter import create_jira_rate_limiter
+
+        c = JiraClient.__new__(JiraClient)
+        c.jira = MagicMock()
+        c.jira_url = "https://jira.local"
+        c.base_url = "https://jira.local"
+        c.rate_limiter = create_jira_rate_limiter()
+        c.request_count = 0
+        c.period_start = time.time()
+        return c
+
+    def test_html_404_raises_service_unavailable_not_not_found(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from src.infrastructure.jira.jira_client import JiraResourceNotFoundError
+
+        c = self._client(monkeypatch)
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.reason = "Not Found"
+        resp.headers = {"Content-Type": "text/html"}
+        resp.text = "<!DOCTYPE html>\n<html>...</html>"
+        with pytest.raises(JiraServiceUnavailableError):
+            c._handle_response(resp)
+        # Verify it is NOT raising JiraResourceNotFoundError (subclass check).
+        try:
+            c._handle_response(resp)
+        except JiraResourceNotFoundError:  # pragma: no cover
+            pytest.fail("Expected JiraServiceUnavailableError, got JiraResourceNotFoundError")
+        except JiraServiceUnavailableError:
+            pass
+
+    def test_html_401_raises_service_unavailable_not_auth_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        c = self._client(monkeypatch)
+        resp = MagicMock()
+        resp.status_code = 401
+        resp.reason = "Unauthorized"
+        resp.headers = {"content-type": "text/html; charset=utf-8"}
+        resp.text = "<!DOCTYPE html><html>Log in</html>"
+        with pytest.raises(JiraServiceUnavailableError):
+            c._handle_response(resp)
+
+    def test_json_404_still_raises_resource_not_found(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Real Jira 404 with JSON body keeps the existing behaviour."""
+        from src.infrastructure.jira.jira_client import JiraResourceNotFoundError
+
+        c = self._client(monkeypatch)
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.reason = "Not Found"
+        resp.headers = {"Content-Type": "application/json"}
+        resp.text = '{"errorMessages":["Issue Does Not Exist"]}'
+        resp.json.return_value = {"errorMessages": ["Issue Does Not Exist"]}
+        with pytest.raises(JiraResourceNotFoundError):
+            c._handle_response(resp)
+
+
 class TestProjectRolesSkipsOnHtml:
     def test_get_project_roles_returns_empty_on_html(
         self,
