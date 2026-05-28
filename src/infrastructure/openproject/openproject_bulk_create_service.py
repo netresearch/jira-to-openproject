@@ -783,6 +783,15 @@ class OpenProjectBulkCreateService:
             elsif wp_data['status_name']
               wp.status = statuses_by_name[wp_data['status_name']]
             end
+            # Safety net (issue #260): if the requested status_id or
+            # status_name didn't resolve to a real Status record (e.g.
+            # after an OP version upgrade that renumbered records, or
+            # when the Python side fell back to a default that doesn't
+            # exist on this instance), fall back to the first Status by
+            # position so the WP doesn't fail validation with
+            # "Status can't be blank". Mirrors the single-WP code paths
+            # earlier in this file.
+            wp.status ||= Status.order(:position).first
 
             # Set priority - using pre-fetched lookup
             if wp_data['priority_id']

@@ -59,6 +59,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, JiraUser
+from src.models.migration_error import MigrationError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -414,16 +415,45 @@ class WorkPackageSkeletonMigration(BaseMigration):
         return self._get_default_status_id()
 
     def _get_default_status_id(self) -> int:
-        """Get default OpenProject status ID (cached)."""
+        """Get default OpenProject status ID (cached).
+
+        Fails loud when no statuses can be resolved. The previous behaviour
+        of falling through to a hard-coded ``1`` masked OpenProject-side
+        misconfiguration: if no Status with that ID exists on the target
+        instance (e.g. after an OP 15→17 upgrade renumbered records),
+        every WP in the batch fails with "Status can't be blank". Better
+        to abort once with an actionable message than to log thousands of
+        per-record failures.
+        """
         if self._cached_statuses is None:
             try:
                 self._cached_statuses = self.op_client.get_statuses()
                 self.logger.info("Cached %d statuses", len(self._cached_statuses or []))
-            except Exception:
-                self._cached_statuses = []
-        if self._cached_statuses:
-            return self._cached_statuses[0].get("id", 1)
-        return 1
+            except Exception as exc:
+                self.logger.exception("Failed to fetch OpenProject statuses")
+                msg = (
+                    "Cannot determine a default OpenProject status_id: "
+                    f"op_client.get_statuses() raised {type(exc).__name__}: {exc}. "
+                    "Verify the OpenProject Rails console is reachable and that "
+                    "at least one work-package Status exists."
+                )
+                raise MigrationError(msg) from exc
+        if not self._cached_statuses:
+            msg = (
+                "Cannot determine a default OpenProject status_id: "
+                "op_client.get_statuses() returned no statuses. Verify "
+                "that at least one work-package Status is configured on the "
+                "OpenProject instance."
+            )
+            raise MigrationError(msg)
+        status_id = self._cached_statuses[0].get("id")
+        if not isinstance(status_id, int) or status_id <= 0:
+            msg = (
+                "Cannot determine a default OpenProject status_id: the first "
+                f"cached Status entry has no usable 'id' field ({status_id!r})."
+            )
+            raise MigrationError(msg)
+        return status_id
 
     def _get_default_priority_id(self) -> int:
         """Get default OpenProject priority ID (Normal priority, cached)."""
