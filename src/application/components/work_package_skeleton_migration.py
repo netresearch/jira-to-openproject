@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -407,6 +408,54 @@ class WorkPackageSkeletonMigration(BaseMigration):
         # Fallback to default type
         return self._get_default_type_id()
 
+    def _cached_or_fetch(
+        self,
+        cache_attr: str,
+        fetch: Callable[[], list[dict[str, Any]] | None],
+        *,
+        resource: str,
+        log_label: str,
+    ) -> list[dict[str, Any]]:
+        """Return the cached list, fetching once on the first miss.
+
+        Centralises the cache+fetch+raise-on-fail pattern shared by the
+        three ``_get_default_*_id`` helpers. The ``_raise_no_default_resource``
+        call is a `NoReturn` raiser so callers can treat the returned
+        list as non-empty without further checks.
+        """
+        cached = getattr(self, cache_attr)
+        if cached is None:
+            try:
+                cached = fetch() or []
+                self.logger.info("Cached %d %s", len(cached), log_label)
+                setattr(self, cache_attr, cached)
+            except Exception as exc:
+                self.logger.exception("Failed to fetch OpenProject %s", log_label)
+                _raise_no_default_resource(
+                    resource,
+                    f"fetch raised {type(exc).__name__}: {exc}",
+                    cause=exc,
+                )
+        if not cached:
+            _raise_no_default_resource(resource, f"fetch returned no {log_label}")
+        return cached
+
+    @staticmethod
+    def _first_valid_id(items: list[dict[str, Any]], *, resource: str) -> int:
+        """Return the first usable positive integer ``id`` field.
+
+        Raises :class:`MigrationError` via :func:`_raise_no_default_resource`
+        when the first record has no usable id — same loud-fail discipline
+        as the rest of this module (issue #260).
+        """
+        rid = items[0].get("id")
+        if not isinstance(rid, int) or rid <= 0:
+            _raise_no_default_resource(
+                resource,
+                f"first cached entry has no usable 'id' field ({rid!r})",
+            )
+        return rid
+
     def _get_default_type_id(self) -> int:
         """Get default OpenProject type ID (cached).
 
@@ -415,26 +464,13 @@ class WorkPackageSkeletonMigration(BaseMigration):
         renumbering / empty Type tables and produces "Type can't be blank"
         on every WP in the batch. See issue #260.
         """
-        if self._cached_types is None:
-            try:
-                self._cached_types = self.op_client.get_work_package_types()
-                self.logger.info("Cached %d work package types", len(self._cached_types or []))
-            except Exception as exc:
-                self.logger.exception("Failed to fetch OpenProject work package types")
-                _raise_no_default_resource(
-                    "type_id",
-                    f"fetch raised {type(exc).__name__}: {exc}",
-                    cause=exc,
-                )
-        if not self._cached_types:
-            _raise_no_default_resource("type_id", "get_work_package_types() returned no records")
-        type_id = self._cached_types[0].get("id")
-        if not isinstance(type_id, int) or type_id <= 0:
-            _raise_no_default_resource(
-                "type_id",
-                f"first cached Type entry has no usable 'id' field ({type_id!r})",
-            )
-        return type_id
+        types = self._cached_or_fetch(
+            "_cached_types",
+            self.op_client.get_work_package_types,
+            resource="type_id",
+            log_label="work package types",
+        )
+        return self._first_valid_id(types, resource="type_id")
 
     def _get_openproject_status_id(self, jira_issue: Issue) -> int | None:
         """Get OpenProject status ID for a Jira status.
@@ -468,26 +504,13 @@ class WorkPackageSkeletonMigration(BaseMigration):
         to abort once with an actionable message than to log thousands of
         per-record failures.
         """
-        if self._cached_statuses is None:
-            try:
-                self._cached_statuses = self.op_client.get_statuses()
-                self.logger.info("Cached %d statuses", len(self._cached_statuses or []))
-            except Exception as exc:
-                self.logger.exception("Failed to fetch OpenProject statuses")
-                _raise_no_default_resource(
-                    "status_id",
-                    f"op_client.get_statuses() raised {type(exc).__name__}: {exc}",
-                    cause=exc,
-                )
-        if not self._cached_statuses:
-            _raise_no_default_resource("status_id", "op_client.get_statuses() returned no statuses")
-        status_id = self._cached_statuses[0].get("id")
-        if not isinstance(status_id, int) or status_id <= 0:
-            _raise_no_default_resource(
-                "status_id",
-                f"first cached Status entry has no usable 'id' field ({status_id!r})",
-            )
-        return status_id
+        statuses = self._cached_or_fetch(
+            "_cached_statuses",
+            self.op_client.get_statuses,
+            resource="status_id",
+            log_label="statuses",
+        )
+        return self._first_valid_id(statuses, resource="status_id")
 
     def _get_default_priority_id(self) -> int:
         """Get default OpenProject priority ID (Normal priority, cached).
@@ -497,33 +520,21 @@ class WorkPackageSkeletonMigration(BaseMigration):
         fallback resolved to a non-existent row, every WP failed with
         validation noise. See issue #260.
         """
-        if self._cached_priorities is None:
-            try:
-                self._cached_priorities = self.op_client.get_issue_priorities()
-                self.logger.info("Cached %d priorities", len(self._cached_priorities or []))
-            except Exception as exc:
-                self.logger.exception("Failed to fetch OpenProject priorities")
-                _raise_no_default_resource(
-                    "priority_id",
-                    f"fetch raised {type(exc).__name__}: {exc}",
-                    cause=exc,
-                )
-        if not self._cached_priorities:
-            _raise_no_default_resource("priority_id", "get_issue_priorities() returned no records")
-        # Try to find "Normal" priority first, otherwise use the first record.
-        for p in self._cached_priorities:
+        priorities = self._cached_or_fetch(
+            "_cached_priorities",
+            self.op_client.get_issue_priorities,
+            resource="priority_id",
+            log_label="priorities",
+        )
+        # Prefer "Normal" priority if it has a usable id; otherwise fall
+        # through to the first record.
+        for p in priorities:
             if p.get("name", "").lower() == "normal":
                 pid = p.get("id")
                 if isinstance(pid, int) and pid > 0:
                     return pid
                 break
-        priority_id = self._cached_priorities[0].get("id")
-        if not isinstance(priority_id, int) or priority_id <= 0:
-            _raise_no_default_resource(
-                "priority_id",
-                f"first cached Priority entry has no usable 'id' field ({priority_id!r})",
-            )
-        return priority_id
+        return self._first_valid_id(priorities, resource="priority_id")
 
     def _get_default_author_id(self) -> int:
         """Get default author ID (admin user)."""
