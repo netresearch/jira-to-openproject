@@ -289,6 +289,75 @@ def _extract_counts(result: ComponentResult) -> tuple[int, int, int]:
         return sc, fc, tc
 
 
+def _first_error_message(result: ComponentResult | None) -> str:
+    """Return the most informative cause message from a result, or ''.
+
+    Search order: ``result.error`` → ``result.errors[0]`` →
+    ``details['error']`` → ``result.message``.
+
+    Used by :func:`_format_component_outcome` to surface *why* a
+    component failed inline in the per-component summary log, so users
+    don't have to scroll back to find the real cause.
+    """
+    if result is None:
+        return ""
+    err = getattr(result, "error", None)
+    if err:
+        return str(err)
+    errors = getattr(result, "errors", None) or []
+    if errors:
+        return str(errors[0])
+    details = getattr(result, "details", None) or {}
+    if isinstance(details, dict):
+        derr = details.get("error")
+        if derr:
+            return str(derr)
+    msg = getattr(result, "message", None)
+    if msg:
+        return str(msg)
+    return ""
+
+
+def _format_component_outcome(
+    name: str,
+    result: ComponentResult,
+    elapsed: float,
+) -> tuple[str, str]:
+    """Build the per-component summary line.
+
+    Returns a ``(level, message)`` pair. ``level`` is ``"success"``,
+    ``"warning"``, or ``"error"`` so the caller can pick the right log
+    method. Partial success (``success=True`` with some failed items)
+    surfaces as a *warning*, not a fake success; full failure includes
+    the underlying cause inline so the user doesn't have to scroll back
+    through the log to find it.
+    """
+    success_count, failed_count, total_count = _extract_counts(result)
+    counts = f"{success_count}/{total_count} items migrated"
+    if failed_count:
+        counts += f", {failed_count} failed"
+    time_part = f"took {elapsed:.2f} seconds"
+
+    has_errors = _component_has_errors(result)
+    if getattr(result, "success", False) and not has_errors:
+        return "success", (
+            f"Component '{name}' completed successfully ({counts}), {time_part}"
+        )
+
+    cause = _first_error_message(result)
+    cause_part = f": {cause}" if cause else ""
+
+    if getattr(result, "success", False):
+        return "warning", (
+            f"Component '{name}' completed with errors{cause_part} "
+            f"({counts}), {time_part}"
+        )
+
+    return "error", (
+        f"Component '{name}' FAILED{cause_part} ({counts}), {time_part}"
+    )
+
+
 class Migration:
     """Main migration orchestrator class."""
 
@@ -867,23 +936,19 @@ async def run_migration(
 
                         # Print component summary based on robust count extraction
                         details = component_result.details or {}
-                        success_count, failed_count, total_count = _extract_counts(component_result)
                         component_time = details.get("time", details.get("duration_seconds", 0))
 
-                        # Logging
-                        had_errors = _component_has_errors(component_result)
-                        if component_result.success and not had_errors:
-                            config.logger.success(
-                                f"Component '{component_name}' completed successfully "
-                                f"({success_count}/{total_count} items migrated), "
-                                f"took {component_time:.2f} seconds",
-                            )
+                        level, summary_line = _format_component_outcome(
+                            component_name,
+                            component_result,
+                            component_time,
+                        )
+                        if level == "success":
+                            config.logger.success(summary_line)
+                        elif level == "warning":
+                            config.logger.warning(summary_line)
                         else:
-                            config.logger.error(
-                                f"Component '{component_name}' failed or had errors "
-                                f"({success_count}/{total_count} items migrated, {failed_count} failed), "
-                                f"took {component_time:.2f} seconds",
-                            )
+                            config.logger.error(summary_line)
                     else:
                         # Handle case where component didn't return a result (should not happen with dataclass)
                         config.logger.warning(
