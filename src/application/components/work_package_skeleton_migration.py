@@ -52,7 +52,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
@@ -84,6 +84,32 @@ def _stringify_optional_timestamp(value: Any) -> str | None:
     if isinstance(value, str):
         return value or None
     return str(value)
+
+
+def _raise_no_default_resource(
+    resource: str,
+    reason: str,
+    *,
+    cause: Exception | None = None,
+) -> NoReturn:
+    """Raise a uniform :class:`MigrationError` for a missing default OP resource.
+
+    Used by the three ``_get_default_*_id`` helpers in
+    :class:`WorkPackageSkeletonMigration`. Centralising the message
+    eliminates the duplicated string template that SonarCloud flags as
+    "duplication on new code" and keeps the wording consistent across
+    status / type / priority. The function itself does the ``raise`` so
+    EM101 doesn't fire on call-site string literals.
+    """
+    label = resource.removesuffix("_id").title()
+    msg = (
+        f"Cannot determine a default OpenProject {resource}: {reason}. "
+        f"Verify the OpenProject Rails console is reachable and that at "
+        f"least one work-package {label} is configured."
+    )
+    if cause is not None:
+        raise MigrationError(msg) from cause
+    raise MigrationError(msg)
 
 
 def _build_provenance_custom_field_entries(
@@ -382,16 +408,33 @@ class WorkPackageSkeletonMigration(BaseMigration):
         return self._get_default_type_id()
 
     def _get_default_type_id(self) -> int:
-        """Get default OpenProject type ID (cached)."""
+        """Get default OpenProject type ID (cached).
+
+        Same loud-fail discipline as :meth:`_get_default_status_id`: returning
+        a literal ``1`` when nothing is cached masks server-side
+        renumbering / empty Type tables and produces "Type can't be blank"
+        on every WP in the batch. See issue #260.
+        """
         if self._cached_types is None:
             try:
                 self._cached_types = self.op_client.get_work_package_types()
                 self.logger.info("Cached %d work package types", len(self._cached_types or []))
-            except Exception:
-                self._cached_types = []
-        if self._cached_types:
-            return self._cached_types[0].get("id", 1)
-        return 1
+            except Exception as exc:
+                self.logger.exception("Failed to fetch OpenProject work package types")
+                _raise_no_default_resource(
+                    "type_id",
+                    f"fetch raised {type(exc).__name__}: {exc}",
+                    cause=exc,
+                )
+        if not self._cached_types:
+            _raise_no_default_resource("type_id", "get_work_package_types() returned no records")
+        type_id = self._cached_types[0].get("id")
+        if not isinstance(type_id, int) or type_id <= 0:
+            _raise_no_default_resource(
+                "type_id",
+                f"first cached Type entry has no usable 'id' field ({type_id!r})",
+            )
+        return type_id
 
     def _get_openproject_status_id(self, jira_issue: Issue) -> int | None:
         """Get OpenProject status ID for a Jira status.
@@ -431,45 +474,56 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 self.logger.info("Cached %d statuses", len(self._cached_statuses or []))
             except Exception as exc:
                 self.logger.exception("Failed to fetch OpenProject statuses")
-                msg = (
-                    "Cannot determine a default OpenProject status_id: "
-                    f"op_client.get_statuses() raised {type(exc).__name__}: {exc}. "
-                    "Verify the OpenProject Rails console is reachable and that "
-                    "at least one work-package Status exists."
+                _raise_no_default_resource(
+                    "status_id",
+                    f"op_client.get_statuses() raised {type(exc).__name__}: {exc}",
+                    cause=exc,
                 )
-                raise MigrationError(msg) from exc
         if not self._cached_statuses:
-            msg = (
-                "Cannot determine a default OpenProject status_id: "
-                "op_client.get_statuses() returned no statuses. Verify "
-                "that at least one work-package Status is configured on the "
-                "OpenProject instance."
-            )
-            raise MigrationError(msg)
+            _raise_no_default_resource("status_id", "op_client.get_statuses() returned no statuses")
         status_id = self._cached_statuses[0].get("id")
         if not isinstance(status_id, int) or status_id <= 0:
-            msg = (
-                "Cannot determine a default OpenProject status_id: the first "
-                f"cached Status entry has no usable 'id' field ({status_id!r})."
+            _raise_no_default_resource(
+                "status_id",
+                f"first cached Status entry has no usable 'id' field ({status_id!r})",
             )
-            raise MigrationError(msg)
         return status_id
 
     def _get_default_priority_id(self) -> int:
-        """Get default OpenProject priority ID (Normal priority, cached)."""
+        """Get default OpenProject priority ID (Normal priority, cached).
+
+        Same loud-fail discipline as :meth:`_get_default_status_id`. Priority
+        is required on ``WorkPackage`` in OP — when the literal ``1``
+        fallback resolved to a non-existent row, every WP failed with
+        validation noise. See issue #260.
+        """
         if self._cached_priorities is None:
             try:
                 self._cached_priorities = self.op_client.get_issue_priorities()
                 self.logger.info("Cached %d priorities", len(self._cached_priorities or []))
-            except Exception:
-                self._cached_priorities = []
-        if self._cached_priorities:
-            # Try to find "Normal" priority, otherwise use first
-            for p in self._cached_priorities:
-                if p.get("name", "").lower() == "normal":
-                    return p.get("id", 1)
-            return self._cached_priorities[0].get("id", 1)
-        return 1
+            except Exception as exc:
+                self.logger.exception("Failed to fetch OpenProject priorities")
+                _raise_no_default_resource(
+                    "priority_id",
+                    f"fetch raised {type(exc).__name__}: {exc}",
+                    cause=exc,
+                )
+        if not self._cached_priorities:
+            _raise_no_default_resource("priority_id", "get_issue_priorities() returned no records")
+        # Try to find "Normal" priority first, otherwise use the first record.
+        for p in self._cached_priorities:
+            if p.get("name", "").lower() == "normal":
+                pid = p.get("id")
+                if isinstance(pid, int) and pid > 0:
+                    return pid
+                break
+        priority_id = self._cached_priorities[0].get("id")
+        if not isinstance(priority_id, int) or priority_id <= 0:
+            _raise_no_default_resource(
+                "priority_id",
+                f"first cached Priority entry has no usable 'id' field ({priority_id!r})",
+            )
+        return priority_id
 
     def _get_default_author_id(self) -> int:
         """Get default author ID (admin user)."""

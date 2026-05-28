@@ -776,6 +776,8 @@ class OpenProjectBulkCreateService:
             elsif wp_data['type_name']
               wp.type = types_by_name[wp_data['type_name']]
             end
+            # Safety net for type (issue #260) - same shape as status below.
+            wp.type ||= (@default_type ||= Type.order(:position).first)
 
             # Set status - using pre-fetched lookup
             if wp_data['status_id']
@@ -789,9 +791,12 @@ class OpenProjectBulkCreateService:
             # when the Python side fell back to a default that doesn't
             # exist on this instance), fall back to the first Status by
             # position so the WP doesn't fail validation with
-            # "Status can't be blank". Mirrors the single-WP code paths
-            # earlier in this file.
-            wp.status ||= Status.order(:position).first
+            # "Status can't be blank". Memoise on the script's binding
+            # via ``@default_status`` so we don't run
+            # ``Status.order(:position).first`` once per failing WP
+            # (N+1 inside the batch loop). Mirrors the single-WP code
+            # paths earlier in this file.
+            wp.status ||= (@default_status ||= Status.order(:position).first)
 
             # Set priority - using pre-fetched lookup
             if wp_data['priority_id']
@@ -799,6 +804,8 @@ class OpenProjectBulkCreateService:
             elsif wp_data['priority_name']
               wp.priority = priorities_by_name[wp_data['priority_name']]
             end
+            # Safety net for priority (issue #260) - same shape as status above.
+            wp.priority ||= (@default_priority ||= IssuePriority.order(:position).first)
 
             # Set author - using pre-fetched lookup
             if wp_data['author_id']

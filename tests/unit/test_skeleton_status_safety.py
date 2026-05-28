@@ -134,6 +134,105 @@ class TestDefaultStatusIdSafety:
             mig._get_default_status_id()
 
 
+class TestDefaultTypeIdSafety:
+    """Mirror tests for ``_get_default_type_id``. Independent review of #262
+    pointed out the same literal-1 fallback existed on the type helper —
+    same OP-renumber scenario would produce "Type can't be blank" after
+    the status fix landed.
+    """
+
+    def test_returns_first_cached_type_id_when_available(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        mig = _build_mig(tmp_path)
+        mig.op_client.get_work_package_types = MagicMock(
+            return_value=[{"id": 13, "name": "Task"}, {"id": 14, "name": "Bug"}],
+        )
+        assert mig._get_default_type_id() == 13
+
+    def test_raises_when_types_empty(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        from src.models.migration_error import MigrationError
+
+        mig = _build_mig(tmp_path)
+        mig.op_client.get_work_package_types = MagicMock(return_value=[])
+        with pytest.raises(MigrationError) as excinfo:
+            mig._get_default_type_id()
+        assert "type" in str(excinfo.value).lower()
+
+    def test_raises_when_types_fetch_raises(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        from src.models.migration_error import MigrationError
+
+        mig = _build_mig(tmp_path)
+        mig.op_client.get_work_package_types = MagicMock(side_effect=RuntimeError("rails down"))
+        with pytest.raises(MigrationError):
+            mig._get_default_type_id()
+
+
+class TestDefaultPriorityIdSafety:
+    """Mirror tests for ``_get_default_priority_id``. Same rationale."""
+
+    def test_returns_normal_priority_when_present(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        mig = _build_mig(tmp_path)
+        mig.op_client.get_issue_priorities = MagicMock(
+            return_value=[
+                {"id": 7, "name": "Low"},
+                {"id": 8, "name": "Normal"},
+                {"id": 9, "name": "High"},
+            ],
+        )
+        assert mig._get_default_priority_id() == 8
+
+    def test_returns_first_priority_when_no_normal(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        mig = _build_mig(tmp_path)
+        mig.op_client.get_issue_priorities = MagicMock(
+            return_value=[{"id": 7, "name": "Low"}, {"id": 9, "name": "High"}],
+        )
+        assert mig._get_default_priority_id() == 7
+
+    def test_raises_when_priorities_empty(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        from src.models.migration_error import MigrationError
+
+        mig = _build_mig(tmp_path)
+        mig.op_client.get_issue_priorities = MagicMock(return_value=[])
+        with pytest.raises(MigrationError) as excinfo:
+            mig._get_default_priority_id()
+        assert "priority" in str(excinfo.value).lower()
+
+    def test_raises_when_priorities_fetch_raises(
+        self,
+        tmp_path: Path,
+        _mock_mappings: None,
+    ) -> None:
+        from src.models.migration_error import MigrationError
+
+        mig = _build_mig(tmp_path)
+        mig.op_client.get_issue_priorities = MagicMock(side_effect=RuntimeError("rails down"))
+        with pytest.raises(MigrationError):
+            mig._get_default_priority_id()
+
+
 # ---------------------------------------------------------------------------
 # 2. Ruby batch template must carry the ``||=`` safety net
 # ---------------------------------------------------------------------------
@@ -178,9 +277,18 @@ class TestRubyBatchTemplateStatusFallback:
         assert isinstance(script, str)
 
         # The safety net must be present after the status assignment block.
-        assert "wp.status ||= Status.order(:position).first" in script, (
-            "Batch Ruby template is missing the ``wp.status ||= "
-            "Status.order(:position).first`` fallback that the single-WP "
-            "paths already have. Without it, a single bad status_id "
+        # Memoised via ``@default_status`` so we don't run
+        # ``Status.order(:position).first`` once per failing WP — Gemini's
+        # N+1 note on the first pass of #262.
+        assert "wp.status ||= (@default_status ||= Status.order(:position).first)" in script, (
+            "Batch Ruby template is missing the memoised ``wp.status ||= "
+            "(@default_status ||= Status.order(:position).first)`` fallback that "
+            "the single-WP paths already have. Without it, a single bad status_id "
             "causes the entire WP to fail with 'Status can't be blank'."
         )
+        # Independent review of #262 noted that the same fallback shape
+        # was missing for type and priority — the generic
+        # ``bulk_create_records`` path has all three rescues, the WP-batch
+        # path only had status.
+        assert "wp.type ||= (@default_type ||= Type.order(:position).first)" in script
+        assert "wp.priority ||= (@default_priority ||= IssuePriority.order(:position).first)" in script
