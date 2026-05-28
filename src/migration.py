@@ -659,11 +659,19 @@ async def run_migration(
 
     """
     try:
+        # Resolve the effective component list NOW so the dry-run gate
+        # sees the same set the orchestrator will execute. Without this,
+        # a bare ``--dry-run`` (no ``--components``, no ``--profile``)
+        # arrives with ``components=None``; default expansion happens
+        # later in this function, and the gate would see an empty list
+        # and let the run proceed — re-introducing the #260 honesty bug.
+        effective_components = list(components) if components else list(DEFAULT_COMPONENT_SEQUENCE)
+
         # Check if we need a migration mode header
         if config.migration_config.get("dry_run", False):
             allow_unsafe = bool(config.migration_config.get("allow_unsafe_dry_run", False))
             level, lines, abort = _build_dry_run_banner(
-                requested=list(components or []),
+                requested=effective_components,
                 allow_unsafe=allow_unsafe,
             )
             log = config.logger.error if level == "error" else config.logger.warning
@@ -676,9 +684,10 @@ async def run_migration(
                     "--allow-unsafe-dry-run to acknowledge."
                 )
                 raise SystemExit(msg)
-            import asyncio as _asyncio
+            if lines:
+                import asyncio as _asyncio
 
-            await _asyncio.sleep(1)  # Give the user a moment to see this warning
+                await _asyncio.sleep(1)  # Give the user a moment to see this warning
             mode = "DRY RUN"
         else:
             mode = "PRODUCTION"

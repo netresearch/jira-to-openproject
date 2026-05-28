@@ -26,12 +26,15 @@ can extend the safe-set incrementally without touching the orchestrator.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from src.migration import (
     DRY_RUN_SAFE_COMPONENTS,
     _build_dry_run_banner,
     _dry_run_safety_partition,
+    run_migration,
 )
 
 
@@ -183,3 +186,77 @@ class TestUnsafeComponentClassesStayUnsafe:
         assert getattr(cls, "DRY_RUN_SAFE", False) is False, (
             f"{class_name} does not honour --dry-run; it must NOT carry DRY_RUN_SAFE = True"
         )
+
+
+class TestRunMigrationGateIntegration:
+    """End-to-end gate behaviour: the abort must propagate out of
+    ``run_migration`` as a ``SystemExit`` (not a swallowed ``Exception``).
+
+    Independent code review of #264 noted that the outer ``try/except
+    Exception`` in ``run_migration`` correctly leaves ``BaseException``
+    subclasses alone — but nothing pinned that contract. A future
+    refactor swapping to ``except BaseException`` would silently
+    re-introduce the #260 honesty bug.
+    """
+
+    def test_bare_dry_run_with_unsafe_default_components_aborts(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The critical case: ``j2o migrate --dry-run`` with no
+        ``--components`` and no ``--profile``. Defaults expand to the
+        full sequence, which contains many unsafe components, and the
+        gate must abort. This pins the fix for the regression the
+        independent reviewer found on the first iteration of this PR.
+        """
+        monkeypatch.setattr(
+            "src.migration.config.migration_config",
+            {"dry_run": True, "no_backup": True},
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            # ``components=None`` triggers default expansion in
+            # ``run_migration`` — same path as bare ``--dry-run``.
+            asyncio.run(run_migration(components=None))
+        assert "--allow-unsafe-dry-run" in str(excinfo.value)
+
+    def test_dry_run_with_only_safe_components_does_not_abort(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Setting ``--components`` to only safe ones lets the run pass
+        the gate without ``--allow-unsafe-dry-run``. ``run_migration``
+        will then fail on downstream client setup (no real Jira / OP
+        configured), but the gate's own ``SystemExit`` must NOT fire.
+        """
+        monkeypatch.setattr(
+            "src.migration.config.migration_config",
+            {"dry_run": True, "no_backup": True},
+        )
+        # The outer ``try/except Exception`` in ``run_migration``
+        # swallows non-BaseException failures; assert it returns
+        # normally rather than aborting via the gate's SystemExit.
+        result = asyncio.run(run_migration(components=["projects"]))
+        # If the gate had aborted, SystemExit would have propagated and
+        # we'd never reach this assert.
+        assert result is not None
+
+    def test_dry_run_with_allow_unsafe_flag_does_not_abort(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``--allow-unsafe-dry-run`` lets the run pass the gate even
+        when unsafe components are in scope.
+        """
+        monkeypatch.setattr(
+            "src.migration.config.migration_config",
+            {
+                "dry_run": True,
+                "allow_unsafe_dry_run": True,
+                "no_backup": True,
+            },
+        )
+        # Same shape as the previous test: the gate must NOT abort.
+        # Downstream failure inside ``run_migration`` is irrelevant —
+        # only the gate's own ``SystemExit`` would be a regression here.
+        result = asyncio.run(run_migration(components=["work_packages_skeleton"]))
+        assert result is not None
