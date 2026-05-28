@@ -304,8 +304,11 @@ def _first_error_message(result: ComponentResult | None) -> str:
     err = getattr(result, "error", None)
     if err:
         return str(err)
-    errors = getattr(result, "errors", None) or []
-    if errors:
+    errors = getattr(result, "errors", None)
+    # Guard against ``errors=[""]`` or other falsy first elements — if the
+    # list is non-empty but the first entry is empty, fall through to the
+    # remaining sources rather than returning "".
+    if isinstance(errors, list) and errors and errors[0]:
         return str(errors[0])
     details = getattr(result, "details", None) or {}
     if isinstance(details, dict):
@@ -321,7 +324,7 @@ def _first_error_message(result: ComponentResult | None) -> str:
 def _format_component_outcome(
     name: str,
     result: ComponentResult,
-    elapsed: float,
+    elapsed: float | None,
 ) -> tuple[str, str]:
     """Build the per-component summary line.
 
@@ -336,26 +339,23 @@ def _format_component_outcome(
     counts = f"{success_count}/{total_count} items migrated"
     if failed_count:
         counts += f", {failed_count} failed"
-    time_part = f"took {elapsed:.2f} seconds"
+    # ``details.get("time")`` can return ``None`` for components that didn't
+    # record a duration; ``{None:.2f}`` would crash. Use ``is not None`` so a
+    # legitimate ``0`` (or ``0.0``) is preserved.
+    elapsed_seconds = elapsed if elapsed is not None else 0.0
+    time_part = f"took {elapsed_seconds:.2f} seconds"
 
     has_errors = _component_has_errors(result)
     if getattr(result, "success", False) and not has_errors:
-        return "success", (
-            f"Component '{name}' completed successfully ({counts}), {time_part}"
-        )
+        return "success", (f"Component '{name}' completed successfully ({counts}), {time_part}")
 
     cause = _first_error_message(result)
     cause_part = f": {cause}" if cause else ""
 
     if getattr(result, "success", False):
-        return "warning", (
-            f"Component '{name}' completed with errors{cause_part} "
-            f"({counts}), {time_part}"
-        )
+        return "warning", (f"Component '{name}' completed with errors{cause_part} ({counts}), {time_part}")
 
-    return "error", (
-        f"Component '{name}' FAILED{cause_part} ({counts}), {time_part}"
-    )
+    return "error", (f"Component '{name}' FAILED{cause_part} ({counts}), {time_part}")
 
 
 class Migration:

@@ -52,6 +52,21 @@ class TestFirstErrorMessage:
         r = ComponentResult(success=True)
         assert _first_error_message(r) == ""
 
+    def test_skips_empty_first_errors_element_and_falls_through(self) -> None:
+        """``errors=[""]`` is non-empty but the first entry is falsy. The
+        previous version returned ``""`` short-circuiting the chain. Now we
+        skip and fall through to ``details['error']`` / ``message``.
+        """
+        r = ComponentResult(
+            success=False,
+            errors=[""],
+            details={"error": "real cause"},
+        )
+        assert _first_error_message(r) == "real cause"
+
+    def test_handles_none_input(self) -> None:
+        assert _first_error_message(None) == ""
+
 
 class TestFormatComponentOutcome:
     def test_clean_success(self) -> None:
@@ -114,3 +129,38 @@ class TestFormatComponentOutcome:
         level, msg = _format_component_outcome("ghost", r, 0.0)
         assert level == "error"
         assert "FAILED" in msg
+
+    def test_elapsed_none_does_not_crash(self) -> None:
+        """``details.get('time')`` can return ``None`` for components that
+        didn't record duration; ``{None:.2f}`` would raise ``TypeError``.
+        """
+        r = ComponentResult(success=True, success_count=1, total_count=1)
+        level, msg = _format_component_outcome("priorities", r, None)
+        assert level == "success"
+        assert "0.00 seconds" in msg
+
+    def test_elapsed_zero_is_preserved(self) -> None:
+        """A legitimate ``0`` must not be coerced via ``or 0.0`` from a
+        falsy-but-valid value (e.g. ``0`` for instant-completion).
+        """
+        r = ComponentResult(success=True, success_count=1, total_count=1)
+        level, msg = _format_component_outcome("priorities", r, 0)
+        assert level == "success"
+        assert "0.00 seconds" in msg
+
+    def test_partial_success_with_message_fallback(self) -> None:
+        """A ``success=True`` result that nonetheless flags an error status
+        in ``details`` must emit a warning AND surface the cause when only
+        ``message`` is set (no ``errors``/``error``/``details['error']``).
+        """
+        r = ComponentResult(
+            success=True,
+            success_count=5,
+            failed_count=2,
+            total_count=7,
+            details={"status": "failed"},
+            message="partial failure cause",
+        )
+        level, msg = _format_component_outcome("priorities", r, 0.5)
+        assert level == "warning"
+        assert "partial failure cause" in msg
