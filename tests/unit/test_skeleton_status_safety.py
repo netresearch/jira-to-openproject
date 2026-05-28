@@ -84,102 +84,82 @@ def _build_mig(tmp_path: Path):  # type: ignore[no-untyped-def]
 # ---------------------------------------------------------------------------
 
 
-class TestDefaultStatusIdSafety:
-    def test_returns_first_cached_status_id_when_available(
-        self,
-        tmp_path: Path,
-        _mock_mappings: None,
-    ) -> None:
-        mig = _build_mig(tmp_path)
-        mig.op_client.get_statuses = MagicMock(
-            return_value=[
-                {"id": 42, "name": "New"},
-                {"id": 43, "name": "In progress"},
-            ],
-        )
-        assert mig._get_default_status_id() == 42
-
-    def test_raises_when_get_statuses_returns_empty(
-        self,
-        tmp_path: Path,
-        _mock_mappings: None,
-    ) -> None:
-        """No silent literal-1 fallback — fail loud with an actionable error."""
-        from src.models.migration_error import MigrationError
-
-        mig = _build_mig(tmp_path)
-        mig.op_client.get_statuses = MagicMock(return_value=[])
-
-        with pytest.raises(MigrationError) as excinfo:
-            mig._get_default_status_id()
-        msg = str(excinfo.value)
-        # Be helpful: name the cause and the actionable next step.
-        assert "status" in msg.lower()
-        assert "openproject" in msg.lower() or "op" in msg.lower()
-
-    def test_raises_when_get_statuses_raises(
-        self,
-        tmp_path: Path,
-        _mock_mappings: None,
-    ) -> None:
-        """A swallowed Exception that left _cached_statuses=[] used to fall
-        through to ``return 1``. It must now raise.
-        """
-        from src.models.migration_error import MigrationError
-
-        mig = _build_mig(tmp_path)
-        mig.op_client.get_statuses = MagicMock(side_effect=RuntimeError("rails down"))
-
-        with pytest.raises(MigrationError):
-            mig._get_default_status_id()
+# Parametrised across the three sibling helpers — issue #260's independent
+# code review pointed out that ``_get_default_type_id`` and
+# ``_get_default_priority_id`` had the same literal-1 bug as
+# ``_get_default_status_id``. The three now share a single test body to
+# keep them honest (and to keep SonarCloud happy about duplication on
+# new code).
+_DEFAULT_RESOURCES = [
+    pytest.param("get_statuses", "_get_default_status_id", "status", id="status"),
+    pytest.param("get_work_package_types", "_get_default_type_id", "type", id="type"),
+    pytest.param("get_issue_priorities", "_get_default_priority_id", "priority", id="priority"),
+]
 
 
-class TestDefaultTypeIdSafety:
-    """Mirror tests for ``_get_default_type_id``. Independent review of #262
-    pointed out the same literal-1 fallback existed on the type helper —
-    same OP-renumber scenario would produce "Type can't be blank" after
-    the status fix landed.
+@pytest.mark.parametrize(("op_method", "default_helper", "label"), _DEFAULT_RESOURCES)
+class TestDefaultIdSafety:
+    """Cover the three sibling ``_get_default_*_id`` helpers uniformly:
+
+    * happy path returns the first valid id from the cache,
+    * empty cache raises :class:`MigrationError` with an actionable message,
+    * fetch raising propagates as :class:`MigrationError`.
     """
 
-    def test_returns_first_cached_type_id_when_available(
+    def test_returns_first_cached_id_when_available(
         self,
+        op_method: str,
+        default_helper: str,
+        label: str,
         tmp_path: Path,
         _mock_mappings: None,
     ) -> None:
         mig = _build_mig(tmp_path)
-        mig.op_client.get_work_package_types = MagicMock(
-            return_value=[{"id": 13, "name": "Task"}, {"id": 14, "name": "Bug"}],
+        setattr(
+            mig.op_client,
+            op_method,
+            MagicMock(return_value=[{"id": 42, "name": "First"}, {"id": 43, "name": "Second"}]),
         )
-        assert mig._get_default_type_id() == 13
+        assert getattr(mig, default_helper)() == 42
 
-    def test_raises_when_types_empty(
+    def test_raises_when_fetch_returns_empty(
         self,
+        op_method: str,
+        default_helper: str,
+        label: str,
         tmp_path: Path,
         _mock_mappings: None,
     ) -> None:
         from src.models.migration_error import MigrationError
 
         mig = _build_mig(tmp_path)
-        mig.op_client.get_work_package_types = MagicMock(return_value=[])
+        setattr(mig.op_client, op_method, MagicMock(return_value=[]))
         with pytest.raises(MigrationError) as excinfo:
-            mig._get_default_type_id()
-        assert "type" in str(excinfo.value).lower()
+            getattr(mig, default_helper)()
+        msg = str(excinfo.value).lower()
+        assert label in msg
+        assert "openproject" in msg or "op" in msg
 
-    def test_raises_when_types_fetch_raises(
+    def test_raises_when_fetch_itself_raises(
         self,
+        op_method: str,
+        default_helper: str,
+        label: str,
         tmp_path: Path,
         _mock_mappings: None,
     ) -> None:
         from src.models.migration_error import MigrationError
 
         mig = _build_mig(tmp_path)
-        mig.op_client.get_work_package_types = MagicMock(side_effect=RuntimeError("rails down"))
+        setattr(mig.op_client, op_method, MagicMock(side_effect=RuntimeError("rails down")))
         with pytest.raises(MigrationError):
-            mig._get_default_type_id()
+            getattr(mig, default_helper)()
 
 
-class TestDefaultPriorityIdSafety:
-    """Mirror tests for ``_get_default_priority_id``. Same rationale."""
+class TestDefaultPriorityIdNormalPreference:
+    """Priority has a small wrinkle the other two don't: prefer "Normal"
+    over the first record when present and usable.
+    """
 
     def test_returns_normal_priority_when_present(
         self,
@@ -206,31 +186,6 @@ class TestDefaultPriorityIdSafety:
             return_value=[{"id": 7, "name": "Low"}, {"id": 9, "name": "High"}],
         )
         assert mig._get_default_priority_id() == 7
-
-    def test_raises_when_priorities_empty(
-        self,
-        tmp_path: Path,
-        _mock_mappings: None,
-    ) -> None:
-        from src.models.migration_error import MigrationError
-
-        mig = _build_mig(tmp_path)
-        mig.op_client.get_issue_priorities = MagicMock(return_value=[])
-        with pytest.raises(MigrationError) as excinfo:
-            mig._get_default_priority_id()
-        assert "priority" in str(excinfo.value).lower()
-
-    def test_raises_when_priorities_fetch_raises(
-        self,
-        tmp_path: Path,
-        _mock_mappings: None,
-    ) -> None:
-        from src.models.migration_error import MigrationError
-
-        mig = _build_mig(tmp_path)
-        mig.op_client.get_issue_priorities = MagicMock(side_effect=RuntimeError("rails down"))
-        with pytest.raises(MigrationError):
-            mig._get_default_priority_id()
 
 
 # ---------------------------------------------------------------------------
