@@ -56,7 +56,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
@@ -107,6 +107,12 @@ class ProjectMigration(BaseMigration):
     - Jira projects as sub-projects under their respective Tempo company parent projects
     - Projects with account information stored in custom fields
     """
+
+    # Honours ``config.migration_config["dry_run"]`` by skipping the
+    # Rails-side ``projects:create_project_attributes`` script call (see
+    # ``DRY RUN: Skipping Rails script execution.`` log line); the
+    # orchestrator gate uses this flag in PR D (issue #260).
+    DRY_RUN_SAFE: ClassVar[bool] = True
 
     def __init__(
         self,

@@ -35,7 +35,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
@@ -53,6 +53,10 @@ class IssueTypeMigration(BaseMigration):
     1. Generate a Ruby script for manual execution via Rails console (traditional approach)
     2. Execute commands directly on the Rails console using pexpect (direct approach)
     """
+
+    # Honours ``config.migration_config["dry_run"]`` by passing
+    # ``dry_run=True`` to the Rails type-create path (PR D, issue #260).
+    DRY_RUN_SAFE: ClassVar[bool] = True
 
     def __init__(
         self,

@@ -32,7 +32,7 @@ out-of-scope and otherwise untouched.
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
@@ -57,6 +57,9 @@ class CompanyMigration(BaseMigration):
     - Tempo Account → Custom field in OpenProject projects and work packages
     - Jira Project → OpenProject project with account information stored in custom fields
     """
+
+    # Honours ``config.migration_config["dry_run"]`` (PR D, issue #260).
+    DRY_RUN_SAFE: ClassVar[bool] = True
 
     def __init__(
         self,

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
@@ -52,6 +52,11 @@ class StatusMigration(BaseMigration):
     2. Creating corresponding statuses in OpenProject
     3. Creating and maintaining the status mapping
     """
+
+    # Honours ``config.migration_config["dry_run"]`` by simulating
+    # mapping creation instead of running Rails-side Status.create
+    # (PR D, issue #260).
+    DRY_RUN_SAFE: ClassVar[bool] = True
 
     def __init__(
         self,

@@ -160,7 +160,21 @@ def main() -> None:
     migrate_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Run without making changes to OpenProject",
+        help=(
+            "Run in dry-run mode. Refuses to run when the selected "
+            "components include any that do not honour the flag (would "
+            "still write to OpenProject); pass --allow-unsafe-dry-run "
+            "to override."
+        ),
+    )
+    migrate_parser.add_argument(
+        "--allow-unsafe-dry-run",
+        action="store_true",
+        help=(
+            "Allow --dry-run to proceed even when the selected components "
+            "include migrations that will still write to OpenProject. "
+            "A loud WARNING enumerates which components are unsafe."
+        ),
     )
     migrate_parser.add_argument(
         "--components",

@@ -959,12 +959,19 @@ class TestCompleteMigrationWorkflow:
             mock_file_handle.__exit__.return_value = None
             mock_open.return_value = mock_file_handle
 
-            # Configure for dry run
+            # Configure for dry run. ``users`` does not declare
+            # ``DRY_RUN_SAFE = True`` (PR D startup gate, issue #260),
+            # so this test must explicitly acknowledge that real OP
+            # writes can happen for unsafe components. The test's
+            # intent is exercising the orchestrator's dry-run path, not
+            # the safety gate; pass ``allow_unsafe_dry_run`` so the gate
+            # warns loudly but does not abort.
             with (
                 patch(
                     "src.config.migration_config",
                     {
                         "dry_run": True,
+                        "allow_unsafe_dry_run": True,
                         "no_backup": True,
                     },
                 ),
