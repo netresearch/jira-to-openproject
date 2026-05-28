@@ -358,6 +358,100 @@ def _format_component_outcome(
     return "error", (f"Component '{name}' FAILED{cause_part} ({counts}), {time_part}")
 
 
+# ---------------------------------------------------------------------------
+# Dry-run safety registry (issue #260, PR D)
+#
+# This frozenset enumerates the components that internally honour
+# ``config.migration_config["dry_run"]`` and skip OpenProject writes when
+# the flag is set. Each named component also declares
+# ``DRY_RUN_SAFE: ClassVar[bool] = True`` on its class — the drift guard
+# at ``tests/unit/test_dry_run_safety_gate.py::TestRegistryClassAttributeDriftGuard``
+# keeps the two views in sync.
+#
+# All other components write to OpenProject regardless of ``--dry-run``;
+# the startup gate aborts when any of them is in scope, unless the
+# operator passes ``--allow-unsafe-dry-run`` to acknowledge the risk.
+# ---------------------------------------------------------------------------
+DRY_RUN_SAFE_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "projects",
+        "issue_types",
+        "link_types",
+        "companies",
+        "status_types",
+    },
+)
+
+
+def _dry_run_safety_partition(requested: list[str]) -> tuple[list[str], list[str]]:
+    """Split requested component names into (safe, unsafe) under ``--dry-run``.
+
+    Unknown component names fall into ``unsafe`` — fail-closed for a flag
+    whose contract is "no changes to OpenProject".
+    """
+    safe = [name for name in requested if name in DRY_RUN_SAFE_COMPONENTS]
+    unsafe = [name for name in requested if name not in DRY_RUN_SAFE_COMPONENTS]
+    return safe, unsafe
+
+
+def _build_dry_run_banner(
+    *,
+    requested: list[str],
+    allow_unsafe: bool,
+) -> tuple[str, list[str], bool]:
+    """Build the dry-run startup banner.
+
+    Returns ``(level, lines, abort)``:
+
+    * ``level`` — ``"warning"`` or ``"error"``; selects the logger.
+    * ``lines`` — log lines to emit, or ``[]`` for nothing to say.
+    * ``abort`` — ``True`` when the orchestrator should refuse to run.
+    """
+    if not requested:
+        return "warning", [], False
+
+    safe, unsafe = _dry_run_safety_partition(requested)
+
+    if not unsafe:
+        return (
+            "warning",
+            [
+                "Running in DRY RUN mode.",
+                f"All requested components honour --dry-run: {', '.join(safe)}.",
+                "No changes will be made to OpenProject for these components.",
+            ],
+            False,
+        )
+
+    if not allow_unsafe:
+        return (
+            "error",
+            [
+                "Refusing to run --dry-run: the following requested components "
+                "do NOT honour the flag and would write to OpenProject:",
+                *(f"  - {name}" for name in unsafe),
+                "",
+                "Either restrict the run to dry-run-safe components "
+                f"({', '.join(sorted(DRY_RUN_SAFE_COMPONENTS))}), or pass "
+                "--allow-unsafe-dry-run to acknowledge that real writes will "
+                "still happen for the components above.",
+            ],
+            True,
+        )
+
+    safe_line = f"Safe (honour --dry-run): {', '.join(safe) or 'none'}." if safe else "Safe (honour --dry-run): none."
+    return (
+        "warning",
+        [
+            "Running in DRY RUN mode with --allow-unsafe-dry-run.",
+            safe_line,
+            "The following components will still write to OpenProject:",
+            *(f"  - {name}" for name in unsafe),
+        ],
+        False,
+    )
+
+
 class Migration:
     """Main migration orchestrator class."""
 
@@ -567,9 +661,21 @@ async def run_migration(
     try:
         # Check if we need a migration mode header
         if config.migration_config.get("dry_run", False):
-            config.logger.warning(
-                "Running in DRY RUN mode - no changes will be made to OpenProject",
+            allow_unsafe = bool(config.migration_config.get("allow_unsafe_dry_run", False))
+            level, lines, abort = _build_dry_run_banner(
+                requested=list(components or []),
+                allow_unsafe=allow_unsafe,
             )
+            log = config.logger.error if level == "error" else config.logger.warning
+            for line in lines:
+                log(line)
+            if abort:
+                msg = (
+                    "Aborting --dry-run: requested components include "
+                    "unsafe migrations. See log above; pass "
+                    "--allow-unsafe-dry-run to acknowledge."
+                )
+                raise SystemExit(msg)
             import asyncio as _asyncio
 
             await _asyncio.sleep(1)  # Give the user a moment to see this warning

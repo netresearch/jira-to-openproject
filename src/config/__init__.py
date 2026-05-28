@@ -387,6 +387,9 @@ def update_from_cli_args(args: object) -> None:
     if hasattr(args, "dry_run") and args.dry_run:
         migration_config["dry_run"] = True
         logger.debug("Setting dry_run=True from CLI arguments")
+    if hasattr(args, "allow_unsafe_dry_run") and args.allow_unsafe_dry_run:
+        migration_config["allow_unsafe_dry_run"] = True
+        logger.debug("Setting allow_unsafe_dry_run=True from CLI arguments")
 
     if hasattr(args, "no_backup") and args.no_backup:
         migration_config["no_backup"] = True

@@ -211,6 +211,14 @@ class BaseMigration:
     # access through ``_mapping_repo`` exclusively and retire the proxy.
     _mapping_repo: MappingRepository
 
+    # Honest --dry-run support flag (issue #260, PR D). Subclasses opt
+    # in by setting `DRY_RUN_SAFE = True`; the orchestrator's startup
+    # gate refuses to run under --dry-run when any requested component
+    # leaves this at the default False, unless --allow-unsafe-dry-run
+    # is passed. The `noqa: ERA001` keeps ruff from flagging the
+    # example-style explanation above as commented-out code.
+    DRY_RUN_SAFE: ClassVar[bool] = False
+
     def __init__(
         self,
         jira_client: JiraClient | None = None,

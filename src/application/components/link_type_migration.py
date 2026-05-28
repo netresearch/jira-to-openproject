@@ -21,7 +21,7 @@ deferred. Behaviour preserved.
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
@@ -76,6 +76,10 @@ class LinkTypeMigration(BaseMigration):
     2. Mapping Jira link types to OpenProject's built-in relation types
     3. Creating custom fields for unmapped link types
     """
+
+    # Honours ``config.migration_config["dry_run"]`` by skipping the
+    # custom-field creation step for unmapped link types (PR D, #260).
+    DRY_RUN_SAFE: ClassVar[bool] = True
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         """Initialize the link type migration tools.

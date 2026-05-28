@@ -109,6 +109,7 @@ class MigrationConfig(TypedDict):
     batch_size: int
     ssl_verify: bool
     dry_run: bool
+    allow_unsafe_dry_run: NotRequired[bool]
     force: bool
     no_backup: bool
     stop_on_error: bool
