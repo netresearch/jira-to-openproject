@@ -8,7 +8,7 @@ caching, and parallel processing.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 from requests import Response
@@ -55,6 +55,70 @@ class JiraResourceNotFoundError(JiraError):
 
 class JiraCaptchaError(JiraError):
     """Error when Jira requires CAPTCHA resolution."""
+
+
+class JiraServiceUnavailableError(JiraError):
+    """A Jira endpoint returned a non-JSON response.
+
+    Causes vary across deployments:
+
+    * The plugin or endpoint is not installed (e.g. Tempo Timesheets /
+      Tempo Accounts missing on Jira Server) — the URL falls through to
+      Jira's HTML "page not found" view or a catch-all action.
+    * Authentication failed and Jira returned the login page at HTTP 200
+      instead of HTTP 401.
+    * A reverse proxy in front of Jira intercepted the request and
+      returned its own HTML page.
+    * A CAPTCHA or WebSudo challenge is active.
+
+    j2o callers that depend on optional services (e.g. Tempo, project
+    roles) should catch this exception and skip cleanly rather than
+    fail the whole migration component.
+    """
+
+
+def _looks_like_html(response: Response) -> bool:
+    """Return ``True`` when a response body is HTML/XML rather than JSON.
+
+    Two heuristics, OR-ed:
+
+    * ``Content-Type`` header contains ``html``.
+    * Body — after stripping leading whitespace — starts with ``<``.
+
+    The second heuristic catches misconfigured servers that send
+    ``text/plain`` or even ``application/json`` with an HTML body.
+    """
+    headers = getattr(response, "headers", None)
+    raw_ctype = headers.get("Content-Type") if isinstance(headers, Mapping) else None
+    ctype = raw_ctype.lower() if isinstance(raw_ctype, str) else ""
+    if "html" in ctype:
+        return True
+    body = getattr(response, "text", "")
+    if not isinstance(body, str):
+        return False
+    return body.lstrip().startswith("<")
+
+
+def _assert_json_response(response: Response, *, path: str) -> None:
+    """Raise ``JiraServiceUnavailableError`` when a response is not JSON.
+
+    Use this before calling ``response.json()`` on responses from optional
+    Jira endpoints (Tempo, project roles, etc.) so the caller gets a typed
+    signal it can handle as "skip cleanly" instead of a downstream
+    ``json.JSONDecodeError``.
+    """
+    if not _looks_like_html(response):
+        return
+    ctype = (response.headers.get("Content-Type") or "unknown") if response.headers else "unknown"
+    msg = (
+        f"Jira endpoint {path} returned a non-JSON response "
+        f"(HTTP {response.status_code}, Content-Type {ctype!r}). "
+        "Likely causes: the plugin or endpoint is not installed; "
+        "authentication failed and Jira returned the login page; "
+        "a reverse proxy intercepted the request; or a CAPTCHA / "
+        "WebSudo challenge is active."
+    )
+    raise JiraServiceUnavailableError(msg)
 
 
 def _import_real_jira_module() -> Any:
