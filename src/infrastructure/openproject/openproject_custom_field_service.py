@@ -94,13 +94,26 @@ class OpenProjectCustomFieldService:
 
         escaped = escape_ruby_single_quoted(name)
         escaped_format = escape_ruby_single_quoted(field_format)
-        script = (
-            f"cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escaped}'); "
-            f"if !cf; cf = CustomField.new(name: '{escaped}', field_format: '{escaped_format}', "
-            f"is_required: false, is_for_all: false, type: 'WorkPackageCustomField'); cf.save; end; cf.id"
-        )
-        result = self._client.execute_query(script)
-        return int(result) if result else 0
+        # Route through the isolated JSON path (Ruby writes the result to a
+        # container file read back via ``cat`` + ``json.loads``), exactly like
+        # the sibling ``ensure_work_package_custom_field``. The raw
+        # ``execute_query`` transport returns the unfiltered tmux pane tail —
+        # irb continuation prompts plus stale ``--EXEC`` / ``# j2o:`` residue
+        # from earlier calls — which fed garbage into ``int(result)`` and
+        # crashed five CF-creating components (GitHub #260). ``as_json`` keeps
+        # the id structurally isolated from any console noise.
+        ruby = f"""
+          cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escaped}')
+          if !cf
+            cf = CustomField.new(name: '{escaped}', field_format: '{escaped_format}', is_required: false, is_for_all: false, type: 'WorkPackageCustomField')
+            cf.save
+          end
+          cf && cf.as_json(only: [:id])
+        """
+        result = self._client.execute_json_query(ruby)
+        if isinstance(result, dict) and result.get("id"):
+            return int(result["id"])
+        return 0
 
     def enable_custom_field_for_projects(
         self,
