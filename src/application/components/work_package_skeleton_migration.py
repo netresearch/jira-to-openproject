@@ -280,6 +280,37 @@ class WorkPackageSkeletonMigration(BaseMigration):
             self._last_save_succeeded = False
         return self._last_save_succeeded
 
+    def _finalize_mapping(self) -> None:
+        """Persist the mapping to disk and publish it to the shared facade.
+
+        Per-batch progress uses the direct ``_save_mapping`` disk write for
+        crash-resilient incremental saves. At the END of the run we also
+        publish through ``config.mappings.set_mapping`` once so the
+        process-wide facade cache reflects the final mapping.
+
+        Without this, facade consumers (attachments, attachment_provenance,
+        attachment_recovery, wp_metadata_backfill, watchers) kept reading an
+        empty ``work_package`` mapping even though skeleton had written 10k+
+        entries to disk: ``config.mappings`` is a singleton whose per-stem
+        cache is seeded empty at startup (``migration.py`` calls
+        ``get_all_mappings()`` before any component) and never re-reads disk
+        (GitHub #260). Components that read the JSON file directly
+        (work_packages_content, time_entries) were unaffected, which is what
+        made the failure look so selective.
+
+        The disk write stays authoritative (the ``run()`` post-condition
+        keys off ``_last_save_succeeded``); a facade-publish hiccup is logged
+        but must not abort an otherwise-successful migration.
+        """
+        self._save_mapping()
+        try:
+            config.mappings.set_mapping("work_package", self.work_package_mapping)
+        except Exception as e:
+            self.logger.warning(
+                "Failed to publish work package mapping to the config.mappings facade (disk save is authoritative): %s",
+                e,
+            )
+
     def _get_projects_to_migrate(self) -> list[dict[str, Any]]:
         """Get list of Jira projects to migrate based on filter."""
         projects = self.jira_client.get_projects()
@@ -999,8 +1030,9 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 project_results["failed"],
             )
 
-        # Final save
-        self._save_mapping()
+        # Final save: persist to disk AND publish to the shared config.mappings
+        # facade so downstream facade consumers see the mapping (GitHub #260).
+        self._finalize_mapping()
 
         self.logger.success(
             "Skeleton migration complete: %d created, %d skipped, %d failed",
