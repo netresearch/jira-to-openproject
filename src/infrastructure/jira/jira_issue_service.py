@@ -359,8 +359,7 @@ class JiraIssueService:
             if status in {413, 414}:
                 # A single key whose URI is still rejected cannot be split further.
                 self._logger.warning(
-                    "Single issue key %s rejected as too large (HTTP %s); skipping it"
-                    " (batch_num=%s, chunk_index=%s)",
+                    "Single issue key %s rejected as too large (HTTP %s); skipping it (batch_num=%s, chunk_index=%s)",
                     first_key,
                     status,
                     batch_num,
