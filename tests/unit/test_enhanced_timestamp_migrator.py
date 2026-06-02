@@ -495,6 +495,69 @@ class TestEnhancedTimestampMigrator:
             assert "warnings" in result
             # The method should find the creation timestamp and not generate warnings
 
+    def test_migrate_creation_timestamp_with_rails_also_populates_payload(
+        self,
+        migrator_with_mocks,
+    ) -> None:
+        """With ``use_rails=True`` the normalized creation timestamp must ALSO be
+        written into ``work_package_data['created_at']`` (issue #260).
+
+        The queued ``set_created_at`` Rails op only updates the v1 *journal* row;
+        the only code that sets the ``work_packages`` row's ``created_at`` is the
+        bulk-create script's ``update_columns``, which reads ``wp_data['created_at']``.
+        If the payload field is left unset, the WP row keeps the migration-run time.
+        """
+
+        class MockJiraIssue:
+            def __init__(self, fields):
+                self.fields = type("MockFields", (), fields)()
+
+        mock_issue = MockJiraIssue({"created": "2023-10-15T10:00:00.000Z"})
+        work_package = {"id": 123}
+
+        with patch.object(migrator_with_mocks, "_normalize_timestamp") as mock_normalize:
+            mock_normalize.return_value = "2023-10-15T10:00:00+00:00"
+            extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
+            result = migrator_with_mocks._migrate_creation_timestamp(
+                extracted,
+                work_package,
+                use_rails=True,
+            )
+
+        # The Rails op is still queued (unchanged) ...
+        assert result["rails_operation"] is not None
+        assert result["rails_operation"]["type"] == "set_created_at"
+        # ... AND the payload carries the timestamp so update_columns can apply it.
+        assert work_package["created_at"] == "2023-10-15T10:00:00+00:00"
+
+    def test_migrate_update_timestamp_with_rails_also_populates_payload(
+        self,
+        migrator_with_mocks,
+    ) -> None:
+        """With ``use_rails=True`` the normalized update timestamp must ALSO be
+        written into ``work_package_data['updated_at']`` (issue #260).
+        """
+
+        class MockJiraIssue:
+            def __init__(self, fields):
+                self.fields = type("MockFields", (), fields)()
+
+        mock_issue = MockJiraIssue({"updated": "2023-10-15T12:00:00.000Z"})
+        work_package = {"id": 123}
+
+        with patch.object(migrator_with_mocks, "_normalize_timestamp") as mock_normalize:
+            mock_normalize.return_value = "2023-10-15T12:00:00+00:00"
+            extracted = migrator_with_mocks._extract_all_timestamps(mock_issue)
+            result = migrator_with_mocks._migrate_update_timestamp(
+                extracted,
+                work_package,
+                use_rails=True,
+            )
+
+        assert result["rails_operation"] is not None
+        assert result["rails_operation"]["type"] == "set_updated_at"
+        assert work_package["updated_at"] == "2023-10-15T12:00:00+00:00"
+
     def test_migrate_creation_timestamp_without_rails(
         self,
         migrator_with_mocks,

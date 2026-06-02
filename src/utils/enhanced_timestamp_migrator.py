@@ -578,7 +578,7 @@ class EnhancedTimestampMigrator:
             return result
 
         if use_rails:
-            # Queue Rails operation for immutable field setting
+            # Queue Rails operation for journal-side timestamp setting.
             rails_op = {
                 "type": "set_created_at",
                 "jira_key": work_package_data.get("jira_key", "unknown"),
@@ -586,9 +586,11 @@ class EnhancedTimestampMigrator:
                 "original_value": created_data["raw_value"],
             }
             result["rails_operation"] = rails_op
-        else:
-            # Set via API (may not work for immutable fields)
-            work_package_data["created_at"] = normalized_utc
+        # Always populate the payload field too (issue #260): the queued Rails op
+        # only updates the v1 *journal* row, while the bulk-create script sets the
+        # ``work_packages`` row's ``created_at`` from ``wp_data['created_at']`` via
+        # ``update_columns``.  Without this the WP keeps the migration-run time.
+        work_package_data["created_at"] = normalized_utc
 
         return result
 
@@ -613,7 +615,7 @@ class EnhancedTimestampMigrator:
             return result
 
         if use_rails:
-            # Queue Rails operation for setting update timestamp
+            # Queue Rails operation for setting update timestamp.
             rails_op = {
                 "type": "set_updated_at",
                 "jira_key": work_package_data.get("jira_key", "unknown"),
@@ -621,9 +623,10 @@ class EnhancedTimestampMigrator:
                 "original_value": updated_data["raw_value"],
             }
             result["rails_operation"] = rails_op
-        else:
-            # Set via API
-            work_package_data["updated_at"] = normalized_utc
+        # Always populate the payload field too (issue #260) so the bulk-create
+        # script's ``update_columns`` can set the ``work_packages`` row's
+        # ``updated_at`` instead of leaving the migration-run time.
+        work_package_data["updated_at"] = normalized_utc
 
         return result
 
