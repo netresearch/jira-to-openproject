@@ -1,15 +1,18 @@
 """Unit tests for :class:`src.infrastructure.jira.jira_issue_service.JiraIssueService`.
 
-Regression tests for the URL-length 401 bug:
+Regression tests for the chunked-fetch behaviour:
   When ``_fetch_issues_batch`` is called with a large key list (e.g. 100 keys),
-  the resulting JQL ``key in ("K-1","K-2",...)`` can exceed 8 KB when URL-encoded
-  by the HTTP stack (Apache Tomcat / Traefik default limit).  The server then
-  rejects the request — returning HTTP 401 — before the auth layer is even
-  consulted, making the error look like an authentication failure.
+  the resulting JQL ``key in ("K-1","K-2",...)`` can exceed the URL length limit
+  enforced by the HTTP stack (Apache Tomcat / Traefik default), which the server
+  rejects with HTTP 414 (or 413/400 on some proxies).  Fix: split large input
+  lists into sub-chunks of ``_FETCH_BATCH_CHUNK_SIZE`` (≤ 25 keys), fetch each
+  independently, and merge transparently so callers see a single
+  ``dict[str, Issue]``.
 
-  Fix: ``_fetch_issues_batch`` must split large input lists into sub-chunks of
-  ``_FETCH_BATCH_CHUNK_SIZE`` (≤ 25 keys), fetch each chunk independently, and
-  merge the results transparently so callers see a single ``dict[str, Issue]``.
+  Issue #260 follow-up: a *pre-bounded* chunk that fails with HTTP 401/403 is a
+  genuine authentication/authorisation failure, not a URL-length rejection, and
+  must be reported as such — never silently relabelled.  A chunk still rejected
+  as too long (414) is recovered by splitting and retrying rather than dropped.
 """
 
 from __future__ import annotations
@@ -274,3 +277,179 @@ def test_fetch_single_chunk_includes_batch_num_in_error_log(
     # batch_num=7 must appear somewhere in the captured log output.
     combined = "\n".join(r.getMessage() for r in caplog.records)
     assert "7" in combined, f"batch_num=7 not found in log output: {combined!r}"
+
+
+# ---------------------------------------------------------------------------
+# Accurate failure classification + URL-length recovery (issue #260)
+#
+# The reporter's run showed `Chunk fetch failed ... (possible URL-length
+# rejection, status=401)` and silently lost 50 issues (two 25-key chunks).
+# A pre-bounded 25-key chunk getting 401 is an auth failure, not a URL-length
+# rejection (which is HTTP 414). These tests pin the corrected contract:
+#   * a genuine 401/403 is labelled as an auth failure, never URL-length;
+#   * a 414 (URI Too Long) is RECOVERED by splitting the chunk and retrying;
+#   * the status code is detected whether it sits on the raised exception or
+#     on its ``__cause__`` (the jira lib surfaces it either way).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _instant_chunk_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the transient-401 retry backoff instant so tests don't sleep."""
+    import src.infrastructure.jira.jira_issue_service as mod
+
+    monkeypatch.setattr(mod, "_CHUNK_TRANSIENT_RETRY_BACKOFF_SECONDS", 0.0, raising=False)
+
+
+def _raise_handle_response_error(status_code: int) -> Any:
+    """Side-effect mirroring ``JiraClient._handle_response``: a custom exception
+    carrying the status only in its ``HTTP Error <code>:`` message, raised
+    ``from None`` (no ``status_code`` attribute, no ``__cause__``).
+    """
+    from src.infrastructure.jira.jira_client import JiraApiError, JiraAuthenticationError
+
+    def _side_effect(_jql: str, **_kw: object) -> list[SimpleNamespace]:
+        msg = f"HTTP Error {status_code}: Simulated"
+        if status_code in {401, 403}:
+            raise JiraAuthenticationError(msg) from None
+        raise JiraApiError(msg) from None
+
+    return _side_effect
+
+
+def _raise_wrapped_jira_error(status_code: int) -> Any:
+    """Side-effect mirroring ``patched_request``'s ``except Exception as e: raise
+    JiraApiError(msg) from e`` path — the HTTP status lands on ``exc.__cause__``
+    (a jira-lib ``JIRAError`` with ``.status_code``). This is the shape that
+    produced the reporter's ``status=401`` log line.
+    """
+    from src.infrastructure.jira.jira_client import JiraApiError
+
+    def _side_effect(_jql: str, **_kw: object) -> list[SimpleNamespace]:
+        try:
+            raise JIRAError("simulated", status_code, "https://jira.test/search")
+        except JIRAError as inner:
+            raise JiraApiError("Error during API request") from inner
+
+    return _side_effect
+
+
+def _split_retry_side_effect(reject_full: Any, *, total_keys: int) -> Any:
+    """Return a search side-effect that rejects only the first full-size chunk
+    (via ``reject_full``, a no-arg callable raising the chosen exception) and
+    returns matching issue stubs for any smaller chunk.
+    """
+    state = {"rejected": False}
+
+    def _side_effect(jql: str, **_kw: object) -> list[SimpleNamespace]:
+        import re
+
+        found = re.findall(r'"([^"]+)"', jql)
+        if not state["rejected"] and len(found) == total_keys:
+            state["rejected"] = True
+            reject_full()
+        return [_make_issue(k) for k in found]
+
+    return _side_effect
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("raiser", [_raise_handle_response_error, _raise_wrapped_jira_error])
+def test_request_too_long_chunk_is_split_and_retried(raiser: Any) -> None:
+    """A 414 (URI Too Long) on a multi-key chunk must be recovered by splitting
+    the chunk and retrying the halves — NOT silently dropped. Covers both
+    production exception shapes (message-only and ``__cause__``-carried status).
+    """
+    keys = [f"TK-{i}" for i in range(1, 9)]  # 8 keys, fits in one chunk
+
+    def _reject() -> None:
+        raiser(414)("")  # invoke the side-effect to raise the 414
+
+    client = _make_client(search_side_effect=_split_retry_side_effect(_reject, total_keys=len(keys)))
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    result = service._fetch_single_chunk(keys, chunk_index=0, batch_num=0)
+
+    assert set(result.keys()) == set(keys), "414 chunk must be split and retried, not dropped"
+    # full chunk (fails) + two retried halves = at least 3 search calls
+    assert client.jira.search_issues.call_count >= 3
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("raiser", [_raise_handle_response_error, _raise_wrapped_jira_error])
+def test_auth_failure_is_not_labelled_url_length(raiser: Any, caplog: pytest.LogCaptureFixture) -> None:
+    """A genuine 401 (either production exception shape) must NOT be reported as
+    a 'URL-length rejection'; the message must name it an auth failure.
+    """
+    import logging
+
+    client = _make_client(search_side_effect=raiser(401))
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        service._fetch_single_chunk(["TK-1", "TK-2"], chunk_index=0, batch_num=3)
+
+    combined = "\n".join(r.getMessage() for r in caplog.records).lower()
+    assert "url-length" not in combined and "url length" not in combined, (
+        f"401 must not be mislabeled as a URL-length issue: {combined!r}"
+    )
+    assert "auth" in combined, f"401 must be identified as an auth failure: {combined!r}"
+
+
+@pytest.mark.unit
+def test_transient_401_is_retried_once_then_recovers() -> None:
+    """An unexpected 401 (after prior success) must be retried once before being
+    given up on — a transient session/proxy blip should not drop the chunk.
+    """
+    calls = {"n": 0}
+
+    def _side_effect(jql: str, **_kw: object) -> list[SimpleNamespace]:
+        import re
+
+        from src.infrastructure.jira.jira_client import JiraAuthenticationError
+
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise JiraAuthenticationError("HTTP Error 401: transient") from None
+        return [_make_issue(k) for k in re.findall(r'"([^"]+)"', jql)]
+
+    client = _make_client(search_side_effect=_side_effect)
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    result = service._fetch_single_chunk(["TK-1", "TK-2"], chunk_index=0, batch_num=0)
+
+    assert set(result.keys()) == {"TK-1", "TK-2"}, "transient 401 must be retried and recovered"
+    assert calls["n"] == 2, "chunk should be attempted exactly twice (initial + one retry)"
+
+
+@pytest.mark.unit
+def test_persistent_401_dropped_after_retry(caplog: pytest.LogCaptureFixture) -> None:
+    """A 401 that persists through the retry is dropped with an accurate auth
+    message (not URL-length), and is not retried forever.
+    """
+    import logging
+
+    client = _make_client(search_side_effect=_raise_handle_response_error(401))
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        result = service._fetch_single_chunk(["TK-1", "TK-2"], chunk_index=0, batch_num=1)
+
+    assert result == {}
+    # initial attempt + exactly one retry
+    assert client.jira.search_issues.call_count == 2
+    combined = "\n".join(r.getMessage() for r in caplog.records).lower()
+    assert "url-length" not in combined and "url length" not in combined
+    assert "auth" in combined
+
+
+@pytest.mark.unit
+def test_status_extracted_from_message_when_no_attribute() -> None:
+    """``_extract_http_status`` must read the status from an ``HTTP Error <code>:``
+    message when the exception carries no ``status_code`` attribute or cause.
+    """
+    from src.infrastructure.jira.jira_client import JiraApiError
+
+    assert JiraIssueService._extract_http_status(JiraApiError("HTTP Error 414: too long")) == 414
+    assert JiraIssueService._extract_http_status(JIRAError("x", 401, "u")) == 401
+    assert JiraIssueService._extract_http_status(RuntimeError("no status here")) is None
