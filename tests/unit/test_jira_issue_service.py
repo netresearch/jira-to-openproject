@@ -327,7 +327,7 @@ def _raise_wrapped_jira_error(status_code: int) -> Any:
 
     def _side_effect(_jql: str, **_kw: object) -> list[SimpleNamespace]:
         try:
-            raise JIRAError("simulated", status_code, "http://jira.test/search")
+            raise JIRAError("simulated", status_code, "https://jira.test/search")
         except JIRAError as inner:
             raise JiraApiError("Error during API request") from inner
 
