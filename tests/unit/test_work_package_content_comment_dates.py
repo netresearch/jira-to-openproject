@@ -188,7 +188,15 @@ class TestBulkCreateBackdatesJournal:
     def test_created_at_in_json_payload(self) -> None:
         svc, captured = self._svc_capturing_script()
         svc.bulk_create_work_package_activities(
-            [{"work_package_id": 5040, "comment": "Hi", "user_id": 100, "jira_comment_id": "1", "created_at": _JIRA_CREATED}]
+            [
+                {
+                    "work_package_id": 5040,
+                    "comment": "Hi",
+                    "user_id": 100,
+                    "jira_comment_id": "1",
+                    "created_at": _JIRA_CREATED,
+                }
+            ]
         )
         payload = _extract_j2o_payload(captured[0])
         assert payload[0]["created_at"] == _JIRA_CREATED
