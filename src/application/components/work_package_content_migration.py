@@ -561,6 +561,8 @@ class WorkPackageContentMigration(BaseMigration):
                         "comment": {"raw": converted_body},
                         "user_id": author_id,
                         "jira_comment_id": jira_comment_id,
+                        # Preserve the original Jira comment date (#260).
+                        "created_at": getattr(comment, "created", None),
                     },
                 )
                 migrated += 1
@@ -719,6 +721,9 @@ class WorkPackageContentMigration(BaseMigration):
                             "comment": converted_body,
                             "user_id": author_id,
                             "jira_comment_id": jira_comment_id,
+                            # Preserve the original Jira comment date (#260) so the
+                            # journal is back-dated instead of stamped with NOW.
+                            "created_at": getattr(comment, "created", None),
                         }
                     )
         except Exception:
@@ -795,12 +800,12 @@ class WorkPackageContentMigration(BaseMigration):
             except Exception as e:
                 self.logger.debug("Bulk custom field update failed: %s", e)
 
-        # Batch 3: Comments (using bulk_create_work_package_activities)
-        # Each entry in item["comments"] is a dict with keys:
-        #   "comment": str, "user_id": int, "jira_comment_id": str|None.
-        # We forward all three: user_id preserves authorship; jira_comment_id
-        # enables provenance-based idempotency so re-runs skip already-migrated
-        # comments instead of duplicating them.
+        # Batch 3: Comments (using bulk_create_work_package_activities).
+        # Each entry in item["comments"] carries comment text, user_id,
+        # jira_comment_id and created_at. We forward all four: user_id preserves
+        # authorship; jira_comment_id enables provenance-based idempotency so
+        # re-runs skip already-migrated comments instead of duplicating them;
+        # created_at back-dates the journal to the original Jira comment time (#260).
         all_comments = []
         for item in collected_items:
             for comment_entry in item["comments"]:
@@ -810,6 +815,8 @@ class WorkPackageContentMigration(BaseMigration):
                         "comment": comment_entry["comment"],
                         "user_id": comment_entry["user_id"],
                         "jira_comment_id": comment_entry.get("jira_comment_id"),
+                        # Forward the original Jira comment date (#260).
+                        "created_at": comment_entry.get("created_at"),
                     },
                 )
 
