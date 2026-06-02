@@ -350,12 +350,9 @@ J2O_DATA
           wp.save!
           created_at_raw = {ruby_created_at}
           if created_at_raw && !created_at_raw.to_s.strip.empty?
-            begin
-              ts = Time.parse(created_at_raw.to_s)
-              j = wp.journals.last
-              j.update_columns(created_at: ts, updated_at: ts) if j
-            rescue ArgumentError
-            end
+            ts = Time.zone.parse(created_at_raw.to_s)
+            j = wp.journals.last
+            j.update_columns(created_at: ts, updated_at: ts) if j && ts
           end
           {{ id: wp.journals.last.id, status: 'created' }}
           {ruby_idempotency_close}
@@ -533,15 +530,13 @@ J2O_DATA
               # bypasses callbacks/validations to set the historical timestamp
               # OpenProject displays as the comment date. validity_period is left
               # as OpenProject set it (used only for historical baseline queries).
+              # Time.zone.parse returns nil (not an exception) for unparseable
+              # input, so a bad date simply leaves the journal's default timestamp.
               raw_created = item['created_at']
               if raw_created && !raw_created.to_s.strip.empty?
-                begin
-                  ts = Time.parse(raw_created.to_s)
-                  j = wp.journals.last
-                  j.update_columns(created_at: ts, updated_at: ts) if j
-                rescue ArgumentError
-                  # Unparseable date — leave the journal at its default timestamp.
-                end
+                ts = Time.zone.parse(raw_created.to_s)
+                j = wp.journals.last
+                j.update_columns(created_at: ts, updated_at: ts) if j && ts
               end
               results[:created] += 1
             rescue => e

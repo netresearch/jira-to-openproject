@@ -70,6 +70,22 @@ if TYPE_CHECKING:
     from jira.resources import Issue
 
 
+def _coerce_comment_timestamp(value: Any) -> str | None:
+    """Coerce a Jira comment timestamp to ``str`` while preserving ``None``.
+
+    The Jira SDK sometimes returns ``datetime`` objects for ``comment.created``
+    instead of ISO strings; a raw ``datetime`` would break ``json.dumps`` of the
+    bulk activity payload.  Mirrors
+    ``work_package_skeleton_migration._stringify_optional_timestamp``: ``None``
+    and empty strings stay ``None`` (never the literal ``"None"``).
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    return str(value)
+
+
 @register_entity_types("work_packages_content")
 class WorkPackageContentMigration(BaseMigration):
     """Phase 2: Populate work package content with link resolution.
@@ -562,7 +578,7 @@ class WorkPackageContentMigration(BaseMigration):
                         "user_id": author_id,
                         "jira_comment_id": jira_comment_id,
                         # Preserve the original Jira comment date (#260).
-                        "created_at": getattr(comment, "created", None),
+                        "created_at": _coerce_comment_timestamp(getattr(comment, "created", None)),
                     },
                 )
                 migrated += 1
@@ -723,7 +739,7 @@ class WorkPackageContentMigration(BaseMigration):
                             "jira_comment_id": jira_comment_id,
                             # Preserve the original Jira comment date (#260) so the
                             # journal is back-dated instead of stamped with NOW.
-                            "created_at": getattr(comment, "created", None),
+                            "created_at": _coerce_comment_timestamp(getattr(comment, "created", None)),
                         }
                     )
         except Exception:

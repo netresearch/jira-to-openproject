@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -134,6 +135,29 @@ class TestCollectCapturesCommentDate:
 
         assert collected["comments"][0]["created_at"] is None
 
+    def test_datetime_created_is_coerced_to_str(self, tmp_path: Path, _mock_mappings: None) -> None:
+        """The Jira SDK sometimes returns a ``datetime`` for ``comment.created``.
+        It must be coerced to a string so the bulk JSON payload stays
+        ``json.dumps``-serialisable (a raw datetime would raise TypeError).
+        """
+        mig = _build_mig(tmp_path)
+        issue = MagicMock()
+        issue.key = "PROJ-1"
+        issue.fields.description = None
+        issue.raw = {"fields": {}}
+        dt = datetime(2023, 10, 15, 10, 0, 0, tzinfo=UTC)
+        mig.jira_client.jira.comments.return_value = [
+            _make_comment("alice", "First", comment_id="1", created=dt),
+        ]
+        mig.jira_client.get_issue_watchers.return_value = []
+
+        collected = mig._collect_content_for_issue(issue, wp_id=5040)
+
+        created_at = collected["comments"][0]["created_at"]
+        assert isinstance(created_at, str), f"datetime must be coerced to str, got {type(created_at)}"
+        # The whole comments payload must be JSON-serialisable (the bulk path).
+        json.dumps(collected["comments"])
+
 
 # ---------------------------------------------------------------------------
 # 2. _bulk_process_collected_content forwards the comment date to the op client
@@ -212,7 +236,7 @@ class TestBulkCreateBackdatesJournal:
         # comment date (guarded by presence of created_at).
         assert "created_at" in source, "bulk script never references created_at"
         assert "update_columns" in source, "bulk script must update_columns the journal's created_at"
-        assert "Time.parse" in source, "bulk script must parse the ISO comment date"
+        assert "Time.zone.parse" in source, "bulk script must parse the ISO comment date"
 
 
 # ---------------------------------------------------------------------------
@@ -245,4 +269,4 @@ class TestSingleCommentPathBackdates:
         )
         assert "created_at" in source, "single script never references created_at"
         assert "update_columns" in source, "single script must update_columns the journal's created_at"
-        assert "Time.parse" in source, "single script must parse the ISO comment date"
+        assert "Time.zone.parse" in source, "single script must parse the ISO comment date"
