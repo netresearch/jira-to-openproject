@@ -18,6 +18,8 @@ the ``jira`` SDK — so there is no Ruby-script escaping to worry about.
 
 from __future__ import annotations
 
+import re
+import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +45,13 @@ if TYPE_CHECKING:
 # 100 keys (the ``BatchProcessor`` default) would produce ≈ 2 500 bytes of
 # JQL argument alone, risking rejection on servers with a tighter URL cap.
 _FETCH_BATCH_CHUNK_SIZE: int = 25
+
+# An unexpected 401/403 on a chunk (after earlier requests succeeded) is almost
+# always a transient session/proxy/WAF blip rather than broken credentials, so
+# retry the chunk once with a short backoff before giving up. A persistent auth
+# failure simply costs one extra attempt per chunk.
+_CHUNK_TRANSIENT_RETRIES: int = 1
+_CHUNK_TRANSIENT_RETRY_BACKOFF_SECONDS: float = 2.0
 
 
 class JiraIssueService:
@@ -321,98 +330,125 @@ class JiraIssueService:
         # fragile for any issue type that allows extended characters.
         quoted_keys = ",".join(f'"{key}"' for key in issue_keys)
         jql = f"key in ({quoted_keys})"
+        batch_num = kwargs.get("batch_num")
+        first_key = issue_keys[0] if issue_keys else "?"
+        last_key = issue_keys[-1] if issue_keys else "?"
 
-        try:
-            issues = self._client.jira.search_issues(
-                jql,
-                maxResults=len(issue_keys),
-                expand="changelog",
-            )
-            return {issue.key: issue for issue in issues}
-        except Exception as exc:
-            batch_num = kwargs.get("batch_num")
-            first_key = issue_keys[0] if issue_keys else "?"
-            last_key = issue_keys[-1] if issue_keys else "?"
-            status = self._extract_http_status(exc)
+        auth_retries = 0
+        while True:
+            try:
+                issues = self._client.jira.search_issues(
+                    jql,
+                    maxResults=len(issue_keys),
+                    expand="changelog",
+                )
+                return {issue.key: issue for issue in issues}
+            except Exception as exc:
+                status = self._extract_http_status(exc)
 
-            # HTTP 413/414: the request URI is genuinely too long.  Recover by
-            # halving the chunk and retrying — the only failure mode where
-            # "URL-length" is the honest cause and where data can be reclaimed.
-            if status in {413, 414} and len(issue_keys) > 1:
-                mid = len(issue_keys) // 2
-                self._logger.warning(
-                    "Chunk too large (HTTP %s): batch_num=%s, chunk_index=%s, keys=[%s..%s];"
-                    " splitting %d keys into %d+%d and retrying",
-                    status,
+                # HTTP 413/414: the request URI is genuinely too long.  Recover by
+                # halving the chunk and retrying — the only failure mode where
+                # "URL-length" is the honest cause and where data can be reclaimed.
+                if status in {413, 414} and len(issue_keys) > 1:
+                    mid = len(issue_keys) // 2
+                    self._logger.warning(
+                        "Chunk too large (HTTP %s): batch_num=%s, chunk_index=%s, keys=[%s..%s];"
+                        " splitting %d keys into %d+%d and retrying",
+                        status,
+                        batch_num,
+                        chunk_index,
+                        first_key,
+                        last_key,
+                        len(issue_keys),
+                        mid,
+                        len(issue_keys) - mid,
+                    )
+                    merged: dict[str, Issue] = {}
+                    merged.update(self._fetch_single_chunk(issue_keys[:mid], chunk_index, **kwargs))
+                    merged.update(self._fetch_single_chunk(issue_keys[mid:], chunk_index, **kwargs))
+                    return merged
+                if status in {413, 414}:
+                    # A single key whose URI is still rejected cannot be split further.
+                    self._logger.warning(
+                        "Single issue key %s rejected as too large (HTTP %s); skipping it"
+                        " (batch_num=%s, chunk_index=%s)",
+                        first_key,
+                        status,
+                        batch_num,
+                        chunk_index,
+                    )
+                    return {}
+                # HTTP 401/403: an unexpected auth failure on a pre-bounded chunk is
+                # usually a transient session/proxy/WAF blip — retry once with a short
+                # backoff before giving up. NOT a URL-length rejection.
+                if status in {401, 403} and auth_retries < _CHUNK_TRANSIENT_RETRIES:
+                    auth_retries += 1
+                    self._logger.warning(
+                        "Chunk fetch hit HTTP %s (auth) for batch_num=%s, chunk_index=%s, keys=[%s..%s];"
+                        " retrying once (%d/%d) after %.1fs in case of a transient session/proxy blip",
+                        status,
+                        batch_num,
+                        chunk_index,
+                        first_key,
+                        last_key,
+                        auth_retries,
+                        _CHUNK_TRANSIENT_RETRIES,
+                        _CHUNK_TRANSIENT_RETRY_BACKOFF_SECONDS,
+                    )
+                    time.sleep(_CHUNK_TRANSIENT_RETRY_BACKOFF_SECONDS)
+                    continue
+                if status in {401, 403}:
+                    # Still failing after the retry: a genuine authentication/
+                    # authorization failure, NOT a URL-length rejection.  Name it
+                    # honestly and make the dropped keys explicit.
+                    self._logger.warning(
+                        "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
+                        " — authentication/authorization failure (HTTP %s) after %d retr(y/ies);"
+                        " these %d issue(s) were NOT fetched. Check Jira credentials/session and re-run.",
+                        batch_num,
+                        chunk_index,
+                        first_key,
+                        last_key,
+                        status,
+                        auth_retries,
+                        len(issue_keys),
+                    )
+                    return {}
+                if status is not None:
+                    self._logger.warning(
+                        "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
+                        " — Jira returned HTTP %s; these %d issue(s) were NOT fetched.",
+                        batch_num,
+                        chunk_index,
+                        first_key,
+                        last_key,
+                        status,
+                        len(issue_keys),
+                    )
+                    return {}
+                # Unexpected error with no HTTP status — keep the full traceback.
+                self._logger.exception(
+                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]",
                     batch_num,
                     chunk_index,
                     first_key,
                     last_key,
-                    len(issue_keys),
-                    mid,
-                    len(issue_keys) - mid,
-                )
-                merged: dict[str, Issue] = {}
-                merged.update(self._fetch_single_chunk(issue_keys[:mid], chunk_index, **kwargs))
-                merged.update(self._fetch_single_chunk(issue_keys[mid:], chunk_index, **kwargs))
-                return merged
-            if status in {413, 414}:
-                # A single key whose URI is still rejected cannot be split further.
-                self._logger.warning(
-                    "Single issue key %s rejected as too large (HTTP %s); skipping it (batch_num=%s, chunk_index=%s)",
-                    first_key,
-                    status,
-                    batch_num,
-                    chunk_index,
                 )
                 return {}
-            if status in {401, 403}:
-                # A pre-bounded chunk (≤ _FETCH_BATCH_CHUNK_SIZE keys) failing with
-                # 401/403 is an authentication/authorization failure, NOT a
-                # URL-length rejection.  Name it honestly so the operator fixes
-                # auth instead of chasing a phantom URL-length limit, and make the
-                # dropped keys explicit.
-                self._logger.warning(
-                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
-                    " — authentication/authorization failure (HTTP %s); these %d issue(s)"
-                    " were NOT fetched. Check Jira credentials/session and re-run.",
-                    batch_num,
-                    chunk_index,
-                    first_key,
-                    last_key,
-                    status,
-                    len(issue_keys),
-                )
-                return {}
-            if status is not None:
-                self._logger.warning(
-                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
-                    " — Jira returned HTTP %s; these %d issue(s) were NOT fetched.",
-                    batch_num,
-                    chunk_index,
-                    first_key,
-                    last_key,
-                    status,
-                    len(issue_keys),
-                )
-                return {}
-            # Unexpected error with no HTTP status — keep the full traceback.
-            self._logger.exception(
-                "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]",
-                batch_num,
-                chunk_index,
-                first_key,
-                last_key,
-            )
-            return {}
 
     @staticmethod
     def _extract_http_status(exc: BaseException) -> int | None:
-        """Return the HTTP status code from an exception or its ``__cause__`` chain.
+        """Return the HTTP status code carried by an exception or its cause chain.
 
-        The ``jira`` library surfaces the status either directly on the raised
-        error (``exc.status_code``) or on the wrapped cause (``exc.__cause__``),
-        so both are inspected.  ``id()`` tracking guards against cyclic chains.
+        Production surfaces the status in several shapes, all handled here:
+        * a jira-lib ``JIRAError`` exposes ``.status_code`` (often on
+          ``exc.__cause__`` after ``JiraClient`` re-wraps it ``from`` the cause);
+        * a ``requests`` error exposes ``.response.status_code``;
+        * ``JiraClient._handle_response`` raises ``JiraAuthenticationError`` /
+          ``JiraApiError`` ``from None`` with the status only in the message
+          (``"HTTP Error <code>: ..."``) — no attribute and no ``__cause__``.
+
+        ``id()`` tracking guards against cyclic ``__cause__`` chains.
         """
         seen: set[int] = set()
         current: BaseException | None = exc
@@ -421,6 +457,13 @@ class JiraIssueService:
             code = getattr(current, "status_code", None)
             if isinstance(code, int):
                 return code
+            response = getattr(current, "response", None)
+            resp_code = getattr(response, "status_code", None) if response is not None else None
+            if isinstance(resp_code, int):
+                return resp_code
+            match = re.search(r"HTTP Error (\d{3})\b", str(current))
+            if match:
+                return int(match.group(1))
             current = current.__cause__
         return None
 
