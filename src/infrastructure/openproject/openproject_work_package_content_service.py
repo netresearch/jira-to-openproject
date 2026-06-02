@@ -311,6 +311,10 @@ J2O_DATA
         raw_user_id = activity_data.get("user_id")
         ruby_user_id = int(raw_user_id) if raw_user_id is not None else "nil"
 
+        # Original Jira comment date (#260) as a Ruby string literal (or nil).
+        raw_created_at = activity_data.get("created_at")
+        ruby_created_at = f"'{escape_ruby_single_quoted(str(raw_created_at))}'" if raw_created_at else "nil"
+
         # Build the idempotency check expression for Ruby.
         # When jira_comment_id is present we grep existing journals for the
         # provenance marker; if found we evaluate to a 'skipped' hash without
@@ -344,6 +348,12 @@ J2O_DATA
           wp.journal_notes = '{escaped_comment}'
           wp.journal_user = user
           wp.save!
+          created_at_raw = {ruby_created_at}
+          if created_at_raw && !created_at_raw.to_s.strip.empty?
+            ts = Time.zone.parse(created_at_raw.to_s)
+            j = wp.journals.last
+            j.update_columns(created_at: ts, updated_at: ts) if j && ts
+          end
           {{ id: wp.journals.last.id, status: 'created' }}
           {ruby_idempotency_close}
         rescue => e
@@ -449,6 +459,9 @@ J2O_DATA
                     "comment": comment_with_marker,
                     "user_id": act.get("user_id"),
                     "jira_comment_id": jira_comment_id,
+                    # Original Jira comment date (#260); the Ruby back-dates the
+                    # journal so OpenProject shows the real authoring time.
+                    "created_at": act.get("created_at"),
                 },
             )
 
@@ -512,6 +525,19 @@ J2O_DATA
               wp.journal_notes = comment_text
               wp.journal_user = user
               wp.save!
+              # Back-date the journal to the original Jira comment date (#260).
+              # journal_notes/save! stamps created_at = NOW; update_columns
+              # bypasses callbacks/validations to set the historical timestamp
+              # OpenProject displays as the comment date. validity_period is left
+              # as OpenProject set it (used only for historical baseline queries).
+              # Time.zone.parse returns nil (not an exception) for unparseable
+              # input, so a bad date simply leaves the journal's default timestamp.
+              raw_created = item['created_at']
+              if raw_created && !raw_created.to_s.strip.empty?
+                ts = Time.zone.parse(raw_created.to_s)
+                j = wp.journals.last
+                j.update_columns(created_at: ts, updated_at: ts) if j && ts
+              end
               results[:created] += 1
             rescue => e
               results[:failed] += 1
