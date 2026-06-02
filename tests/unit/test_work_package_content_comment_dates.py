@@ -30,58 +30,26 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Helpers (mirroring tests/unit/test_work_package_content_comment_idempotency.py)
-# ---------------------------------------------------------------------------
-
-
-def _build_mig(tmp_path: Path):
-    from src.application.components.work_package_content_migration import (
-        WorkPackageContentMigration,
-    )
-
-    jira = MagicMock()
-    op = MagicMock()
-    mig = WorkPackageContentMigration(jira_client=jira, op_client=op)
-    mig.data_dir = tmp_path
-    mig.work_package_mapping_file = tmp_path / mig.WORK_PACKAGE_MAPPING_FILE
-    mig.attachment_mapping_file = tmp_path / mig.ATTACHMENT_MAPPING_FILE
-    return mig
+# Reuse the shared content-migration builders rather than re-defining them.
+from tests.unit.test_work_package_content_comment_idempotency import _build_mig, _make_comment
 
 
 @pytest.fixture
-def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
+def _mock_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``config.mappings`` so the migration's lookups don't touch global state.
+
+    These comment-date tests assert on timestamps, not on resolved ids, so an
+    empty mapping (``get_mapping`` returns ``{}`` for any name) is sufficient.
+    """
     import src.config as cfg
 
-    class DummyMappings:
-        def __init__(self) -> None:
-            self._m = {
-                "project": {"PROJ": {"openproject_id": 11}},
-                "user": {"alice": {"openproject_id": 201}},
-                "custom_field": {},
-            }
-
-        def get_mapping(self, name: str):
-            return self._m.get(name, {})
-
-        def set_mapping(self, name: str, value):
-            self._m[name] = value
-
-    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
+    monkeypatch.setattr(cfg, "mappings", SimpleNamespace(get_mapping=lambda _name: {}), raising=False)
 
 
-def _make_comment(author_name: str, body: str, comment_id: str = "cid-1", created: str | None = None):
-    c = MagicMock()
-    c.body = body
-    c.id = comment_id
+def _comment_with_date(author: str, body: str, created: object, comment_id: str = "1") -> MagicMock:
+    """A Jira comment stub (via the shared ``_make_comment``) with ``.created`` set."""
+    c = _make_comment(author, body, comment_id=comment_id)
     c.created = created
-    c.author = SimpleNamespace(
-        name=author_name,
-        displayName=author_name.capitalize(),
-        emailAddress=f"{author_name}@example.com",
-        accountId=None,
-        key=None,
-    )
     return c
 
 
@@ -108,7 +76,7 @@ class TestCollectCapturesCommentDate:
         issue.fields.description = None
         issue.raw = {"fields": {}}
         mig.jira_client.jira.comments.return_value = [
-            _make_comment("alice", "First", comment_id="1", created=_JIRA_CREATED),
+            _comment_with_date("alice", "First", _JIRA_CREATED),
         ]
         mig.jira_client.get_issue_watchers.return_value = []
 
@@ -147,7 +115,7 @@ class TestCollectCapturesCommentDate:
         issue.raw = {"fields": {}}
         dt = datetime(2023, 10, 15, 10, 0, 0, tzinfo=UTC)
         mig.jira_client.jira.comments.return_value = [
-            _make_comment("alice", "First", comment_id="1", created=dt),
+            _comment_with_date("alice", "First", dt),
         ]
         mig.jira_client.get_issue_watchers.return_value = []
 
@@ -250,7 +218,7 @@ class TestSingleCommentPathBackdates:
         issue = MagicMock()
         issue.key = "PROJ-1"
         mig.jira_client.jira.comments.return_value = [
-            _make_comment("alice", "First", comment_id="1", created=_JIRA_CREATED),
+            _comment_with_date("alice", "First", _JIRA_CREATED),
         ]
         # Avoid link-resolution surprises: return body unchanged.
         mig._convert_jira_links = lambda body, jira_key=None: body  # type: ignore[method-assign]
