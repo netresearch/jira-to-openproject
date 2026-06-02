@@ -267,10 +267,12 @@ class JiraIssueService:
 
         Deduplicates ``issue_keys`` (preserving order), then splits them into
         sub-chunks of at most ``_FETCH_BATCH_CHUNK_SIZE`` keys before building
-        the JQL query.  This prevents the ``key in (...)`` clause from growing
-        past the URL length limit enforced by Apache Tomcat and reverse proxies,
-        which can cause a spurious HTTP 401 response before the auth layer is
-        consulted.
+        the JQL query.  This keeps the ``key in (...)`` clause below the URL
+        length limit enforced by Apache Tomcat and reverse proxies (which reject
+        an over-long URI with HTTP 414, or 413/400 on some proxies).  A chunk
+        that is still rejected as too long is recovered by ``_fetch_single_chunk``
+        splitting it further; genuine auth failures (401/403) are reported as
+        such rather than misattributed to URL length.
         """
         # Deduplicate while preserving insertion order so the caller's ordering
         # is respected and duplicate keys don't inflate chunk count or JQL size.
@@ -331,31 +333,97 @@ class JiraIssueService:
             batch_num = kwargs.get("batch_num")
             first_key = issue_keys[0] if issue_keys else "?"
             last_key = issue_keys[-1] if issue_keys else "?"
-            # Inspect the root cause to distinguish a known URL-length rejection
-            # (HTTP 400/401/414 from Tomcat or a proxy) from an unexpected error.
-            cause = exc.__cause__
-            is_url_length_error = (
-                isinstance(cause, Exception) and hasattr(cause, "status_code") and cause.status_code in {400, 401, 414}
-            )
-            if is_url_length_error:
+            status = self._extract_http_status(exc)
+
+            # HTTP 413/414: the request URI is genuinely too long.  Recover by
+            # halving the chunk and retrying — the only failure mode where
+            # "URL-length" is the honest cause and where data can be reclaimed.
+            if status in {413, 414} and len(issue_keys) > 1:
+                mid = len(issue_keys) // 2
+                self._logger.warning(
+                    "Chunk too large (HTTP %s): batch_num=%s, chunk_index=%s, keys=[%s..%s];"
+                    " splitting %d keys into %d+%d and retrying",
+                    status,
+                    batch_num,
+                    chunk_index,
+                    first_key,
+                    last_key,
+                    len(issue_keys),
+                    mid,
+                    len(issue_keys) - mid,
+                )
+                merged: dict[str, Issue] = {}
+                merged.update(self._fetch_single_chunk(issue_keys[:mid], chunk_index, **kwargs))
+                merged.update(self._fetch_single_chunk(issue_keys[mid:], chunk_index, **kwargs))
+                return merged
+            if status in {413, 414}:
+                # A single key whose URI is still rejected cannot be split further.
+                self._logger.warning(
+                    "Single issue key %s rejected as too large (HTTP %s); skipping it"
+                    " (batch_num=%s, chunk_index=%s)",
+                    first_key,
+                    status,
+                    batch_num,
+                    chunk_index,
+                )
+                return {}
+            if status in {401, 403}:
+                # A pre-bounded chunk (≤ _FETCH_BATCH_CHUNK_SIZE keys) failing with
+                # 401/403 is an authentication/authorization failure, NOT a
+                # URL-length rejection.  Name it honestly so the operator fixes
+                # auth instead of chasing a phantom URL-length limit, and make the
+                # dropped keys explicit.
                 self._logger.warning(
                     "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
-                    " (possible URL-length rejection, status=%s)",
+                    " — authentication/authorization failure (HTTP %s); these %d issue(s)"
+                    " were NOT fetched. Check Jira credentials/session and re-run.",
                     batch_num,
                     chunk_index,
                     first_key,
                     last_key,
-                    cause.status_code,  # type: ignore[union-attr]
+                    status,
+                    len(issue_keys),
                 )
-            else:
-                self._logger.exception(
-                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]",
+                return {}
+            if status is not None:
+                self._logger.warning(
+                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
+                    " — Jira returned HTTP %s; these %d issue(s) were NOT fetched.",
                     batch_num,
                     chunk_index,
                     first_key,
                     last_key,
+                    status,
+                    len(issue_keys),
                 )
+                return {}
+            # Unexpected error with no HTTP status — keep the full traceback.
+            self._logger.exception(
+                "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]",
+                batch_num,
+                chunk_index,
+                first_key,
+                last_key,
+            )
             return {}
+
+    @staticmethod
+    def _extract_http_status(exc: BaseException) -> int | None:
+        """Return the HTTP status code from an exception or its ``__cause__`` chain.
+
+        The ``jira`` library surfaces the status either directly on the raised
+        error (``exc.status_code``) or on the wrapped cause (``exc.__cause__``),
+        so both are inspected.  ``id()`` tracking guards against cyclic chains.
+        """
+        seen: set[int] = set()
+        current: BaseException | None = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            code = getattr(current, "status_code", None)
+            if isinstance(code, int):
+                return code
+            current = current.__cause__
+        return None
 
     # ── streaming ────────────────────────────────────────────────────────
 
