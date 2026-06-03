@@ -108,6 +108,27 @@ var/               → Runtime data, logs, caches, checkpoints (gitignored)
 - **Never commit secrets** — credentials belong in `.env.local`; verify via `git diff` before staging.
 - **Never work on main** — always land changes through feature branches and PRs.
 
+## Lint & type conventions
+
+- **mypy scope** — `files = ["src"]`; `tests/` and `scripts/` are excluded by design (tests duck-type internals; scripts are one-off). A per-module override on JSON-API-boundary modules (`src.clients.*`, `src.migrations.*`, `src.utils.*`, `src.dashboard.*`, `src.migration`, `src.main`) disables structural codes (`attr-defined`, `arg-type`, `union-attr`, `index`, `return-value`, … the dict-shape family) because Jira/OP JSON can't be statically proven. Name/import codes still fire everywhere. A new `src/` module that handles **typed** data (pydantic/internal helpers) must NOT join the override — let the codes fire. Tighter typing path = add TypedDict/pydantic at the boundary, then re-enable codes.
+- **Never put `"str"`/`"int"`/`"object"` in `disable_error_code`** — not valid mypy codes; mypy crashes with `KeyError` on startup. Use `str-bytes-safe`/`str-format` if that's what you mean.
+- **ruff** — `select = ["ALL"]`. Non-production dirs carry per-file-ignore blocks (`scripts/**`, `examples/**`, `config/**`, `check_*.py`, `jira/**` local stub). `scripts/**` also ignores `F821` (scripts embed Ruby in f-strings where `#{var}` isn't a Python name). When a new rule fires only in those dirs, extend the matching per-file block — don't add to the project-wide `ignore` unless `src/` needs it too. `D203/D211`, `D212/D213`, `COM812` stay in the global ignore (mutually incompatible / conflicts with the formatter).
+
+## Architecture contract (import-linter)
+
+`.importlinter` enforces a Cosmic Python layered contract (CI job `architecture` runs `uv run lint-imports`). Layer ordering, highest to lowest:
+
+```
+src.dashboard | src.main  >  src.application  >  src.infrastructure  >  src.domain : src.models
+```
+
+Cross-cutting modules are **intentionally outside** the contract and may be imported from any layer: `src.utils`, `src.config`, `src.mappings`, `src.display`, `src.migration`. Preserve this layering on any structural change.
+
+## Migration fidelity gotchas
+
+- **Never `raise` from `JiraIssueService._fetch_single_chunk`.** `PerformanceOptimizer.process_batches` runs each batch in a thread pool and catches per-future exceptions by **dropping the whole batch** (≈100 keys) — raising to "fail fast" silently amplifies data loss without aborting. Recover in place (e.g. classify by HTTP status, halve+retry on 413/414) or log+continue.
+- **Work-package date flow** — the default profile is `work_packages_skeleton` (sets `work_packages.created_at/updated_at` from Jira via the bulk-create Ruby `update_columns`) + `work_packages_content` (comment journals via `journal_notes/journal_user + save!`, which stamps NOW). The WP "Created on" is preserved by the skeleton step; **comment/journal dates must be back-dated** by carrying `comment.created` through and running `update_columns(created_at:)` after `save!`. Do NOT rewrite the journal `validity_period` (tstzrange with a per-journable non-overlap exclusion constraint) when back-dating — `update_columns(created_at:)` alone drives the displayed date.
+
 ## Boundaries
 **Always:** Check `git status` first · Use feature branches · Run `make dev-test` before commit
 **Ask first:** Heavy deps · Repo-wide rewrites · Full e2e suites · Deleting migration data
