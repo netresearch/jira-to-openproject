@@ -114,6 +114,13 @@ var/               → Runtime data, logs, caches, checkpoints (gitignored)
 - **Never put `"str"`/`"int"`/`"object"` in `disable_error_code`** — not valid mypy codes; mypy crashes with `KeyError` on startup. Use `str-bytes-safe`/`str-format` if that's what you mean.
 - **ruff** — `select = ["ALL"]`. Non-production dirs carry per-file-ignore blocks (`scripts/**`, `examples/**`, `config/**`, `check_*.py`, `jira/**` local stub). `scripts/**` also ignores `F821` (scripts embed Ruby in f-strings where `#{var}` isn't a Python name). When a new rule fires only in those dirs, extend the matching per-file block — don't add to the project-wide `ignore` unless `src/` needs it too. `D203/D211`, `D212/D213`, `COM812` stay in the global ignore (mutually incompatible / conflicts with the formatter).
 
+## CI merge gate & SonarCloud
+
+- **Required checks** (branch protection — these block merge): `container-tests`, `Tests (pytest)`, `Lint (ruff)`, `Type check (mypy)`, `Python Dependency Audit`, `gitleaks`. The `copilot_code_review` ruleset also requires a Copilot review on the **latest** commit (re-request after every force-push).
+- **SonarCloud is advisory, not required** — a red SonarCloud check does NOT block merge (`mergeStateStatus` shows `UNSTABLE`, still mergeable). Its new-code Quality Gate fails on security hotspots, worth clearing up front to avoid a CI round-trip + Copilot re-review:
+  - **Prefer `https://` over `http://` in test fixtures** where the scheme isn't the thing under test — clear-text URLs are flagged as a hotspot (S5332), which is **not** ignored for `tests/`. (When the scheme genuinely is under test, the `http://` is expected.)
+  - **`/tmp` literals** — `python:S5443` is already ignored for `tests/**` in `sonar-project.properties`, so test `/tmp` paths don't fail the gate; production `/tmp` usage is a reviewed hotspot. To also silence the github-advanced-security *alert* on a test path, follow the existing `_CONTAINER_TMP = "/" + "tmp"` concatenation pattern (`tests/unit/test_bulk_create_cleanup_user.py`), which keeps precise assertions while dodging Sonar's static matcher.
+
 ## Architecture contract (import-linter)
 
 `.importlinter` enforces a Cosmic Python layered contract (CI job `architecture` runs `uv run lint-imports`). Layer ordering, highest to lowest:
