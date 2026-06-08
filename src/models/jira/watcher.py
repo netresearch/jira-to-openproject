@@ -26,6 +26,11 @@ class JiraWatcher(BaseModel):
     name: str | None = None
     """Server/DC login (``name``) — the legacy username-based identifier."""
 
+    key: str | None = None
+    """Server/DC internal user key (e.g. ``JIRAUSER18400``). Differs from
+    ``name`` for renamed/inactive accounts and is the key the user mapping is
+    stored under, so it must be carried for resolution (#260)."""
+
     account_id: str | None = Field(default=None, alias="accountId")
     """Cloud ``accountId`` for the watcher, when present."""
 
@@ -53,13 +58,16 @@ class JiraWatcher(BaseModel):
         else:
             data = {
                 "name": getattr(raw, "name", None),
+                "key": getattr(raw, "key", None),
                 "accountId": getattr(raw, "accountId", None),
                 "displayName": getattr(raw, "displayName", None),
                 "emailAddress": getattr(raw, "emailAddress", None),
                 "active": getattr(raw, "active", True),
             }
         instance = cls.model_validate(data)
-        if not (instance.name or instance.account_id or instance.email_address or instance.display_name):
+        if not (
+            instance.name or instance.key or instance.account_id or instance.email_address or instance.display_name
+        ):
             return None
         return instance
 

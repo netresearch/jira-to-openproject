@@ -300,6 +300,28 @@ class JiraIssueService:
                 **kwargs,
             )
             merged.update(chunk_result)
+
+        # Reconcile requested-vs-returned so a dropped chunk is never silent at
+        # the batch level (#260).  A genuine 401/403 chunk drop is non-fatal by
+        # design (per-chunk WARNING above), but a partial result previously
+        # looked complete to callers.  Surface the gap with a single summary so
+        # operators can see issues went unfetched.  Note: missing keys can also
+        # be issues deleted in Jira (``key in (...)`` JQL omits them silently),
+        # so the message names both causes rather than asserting an error.
+        missing = [k for k in unique_keys if k not in merged]
+        if missing:
+            sample = ", ".join(missing[:10])
+            self._logger.warning(
+                "Issue fetch reconciliation (batch_num=%s): requested %d key(s), received %d; "
+                "%d key(s) were not returned by Jira — either deleted in Jira, or dropped by a "
+                "fetch error (see the per-chunk warnings above). Missing sample: [%s%s]",
+                kwargs.get("batch_num"),
+                len(unique_keys),
+                len(merged),
+                len(missing),
+                sample,
+                "" if len(missing) <= 10 else ", …",
+            )
         return merged
 
     def _fetch_single_chunk(
@@ -547,6 +569,10 @@ class JiraIssueService:
             return [
                 {
                     "name": getattr(watcher, "name", None),
+                    # Server/DC internal user key (e.g. JIRAUSER18400); the user
+                    # mapping is keyed by it, so it must be carried for watcher
+                    # resolution (#260).
+                    "key": getattr(watcher, "key", None),
                     "accountId": getattr(watcher, "accountId", None),
                     "displayName": getattr(watcher, "displayName", None),
                     "emailAddress": getattr(watcher, "emailAddress", None),

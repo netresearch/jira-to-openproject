@@ -521,6 +521,13 @@ J2O_DATA
               comment_text = item['comment'].to_s
               next if comment_text.empty?
 
+              # The same WorkPackage object is reused for every comment of this
+              # WP (pre-fetched once into `wps`). Reload it so each comment
+              # starts from fresh persisted state — reusing the stale in-memory
+              # object (cached journals association / lock_version) made the
+              # 2nd+ save fail, so only the first comment per WP persisted (#260).
+              wp.reload
+
               # OpenProject 15+ journal creation - use journal_notes/journal_user
               wp.journal_notes = comment_text
               wp.journal_user = user
