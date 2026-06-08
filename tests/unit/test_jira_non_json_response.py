@@ -381,3 +381,37 @@ class TestProjectRolesSkipsOnHtml:
         assert roles == []
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings, "expected a WARNING-level log entry on project-roles unavailability"
+
+
+class TestRoleDetailPath:
+    """Issue #260: Jira's role-list returns absolute role URLs. The detail
+    request must use only the *path*, never the whole URL re-prefixed onto the
+    client base — which produced ``/http://jira.../role/10100`` (HTML 200) when
+    scheme/host/port differed (e.g. https base vs http behind a proxy).
+    """
+
+    def _path(self, role_url: str) -> str:
+        from src.infrastructure.jira.jira_project_service import JiraProjectService
+
+        return JiraProjectService._role_detail_path(role_url)
+
+    def test_absolute_url_with_matching_base_becomes_relative(self) -> None:
+        assert self._path("https://jira.local/rest/api/2/project/1/role/10100") == "/rest/api/2/project/1/role/10100"
+
+    def test_scheme_or_host_mismatch_does_not_double_prefix(self) -> None:
+        path = self._path("https://jira-proxy.domain.tld:8443/rest/api/2/project/10001/role/10100")
+        assert path == "/rest/api/2/project/10001/role/10100"
+        assert not path.startswith("/http"), "must not embed an absolute URL in the path"
+
+    def test_port_mismatch_does_not_double_prefix(self) -> None:
+        path = self._path("https://jira.local:8443/rest/api/2/project/1/role/2")
+        assert path == "/rest/api/2/project/1/role/2"
+
+    def test_relative_url_is_kept(self) -> None:
+        assert self._path("/rest/api/2/project/1/role/2") == "/rest/api/2/project/1/role/2"
+
+    def test_query_string_is_preserved(self) -> None:
+        assert (
+            self._path("https://jira.x/rest/api/2/project/1/role/2?expand=actors")
+            == "/rest/api/2/project/1/role/2?expand=actors"
+        )

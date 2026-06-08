@@ -453,3 +453,98 @@ def test_status_extracted_from_message_when_no_attribute() -> None:
     assert JiraIssueService._extract_http_status(JiraApiError("HTTP Error 414: too long")) == 414
     assert JiraIssueService._extract_http_status(JIRAError("x", 401, "u")) == 401
     assert JiraIssueService._extract_http_status(RuntimeError("no status here")) is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #260: dropped chunks must be reconciled (not silently lost at the
+# batch level).  The team deliberately keeps a dropped chunk non-fatal
+# (returns {} + per-chunk WARNING), but the *overall* fetch previously gave
+# no requested-vs-returned summary, so a partial result looked complete.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_fetch_issues_batch_logs_reconciliation_when_chunk_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+    import re
+
+    keys_a = [f"OK-{i}" for i in range(1, 26)]
+    keys_b = [f"FAIL-{i}" for i in range(1, 26)]
+    all_keys = keys_a + keys_b
+    call_count = 0
+
+    def _search(jql: str, **_kw: object) -> list[SimpleNamespace]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [_make_issue(k) for k in re.findall(r'"([^"]+)"', jql)]
+        raise JIRAError("Simulated 401", 401, "https://jira.test/search?jql=...")
+
+    client = _make_client(search_side_effect=_search)
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        result = service._fetch_issues_batch(all_keys)
+
+    # Partial-result contract preserved: first chunk present, second dropped.
+    assert len(result) == 25
+    # The gap must be surfaced loudly with a reconciliation summary naming the
+    # count of unreturned keys — never a mislabelled URL-length problem.
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "reconciliation" in msgs.lower(), msgs
+    assert "25" in msgs, msgs
+    assert "url" not in msgs.lower() or "url-length" not in msgs.lower()
+
+
+@pytest.mark.unit
+def test_fetch_issues_batch_no_reconciliation_log_when_complete(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When every requested key is returned, no reconciliation warning fires."""
+    import logging
+    import re
+
+    keys = [f"OK-{i}" for i in range(1, 11)]
+
+    def _search(jql: str, **_kw: object) -> list[SimpleNamespace]:
+        return [_make_issue(k) for k in re.findall(r'"([^"]+)"', jql)]
+
+    client = _make_client(search_side_effect=_search)
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING):
+        result = service._fetch_issues_batch(keys)
+
+    assert len(result) == 10
+    assert not any("reconciliation" in r.getMessage().lower() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Issue #260: get_issue_watchers must carry the Server/DC ``key`` so watchers
+# resolve against a user mapping keyed by that internal key.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_get_issue_watchers_includes_server_dc_key() -> None:
+    client = _make_client()
+    client.jira.watchers.return_value = SimpleNamespace(
+        watchers=[
+            SimpleNamespace(
+                name="anne.geissler",
+                key="JIRAUSER18400",
+                accountId=None,
+                displayName="Anne G",
+                emailAddress=None,
+                active=True,
+            ),
+        ],
+    )
+    service = JiraIssueService(client)  # type: ignore[arg-type]
+
+    result = service.get_issue_watchers("TK-1")
+
+    assert result[0]["key"] == "JIRAUSER18400"
+    assert result[0]["name"] == "anne.geissler"

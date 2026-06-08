@@ -14,6 +14,7 @@ there is no Ruby-script escaping to worry about.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
@@ -169,6 +170,28 @@ class JiraProjectService:
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
+    @staticmethod
+    def _role_detail_path(role_url: str) -> str:
+        """Reduce a Jira role URL to a base-relative request path.
+
+        Jira's project role-list returns *absolute* role URLs. ``_make_request``
+        unconditionally prepends the client base URL, so the role URL must be
+        stripped to its path (plus query) first. A naive ``startswith(base_url)``
+        strip fails whenever the scheme/host/port differ (https base vs http
+        behind a TLS-terminating proxy, an explicit port, or case differences),
+        leaving the absolute URL intact and producing ``/http://…`` — a path
+        Jira answers with an HTML 200 (#260). ``urlsplit().path`` is empty for a
+        bare host and equals the input for an already-relative path, so taking
+        the path unconditionally is host-independent and handles both shapes.
+        """
+        parts = urlsplit(role_url)
+        path = parts.path
+        if parts.query:
+            path = f"{path}?{parts.query}"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return path
+
     def get_project_roles(self, project_key: str) -> list[dict[str, Any]]:
         """Retrieve Jira project roles and their actors for a project."""
         if not project_key:
@@ -192,11 +215,7 @@ class JiraProjectService:
                 if not isinstance(role_url, str):
                     continue
 
-                detail_path = role_url
-                if role_url.startswith(client.base_url):
-                    detail_path = role_url[len(client.base_url) :]
-                if not detail_path.startswith("/"):
-                    detail_path = f"/{detail_path}"
+                detail_path = self._role_detail_path(role_url)
 
                 try:
                     detail_response = client._make_request(detail_path)

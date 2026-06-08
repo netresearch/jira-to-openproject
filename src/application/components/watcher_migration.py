@@ -80,14 +80,17 @@ class WatcherMigration(BaseMigration):
         """Map a typed watcher to an OP user id.
 
         Probes the user mapping using (in order): ``account_id``,
-        ``name``, ``email_address``, ``display_name`` — matching the
+        ``name``, ``key``, ``email_address``, ``display_name`` — matching the
         pattern used in :class:`AttachmentProvenanceMigration`. Cloud
-        instances primarily key on ``account_id``; Server/DC on ``name``.
+        instances primarily key on ``account_id``; Server/DC user mappings are
+        stored under the internal ``key`` (e.g. ``JIRAUSER18400``), which
+        differs from ``name`` for renamed/inactive accounts (#260).
         """
         user_map = self.mappings.get_mapping("user") or {}
         for probe in (
             watcher.account_id,
             watcher.name,
+            watcher.key,
             watcher.email_address,
             watcher.display_name,
         ):

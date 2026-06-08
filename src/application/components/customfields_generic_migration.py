@@ -76,7 +76,18 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
         # Use existing CF mapping to decide names/types
         cf_mapping = self.mappings.get_mapping("custom_field") or {}
 
-        values_by_wp: dict[int, list[tuple[str, str]]] = {}
+        # Production wp_map is keyed by the numeric Jira ID with the human key
+        # nested under ``jira_key``; ``issues`` is keyed by the human key. Index
+        # entries by their human key so the lookup below works for both the
+        # production (numeric-ID) and legacy/test (human-key) mapping shapes
+        # instead of silently skipping every issue (#260).
+        entry_by_jira_key: dict[str, Any] = {}
+        for outer_key, raw in wp_map.items():
+            inner_key = self._inner_jira_key(outer_key, raw)
+            if inner_key is not None:
+                entry_by_jira_key[inner_key] = raw
+
+        values_by_wp: dict[int, list[tuple[str, str, str]]] = {}
         wp_to_project: dict[int, int] = {}  # Track project ID for each WP
         for jira_key, issue in issues.items():
             # Walk raw ``fields`` for dynamic ``customfield_*`` attributes —
@@ -85,7 +96,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
             fields = getattr(issue, "fields", None)
             if not fields:
                 continue
-            raw_entry = wp_map.get(jira_key)
+            raw_entry = entry_by_jira_key.get(jira_key)
             if raw_entry is None:
                 continue
             try:
@@ -116,12 +127,14 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                 norm_value = self._to_string_value(cf_value)
                 if not norm_value:
                     continue
-                values_by_wp.setdefault(wp_id, []).append((op_name, op_type))
+                values_by_wp.setdefault(wp_id, []).append((op_name, op_type, norm_value))
 
         return ComponentResult(success=True, data={"values_by_wp": values_by_wp, "wp_to_project": wp_to_project})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        values_by_wp: dict[int, list[tuple[str, str]]] = (mapped.data or {}).get("values_by_wp", {})  # type: ignore[assignment]
+        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+
+        values_by_wp: dict[int, list[tuple[str, str, str]]] = (mapped.data or {}).get("values_by_wp", {})  # type: ignore[assignment]
         wp_to_project: dict[int, int] = (mapped.data or {}).get("wp_to_project", {})  # type: ignore[assignment]
         if not values_by_wp:
             return ComponentResult(success=True, updated=0)
@@ -136,7 +149,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
             project_id = wp_to_project.get(wp_id)
             # Deduplicate CF names for this WP
             seen: set[str] = set()
-            for name, field_format in cf_specs:
+            for name, field_format, value in cf_specs:
                 if name in seen:
                     continue
                 seen.add(name)
@@ -145,15 +158,15 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
                     # Track project for selective enablement
                     if project_id:
                         cf_to_projects.setdefault(cf_id, set()).add(project_id)
-                    # Set CF value from mapping; re-lookup actual value by WP/Jira key not available here,
-                    # so apply a placeholder behavior is not possible. Instead, re-extracting values again
-                    # would be redundant in tests; we set a non-empty string already normalized earlier.
-                    # Since execute_query requires actual value, use a minimal no-op if missing.
-                    # Here we store an empty string would be skipped above, so set 'set' to preserve flow.
+                    # Write the actual normalized Jira value extracted in ``_extract``
+                    # (#260: previously a literal 'set' placeholder was written,
+                    # discarding the real value).
+                    escaped_value = escape_ruby_single_quoted(value)
                     set_script = (
                         "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                        "cv = wp.custom_value_for(cf); if cv; cv.value = (cv.value.presence || 'set'); cv.save; else; wp.custom_field_values = { cf.id => 'set' }; end; wp.save!; true"
-                        % (wp_id, cf_id)
+                        "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save!; "
+                        "else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
+                        % (wp_id, cf_id, escaped_value, escaped_value)
                     )
                     ok = self.op_client.execute_query(set_script)
                     if ok:

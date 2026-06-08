@@ -339,7 +339,12 @@ class OpenProjectRailsRunnerService:
         """
         try:
             _ts = int(__import__("time").time())
-            container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}.json"
+            # Append a per-call random token so two calls within the same
+            # wall-clock second in the same process never collide on the
+            # tempfile path and read back each other's stale JSON — which
+            # surfaced as "Unexpected response when ensuring reporting
+            # project" (a stale groups list) during the #260 run.
+            container_file = f"/tmp/j2o_query_{_ts}_{os.getpid()}_{secrets.token_hex(8)}.json"
             return self._client.execute_large_query_to_json_file(
                 query,
                 container_file=container_file,

@@ -59,7 +59,32 @@ def test_from_any_active_defaults_to_true_when_missing() -> None:
 
 def test_from_any_extra_keys_are_ignored() -> None:
     watcher = JiraWatcher.from_any(
-        {"name": "dave", "self": "https://j.example.com/rest/api/2/user", "key": "ignored-extra"},
+        {"name": "dave", "self": "https://j.example.com/rest/api/2/user", "timeZone": "UTC"},
     )
     assert watcher is not None
     assert watcher.name == "dave"
+
+
+def test_from_any_captures_server_dc_key_from_dict() -> None:
+    """Jira Server/DC watcher rows carry a ``key`` (e.g. JIRAUSER18400) that
+    differs from ``name`` for renamed/inactive accounts. It must be captured
+    so the watcher can be resolved against a key-keyed user mapping (#260).
+    """
+    watcher = JiraWatcher.from_any({"key": "JIRAUSER18400", "name": "anne.geissler"})
+    assert watcher is not None
+    assert watcher.key == "JIRAUSER18400"
+    assert watcher.name == "anne.geissler"
+
+
+def test_from_any_captures_key_from_sdk_like_object() -> None:
+    obj = SimpleNamespace(key="JIRAUSER18400", name="anne.geissler")
+    watcher = JiraWatcher.from_any(obj)
+    assert watcher is not None
+    assert watcher.key == "JIRAUSER18400"
+
+
+def test_from_any_resolves_when_only_key_present() -> None:
+    """A row with only ``key`` is a usable identifier, not skipped."""
+    watcher = JiraWatcher.from_any({"key": "JIRAUSER18400"})
+    assert watcher is not None
+    assert watcher.key == "JIRAUSER18400"

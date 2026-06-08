@@ -774,6 +774,7 @@ class WorkPackageContentMigration(BaseMigration):
             "descriptions_updated": 0,
             "custom_fields_updated": 0,
             "comments_migrated": 0,
+            "comments_failed": 0,
             "watchers_added": 0,
         }
 
@@ -840,8 +841,26 @@ class WorkPackageContentMigration(BaseMigration):
             try:
                 result = self.op_client.bulk_create_work_package_activities(all_comments)
                 results["comments_migrated"] = result.get("created", 0)
+                # Surface the Rails-side failure count instead of discarding it —
+                # previously only ``created`` was read, so dropped comments
+                # (e.g. all but the first per WP) looked like a clean success (#260).
+                failed = int(result.get("failed", 0) or 0)
+                results["comments_failed"] = failed
+                if failed or result.get("success") is False:
+                    self.logger.warning(
+                        "Bulk comment creation: %d created, %d failed (success=%s) — "
+                        "failed comments were dropped; check the OpenProject Rails errors. "
+                        "First errors: %s",
+                        result.get("created", 0),
+                        failed,
+                        result.get("success"),
+                        (result.get("errors") or [])[:3],
+                    )
             except Exception as e:
-                self.logger.debug("Bulk comment creation failed: %s", e)
+                # A thrown bulk call drops the whole batch of comments; record
+                # and warn rather than swallowing it at debug level (#260).
+                self.logger.warning("Bulk comment creation failed (%d comments dropped): %s", len(all_comments), e)
+                results["comments_failed"] = len(all_comments)
 
         # Batch 4: Watchers (using bulk_add_watchers)
         if os.environ.get("J2O_SKIP_WATCHERS"):
@@ -920,6 +939,7 @@ class WorkPackageContentMigration(BaseMigration):
             "descriptions_updated": 0,
             "custom_fields_updated": 0,
             "comments_migrated": 0,
+            "comments_failed": 0,
             "watchers_added": 0,
             "projects": {},
         }
@@ -966,6 +986,7 @@ class WorkPackageContentMigration(BaseMigration):
                     results["descriptions_updated"] += batch_results["descriptions_updated"]
                     results["custom_fields_updated"] += batch_results["custom_fields_updated"]
                     results["comments_migrated"] += batch_results["comments_migrated"]
+                    results["comments_failed"] += batch_results.get("comments_failed", 0)
                     results["watchers_added"] += batch_results["watchers_added"]
 
                     self.logger.info(
@@ -983,6 +1004,7 @@ class WorkPackageContentMigration(BaseMigration):
                 results["descriptions_updated"] += batch_results["descriptions_updated"]
                 results["custom_fields_updated"] += batch_results["custom_fields_updated"]
                 results["comments_migrated"] += batch_results["comments_migrated"]
+                results["comments_failed"] += batch_results.get("comments_failed", 0)
                 results["watchers_added"] += batch_results["watchers_added"]
 
                 self.logger.info(
@@ -1020,6 +1042,12 @@ class WorkPackageContentMigration(BaseMigration):
             results["comments_migrated"],
             results["watchers_added"],
         )
+        if results["comments_failed"]:
+            self.logger.warning(
+                "Content migration dropped %d comment(s) across all projects — these were NOT "
+                "migrated (#260). Review the per-batch bulk-comment warnings above and re-run.",
+                results["comments_failed"],
+            )
 
         return results
 
@@ -1059,6 +1087,7 @@ class WorkPackageContentMigration(BaseMigration):
                     "total_failed": migration_results["total_failed"],
                     "descriptions_updated": migration_results["descriptions_updated"],
                     "comments_migrated": migration_results["comments_migrated"],
+                    "comments_failed": migration_results.get("comments_failed", 0),
                 },
             )
         except Exception as e:

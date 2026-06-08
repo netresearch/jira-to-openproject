@@ -103,6 +103,35 @@ def test_skip_reasons_user_unmapped(
     assert res.details["created"] == 1
 
 
+def test_watcher_resolves_via_server_dc_key(
+    monkeypatch: pytest.MonkeyPatch,
+    _map_store,
+    tmp_path,
+):
+    """On Jira Server/DC the user mapping is keyed by the Jira ``key``
+    (e.g. JIRAUSER18400), which differs from ``name`` for renamed/inactive
+    accounts. The resolver must probe ``key`` so such watchers map instead of
+    being skipped as ``user_unmapped`` (#260).
+    """
+    _map_store.set_mapping("user", {"JIRAUSER18400": {"openproject_id": 7}})
+    op = DummyOpClient()
+
+    class DummyJira:
+        def get_issue_watchers(self, key: str):
+            # name differs from the Jira key, which is how the map is keyed.
+            return [{"key": "JIRAUSER18400", "name": "anne.geissler"}]
+
+    wm = WatcherMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
+    cache_dir = tmp_path / "data"
+    cache_dir.mkdir()
+    (cache_dir / "jira_issues_cache.json").write_text('{"J1": {"key": "J1"}}')
+    wm.data_dir = cache_dir
+
+    res = wm.run()
+    assert res.success
+    assert op.added == [(10, 7)], res.details
+
+
 def test_skip_reasons_wp_unmapped(
     monkeypatch: pytest.MonkeyPatch,
     _map_store,
