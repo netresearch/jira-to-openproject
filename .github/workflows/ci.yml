@@ -13,115 +13,100 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Lint / type-check / architecture / tests run through the org-standard
+  # python-ci.yml reusable (package-manager: uv), so the pinned action
+  # versions (checkout, setup-uv, setup-python) are maintained centrally
+  # in netresearch/.github instead of inline per-repo.
   lint:
     name: Lint (ruff)
-    runs-on: ubuntu-latest
+    uses: netresearch/.github/.github/workflows/python-ci.yml@main
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-      - name: Install dev dependencies
-        run: uv sync --frozen --extra dev
-      - name: ruff check
-        run: uv run ruff check --no-fix .
-      - name: ruff format check
-        run: uv run ruff format --check .
+    with:
+      package-manager: uv
+      python-versions: '["3.14"]'
+      install-cmd: uv sync --frozen --extra dev
+      run-lint: true
+      lint-cmd: uv run ruff check --no-fix . && uv run ruff format --check .
+      run-type-check: false
+      run-tests: false
 
   typecheck:
     name: Type check (mypy)
-    runs-on: ubuntu-latest
+    uses: netresearch/.github/.github/workflows/python-ci.yml@main
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-      - name: Install dev dependencies
-        run: uv sync --frozen --extra dev
-      - name: mypy
-        run: uv run mypy
+    with:
+      package-manager: uv
+      python-versions: '["3.14"]'
+      install-cmd: uv sync --frozen --extra dev
+      run-lint: false
+      run-type-check: true
+      type-check-cmd: uv run mypy
+      run-tests: false
 
   architecture:
     name: Architecture (import-linter)
-    runs-on: ubuntu-latest
+    uses: netresearch/.github/.github/workflows/python-ci.yml@main
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-      - name: Install dev dependencies
-        run: uv sync --frozen --extra dev
-      - name: lint-imports
-        run: uv run lint-imports
+    with:
+      package-manager: uv
+      python-versions: '["3.14"]'
+      install-cmd: uv sync --frozen --extra dev
+      run-lint: true
+      lint-cmd: uv run lint-imports
+      run-type-check: false
+      run-tests: false
 
   test:
     name: Tests (pytest)
-    runs-on: ubuntu-latest
+    uses: netresearch/.github/.github/workflows/python-ci.yml@main
     permissions:
       contents: read
-    env:
-      # tests/conftest.py auto-loads .env.test, but that file is not
-      # tracked in git. Provide the same surface here so client
-      # constructors that demand env-supplied values work in CI.
-      J2O_TEST_MODE: "true"
-      J2O_USE_MOCK_APIS: "true"
-      J2O_OPENPROJECT_SERVER: openproject.local
-      J2O_OPENPROJECT_CONTAINER: openproject-web-1
-      J2O_OPENPROJECT_USER: root
-      J2O_OPENPROJECT_URL: https://openproject.local
-      J2O_OPENPROJECT_API_KEY: test_api_key
-      J2O_OPENPROJECT_TMUX_SESSION_NAME: rails_console
-      J2O_JIRA_URL: https://jira.local
-      J2O_JIRA_USERNAME: testuser
-      J2O_JIRA_API_TOKEN: test_token
-      J2O_SSH_HOST: localhost
-      J2O_SSH_USER: root
-      J2O_SSL_VERIFY: "false"
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-      - name: Install test dependencies
-        run: uv sync --frozen --extra test --extra dev
-      - name: pytest
-        run: uv run pytest --cov=src --cov-report=xml --cov-report=term -n auto
-      - name: Upload coverage
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-xml
-          path: coverage.xml
-          if-no-files-found: ignore
+    with:
+      package-manager: uv
+      python-versions: '["3.14"]'
+      # tests/conftest.py auto-loads .env.test, which is not tracked in git.
+      # Export the same surface via $GITHUB_ENV (persists to the pytest step)
+      # so client constructors that demand env-supplied values work in CI.
+      install-cmd: |
+        set -e
+        uv sync --frozen --extra test --extra dev
+        {
+          echo "J2O_TEST_MODE=true"
+          echo "J2O_USE_MOCK_APIS=true"
+          echo "J2O_OPENPROJECT_SERVER=openproject.local"
+          echo "J2O_OPENPROJECT_CONTAINER=openproject-web-1"
+          echo "J2O_OPENPROJECT_USER=root"
+          echo "J2O_OPENPROJECT_URL=https://openproject.local"
+          echo "J2O_OPENPROJECT_API_KEY=test_api_key"
+          echo "J2O_OPENPROJECT_TMUX_SESSION_NAME=rails_console"
+          echo "J2O_JIRA_URL=https://jira.local"
+          echo "J2O_JIRA_USERNAME=testuser"
+          echo "J2O_JIRA_API_TOKEN=test_token"
+          echo "J2O_SSH_HOST=localhost"
+          echo "J2O_SSH_USER=root"
+          echo "J2O_SSL_VERIFY=false"
+        } >> "$GITHUB_ENV"
+      run-lint: false
+      run-type-check: false
+      run-tests: true
+      test-cmd: uv run pytest --cov=src --cov-report=xml --cov-report=term -n auto
+      upload-coverage-artifact: true
+      coverage-artifact-name: coverage-xml
+      coverage-file: coverage.xml
+      coverage-os: ubuntu-latest
+      coverage-python-version: "3.14"
 
-  # Job name intentionally left implicit so the reported check is
-  # `container-tests` (the job ID), matching the existing branch-protection
-  # required-status-check rule. The previous workflow used the same name;
-  # renaming it here would orphan the protection rule.
+  # Containerised suite: buildx + make, no Python setup — stays inline.
+  # Job ID kept as container-tests to match the branch-protection check.
   container-tests:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
       - name: Run containerised test suite
         run: make container-test

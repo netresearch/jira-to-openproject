@@ -19,30 +19,16 @@ jobs:
       contents: read
       pull-requests: write
 
-  pip-audit:
-    name: Python Dependency Audit
-    runs-on: ubuntu-latest
+  # bandit + pip-audit via the shared python-audit.yml reusable (uv), so the
+  # pinned action versions are maintained centrally in netresearch/.github.
+  audit:
+    uses: netresearch/.github/.github/workflows/python-audit.yml@main
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: true
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-      - name: Export runtime requirements from uv.lock
-        # The project uses uv + pyproject.toml — no requirements.txt exists.
-        # Export the locked runtime deps (without the project itself) so
-        # pip-audit scans our actual dependency graph; the previous
-        # `... || pip-audit` fallback flagged pip's own CVEs from the
-        # runner environment, and `-e .` for the local project tripped a
-        # "not found on PyPI" lookup error.
-        run: |
-          uv export --frozen --no-hashes --no-dev --no-emit-project \
-            -o /tmp/runtime-requirements.txt
-      - name: pip-audit
-        run: |
-          pip install pip-audit
-          pip-audit --strict -r /tmp/runtime-requirements.txt
+    with:
+      python-version-file: pyproject.toml
+      package-manager: uv
+      # Preserve the previous scope (pip-audit only). bandit is a new scan
+      # here and flags pre-existing findings; enable it in a separate change
+      # once those are triaged.
+      run-bandit: false
