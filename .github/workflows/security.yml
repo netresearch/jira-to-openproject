@@ -28,3 +28,7 @@ jobs:
     with:
       python-version-file: pyproject.toml
       package-manager: uv
+      # Preserve the previous scope (pip-audit only). bandit is a new scan
+      # here and flags pre-existing findings; enable it in a separate change
+      # once those are triaged.
+      run-bandit: false
