@@ -13,57 +13,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Lint / type-check / architecture / tests run through the org-standard
-  # python-ci.yml reusable (package-manager: uv), so the pinned action
-  # versions (checkout, setup-uv, setup-python) are maintained centrally
-  # in netresearch/.github instead of inline per-repo.
-  lint:
-    name: Lint (ruff)
-    uses: netresearch/.github/.github/workflows/python-ci.yml@main
+  # Lint / type-check / architecture / tests + audit + secret-scanning +
+  # dependency-review are consolidated into the org gold-standard
+  # python-app-ci meta-reusable (package-manager: uv). It composes
+  # python-ci + python-audit + gitleaks + dependency-review (+ opt-in
+  # codeql/build/zizmor/scorecard) so this repo has one CI call site and
+  # the pinned action versions are maintained centrally in netresearch/.github.
+  app-ci:
+    uses: netresearch/.github/.github/workflows/python-app-ci.yml@main
     permissions:
+      actions: read
       contents: read
-    with:
-      package-manager: uv
-      python-versions: '["3.14"]'
-      install-cmd: uv sync --frozen --extra dev
-      run-lint: true
-      lint-cmd: uv run ruff check --no-fix . && uv run ruff format --check .
-      run-type-check: false
-      run-tests: false
-
-  typecheck:
-    name: Type check (mypy)
-    uses: netresearch/.github/.github/workflows/python-ci.yml@main
-    permissions:
-      contents: read
-    with:
-      package-manager: uv
-      python-versions: '["3.14"]'
-      install-cmd: uv sync --frozen --extra dev
-      run-lint: false
-      run-type-check: true
-      type-check-cmd: uv run mypy
-      run-tests: false
-
-  architecture:
-    name: Architecture (import-linter)
-    uses: netresearch/.github/.github/workflows/python-ci.yml@main
-    permissions:
-      contents: read
-    with:
-      package-manager: uv
-      python-versions: '["3.14"]'
-      install-cmd: uv sync --frozen --extra dev
-      run-lint: true
-      lint-cmd: uv run lint-imports
-      run-type-check: false
-      run-tests: false
-
-  test:
-    name: Tests (pytest)
-    uses: netresearch/.github/.github/workflows/python-ci.yml@main
-    permissions:
-      contents: read
+      security-events: write
+      pull-requests: write
+      id-token: write
     with:
       package-manager: uv
       python-versions: '["3.14"]'
@@ -89,15 +52,27 @@ jobs:
           echo "J2O_SSH_USER=root"
           echo "J2O_SSL_VERIFY=false"
         } >> "$GITHUB_ENV"
-      run-lint: false
-      run-type-check: false
+      run-lint: true
+      # ruff lint + format check, plus the import-linter architecture check
+      # folded in (previously a separate python-ci call site).
+      lint-cmd: uv run ruff check --no-fix . && uv run ruff format --check . && uv run lint-imports
+      run-type-check: true
+      type-check-cmd: uv run mypy
       run-tests: true
       test-cmd: uv run pytest --cov=src --cov-report=xml --cov-report=term -n auto
-      upload-coverage-artifact: true
-      coverage-artifact-name: coverage-xml
-      coverage-file: coverage.xml
-      coverage-os: ubuntu-latest
-      coverage-python-version: "3.14"
+      coverage-upload: true
+      # Internal application: no distribution build / PyPI publish.
+      enable-build: false
+      # pip-audit only; bandit flags pre-existing findings — enable separately
+      # once triaged (matches the prior security.yml audit call).
+      run-bandit: false
+      # CodeQL default setup is enabled on this repo; keep the advanced job
+      # off to avoid the default-vs-advanced conflict.
+      enable-codeql: false
+      enable-gitleaks: true
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
   # Containerised suite: buildx + make, no Python setup — stays inline.
   # Job ID kept as container-tests to match the branch-protection check.
