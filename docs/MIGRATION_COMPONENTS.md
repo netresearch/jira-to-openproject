@@ -47,8 +47,8 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 | RelationMigration | `relations` | Stable | Yes | Issue links |
 | WatcherMigration | `watchers` | Stable | Yes | Notifications |
 | **Agile** |
-| SprintEpicMigration | `sprint_epic` | Stable | Yes | Sprints/Epics |
-| AgileBoardMigration | `agile_boards` | Stable | Yes | Board views |
+| SprintEpicMigration | `sprint_epic` | Stable | Yes | Sprint/Epic links on WPs |
+| AgileBoardMigration | `agile_boards` | Stable | Yes | Board queries + sprint versions |
 | VersionsMigration | `versions` | Stable | Yes | Release tracking |
 | AffectsVersionsMigration | `affects_versions` | Stable | Yes | Version links |
 | **Labels & Tags** |
@@ -498,35 +498,43 @@ Migrates Jira issue link types to OpenProject relation types.
 
 ### SprintEpicMigration
 
-**Location**: `src/migrations/sprint_epic_migration.py`
+**Location**: `src/application/components/sprint_epic_migration.py`
 
-Migrates Jira sprints and epics.
+Applies Jira sprint membership and Epic Links to already-migrated work packages.
+The sprint versions themselves are created by `AgileBoardMigration`.
 
 **Features**:
-- Sprint → Version mapping
-- Epic → Work package type
-- Sprint dates and goals
-- Epic hierarchies
+- Epic Link → `parent_id` hierarchy on the child work package
+- Sprint → `version_id` on the work package, resolved via the `sprint` mapping
+  (first matching sprint only)
+- Sprint → "Sprint" text custom field, holding all sprint names comma-separated
 
-**Dependencies**: ProjectMigration, WorkPackageMigration
+**Dependencies**: ProjectMigration, WorkPackageMigration, AgileBoardMigration
+(provides the `sprint` mapping)
 
-**Related**: AgileBoardMigration
+**Related**: AgileBoardMigration, [Entity Mapping §11](ENTITY_MAPPING.md#11-agile-migration)
 
 ---
 
 ### AgileBoardMigration
 
-**Location**: `src/migrations/agile_board_migration.py`
+**Location**: `src/application/components/agile_board_migration.py`
 
-Migrates Jira agile boards to OpenProject saved queries.
+Creates one OpenProject saved query per Jira board and one OpenProject version
+per Jira sprint. Handles the entity types `agile_boards` and `sprints`.
 
 **Features**:
-- Board → Saved query mapping
-- Sprint filters
-- Column configuration
-- Quick filters
+- Board → public saved query named `[Board] <name>`; board type, original JQL and
+  column/status list go into the query **description** only — filters and columns
+  are left empty
+- Sprint → project version (name, goal → description, start/due date, open/closed
+  status), persisted in the `sprint` mapping for `SprintEpicMigration`
 
-**Dependencies**: ProjectMigration, SprintEpicMigration
+**Not** mapped to OpenProject's native boards or (since 17.3) native sprints —
+see [Entity Mapping §11](ENTITY_MAPPING.md#11-agile-migration) for the reasoning
+and the planned change.
+
+**Dependencies**: ProjectMigration
 
 **Example Usage**:
 ```bash

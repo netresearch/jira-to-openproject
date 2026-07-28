@@ -4,7 +4,7 @@
 
 ## Overview
 
-**j2o** is a Python 3.14 migration toolset that moves project management data from Jira Server 9.x to OpenProject 15+/16.x — users, projects, work packages, custom fields, statuses, workflows, attachments, Tempo time logs, agile boards, and reporting artefacts. It is a 41-module ETL pipeline with a FastAPI dashboard.
+**j2o** is a Python 3.14 migration toolset that moves project management data from Jira Server 9.x to OpenProject 17.3+ — users, projects, work packages, custom fields, statuses, workflows, attachments, Tempo time logs, agile boards, and reporting artefacts. It is a 41-module ETL pipeline with a FastAPI dashboard.
 
 **Precedence:** The **closest AGENTS.md** to changed files wins. Root holds global defaults only.
 
@@ -143,7 +143,7 @@ Cross-cutting modules are **intentionally outside** the contract and may be impo
 
 ## Codebase state
 - Python 3.14+, `uv` package manager, Docker Compose test profile
-- Target: Jira Server 9.x → OpenProject 15+/16.x
+- Target: Jira Server 9.x → OpenProject 17.3+ (currently tested against 17.3)
 - OpenProject 15+ requires `journal_notes`/`journal_user` + `save!` pattern (not `journals.create!`)
 - `J2O_FORCE_RAILS_RUNNER=1` bypasses tmux console for `rails runner` mode
 - 41 migration modules, 307 projects migrated, 65K+ work packages
