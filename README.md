@@ -20,7 +20,7 @@ A robust, modular migration toolset for transferring project management data fro
 - **Attachment Migration:** Issue attachments → Work package files
 - **Time Log Migration:** Tempo worklogs → OpenProject time entries
 - **Workflow Automation:** Jira workflow transitions → OpenProject workflow entries per type/role
-- **Agile Boards & Sprints:** Jira boards → OpenProject saved queries with sprint (version) mapping
+- **Agile Boards & Sprints:** Jira boards → OpenProject saved queries, sprints → versions (not OpenProject's native boards/sprints — see [Entity Mapping §11](docs/ENTITY_MAPPING.md#11-agile-migration))
 - **Admin Schemes:** Jira role memberships → OpenProject project memberships
 - **Reporting Artefacts:** Jira saved filters & dashboards → OpenProject queries and wiki summaries
 
