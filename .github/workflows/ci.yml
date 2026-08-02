@@ -72,7 +72,6 @@ jobs:
       enable-gitleaks: true
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
   # Containerised suite: buildx + make, no Python setup — stays inline.
   # Job ID kept as container-tests to match the branch-protection check.
