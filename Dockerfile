@@ -23,7 +23,7 @@ RUN apt-get update \
 
 # Install uv
 RUN --mount=type=cache,target=/root/.cache/uv \
-    python -m pip install --no-cache-dir uv
+    python -m pip install --no-cache-dir --only-binary :all: uv
 
 # Resolve + install dependencies to /install
 COPY pyproject.toml uv.lock ./
