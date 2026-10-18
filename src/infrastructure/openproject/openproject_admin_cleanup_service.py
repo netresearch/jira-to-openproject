@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Admin cleanup helpers for the OpenProject Rails console.
 
 Phase 2v of ADR-002 collects the destructive admin operations onto a

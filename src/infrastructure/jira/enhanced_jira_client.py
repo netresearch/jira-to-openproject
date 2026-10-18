@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Enhanced Jira client with advanced features for migration operations.
 
 .. deprecated::

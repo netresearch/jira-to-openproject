@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migration component package.
 
 Component classes live in submodules and are imported by callers as needed

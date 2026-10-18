@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test script for project hierarchy implementation.
 
 This verifies the proper organization of projects under their parent Tempo companies.

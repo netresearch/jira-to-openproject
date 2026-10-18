@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """End-to-end tests for the complete migration workflow.
 
 These tests validate the entire migration process from start to finish,

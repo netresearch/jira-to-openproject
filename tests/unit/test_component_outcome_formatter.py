@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Per-component outcome log line must be informative.
 
 Issue #260 reported a misleading pair of lines from the run summary::

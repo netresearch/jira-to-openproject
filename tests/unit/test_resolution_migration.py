@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 import pytest
 
 from src.application.components.resolution_migration import RESOLUTION_CF_NAME, ResolutionMigration

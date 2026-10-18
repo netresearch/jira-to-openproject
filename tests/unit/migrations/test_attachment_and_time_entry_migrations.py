@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Integration-like smoke tests for attachment and time-entry migrations."""
 
 from pathlib import Path

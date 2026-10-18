@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for selective custom field project enablement.
 
 BUG: All custom fields are created with `is_for_all: true`, making them

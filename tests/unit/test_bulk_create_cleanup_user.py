@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Container ``/tmp`` cleanup must run as root.
 
 When ``OpenProjectBulkCreateService.bulk_create_records`` finishes, it cleans

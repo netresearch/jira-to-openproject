@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Relation migration: create OpenProject relations from Jira issue links.
 
 Minimal first pass: handles standard types (relates, duplicates, blocks, precedes)

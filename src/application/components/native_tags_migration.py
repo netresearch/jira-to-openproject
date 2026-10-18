@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate labels to native OpenProject tags (with color best-effort).
 
 Extract Jira issue labels for mapped work packages, ensure Tag records exist,

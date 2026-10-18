@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Generic ActiveRecord CRUD helpers for the OpenProject Rails console.
 
 Phase 2m of ADR-002 continues the openproject_client.py god-class

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for Enhanced User Association Migrator staleness detection and refresh functionality."""
 
 from datetime import UTC, datetime, timedelta

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Models package for data structures used in the application."""
 
 from src.models.component_results import ComponentResult

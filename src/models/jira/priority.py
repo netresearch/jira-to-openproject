@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Pydantic v2 model for Jira priority payloads.
 
 The migration consumes Jira priorities at one well-defined boundary:

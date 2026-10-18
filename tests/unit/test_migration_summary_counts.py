@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 from src.migration import _extract_counts
 from src.models.component_results import ComponentResult
 

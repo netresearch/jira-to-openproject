@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Start a local tmux session connected to the OpenProject Rails console.
 
 This mirrors the commonly used manual command, but reads configuration from

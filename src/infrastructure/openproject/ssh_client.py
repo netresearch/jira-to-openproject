@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """SSHClient.
 
 Handles SSH operations to remote servers, including command execution and file transfers.

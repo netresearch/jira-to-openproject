@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Custom-field operations against an OpenProject instance.
 
 Phase 2 split of ``OpenProjectClient`` (ADR-002 phase 2): all the

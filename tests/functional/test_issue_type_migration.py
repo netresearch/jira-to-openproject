@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test module for IssueTypeMigration.
 
 This module contains test cases for validating the issue type migration from Jira to OpenProject.

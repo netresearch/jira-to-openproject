@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Simple retry decorator for API calls.
 
 For a YOLO dev script, we just need basic retry with exponential backoff.

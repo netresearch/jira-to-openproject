@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for scripts/backfill_comment_provenance_markers.py.
 
 Tests the pure-Python pairing and validation logic without hitting Rails or Jira.

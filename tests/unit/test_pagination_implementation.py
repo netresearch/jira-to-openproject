@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for the pagination implementation in WorkPackageMigration.
 
 These tests verify that the new generator-based pagination approach works correctly

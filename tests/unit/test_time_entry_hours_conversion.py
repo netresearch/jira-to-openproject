@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Time entry hours conversion (Bug B).
 
 The audit of the live OP database showed 10,606 time entries summing to

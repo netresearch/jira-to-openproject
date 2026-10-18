@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira project queries.
 
 Phase 3a of ADR-002 starts the jira_client.py decomposition. The

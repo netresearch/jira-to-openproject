@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Structural validation tests for WorkPackageMigration.
 
 These tests ensure critical methods exist in the class and are callable.

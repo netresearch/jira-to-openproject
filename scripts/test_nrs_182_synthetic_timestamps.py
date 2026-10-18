@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test synthetic timestamp fix for Bug #32 - NRS-182 missing journals
 Verify that operations 23-27 no longer fail with EXCLUSION constraint violations
 """

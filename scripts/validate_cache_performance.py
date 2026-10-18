@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Cache Performance Validation Script for j2o-50.
 
 This script validates the idempotent workflow caching system by:

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Composable decorators for :class:`JiraClient`.
 
 This module replaces the inheritance-based ``EnhancedJiraClient`` with a set of

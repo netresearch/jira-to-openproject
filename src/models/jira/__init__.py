@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira-side Pydantic models (ADR-002 phase 3a)."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira Affects Versions (versions field) to OpenProject via CF fallback.
 
 Creates/ensures a WorkPackage custom field "Affects Versions" (text) and writes

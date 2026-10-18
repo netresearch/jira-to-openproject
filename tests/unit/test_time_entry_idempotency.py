@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Time entry idempotency on re-run.
 
 Bug C: running the migration twice produced 10,606 TimeEntries (= 2x the

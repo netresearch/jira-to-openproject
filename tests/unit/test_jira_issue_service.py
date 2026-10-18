@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for :class:`src.infrastructure.jira.jira_issue_service.JiraIssueService`.
 
 Regression tests for the chunked-fetch behaviour:

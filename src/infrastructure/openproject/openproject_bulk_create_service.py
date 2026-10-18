@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Bulk record creation pipeline for the OpenProject Rails console.
 
 Phase 2y of ADR-002 continues the openproject_client.py god-class

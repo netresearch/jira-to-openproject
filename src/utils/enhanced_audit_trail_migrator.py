@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Enhanced Audit Trail Migration for comprehensive history and activity stream preservation.
 
 This module provides advanced audit trail migration capabilities that:

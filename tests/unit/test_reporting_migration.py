@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for ReportingMigration component.
 
 Covers happy path (filter → query, dashboard → wiki page), dashboard

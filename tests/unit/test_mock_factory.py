@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for the mock_factory utility module."""
 
 from unittest.mock import MagicMock

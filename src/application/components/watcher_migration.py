@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Watcher migration: add Jira watchers as OpenProject watchers idempotently.
 
 Note on dict access patterns kept here

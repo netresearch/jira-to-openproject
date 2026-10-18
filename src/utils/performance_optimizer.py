@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Performance Optimization Utilities for Migration System.
 
 This module provides comprehensive performance optimizations including:

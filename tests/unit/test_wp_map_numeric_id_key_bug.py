@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Regression tests for the wp_map numeric-ID-as-key bug.
 
 Production work_package mappings are stored with the numeric Jira *ID* as the

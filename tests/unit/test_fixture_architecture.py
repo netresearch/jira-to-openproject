@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test fixture architecture validation for enhanced user association migrator staleness tests.
 
 This module validates that the standardized fixture patterns work correctly across

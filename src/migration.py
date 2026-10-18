@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Master migration script for Jira to OpenProject migration.
 
 This script orchestrates the complete migration process with performance optimization.

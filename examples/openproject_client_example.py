@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Example usage of the OpenProjectClient.
 
 This example demonstrates how to use the new OpenProjectClient

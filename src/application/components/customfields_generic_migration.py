@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Generic migration for unmapped Jira customfield_* values to OpenProject CFs.
 
 Relies on existing custom field mapping (name/type) and ensures missing CFs

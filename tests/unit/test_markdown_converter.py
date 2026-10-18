@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for the MarkdownConverter class."""
 
 from src.utils.markdown_converter import MarkdownConverter

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira API client for the migration project.
 
 Provides a clean, exception-based interface for Jira resource access.

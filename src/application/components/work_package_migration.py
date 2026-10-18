@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 r"""Work package migration module for Jira to OpenProject migration.
 Handles the migration of issues from Jira to work packages in OpenProject.
 

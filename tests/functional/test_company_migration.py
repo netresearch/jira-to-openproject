@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test module for CompanyMigration.
 
 This module contains test cases for validating the company migration from Jira Tempo to OpenProject.

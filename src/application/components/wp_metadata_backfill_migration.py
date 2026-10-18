@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Backfill assignee + provenance CFs on existing OP work packages.
 
 Two distinct gaps the regular work-package migration cannot close on

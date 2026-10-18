@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Configuration loader for Jira to OpenProject migration.
 
 This module provides a simple interface for loading and accessing configuration

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Placeholders to enforce zero-created gating across components.
 
 These are marked xfail until each component implements consistent behavior:

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Regression tests for ``OpenProjectCustomFieldService.ensure_wp_custom_field_id``.
 
 GitHub issue #260: creating a WorkPackage custom field crashed five

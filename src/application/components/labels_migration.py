@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira labels to OpenProject using a custom field fallback.
 
 Preferred path would be native tags; fallback implemented here uses a

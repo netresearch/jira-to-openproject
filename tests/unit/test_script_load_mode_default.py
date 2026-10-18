@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Default ``J2O_SCRIPT_LOAD_MODE`` should be ``console``.
 
 The runner mode (``bundle exec rails runner``) costs ~5-10 s of Rails boot

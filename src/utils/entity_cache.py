@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Thread-safe entity cache with LRU-like eviction.
 
 Two-tier caching used by migration components for entity-list lookups:

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Account migration module for Jira to OpenProject migration.
 
 Handles the migration of Tempo timesheet accounts as custom fields in OpenProject.

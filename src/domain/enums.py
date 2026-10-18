@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Domain enumerations.
 
 These enums replace previously scattered magic strings used to discriminate

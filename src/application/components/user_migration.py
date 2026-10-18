@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """User migration module for Jira to OpenProject migration.
 
 Handles the migration of users and their accounts from Jira to OpenProject.

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for the composable Jira client decorators (ADR-002 phase 8b)."""
 
 from __future__ import annotations

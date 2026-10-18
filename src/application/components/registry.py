@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Component registry for migration component factories.
 
 Phase 1 scaffold: this module provides a registration API alongside the

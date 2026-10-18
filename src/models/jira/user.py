@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Pydantic v2 model for Jira user payloads.
 
 The migration receives Jira users in two shapes:

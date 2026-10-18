@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for :func:`src.utils.wp_mapping_normalizer.normalize_wp_mapping`.
 
 The helper is a pure function with two contracts:

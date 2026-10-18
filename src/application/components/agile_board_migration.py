@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira Software boards and sprints into OpenProject equivalents.
 
 Phase 7d note

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Health check client for monitoring disk space and temp file accumulation.
 
 Provides pre-migration, during-migration, and post-migration health checks

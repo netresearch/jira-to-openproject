@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira filters and dashboards into OpenProject queries and wiki summaries.
 
 Phase 7e notes

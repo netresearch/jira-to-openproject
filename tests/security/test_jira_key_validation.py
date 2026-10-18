@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 # Comprehensive security tests for JIRA key validation
 # Testing against various attack vectors and edge cases
 

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Advanced retry mechanisms with exponential backoff for migration operations.
 
 This module provides robust retry logic for handling transient failures in API calls,

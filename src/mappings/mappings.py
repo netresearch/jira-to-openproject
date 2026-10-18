@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Mappings facade over :class:`MappingRepository` (ADR-002 phase 4b).
 
 Phase 4a introduced :class:`src.domain.repositories.MappingRepository` and a

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Data handler module for serialization and deserialization of data.
 
 This module provides a consistent interface for loading and saving data,

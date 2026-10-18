@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Provenance custom-field bootstrap must run at migration startup.
 
 Bug D: ``ensure_origin_custom_fields()`` is the only place that creates the

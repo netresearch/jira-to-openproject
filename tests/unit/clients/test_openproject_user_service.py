@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Regression tests for :class:`OpenProjectUserService`.
 
 Covers issue #255: ``get_user_by_email`` built a Rails query against the

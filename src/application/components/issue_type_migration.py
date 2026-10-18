@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Issue type migration module for Jira to OpenProject migration.
 Handles mapping and creation of issue types from Jira to work package types in OpenProject.
 

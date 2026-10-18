@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira Tempo plugin queries.
 
 Phase 3f of ADR-002 continues the jira_client.py decomposition. The

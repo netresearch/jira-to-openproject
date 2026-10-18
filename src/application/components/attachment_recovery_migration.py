@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Recover Jira attachments that didn't make it into OP after the
 ``attachments`` component ran.
 

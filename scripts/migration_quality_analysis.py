@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migration Quality Analysis - Compare Jira issues with OpenProject work packages.
 
 This script samples Jira issues and compares them with their migrated OP counterparts

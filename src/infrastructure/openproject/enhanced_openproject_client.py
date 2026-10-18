@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Enhanced OpenProject client with advanced features for migration operations.
 
 This client adds file-based Ruby command execution for large commands/results,

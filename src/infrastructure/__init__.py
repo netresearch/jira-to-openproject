@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Infrastructure layer for j2o (ADR-002 phases 4+).
 
 This package will host adapters that bridge the domain layer (see

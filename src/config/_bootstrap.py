@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Explicit, idempotent bootstrap for the migration config side effects.
 
 Phase 6a of ADR-002 makes :mod:`src.config` import-time side-effect-free.

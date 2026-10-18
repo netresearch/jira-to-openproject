@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Non-JSON Jira responses must surface as a typed signal, not a JSONDecodeError.
 
 Issue #260 background

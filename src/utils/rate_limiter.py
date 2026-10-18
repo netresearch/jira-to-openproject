@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Adaptive rate limiter for API clients.
 
 Provides intelligent throttling that adapts to API responses, handles rate limit headers,

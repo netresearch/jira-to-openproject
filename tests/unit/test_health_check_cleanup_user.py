@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """``HealthCheckClient.cleanup_temp_files`` must run as root.
 
 Same root cause as the other cleanup paths: ``find /tmp -name j2o_* -delete``

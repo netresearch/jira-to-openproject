@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Pydantic v2 model for Jira issue watchers (ADR-002 phase 7c).
 
 The :meth:`src.infrastructure.jira.jira_issue_service.JiraIssueService.get_issue_watchers`

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Comprehensive tests for validation and fallback strategies in Enhanced User Association Migrator.
 
 This test suite covers:

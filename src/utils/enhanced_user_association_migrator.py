@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Enhanced User Association Migration for comprehensive metadata preservation.
 
 This module provides advanced user association migration capabilities that:

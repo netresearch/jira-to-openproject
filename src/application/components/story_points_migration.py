@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira Story Points to OpenProject via numeric CF fallback.
 
 Creates/ensures a WorkPackage custom field "Story Points" (float) and writes the

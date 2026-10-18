@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira components to OpenProject Categories and assign to work packages.
 
 Phase 7d converts the work-package side of this migration to the typed

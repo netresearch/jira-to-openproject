@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Verification tests for core migration features (j2o-1 through j2o-6).
 
 This test suite verifies that the 5 high-priority features are implemented

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Partial-success classification for ``_component_has_errors``.
 
 Migrations like ``time_entries`` legitimately produce partial output: in the

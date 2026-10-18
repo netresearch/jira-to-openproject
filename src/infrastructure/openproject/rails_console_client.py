@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """RailsConsoleClient.
 
 Client for executing commands on a Rails console running in a tmux session.

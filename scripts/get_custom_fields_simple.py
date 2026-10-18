@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Get Custom Fields (Simple Approach).
 
 This script uses the most reliable approach to get custom fields from Rails console:

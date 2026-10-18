@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Generate description updates JSON for NRS work packages.
 Uses existing J2O infrastructure to fetch Jira descriptions and map to OpenProject WP IDs.
 """

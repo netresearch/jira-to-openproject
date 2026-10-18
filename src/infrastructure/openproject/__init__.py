@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """OpenProject infrastructure layer for the Jira to OpenProject migration.
 
 Lazily exposes the common client class to avoid importing heavy dependencies at

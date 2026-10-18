@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Integration and security tests for Enhanced User Association Migrator staleness functionality."""
 
 from datetime import UTC, datetime, timedelta

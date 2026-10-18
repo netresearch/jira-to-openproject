@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Normalisation helpers for the polymorphic ``work_package`` mapping.
 
 The persisted ``work_package`` mapping pre-dates ADR-002 phase 3c and

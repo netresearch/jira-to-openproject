@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Shared validation utilities for preventing injection attacks.
 
 This module provides centralized validation functions used across the migration

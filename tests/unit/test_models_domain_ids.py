@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for branded identifier types in :mod:`src.domain.ids`.
 
 ``NewType`` is a no-op at runtime — these tests pin that contract so a

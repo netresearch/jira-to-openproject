@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Idempotency Decorators for Batch Operations.
 
 This module provides decorators and utilities to add idempotency support

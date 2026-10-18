@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for comment-author resolution in WorkPackageContentMigration.
 
 BUG: Both code paths (_populate_comments + _collect_content_for_issue /

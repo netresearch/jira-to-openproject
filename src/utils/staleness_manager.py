@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Staleness Manager for TTL-based user mapping cache with automatic refresh.
 
 This module provides intelligent caching with staleness detection for user mappings

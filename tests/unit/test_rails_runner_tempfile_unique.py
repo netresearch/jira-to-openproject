@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Issue #260: the Rails query tempfile name must be unique per call.
 
 ``execute_query_to_json_file`` writes the Ruby result to a container tempfile

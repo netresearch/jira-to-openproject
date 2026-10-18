@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Main entry point for Jira to OpenProject migration tool.
 
 This script provides a unified interface for running both migration

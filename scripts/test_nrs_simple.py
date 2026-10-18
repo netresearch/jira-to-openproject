@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Simple test for NRS migration with 10 specific issues.
 Tests all bug fixes with comprehensive validation.
 """

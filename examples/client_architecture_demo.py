@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Client Architecture Demo.
 
 This script demonstrates the layered client architecture with proper dependency injection:

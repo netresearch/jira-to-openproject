@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Backfill ``user_mapping`` for Jira identities not in ``/rest/api/2/users``.
 
 The ``users`` component populates ``user_mapping.json`` by iterating

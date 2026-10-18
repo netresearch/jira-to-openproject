@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Configuration module for Jira to OpenProject migration.
 
 Handles loading and accessing configuration settings.

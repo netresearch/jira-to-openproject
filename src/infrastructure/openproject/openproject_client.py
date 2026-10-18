@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """OpenProject client for interacting with OpenProject instances via SSH and Rails console."""
 
 import json

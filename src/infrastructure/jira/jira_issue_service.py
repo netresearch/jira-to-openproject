@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira issue-domain queries.
 
 Phase 3k of ADR-002 — the final big slice of the jira_client.py

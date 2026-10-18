@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """IssuePriority helpers for the OpenProject Rails console.
 
 Phase 2p of ADR-002 continues the openproject_client.py god-class

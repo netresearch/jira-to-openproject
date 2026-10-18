@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for ``tools.audit_migrated_project._classify``.
 
 The classifier turns the Ruby-side metrics hash (returned by the OP

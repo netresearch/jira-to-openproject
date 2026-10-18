@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test comprehensive fix for Bug #32 - NRS-182 missing journals
 Validates ALL 11 fixes including:
 - Bug #1: Unified timestamp tracking (23/23 journals)
