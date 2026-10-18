@@ -1866,6 +1866,7 @@ class WorkPackageMigration(BaseMigration):
 
     def _fetch_issues_with_retry(
         self,
+        *,
         jql: str,
         start_at: int,
         max_results: int,

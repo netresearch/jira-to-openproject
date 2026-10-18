@@ -135,7 +135,7 @@ class TestCompanyMigration(unittest.TestCase):
     @patch("src.application.components.company_migration.Path.exists")
     @patch("src.application.components.company_migration.data_handler.load_dict")
     @patch("pathlib.Path.open", new_callable=mock_open)
-    def test_extract_tempo_companies(
+    def test_extract_tempo_companies(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_load_dict: MagicMock,

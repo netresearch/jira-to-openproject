@@ -77,6 +77,7 @@ class TestConfigLoaderSecurityEnhanced:
         mock_load_yaml,
         mock_apply_env,
         mock_load_dotenv,
+        *,
         mock_config_data,
         caplog,
     ) -> None:
@@ -117,6 +118,7 @@ class TestConfigLoaderSecurityEnhanced:
         mock_load_yaml,
         mock_apply_env,
         mock_load_dotenv,
+        *,
         mock_config_data,
         caplog,
     ) -> None:

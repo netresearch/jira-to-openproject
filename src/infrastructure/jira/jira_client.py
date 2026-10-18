@@ -713,6 +713,7 @@ class JiraClient:
 
     def get_tempo_work_logs(
         self,
+        *,
         issue_key: str | None = None,
         project_key: str | None = None,
         date_from: str | None = None,

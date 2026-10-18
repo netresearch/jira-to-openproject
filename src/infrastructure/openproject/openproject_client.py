@@ -134,6 +134,7 @@ class OpenProjectClient:
 
     def __init__(
         self,
+        *,
         container_name: str | None = None,
         ssh_host: str | None = None,
         ssh_user: str | None = None,
@@ -906,11 +907,11 @@ class OpenProjectClient:
         self,
         operation: Callable[[], object],
         operation_name: str,
+        *,
         max_retries: int = 3,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
         backoff_factor: float = 2.0,
-        *,
         jitter: bool = True,
     ) -> object:
         """Execute an operation with exponential backoff retry logic.

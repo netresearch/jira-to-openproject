@@ -11,6 +11,7 @@ import sys
 
 
 def run_tests(
+    *,
     test_type: str | None = None,
     test_path: str | None = None,
     verbose: bool = False,

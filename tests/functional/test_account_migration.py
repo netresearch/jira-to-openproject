@@ -191,7 +191,7 @@ class TestAccountMigration(unittest.TestCase):
     @patch("src.application.components.account_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("pathlib.Path.open", new_callable=mock_open)
-    def test_create_account_mapping(
+    def test_create_account_mapping(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,

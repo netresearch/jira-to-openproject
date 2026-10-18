@@ -113,7 +113,7 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_extract_jira_link_types(
+    def test_extract_jira_link_types(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
@@ -152,7 +152,7 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_create_link_type_mapping(
+    def test_create_link_type_mapping(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
@@ -196,7 +196,7 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("src.display.ProgressTracker")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_run_method(
+    def test_run_method(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
@@ -259,7 +259,7 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_analyze_link_type_mapping(
+    def test_analyze_link_type_mapping(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
@@ -322,7 +322,7 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("src.application.components.link_type_migration.CustomFieldMigration")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_create_custom_fields_for_link_types(
+    def test_create_custom_fields_for_link_types(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
@@ -432,7 +432,7 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_run_with_custom_field_creation(
+    def test_run_with_custom_field_creation(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,
@@ -548,7 +548,7 @@ class TestLinkTypeMigration(unittest.TestCase):
     @patch("src.application.components.link_type_migration.config.migration_config")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_none_guards_prevent_attribute_error(
+    def test_none_guards_prevent_attribute_error(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,

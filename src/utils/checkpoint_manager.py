@@ -124,6 +124,7 @@ class CheckpointManager:
         migration_record_id: str,
         step_name: str,
         step_description: str,
+        *,
         entities_processed: int = 0,
         entities_total: int = 0,
         current_entity_id: str | None = None,

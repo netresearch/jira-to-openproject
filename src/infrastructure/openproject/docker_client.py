@@ -377,6 +377,7 @@ class DockerClient:
     def run_container(
         self,
         image: str,
+        *,
         name: str | None = None,
         user: str | None = None,
         environment: dict[str, str] | None = None,
@@ -385,7 +386,6 @@ class DockerClient:
         cpu_limit: str | None = None,
         memory_limit: str | None = None,
         network: str | None = None,
-        *,
         detach: bool = True,
         remove: bool = False,
         command: str | None = None,
