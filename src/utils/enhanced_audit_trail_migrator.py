@@ -1163,7 +1163,7 @@ class EnhancedAuditTrailMigrator:
                         continue
                 # Pick most recent candidate
                 if candidates:
-                    _mtime, latest = sorted(candidates, key=lambda x: x[0], reverse=True)[0]
+                    _mtime, latest = max(candidates, key=lambda x: x[0])
                     mig_dir = latest / "migration_data"
                     mig_dir.mkdir(parents=True, exist_ok=True)
                     data_handler.save(

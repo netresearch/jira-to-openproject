@@ -166,6 +166,9 @@ disable_error_code = [
 target-version = "py314"
 fix = true
 line-length = 120
+# ruff >= 0.16 formats Python code fences inside Markdown. The docs carry
+# illustrative snippets whose layout is part of the prose; keep them as written.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -186,6 +189,8 @@ ignore = [
     "PLR0915", # Too many statements: migration methods are complex by nature
     "PLR0911", # Too many return statements: acceptable for validation logic
     "PLR0913", # Too many arguments: some constructors need many params
+    "PLR0917", # Too many positional arguments: same rationale as PLR0913; stable since ruff 0.16
+    "CPY001",  # Missing copyright notice: no per-file header convention (LICENSE covers the repo); stable since ruff 0.16
     "ARG002",  # Unused method argument: interface requirements in base class
     "FBT001",  # Boolean positional argument: acceptable in this codebase
     "FBT002",  # Boolean default positional: acceptable in this codebase

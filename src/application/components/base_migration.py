@@ -663,9 +663,11 @@ class BaseMigration:
         return ComponentResult(
             success=False,
             errors=[
-                f"The run() method has not been implemented for {self.__class__.__name__}. "
-                f"Implement migration logic in run() and call via run_with_change_detection() "
-                f"for idempotent workflow support.",
+                (
+                    f"The run() method has not been implemented for {self.__class__.__name__}. "
+                    f"Implement migration logic in run() and call via run_with_change_detection() "
+                    f"for idempotent workflow support."
+                ),
             ],
             success_count=0,
             failed_count=0,

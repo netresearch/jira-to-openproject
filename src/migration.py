@@ -427,14 +427,18 @@ def _build_dry_run_banner(
         return (
             "error",
             [
-                "Refusing to run --dry-run: the following requested components "
-                "do NOT honour the flag and would write to OpenProject:",
+                (
+                    "Refusing to run --dry-run: the following requested components "
+                    "do NOT honour the flag and would write to OpenProject:"
+                ),
                 *(f"  - {name}" for name in unsafe),
                 "",
-                "Either restrict the run to dry-run-safe components "
-                f"({', '.join(sorted(DRY_RUN_SAFE_COMPONENTS))}), or pass "
-                "--allow-unsafe-dry-run to acknowledge that real writes will "
-                "still happen for the components above.",
+                (
+                    "Either restrict the run to dry-run-safe components "
+                    f"({', '.join(sorted(DRY_RUN_SAFE_COMPONENTS))}), or pass "
+                    "--allow-unsafe-dry-run to acknowledge that real writes will "
+                    "still happen for the components above."
+                ),
             ],
             True,
         )
