@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for :class:`src.models.mapping.WorkPackageMappingEntry`.
 
 ADR-002 phase 3c: the typed entry must accept both legacy shapes

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Convert Rails output to JSON.
 
 This script takes Ruby-formatted output and converts it to valid JSON.

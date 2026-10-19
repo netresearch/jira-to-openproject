@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """File transfer + temp script lifecycle for the OpenProject container.
 
 Phase 2d of ADR-002: continues the god-class split. The Rails-script

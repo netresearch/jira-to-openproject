@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Work Package Skeleton Migration - Phase 1 of two-phase migration.
 
 This migration creates work package skeletons with minimal data to establish

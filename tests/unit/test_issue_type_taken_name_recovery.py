@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Recovery from ``Name has already been taken`` errors in issue-type bulk create.
 
 The pre-check at the start of ``migrate_issue_types_via_rails`` queries OP

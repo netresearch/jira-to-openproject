@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Markdown converter for Jira wiki markup to OpenProject markdown.
 
 This module provides comprehensive conversion functionality for transforming

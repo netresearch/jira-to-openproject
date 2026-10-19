@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Mock time utilities for test performance optimization."""
 
 from unittest.mock import patch

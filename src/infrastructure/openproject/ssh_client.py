@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """SSHClient.
 
 Handles SSH operations to remote servers, including command execution and file transfers.
@@ -111,13 +114,13 @@ class SSHClient:
     def __init__(
         self,
         host: str,
+        *,
         user: str | None = None,
         key_file: str | None = None,
         connect_timeout: int = 10,
         operation_timeout: int = 60,
         retry_count: int = 3,
         retry_delay: float = 1.0,
-        *,
         auto_reconnect: bool = True,
     ) -> None:
         """Initialize the SSH client.

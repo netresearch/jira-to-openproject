@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Post-migration audit for a Jira project's WPs in OpenProject.
 
 Runs against a live OP instance (via the same tmux Rails console

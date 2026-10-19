@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira remote/web links to OpenProject by writing a description section.
 
 Renders a section "Remote Links" containing markdown bullets of [title](url).

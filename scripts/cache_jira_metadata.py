@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Cache Jira issue metadata for bulk update of OpenProject work packages.
 
 This script fetches priority, assignee, reporter, created, and updated fields

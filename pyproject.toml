@@ -166,6 +166,9 @@ disable_error_code = [
 target-version = "py314"
 fix = true
 line-length = 120
+# ruff >= 0.16 formats Python code fences inside Markdown. The docs carry
+# illustrative snippets whose layout is part of the prose; keep them as written.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["ALL"]

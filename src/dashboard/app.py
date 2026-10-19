@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """FastAPI web server for real-time migration progress dashboard."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for idempotent comment creation via provenance marker.
 
 Root cause: every re-run of work_packages_content added a fresh set of

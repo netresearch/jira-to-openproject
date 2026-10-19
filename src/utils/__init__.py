@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Utility modules for Jira to OpenProject migration tool.
 
 Delay heavy imports to avoid test-time dependency on optional libraries.

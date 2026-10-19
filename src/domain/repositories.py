@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Domain-layer repository Protocols (ADR-002 phase 4a).
 
 Phase 4a of ADR-002 introduces a storage abstraction for migration mappings.

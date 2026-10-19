@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Smoke tests ensuring legacy migration run() implementations exercise extract→map→load."""
 
 from unittest.mock import MagicMock

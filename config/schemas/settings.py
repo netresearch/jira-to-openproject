@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Main settings schema for Jira to OpenProject migration.
 
 This module defines the core Pydantic settings model with proper validation

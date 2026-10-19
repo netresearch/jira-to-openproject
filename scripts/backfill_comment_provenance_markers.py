@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Backfill provenance markers onto OP journal notes that lack them.
 
 After a correctly-authored migration run the OP journals have the right

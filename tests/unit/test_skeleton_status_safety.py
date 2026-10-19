@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Skeleton migration must not silently pick a status_id that doesn't exist.
 
 Issue #260 background

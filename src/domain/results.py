@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Discriminated-union step results for the j2o domain layer.
 
 Phase 8a of ADR-002 ("Polish") introduces a typed, three-arm result union

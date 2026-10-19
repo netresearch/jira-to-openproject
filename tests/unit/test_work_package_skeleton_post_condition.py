@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Post-condition guard for ``WorkPackageSkeletonMigration.run``.
 
 Live TEST audit (2026-05-06) caught a 100% attachment loss whose

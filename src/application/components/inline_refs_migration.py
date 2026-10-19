@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Rewrite inline image/file references to point to OpenProject attachments.
 
 A minimal Rails script is used to, per work package:

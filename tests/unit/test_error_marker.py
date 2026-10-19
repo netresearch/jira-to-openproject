@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit coverage for Rails console client error-marker handling.
 
 The original live-Rails integration test required a tmux session named

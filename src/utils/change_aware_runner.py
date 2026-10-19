@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Change-aware runner for migration components.
 
 Wraps a ``BaseMigration`` with the change-detection + entity-cache workflow

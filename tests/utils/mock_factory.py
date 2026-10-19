@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Factory functions for creating consistent mock objects for testing."""
 
 from typing import Any
@@ -158,6 +161,7 @@ def create_mock_jira_project(
 
 
 def create_mock_jira_issue(
+    *,
     key: str = "PROJ-1",
     summary: str = "Test Issue",
     description: str = "Test issue description",
@@ -248,6 +252,7 @@ def create_mock_openproject_project(
 
 
 def create_mock_openproject_work_package(
+    *,
     wp_id: int = 1,
     subject: str = "Test Work Package",
     description: str = "Test work package description",

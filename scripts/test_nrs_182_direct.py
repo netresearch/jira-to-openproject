@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Direct test for Bug #32 comprehensive fix on NRS-182
 Bypasses command-line interface and directly migrates just NRS-182
 """

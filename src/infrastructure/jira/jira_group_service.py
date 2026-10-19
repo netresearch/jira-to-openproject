@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira group directory queries.
 
 Phase 3g of ADR-002 continues the jira_client.py decomposition. The

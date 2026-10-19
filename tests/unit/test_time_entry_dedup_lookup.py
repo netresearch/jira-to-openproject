@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Bug C2: extracting worklog keys from OP-side TimeEntry payloads.
 
 The first attempt at the dedup filter looked up CF values by *name*

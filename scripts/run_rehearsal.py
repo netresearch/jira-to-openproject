@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Containerised rehearsal runner for Jira→OpenProject migrations.
 
 This helper script can spin up the mock Jira/OpenProject stack via

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Comprehensive Time Entry Migration for Jira to OpenProject migration.
 
 This module provides complete time tracking data migration capabilities:

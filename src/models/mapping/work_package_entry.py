@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Pydantic v2 model for the work-package mapping entry (ADR-002 phase 3c).
 
 Historically the ``work_package`` mapping persisted by

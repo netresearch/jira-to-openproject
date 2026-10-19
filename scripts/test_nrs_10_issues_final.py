@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Comprehensive test for 10 NRS issues including known problematic ones.
 Tests Bug #10, #15, and #16 fixes with enhanced logging.
 """

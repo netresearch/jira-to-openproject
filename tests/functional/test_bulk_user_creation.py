@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Placeholder for former bulk-user-creation tests.
 
 The tests that used to live here (``test_create_users_in_bulk``,

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
 
 from src.display import configure_logging
 
@@ -122,6 +124,7 @@ class CheckpointManager:
         migration_record_id: str,
         step_name: str,
         step_description: str,
+        *,
         entities_processed: int = 0,
         entities_total: int = 0,
         current_entity_id: str | None = None,

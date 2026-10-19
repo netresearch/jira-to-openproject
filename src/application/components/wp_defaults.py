@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 from typing import Any
 
 # Timeout in seconds for Rails console queries fetching default IDs

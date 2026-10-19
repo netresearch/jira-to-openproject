@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Pure mapping logic extracted from :mod:`src.application.components.work_package_migration`.
 
 This module is **Phase 1** of the ``WorkPackageMigration`` god-class

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Time entry (work log) migration as a standalone component.
 
 This component reads migrated work packages from the mapping file and then

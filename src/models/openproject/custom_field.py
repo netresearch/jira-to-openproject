@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Pydantic v2 model for OpenProject custom field payloads.
 
 The shape modelled here matches the ``CustomField.as_json`` dump produced

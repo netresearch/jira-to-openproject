@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Enhanced Audit Trail Migration for comprehensive history and activity stream preservation.
 
 This module provides advanced audit trail migration capabilities that:
@@ -1163,7 +1166,7 @@ class EnhancedAuditTrailMigrator:
                         continue
                 # Pick most recent candidate
                 if candidates:
-                    _mtime, latest = sorted(candidates, key=lambda x: x[0], reverse=True)[0]
+                    _mtime, latest = max(candidates, key=lambda x: x[0])
                     mig_dir = latest / "migration_data"
                     mig_dir.mkdir(parents=True, exist_ok=True)
                     data_handler.save(

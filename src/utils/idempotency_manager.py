@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Idempotency Key Manager for Batch API Operations.
 
 This module provides idempotency key support for all batch API endpoints to prevent

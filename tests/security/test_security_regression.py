@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Regression tests to ensure security fixes don't break existing functionality."""
 
 from datetime import datetime

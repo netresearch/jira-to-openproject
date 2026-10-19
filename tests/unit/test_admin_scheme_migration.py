@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for AdminSchemeMigration component.
 
 Covers happy path (user + group role assignment), unmapped role skip,

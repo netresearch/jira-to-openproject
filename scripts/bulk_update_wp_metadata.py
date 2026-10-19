@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Bulk update OpenProject work package metadata from Jira data.
 
 This script corrects priority, author, assignee, and timestamps for all

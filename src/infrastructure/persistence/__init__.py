@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Persistence adapters for j2o (ADR-002 phase 4a).
 
 Concrete implementations of the domain repository Protocols. Today this

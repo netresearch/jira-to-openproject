@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Filesystem-backed JSON store with logger-aware diagnostics.
 
 Replaces the ``_load_from_json`` / ``_save_to_json`` helpers that used to live

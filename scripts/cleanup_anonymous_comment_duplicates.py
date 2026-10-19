@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Remove duplicate comment journals produced by non-idempotent migration runs.
 
 Before the fix in PR #XXX (fix/wp-content-comment-idempotency) every

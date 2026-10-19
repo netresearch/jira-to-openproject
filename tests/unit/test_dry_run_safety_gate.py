@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Startup gate that keeps ``--dry-run`` honest.
 
 Issue #260 background

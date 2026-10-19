@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 r"""Work package migration module for Jira to OpenProject migration.
 Handles the migration of issues from Jira to work packages in OpenProject.
 
@@ -1863,6 +1866,7 @@ class WorkPackageMigration(BaseMigration):
 
     def _fetch_issues_with_retry(
         self,
+        *,
         jql: str,
         start_at: int,
         max_results: int,

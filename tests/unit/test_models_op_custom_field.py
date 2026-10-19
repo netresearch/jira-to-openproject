@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for :class:`src.models.openproject.OpCustomField`."""
 
 from __future__ import annotations

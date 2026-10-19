@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Integration tests for Jira client.
 
 These tests verify that the JiraClient can connect to a real Jira instance,

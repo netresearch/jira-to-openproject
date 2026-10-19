@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Bug D2: WP migration must populate ALL provenance CFs, not just Origin Key.
 
 After Bug D's startup bootstrap, all 8 ``WorkPackageCustomField`` provenance

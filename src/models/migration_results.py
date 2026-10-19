@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migration result models for tracking overall migration operations."""
 
 from datetime import UTC, datetime

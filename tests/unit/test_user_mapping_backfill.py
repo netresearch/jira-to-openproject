@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Bug A2: back-fill ``openproject_id`` for users still ``matched_by='none'``.
 
 After the initial probe in ``create_user_mapping`` builds the mapping,

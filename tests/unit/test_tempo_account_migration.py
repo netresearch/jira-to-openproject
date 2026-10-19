@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for TempoAccountMigration component.
 
 This component does not extend BaseMigration; it has standalone helper

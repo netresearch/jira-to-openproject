@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Configuration package for Jira to OpenProject migration.
 
 This package provides a modern, type-safe configuration system using Pydantic v2

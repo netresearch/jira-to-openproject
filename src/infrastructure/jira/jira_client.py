@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira API client for the migration project.
 
 Provides a clean, exception-based interface for Jira resource access.
@@ -710,6 +713,7 @@ class JiraClient:
 
     def get_tempo_work_logs(
         self,
+        *,
         issue_key: str | None = None,
         project_key: str | None = None,
         date_from: str | None = None,

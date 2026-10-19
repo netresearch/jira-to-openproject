@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Quick data QA summary for Jira → OpenProject migrations.
 
 The script inspects cached migration artifacts (under ``var/data`` by default)

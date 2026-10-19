@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """``cleanup_script_files`` must run ``docker exec rm`` as root.
 
 Same root cause as ``openproject_bulk_create_service._cleanup_container_temps``:

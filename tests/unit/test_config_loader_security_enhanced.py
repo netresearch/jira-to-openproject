@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Comprehensive security-focused tests for the configuration loader."""
 
 import logging
@@ -74,6 +77,7 @@ class TestConfigLoaderSecurityEnhanced:
         mock_load_yaml,
         mock_apply_env,
         mock_load_dotenv,
+        *,
         mock_config_data,
         caplog,
     ) -> None:
@@ -114,6 +118,7 @@ class TestConfigLoaderSecurityEnhanced:
         mock_load_yaml,
         mock_apply_env,
         mock_load_dotenv,
+        *,
         mock_config_data,
         caplog,
     ) -> None:

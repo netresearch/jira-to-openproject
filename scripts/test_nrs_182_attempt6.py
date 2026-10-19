@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test migration of NRS-182 with Bug #23 fix (Ruby output enabled)"""
 
 import os

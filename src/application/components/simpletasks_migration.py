@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Simple Tasklists checklist items into OpenProject work packages.
 
 Source: Jira add-on 'Simple Tasklists' (lightweight inline tasks, not Jira subtasks).

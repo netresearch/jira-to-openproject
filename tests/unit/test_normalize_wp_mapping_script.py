@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for ``scripts/normalize_wp_mapping.py``.
 
 The script is loaded via :mod:`importlib` because the ``scripts/``

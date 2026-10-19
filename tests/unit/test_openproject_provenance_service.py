@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for OpenProjectProvenanceService.
 
 Focused regression tests for the bug Copilot caught in PR #112:

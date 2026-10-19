@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """In-memory :class:`MappingRepository` for unit tests (ADR-002 phase 4a).
 
 PR 4a introduces the :class:`src.domain.repositories.MappingRepository`

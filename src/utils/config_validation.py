@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Security-focused configuration validation utilities for performance components.
 
 This module provides comprehensive input validation with bounds checking, type validation,

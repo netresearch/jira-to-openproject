@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Roles, groups, and project-membership helpers for the OpenProject Rails console.
 
 Phase 2l of ADR-002 continues the openproject_client.py god-class

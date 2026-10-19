@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira Issue Security Levels to OpenProject via CF fallback.
 
 Creates/ensures a WorkPackage custom field "Security Level" (string) and writes

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Comprehensive tests for TimeEntryMigrator class."""
 
 import json
@@ -876,14 +879,14 @@ class TestTimeEntryMigratorEdgeCases:
         # Make the directory read-only to simulate permission error
         import os
 
-        os.chmod(tmp_data_dir, 0o444)
+        os.chmod(tmp_data_dir, 0o500)  # owner may read and enter, nobody may write
 
         # Act & Assert
         # Should not raise exception, just log warning
         migrator._save_extracted_work_logs()
 
         # Cleanup
-        os.chmod(tmp_data_dir, 0o755)
+        os.chmod(tmp_data_dir, 0o700)
 
     @patch("src.utils.time_entry_migrator.datetime")
     def test_timing_measurements_accuracy(self, mock_datetime, migrator) -> None:

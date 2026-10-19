@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Issue #260: only the first comment per work package was migrated.
 
 Two compounding defects dropped comments silently:

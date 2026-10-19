@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Utility for selective custom field project enablement.
 
 Custom fields should only be visible in projects where they have non-empty,

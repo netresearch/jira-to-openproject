@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for the configuration loader."""
 
 import os
@@ -76,6 +79,7 @@ def test_config_loader_loads_from_config_file(
     mock_load_yaml,
     mock_load_db,
     mock_apply_env,
+    *,
     test_env,
     config_helper,
     temp_dir,
@@ -153,6 +157,7 @@ def test_config_loader_file_overrides_environment(
     mock_load_yaml,
     mock_load_db,
     mock_apply_env,
+    *,
     test_env,
     config_helper,
     temp_dir,

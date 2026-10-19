@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Pydantic v2 models for Jira issue payloads.
 
 The migration code consumes Jira issues from two boundaries:

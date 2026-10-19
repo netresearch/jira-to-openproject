@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Delete legacy ``noname`` OP attachments left over from pre-#215 runs.
 
 Before [PR #215](https://github.com/netresearch/jira-to-openproject/pull/215),

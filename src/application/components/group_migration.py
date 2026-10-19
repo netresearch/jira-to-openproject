@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Synchronise Jira groups and project role memberships into OpenProject.
 
 Phase 7e notes

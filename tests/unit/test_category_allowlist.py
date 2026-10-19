@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """``Category`` must be in the bulk-create model allowlist.
 
 ``components_migration`` migrates Jira components into OP categories via

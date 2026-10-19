@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Script to update descriptions for NRS work packages that were migrated without descriptions.
 This fixes the bug where jira_id/jira_key in attrs caused assign_attributes to fail silently.
 """

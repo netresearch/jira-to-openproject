@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Preserve attachment author and timestamp in OpenProject.
 
 Reads Jira attachments for mapped issues, resolves OP user IDs for authors,

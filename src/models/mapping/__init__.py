@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Mapping-side Pydantic models and legacy mapping helpers (ADR-002 phase 3).
 
 ``JiraToOPMapping`` is intentionally NOT re-exported here. Its module

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """JSON-file-backed :class:`MappingRepository` adapter (ADR-002 phase 4a).
 
 Mappings are stored one-per-file under a configurable data directory

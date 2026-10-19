@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for minor quality improvements in Enhanced User Association Migrator."""
 
 from unittest.mock import MagicMock, patch

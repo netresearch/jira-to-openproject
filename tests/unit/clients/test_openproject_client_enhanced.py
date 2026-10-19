@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Enhanced unit tests for OpenProjectClient based on Zen TestGen expert analysis.
 These tests focus on the most critical and fragile areas of the class:
 - Complex logic for parsing unstructured console output

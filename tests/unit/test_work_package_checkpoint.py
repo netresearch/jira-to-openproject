@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for WorkPackageMigration checkpoint helpers."""
 
 from __future__ import annotations

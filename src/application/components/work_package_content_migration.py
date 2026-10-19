@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Work Package Content Migration - Phase 2 of two-phase migration.
 
 This migration populates work package content using the complete Jira→OpenProject

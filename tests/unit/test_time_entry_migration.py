@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit tests for TimeEntryMigration component.
 
 Covers preflight (Rails client missing), the no-mapping skip path, the

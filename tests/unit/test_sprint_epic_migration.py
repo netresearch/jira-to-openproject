@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 import pytest
 
 from src.application.components.sprint_epic_migration import SPRINT_CF_NAME, SprintEpicMigration

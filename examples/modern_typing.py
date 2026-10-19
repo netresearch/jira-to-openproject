@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Modern Python Type Annotations Example.
 
 This file demonstrates best practices for type annotations in Python 3.9+ projects.

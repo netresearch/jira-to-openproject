@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for ``src.config`` Phase 6a inert-import + explicit ``bootstrap()``.
 
 These tests pin the contract introduced by ADR-002 Phase 6a:

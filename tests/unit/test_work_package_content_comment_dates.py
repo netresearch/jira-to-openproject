@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Comment journals must preserve the original Jira comment date (issue #260).
 
 Issue #260 background

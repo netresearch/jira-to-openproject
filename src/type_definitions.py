@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Type definitions for Jira to OpenProject migration.
 
 This module contains data classes and type definitions used throughout

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Workflow-detail endpoints (transitions / statuses) must treat unfetchable cases quietly.
 
 The Jira Server REST endpoints

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """CLI tools for configuration management and validation.
 
 This module provides command-line tools for managing and validating

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Work-package content helpers for the OpenProject Rails console.
 
 Phase 2s of ADR-002 continues the openproject_client.py god-class

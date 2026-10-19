@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Jira Tempo plugin queries.
 
 Phase 3f of ADR-002 continues the jira_client.py decomposition. The
@@ -189,6 +192,7 @@ class JiraTempoService:
 
     def get_tempo_work_logs(
         self,
+        *,
         issue_key: str | None = None,
         project_key: str | None = None,
         date_from: str | None = None,

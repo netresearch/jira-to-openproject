@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Project-related read operations against the OpenProject Rails console.
 
 Phase 2k of ADR-002 continues the openproject_client.py god-class

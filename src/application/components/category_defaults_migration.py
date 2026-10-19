@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Set default assignee for Categories from Jira Component leads.
 
 For each project, fetch Jira components and their leads, map to OP users, find

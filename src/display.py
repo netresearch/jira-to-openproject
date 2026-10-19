@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Centralized display utilities for console output and progress tracking.
 
 Provides standardized progress bars and logging displays using rich.

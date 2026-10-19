@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Rails console runner — parsing, connectivity, and the ``execute*`` family.
 
 Phases 2e-2i of ADR-002 collected the Rails-console helpers off

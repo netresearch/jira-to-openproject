@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Enhanced progress tracking system for migration operations.
 
 This module provides comprehensive progress tracking with real-time reporting,

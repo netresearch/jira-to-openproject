@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Priority migration: map Jira priorities to OpenProject IssuePriority and set on WPs."""
 
 from __future__ import annotations

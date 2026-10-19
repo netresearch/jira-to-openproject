@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Regression test for the work-package mapping facade hand-off (issue #260).
 
 GitHub issue #260: after ``work_packages_skeleton`` created ~11k work

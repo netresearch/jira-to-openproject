@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Newly-created users must have their OP id written back to the mapping.
 
 Bug A: ``UserMigration.create_missing_users`` calls ``bulk_create_records``

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Direct bulk update via SSH - bypasses tmux session issues.
 
 This script transfers data via stdin to the rails runner for reliable execution.

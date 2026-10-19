@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Branded identifier types for the j2o domain layer.
 
 Phase 3a of ADR-002 introduces a thin nominal type layer over the primitive

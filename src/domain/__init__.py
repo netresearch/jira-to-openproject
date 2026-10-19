@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Domain layer for j2o (ADR-002 phase 3a).
 
 This package will host the framework-agnostic core of the migration tool —

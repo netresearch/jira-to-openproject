@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 from src.display import configure_logging
 
 """Efficient batching system for API calls in migration components.

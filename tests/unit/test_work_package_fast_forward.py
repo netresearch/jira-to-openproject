@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for fast-forward helpers in WorkPackageMigration."""
 
 from __future__ import annotations

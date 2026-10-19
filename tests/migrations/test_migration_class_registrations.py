@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Test suite for migration class registrations with @register_entity_types decorator.
 
 This module verifies that the newly decorated migration classes (AccountMigration,

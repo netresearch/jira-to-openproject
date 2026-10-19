@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Composable decorators for :class:`OpenProjectClient`.
 
 Phase 8b of ADR-002 replaces the inheritance-based ``EnhancedOpenProjectClient``

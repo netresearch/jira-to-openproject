@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Data mapping module for Jira to OpenProject migration.
 
 Defines the mapping strategies between Jira and OpenProject data models.

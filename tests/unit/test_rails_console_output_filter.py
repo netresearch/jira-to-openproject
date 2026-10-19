@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Unit coverage for the output filter that strips Rails console noise.
 
 When the persistent Rails console executes a multi-line wrapped script

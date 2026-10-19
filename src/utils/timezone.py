@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 from datetime import UTC as _UTC
 
 # Shared UTC timezone constant for consistent timestamp handling across the app

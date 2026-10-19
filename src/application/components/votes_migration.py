@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Migrate Jira votes count to OpenProject via integer CF fallback.
 
 Creates/ensures a WorkPackage custom field "Votes" (int) and writes the

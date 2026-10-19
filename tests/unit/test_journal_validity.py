@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for journal validity period handling and PG::ExclusionViolation prevention.
 
 This module tests the journal creation logic to ensure:

@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 from unittest.mock import MagicMock
 
 from src.utils.time_entry_migrator import TimeEntryMigrator

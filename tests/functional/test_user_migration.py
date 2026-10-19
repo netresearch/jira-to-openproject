@@ -1,3 +1,6 @@
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Tests for the user migration component."""
 
 import json
@@ -153,7 +156,7 @@ class TestUserMigration(unittest.TestCase):
     @patch("src.application.components.user_migration.ProgressTracker")
     @patch("os.path.exists")
     @patch("builtins.open", new_callable=mock_open)
-    def test_create_user_mapping(
+    def test_create_user_mapping(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
         mock_exists: MagicMock,

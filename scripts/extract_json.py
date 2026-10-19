@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Extract JSON from raw tmux output.
 
 This script extracts JSON data from the raw tmux output file

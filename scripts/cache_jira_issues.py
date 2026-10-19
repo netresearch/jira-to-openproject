@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Cache all Jira issues for relation migration to avoid session timeout."""
 
 from __future__ import annotations

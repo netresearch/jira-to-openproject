@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
 """Validate NRS-182 journal migration using actual mapping structure (by Jira ID)"""
 
 import json
