@@ -9,7 +9,7 @@ interface for file creation, tracking, and cleanup.
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import json
 import secrets
 import shutil
@@ -197,7 +197,7 @@ class FileManager:
             A unique ID string
 
         """
-        timestamp = datetime.datetime.now(tz=datetime.UTC)
+        timestamp = dt.datetime.now(tz=dt.UTC)
         microseconds = timestamp.microsecond
         timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
         random_suffix = secrets.token_hex(2)
@@ -454,7 +454,7 @@ class FileManager:
 
         """
         debug_id = self.generate_unique_id()
-        timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+        timestamp = dt.datetime.now(tz=dt.UTC).strftime("%Y%m%d_%H%M%S")
         debug_dir = self.debug_dir / f"debug_{timestamp}_{debug_id}"
         debug_dir.mkdir(parents=True, exist_ok=True)
         return debug_id
