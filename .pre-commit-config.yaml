@@ -39,7 +39,7 @@ repos:
   # default file-by-file invocation can silently skip pushes that don't
   # change ``src/``). This mirrors how CI invokes ``mypy src/``.
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.20.2
+    rev: v2.4.0
     hooks:
       - id: mypy
         name: mypy (src/)
