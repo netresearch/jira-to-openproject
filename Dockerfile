@@ -65,6 +65,11 @@ RUN useradd -m -u 1000 appuser
 # Copy installed venv and sources from build stage
 COPY --from=build --chown=appuser:appuser /app /app
 
+# var/ is excluded by .dockerignore, and WORKDIR left /app itself root-owned,
+# so appuser could not create it at startup. j2o writes logs, data and
+# checkpoints only below var/; compose bind-mounts the host tree over /app.
+RUN install -d -o appuser -g appuser /app/var
+
 USER appuser
 
 # The container's CMD is `sleep infinity` — operators exec `j2o ...`
