@@ -109,8 +109,9 @@ exec: ## Execute command in dev container (use CMD="command here")
 	fi
 	docker compose exec app $(CMD)
 
-install: ## Rebuild the app image after dependency changes (its venv lives in the image at /opt/venv)
+install: ## Rebuild the app image after dependency changes and recreate the app container (its venv lives in the image at /opt/venv)
 	docker compose build app
+	docker compose up -d app
 
 install-test: ## Prepare the test container and its dependencies
 	docker compose --profile test up -d test
