@@ -30,14 +30,18 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # docker.io intentionally omitted - uses SSH-based remote Docker client
 
-# Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
+# Install uv from its pinned release image (no unverified installer script)
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
-# Dependency layer (cached)
+# Dependency layer (cached): locked dependencies incl. the dev and test
+# extras, installed into the system interpreter. compose.yml bind-mounts the
+# source tree over /app at test time, so an /app/.venv would be hidden.
+# --inexact keeps the base image's own packages (pip) in place.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project
+RUN UV_PROJECT_ENVIRONMENT=/usr/local \
+    uv sync --frozen --inexact --no-dev --extra dev --extra test --no-install-project
 
 # Source layer
 COPY --chown=appuser:appuser . .
@@ -46,9 +50,9 @@ COPY --chown=appuser:appuser . .
 RUN mkdir -p /app/var/logs /app/var/data /app/var/run && \
     chown -R appuser:appuser /app/var
 
-# Install project with dev+test extras
-RUN uv pip install --system . && \
-    uv pip install --system '.[dev,test]'
+# Install the project itself; its dependencies come from the lockfile above
+RUN UV_PROJECT_ENVIRONMENT=/usr/local \
+    uv sync --frozen --inexact --no-dev --extra dev --extra test
 
 USER appuser
 

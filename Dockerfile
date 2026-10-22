@@ -21,9 +21,8 @@ RUN apt-get update \
         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-RUN --mount=type=cache,target=/root/.cache/uv \
-    python -m pip install --no-cache-dir --only-binary :all: uv
+# Install uv from its pinned release image (no unlocked pip resolution)
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
 
 # Resolve + install dependencies to /install
 COPY pyproject.toml uv.lock ./
