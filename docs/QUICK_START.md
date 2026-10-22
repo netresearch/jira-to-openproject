@@ -69,7 +69,7 @@ POSTGRES_PASSWORD=secure_password_here
 ### Step 3: Start Development Services
 
 ```bash
-# Start Docker services (PostgreSQL, Redis)
+# Start Docker services (app container, PostgreSQL, Redis)
 make up
 
 # Verify services are running
