@@ -89,6 +89,8 @@ make type-check
 make start-rails ATTACH=true
 ```
 
+The compose `app` service bind-mounts the repository over `/app`, so source edits on the host take effect in the container without a rebuild. Its Python environment lives in the image at `/opt/venv`, outside the mount; a host `.venv` is neither needed nor used inside the container. After a dependency change in `pyproject.toml`/`uv.lock`, rebuild the image with `make install`.
+
 ### Migration Execution
 
 ```bash
