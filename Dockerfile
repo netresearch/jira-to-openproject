@@ -8,7 +8,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 
 WORKDIR /app
 
@@ -24,7 +25,8 @@ RUN apt-get update \
 # Install uv from its pinned release image (no unlocked pip resolution)
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
 
-# Resolve + install dependencies to /install
+# Resolve + install dependencies into /opt/venv. The venv lives outside /app
+# so compose's bind mount of the source tree over /app does not hide it.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
@@ -45,7 +47,7 @@ LABEL maintainer="Netresearch DTT GmbH <sebastian.mendel@netresearch.de>" \
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/app/.venv/bin:${PATH}"
+    PATH="/opt/venv/bin:${PATH}"
 
 WORKDIR /app
 
@@ -62,7 +64,10 @@ RUN apt-get update \
 
 RUN useradd -m -u 1000 appuser
 
-# Copy installed venv and sources from build stage
+# Copy the venv and the sources from the build stage. The project is
+# installed editable, so the venv imports it from /app: the copied sources
+# here, or the host tree when compose bind-mounts it over /app.
+COPY --from=build /opt/venv /opt/venv
 COPY --from=build --chown=appuser:appuser /app /app
 
 # var/ is excluded by .dockerignore, and WORKDIR left /app itself root-owned,

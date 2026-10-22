@@ -23,7 +23,8 @@ services:
     env_file:
       - .env
     volumes:
-      # Mount source code for live editing
+      # Mount source code for live editing. The Python environment lives in
+      # the image at /opt/venv, outside this mount, so no host .venv is needed.
       # IMPORTANT: Ensure DOCKER_UID/GID in your .env file match your
       # host user's UID/GID (`id -u`/`id -g`) to avoid permission issues
       - .:/app
