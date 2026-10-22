@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit install-irbrc start-rails attach-rails check-architecture
+.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit install-irbrc start-rails attach-rails check-architecture config
 
 # Default target
 help: ## Show this help message
@@ -62,37 +62,42 @@ check-env: ## Validate required environment variables for services
 
 ## mocks configured via compose test profile
 
+# The app service sits in the app/dev compose profiles, so a plain
+# `docker compose up` (as in CI) leaves it out. The development-stack targets
+# opt in to the dev profile: app plus the services without a profile.
+DEV_COMPOSE := docker compose --profile dev
+
 build: ## Build development containers
-	docker compose build
+	$(DEV_COMPOSE) build
 
 rebuild: ## Rebuild containers without cache
-	docker compose build --no-cache
+	$(DEV_COMPOSE) build --no-cache
 
 up dev: ## Start the development stack (app + default services)
-	docker compose up -d
+	$(DEV_COMPOSE) up -d
 
 
 down dev-down: ## Stop all services
-	docker compose down
+	$(DEV_COMPOSE) down
 
 restart: ## Restart development environment
-	docker compose restart
+	$(DEV_COMPOSE) restart
 
 stop: ## Stop services without removing containers
-	docker compose stop
+	$(DEV_COMPOSE) stop
 
 # =============================================================================
 # Monitoring and Logs
 # =============================================================================
 
 logs: ## Show logs from all services
-	docker compose logs -f
+	$(DEV_COMPOSE) logs -f
 
 logs-app: ## Show logs from app service only
 	docker compose logs -f app
 
 status ps: ## Show running containers
-	docker compose ps
+	$(DEV_COMPOSE) ps
 
 # =============================================================================
 # Development Tools
@@ -259,13 +264,13 @@ local-format: ## Format code locally
 # =============================================================================
 
 clean: ## Clean up containers, volumes, and cache
-	docker compose down -v --remove-orphans
+	$(DEV_COMPOSE) down -v --remove-orphans
 	docker compose --profile test down -v --remove-orphans
 	docker system prune -f
 	docker volume prune -f
 
 clean-all: ## Nuclear option: remove everything including images
-	docker compose down -v --remove-orphans --rmi all
+	$(DEV_COMPOSE) down -v --remove-orphans --rmi all
 	docker system prune -af
 	docker volume prune -f
 
@@ -274,10 +279,10 @@ clean-all: ## Nuclear option: remove everything including images
 # =============================================================================
 
 pull: ## Pull latest images
-	docker compose pull
+	$(DEV_COMPOSE) pull
 
 config: ## Show docker compose configuration
-	docker compose config
+	$(DEV_COMPOSE) config
 
 # =============================================================================
 # Development Workflow Helpers
