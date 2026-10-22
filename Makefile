@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit install-irbrc start-rails attach-rails check-architecture
+.PHONY: help build up down restart logs shell test clean dev status ps exec install lint format type-check pre-commit install-irbrc start-rails attach-rails check-architecture config
 
 # Default target
 help: ## Show this help message
