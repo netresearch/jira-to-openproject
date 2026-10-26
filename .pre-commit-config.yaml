@@ -24,7 +24,7 @@ repos:
   # Ruff replaces black + isort + flake8 + pyupgrade. Keep the version pin in
   # sync with pyproject.toml's [project.optional-dependencies] dev pin.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.1
+    rev: v0.17.2
     hooks:
       - id: ruff
         name: ruff lint
