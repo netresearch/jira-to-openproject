@@ -105,6 +105,8 @@ var/               → Runtime data, logs, caches, checkpoints (gitignored)
 
 - **Python 3.14 PEP 649** — NEVER enable ruff's `TC001`/`TC002`/`TC003`; annotations are evaluated eagerly and `TYPE_CHECKING`-only imports break at runtime.
 - **Mappings proxy** — `BaseMigration.__init__` must use `self.mappings = config.mappings` (proxy), not `config.get_mappings()`; tests monkeypatch the proxy.
+- **Mappings facade caches per stem** — `Mappings._read` (`src/mappings/mappings.py`) caches each stem in `_overrides` on first access and never re-reads disk, and `migration.py` seeds every stem early (empty on a cold run). A component that writes a mapping file directly must also publish it via `config.mappings.set_mapping(...)` (see `_finalize_mapping` in `work_package_skeleton_migration.py`); otherwise facade readers keep the cached empty dict.
+- **Structured Rails reads use the JSON file path** — `execute_query` sends the command through `_send_command_to_tmux` and returns the raw tmux pane tail, which can still hold output of an earlier command. Do not parse it structurally (`int(result)`, `json.loads`); use `execute_json_query` / `execute_query_to_json_file`, which write to a container tempfile and read it back.
 - **Never commit secrets** — credentials belong in `.env.local`; verify via `git diff` before staging.
 - **Never work on main** — always land changes through feature branches and PRs.
 
