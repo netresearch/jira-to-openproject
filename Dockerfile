@@ -23,7 +23,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv from its pinned release image (no unlocked pip resolution)
-COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.8 /uv /uvx /usr/local/bin/
 
 # Resolve + install dependencies into /opt/venv. The venv lives outside /app
 # so compose's bind mount of the source tree over /app does not hide it.
