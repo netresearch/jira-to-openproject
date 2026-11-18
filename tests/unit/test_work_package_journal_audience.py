@@ -14,25 +14,23 @@ from src.infrastructure.openproject.openproject_bulk_create_service import Legac
 
 
 @pytest.mark.parametrize("restriction", [{"visibility": {"type": "group", "value": "team"}}, {"jsdPublic": True}])
-def test_ordinary_journals_keep_only_eligible_history(restriction):
-    marker = "private-history-marker"
-    held = {"field": "description", "fromString": "old", "toString": marker}
-    visible = {"field": "summary", "fromString": "Before", "toString": "After"}
-    histories = [
-        {"created": "2024-01-01T09:00:00Z", "items": [held], **restriction},
-        {"created": "2024-01-02T09:00:00Z", "items": [dict(held, **restriction), visible]},
-    ]
+@pytest.mark.parametrize("sdk", [True, False])
+def test_legacy_create_refuses_source_history_before_target_calls(restriction, sdk):
+    held = {"field": "description", "toString": "private-history-marker"}
+    history = {
+        "histories": [
+            {"items": [held], **restriction},
+            {"items": [dict(held, **restriction), {"field": "summary", "toString": "Public"}]},
+        ]
+    }
+    issue = SimpleNamespace(key="JOURNAL-1", raw={"changelog": history}) if sdk else {"changelog": history}
     migration = WorkPackageMigration.__new__(WorkPackageMigration)
     migration.logger = Mock()
-    migration.user_mapping = {}
-    migration.enhanced_audit_trail_migrator = Mock()
-    migration.enhanced_audit_trail_migrator.extract_changelog_from_issue.return_value = histories
-    issue = SimpleNamespace(key="JOURNAL-1")
-    operations = migration._journal_entries(issue)
-    assert len(operations) == 1
-    assert operations[0]["data"]["items"] == [visible]
-    assert marker not in repr(operations)
-    assert marker not in repr(migration.logger.mock_calls)
+    migration.op_client = Mock()
+    with pytest.raises(LegacyJournalReplayError):
+        migration.prepare_work_package(issue, 7)
+    assert not migration.op_client.mock_calls
+    assert not migration.logger.mock_calls
 
 
 @pytest.mark.parametrize("existing", [True, False])
