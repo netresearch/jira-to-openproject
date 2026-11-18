@@ -137,8 +137,9 @@ def test_rejects_missing_requested_epic_field_and_stale_internal_link():
 def test_refuses_to_reuse_an_archive_symlink(tmp_path):
     identity = x25519.Identity.generate()
     original = tmp_path / "original.age"
-    write_snapshot(original, sample(), identity)
+    snapshot = sample()
+    write_snapshot(original, snapshot, identity)
     alias = tmp_path / "alias.age"
     alias.symlink_to(original)
     with pytest.raises(ValueError, match="regular archive destination"):
-        write_snapshot(alias, sample(), identity)
+        write_snapshot(alias, snapshot, identity)
