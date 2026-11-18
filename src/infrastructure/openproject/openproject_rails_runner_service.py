@@ -555,9 +555,7 @@ class OpenProjectRailsRunnerService:
             self._run_staged_query(script, timeout or 120)
             return
         try:
-            output = self._client.rails_client.execute(
-                f"load '{escape_ruby_single_quoted(script)}'", timeout=timeout
-            )
+            output = self._client.rails_client.execute(f"load '{escape_ruby_single_quoted(script)}'", timeout=timeout)
             self.check_console_output_for_errors(output or "", context="structured Rails script")
         except ConsoleNotReadyError:
             if not config.migration_config.get("enable_runner_fallback", False):
