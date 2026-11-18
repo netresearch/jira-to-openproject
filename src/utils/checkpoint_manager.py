@@ -4,6 +4,9 @@
 
 from src.display import configure_logging
 
+_MISSING_CHECKPOINT_MESSAGE = "Checkpoint not found: %s"
+
+
 """Checkpoint management system for resilient migration operations.
 
 This module provides functionality to:
@@ -190,7 +193,7 @@ class CheckpointManager:
         """Mark a checkpoint as in progress."""
         checkpoint = self._active_checkpoints.get(checkpoint_id)
         if not checkpoint:
-            self.logger.error("Checkpoint not found: %s", checkpoint_id)
+            self.logger.error(_MISSING_CHECKPOINT_MESSAGE, checkpoint_id)
             return
 
         checkpoint["status"] = CheckpointStatus.IN_PROGRESS.value
@@ -214,7 +217,7 @@ class CheckpointManager:
         """
         checkpoint = self._active_checkpoints.get(checkpoint_id)
         if not checkpoint:
-            self.logger.error("Checkpoint not found: %s", checkpoint_id)
+            self.logger.error(_MISSING_CHECKPOINT_MESSAGE, checkpoint_id)
             return
 
         checkpoint["status"] = CheckpointStatus.COMPLETED.value
@@ -253,7 +256,7 @@ class CheckpointManager:
         """
         checkpoint = self._active_checkpoints.get(checkpoint_id)
         if not checkpoint:
-            self.logger.error("Checkpoint not found: %s", checkpoint_id)
+            self.logger.error(_MISSING_CHECKPOINT_MESSAGE, checkpoint_id)
             return
 
         checkpoint["status"] = CheckpointStatus.FAILED.value

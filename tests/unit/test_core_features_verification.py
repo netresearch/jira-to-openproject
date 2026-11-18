@@ -210,15 +210,20 @@ class TestJ2O1MetadataPreservation:
 
     def test_j2o_provenance_fields_created(self):
         """Verify J2O provenance custom fields are created."""
-        wp_migration_file = (
-            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
-        )
-        wp_source = wp_migration_file.read_text()
+        from unittest.mock import Mock
 
-        # Verify J2O provenance fields are defined
-        assert "J2O Origin System" in wp_source
-        assert "J2O Origin Key" in wp_source
-        assert "J2O Origin URL" in wp_source or "J2O Origin ID" in wp_source
+        from src.application.components.work_package_migration import WorkPackageMigration
+
+        migration = object.__new__(WorkPackageMigration)
+        migration.op_client = Mock()
+        migration.logger = Mock()
+        migration.op_client.ensure_custom_field.return_value = {"id": 12}
+        migration._ensure_provenance_field_ids()
+        registered = {call.args[0] for call in migration.op_client.ensure_custom_field.call_args_list}
+        assert {"J2O Origin System", "J2O Origin Key", "J2O Origin URL", "J2O Origin ID"} <= registered
+        migration.op_client.ensure_custom_field.reset_mock()
+        migration._ensure_provenance_field_ids()
+        migration.op_client.ensure_custom_field.assert_not_called()
 
     def test_user_associations_preserved(self):
         """Verify user associations (assignee, reporter, watchers) are preserved."""

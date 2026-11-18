@@ -31,6 +31,9 @@ from src.config import get_path, jira_config, logger, migration_config
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, OpenProjectError
 
+_TEMPO_ACCOUNT_MAPPING_FILE = "tempo_account_mapping.json"
+
+
 config = SimpleNamespace(logger=logger)
 
 from src.display import ProgressTracker
@@ -200,7 +203,7 @@ class TempoAccountMigration:
 
         # Save mapping to file
         self.account_mapping = mapping
-        self._save_to_json(mapping, "tempo_account_mapping.json")
+        self._save_to_json(mapping, _TEMPO_ACCOUNT_MAPPING_FILE)
 
         # Log statistics
         total_accounts = len(mapping)
@@ -373,7 +376,7 @@ class TempoAccountMigration:
                 tracker.increment()
 
         # Save updated mapping to file
-        self._save_to_json(self.account_mapping, "tempo_account_mapping.json")
+        self._save_to_json(self.account_mapping, _TEMPO_ACCOUNT_MAPPING_FILE)
 
         # Log statistics
         total_accounts = len(self.account_mapping)
@@ -401,7 +404,7 @@ class TempoAccountMigration:
 
         """
         if not self.account_mapping:
-            mapping_path = Path(self.data_dir) / "tempo_account_mapping.json"
+            mapping_path = Path(self.data_dir) / _TEMPO_ACCOUNT_MAPPING_FILE
             if Path(mapping_path).exists():
                 with mapping_path.open() as f:
                     self.account_mapping = json.load(f)

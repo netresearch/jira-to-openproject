@@ -35,16 +35,20 @@ from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 
+_PROJECT_ADMIN_ROLE = "Project admin"
+_PROJECT_MEMBER_ROLE = "Project member"
+
+
 ROLE_NAME_MAPPING = {
-    "administrators": ["Project admin"],
-    "project administrators": ["Project admin"],
-    "project admins": ["Project admin"],
-    "admin": ["Project admin"],
-    "admins": ["Project admin"],
-    "developers": ["Project member"],
-    "users": ["Project member"],
-    "members": ["Project member"],
-    "team members": ["Project member"],
+    "administrators": [_PROJECT_ADMIN_ROLE],
+    "project administrators": [_PROJECT_ADMIN_ROLE],
+    "project admins": [_PROJECT_ADMIN_ROLE],
+    "admin": [_PROJECT_ADMIN_ROLE],
+    "admins": [_PROJECT_ADMIN_ROLE],
+    "developers": [_PROJECT_MEMBER_ROLE],
+    "users": [_PROJECT_MEMBER_ROLE],
+    "members": [_PROJECT_MEMBER_ROLE],
+    "team members": [_PROJECT_MEMBER_ROLE],
     "viewers": ["Viewer", "Reader"],
     "observers": ["Viewer", "Reader"],
 }

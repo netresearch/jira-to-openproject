@@ -39,6 +39,8 @@ from typing import Any
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
+_RESULT_SUFFIX = ".result"
+
 
 class OpenProjectMembershipService:
     """Roles + groups + project-membership helpers for ``OpenProjectClient``."""
@@ -104,14 +106,14 @@ class OpenProjectMembershipService:
         # ``/tmp`` paths derived from the filename.
         unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
         payload_path = temp_dir / f"group_memberships_{unique_suffix}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
+        result_path = temp_dir / (payload_path.name + _RESULT_SUFFIX)
 
         try:
             with payload_path.open("w", encoding="utf-8") as handle:
                 json.dump(assignments, handle)
 
             container_input = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
+            container_output = Path("/tmp") / (payload_path.name + _RESULT_SUFFIX)
             client.transfer_file_to_container(payload_path, container_input)
 
             ruby = (
@@ -192,14 +194,14 @@ class OpenProjectMembershipService:
         # process when this method is called from a tight loop.
         unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
         payload_path = temp_dir / f"group_roles_{unique_suffix}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
+        result_path = temp_dir / (payload_path.name + _RESULT_SUFFIX)
 
         try:
             with payload_path.open("w", encoding="utf-8") as handle:
                 json.dump(assignments, handle)
 
             container_input = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
+            container_output = Path("/tmp") / (payload_path.name + _RESULT_SUFFIX)
             client.transfer_file_to_container(payload_path, container_input)
 
             ruby = (

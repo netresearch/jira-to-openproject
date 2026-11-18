@@ -16,6 +16,12 @@ from typing import Any
 
 from src.display import configure_logging
 
+_RUBY_ERROR_PREFIX = "Ruby error:"
+_RUBY_FULL_MESSAGE_MARKER = "full_message':"
+_IRB_MAIN_PROMPT = "irb(main):"
+_RUBY_STACK_OVERFLOW = "stack level too deep"
+
+
 try:
     from src import config  # type: ignore
 except Exception:
@@ -31,7 +37,7 @@ _CONSOLE_NOISE_PREFIXES: tuple[str, ...] = (
     "--EXEC_",
     "TMUX_CMD_",
     "=> ",
-    "irb(main):",
+    _IRB_MAIN_PROMPT,
     "open-project(",
 )
 
@@ -142,9 +148,9 @@ class RailsConsoleClient:
             # Targeted patterns
             key_preds = [
                 lambda s: "SystemStackError" in s,
-                lambda s: "stack level too deep" in s,
-                lambda s: "full_message':" in s,
-                lambda s: s.startswith("Ruby error:"),
+                lambda s: _RUBY_STACK_OVERFLOW in s,
+                lambda s: _RUBY_FULL_MESSAGE_MARKER in s,
+                lambda s: s.startswith(_RUBY_ERROR_PREFIX),
             ]
 
             matched: list[str] = []
@@ -259,7 +265,7 @@ class RailsConsoleClient:
             "Reline::Core#readmultiline",
             "IRB::Irb#run",
             "SystemStackError",
-            "stack level too deep",
+            _RUBY_STACK_OVERFLOW,
         ]
         return any(term in output for term in fatal_terms)
 
@@ -546,9 +552,9 @@ class RailsConsoleClient:
             severe_output = tmux_output
             if (
                 "SystemStackError" in severe_output
-                or "stack level too deep" in severe_output
-                or "Ruby error:" in severe_output
-                or "full_message':" in severe_output
+                or _RUBY_STACK_OVERFLOW in severe_output
+                or _RUBY_ERROR_PREFIX in severe_output
+                or _RUBY_FULL_MESSAGE_MARKER in severe_output
             ):
                 snippet = self._extract_error_summary(severe_output)
                 msg = f"Ruby console reported error with no markers: {snippet}"
@@ -649,9 +655,9 @@ class RailsConsoleClient:
             severe_output = tmux_output
             if (
                 "SystemStackError" in severe_output
-                or "stack level too deep" in severe_output
-                or "Ruby error:" in severe_output
-                or "full_message':" in severe_output
+                or _RUBY_STACK_OVERFLOW in severe_output
+                or _RUBY_ERROR_PREFIX in severe_output
+                or _RUBY_FULL_MESSAGE_MARKER in severe_output
             ):
                 snippet = self._extract_error_summary(severe_output)
                 msg = f"Ruby console reported error before end marker: {snippet}"
@@ -679,7 +685,7 @@ class RailsConsoleClient:
             logger.error("Error marker found in output, indicating a Ruby error")
             error_message = "Ruby error detected"
             for ln in between_lines:
-                if "Ruby error:" in ln:
+                if _RUBY_ERROR_PREFIX in ln:
                     error_message = ln.strip()
                     break
             raise RubyError(error_message)
@@ -717,8 +723,8 @@ class RailsConsoleClient:
             trailing_output = "\n".join(trailing_segment_lines)
             if (
                 "SystemStackError" in trailing_output
-                or "full_message':" in trailing_output
-                or "stack level too deep" in trailing_output
+                or _RUBY_FULL_MESSAGE_MARKER in trailing_output
+                or _RUBY_STACK_OVERFLOW in trailing_output
             ):
                 snippet = self._extract_error_summary(trailing_output)
                 msg = f"Ruby console reported error after end marker: {snippet}"
@@ -741,7 +747,7 @@ class RailsConsoleClient:
             Dictionary with state information
 
         """
-        ready_patterns = ["irb(main):", ">", ">>", "irb>", "pry>"]
+        ready_patterns = [_IRB_MAIN_PROMPT, ">", ">>", "irb>", "pry>"]
         awaiting_patterns = ["*"]
         string_patterns = ['"', "'"]
 
@@ -1029,7 +1035,7 @@ class RailsConsoleClient:
             )
             # drop all lines irb(main):30486>
             last_output = "\n".join(
-                [line.strip() for line in last_output.split("\n") if not line.strip().startswith("irb(main):")],
+                [line.strip() for line in last_output.split("\n") if not line.strip().startswith(_IRB_MAIN_PROMPT)],
             )
             # Do not slice out EXEC markers here; higher-level parser relies on them
 

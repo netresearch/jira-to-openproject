@@ -4,6 +4,9 @@
 
 from src.display import configure_logging
 
+_UTC_OFFSET = "+00:00"
+
+
 """Timezone Correction Script for Previously Migrated Timestamps.
 
 This script scans previously migrated timestamps and corrects their timezone
@@ -287,7 +290,7 @@ class TimestampCorrectionScript:
             # Parse the timestamp
             if timestamp_str.endswith("Z"):
                 # UTC timestamp - might need timezone correction if original was not UTC
-                dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(timestamp_str.replace("Z", _UTC_OFFSET))
                 return dt.tzinfo == UTC and self.correct_timezone != "UTC"
             if "+" in timestamp_str:
                 # Already has timezone info; treat '+01:00' as Europe/Berlin equivalence if offset matches
@@ -324,7 +327,7 @@ class TimestampCorrectionScript:
         try:
             # Parse original timestamp
             if timestamp_str.endswith("Z"):
-                dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(timestamp_str.replace("Z", _UTC_OFFSET))
             else:
                 dt = datetime.fromisoformat(timestamp_str)
 
@@ -378,7 +381,7 @@ class TimestampCorrectionScript:
         # Check if value looks like a timestamp
         if isinstance(value, str) and value:
             try:
-                datetime.fromisoformat(value.replace("Z", "+00:00"))
+                datetime.fromisoformat(value.replace("Z", _UTC_OFFSET))
                 return True
             except Exception:
                 pass

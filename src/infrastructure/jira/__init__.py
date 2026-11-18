@@ -7,7 +7,9 @@ Lazily exposes the common client class to avoid importing heavy dependencies at
 package import time (helps tests run without optional libs like `jira`).
 """
 
-__all__ = ["JiraClient"]
+CLIENT_NOT_INITIALIZED = "Jira client is not initialized"
+
+__all__ = ["CLIENT_NOT_INITIALIZED", "JiraClient"]
 
 
 def __getattr__(name: str) -> object:  # pragma: no cover - simple lazy import shim

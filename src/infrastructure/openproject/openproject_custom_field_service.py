@@ -45,6 +45,7 @@ import json
 import time
 from typing import Any
 
+from src.domain import provenance_fields
 from src.infrastructure.exceptions import QueryExecutionError, RecordNotFoundError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
@@ -389,7 +390,7 @@ class OpenProjectCustomFieldService:
         }
 
         for name, fmt in (
-            ("J2O Origin System", "string"),
+            (provenance_fields.ORIGIN_SYSTEM, "string"),
             ("J2O Origin ID", "string"),
             ("J2O Origin Key", "string"),
             ("J2O Origin URL", "string"),
@@ -410,7 +411,7 @@ class OpenProjectCustomFieldService:
         ensured["project"] = []
 
         for name, fmt in (
-            ("J2O Origin System", "string"),
+            (provenance_fields.ORIGIN_SYSTEM, "string"),
             ("J2O User ID", "string"),
             ("J2O User Key", "string"),
             ("J2O External URL", "string"),
@@ -424,7 +425,7 @@ class OpenProjectCustomFieldService:
             ("J2O Origin Worklog Key", "string"),
             ("J2O Origin Issue ID", "string"),
             ("J2O Origin Issue Key", "string"),
-            ("J2O Origin System", "string"),
+            (provenance_fields.ORIGIN_SYSTEM, "string"),
             ("J2O First Migration Date", "date"),
             ("J2O Last Update Date", "date"),
         ):

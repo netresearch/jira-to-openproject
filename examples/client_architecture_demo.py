@@ -24,6 +24,8 @@ from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 from src.infrastructure.openproject.ssh_client import SSHClient
 
+_REMOTE_TEST_PATH = "/tmp/test_transfer.txt"
+
 
 def demo_each_client_independently() -> None:
     """Demonstrate each client layer independently, showing how they can be used directly."""
@@ -130,7 +132,7 @@ def demo_file_transfer() -> None:
     print("=" * 80)
 
     # Create a test file locally
-    with Path("/tmp/test_transfer.txt").open("w") as f:
+    with Path(_REMOTE_TEST_PATH).open("w") as f:
         f.write("This is a test file for demonstrating the file transfer workflow.")
 
     # Create clients for file transfer
@@ -148,29 +150,29 @@ def demo_file_transfer() -> None:
     # 3. Transfer to remote host via SSHClient
     print("Transferring file to remote host...")
     result = ssh_client.copy_file_to_remote(
-        "/tmp/test_transfer.txt",
-        "/tmp/test_transfer.txt",
+        _REMOTE_TEST_PATH,
+        _REMOTE_TEST_PATH,
     )
     print(f"SSH transfer result: {result.get('status')}")
 
     # 4. Transfer from remote host to container via DockerClient
     print("Transferring file to container...")
     result = docker_client.copy_file_to_container(
-        "/tmp/test_transfer.txt",
-        "/tmp/test_transfer.txt",
+        _REMOTE_TEST_PATH,
+        _REMOTE_TEST_PATH,
     )
     print(f"Docker transfer result: {result.get('status')}")
 
     # 5. Verify file in container
     print("Verifying file in container...")
-    exists = docker_client.check_file_exists_in_container("/tmp/test_transfer.txt")
+    exists = docker_client.check_file_exists_in_container(_REMOTE_TEST_PATH)
     print(f"File exists in container: {exists}")
 
     # Clean up
     print("Cleaning up...")
     ssh_client.execute_command("rm /tmp/test_transfer.txt")
     docker_client.execute_command("rm /tmp/test_transfer.txt")
-    os.remove("/tmp/test_transfer.txt")
+    os.remove(_REMOTE_TEST_PATH)
 
 
 def main() -> None:
