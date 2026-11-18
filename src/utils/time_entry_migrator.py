@@ -703,6 +703,41 @@ class TimeEntryMigrator:
             issue_key, set()
         )
 
+    @staticmethod
+    def _verified_tempo_entry(row: dict[str, Any], canonical: dict[str, Any]) -> dict[str, Any]:
+        # Tempo Server sends local times without a zone. Anchor the entry to the
+        # independently read Jira worklog and reject any different note or worker.
+        author = canonical.get("author") or {}
+        fields = (
+            (author.get("key"), (row.get("author") or {}).get("key")),
+            (canonical.get("time_spent_seconds"), row.get("time_spent_seconds")),
+        )
+        if any(expected is not None and observed != expected for expected, observed in fields):
+            msg = "Tempo and Jira disagree about the identity or duration of a work log."
+            raise ValueError(msg)
+        if (canonical.get("comment") or "") != (row.get("description", row.get("comment")) or ""):
+            msg = "Tempo and Jira disagree about the work log comment."
+            raise ValueError(msg)
+        return {**row, "jira_started": canonical["started"], "jira_author_time_zone": author.get("time_zone")}
+
+    def _selected_tempo_entries(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        jira_rows = {(issue, str(row["id"])): row for issue, logs in self.extracted_work_logs.items() for row in logs}
+        result = []
+        for row in entries:
+            if not self._tempo_allowed(row):
+                continue
+            issue = row.get("issue_key") or (row.get("issue") or {}).get("key")
+            identifier = row.get("jira_worklog_id", row.get("jiraWorklogId"))
+            canonical = jira_rows.get((issue, str(identifier)))
+            if canonical is None and self._requested_issues is not None:
+                continue
+            if canonical:
+                row = self._verified_tempo_entry(row, canonical)
+            clock = canonical or row
+            if self._ff_accept(clock.get("created"), clock.get("updated")):
+                result.append(row)
+        return result
+
     def _read_tempo_entries(
         self, project_keys: list[str] | None, date_from: str | None, date_to: str | None
     ) -> list[dict[str, Any]]:
@@ -755,16 +790,7 @@ class TimeEntryMigrator:
 
             result_entries: list[dict[str, Any]] = []
             if tempo_entries:
-                # Fast-forward filter for Tempo using created/updated
-                filtered = []
-                for te in tempo_entries:
-                    created = te.get("created")
-                    updated = te.get("updated")
-                    try:
-                        if self._tempo_allowed(te) and self._ff_accept(created, updated):
-                            filtered.append(te)
-                    except Exception:
-                        continue
+                filtered = self._selected_tempo_entries(tempo_entries)
                 self.extracted_tempo_entries = filtered
                 self.migration_results["tempo_entries_extracted"] = len(filtered)
                 self.migration_results["total_work_logs_found"] += len(filtered)

@@ -218,6 +218,12 @@ class TimeEntryTransformer:
                 "href": f"/api/v3/work_packages/{work_package_id}",
             }
 
+    @staticmethod
+    def _tempo_worklog_start(log: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        if log.get("jira_started"):
+            return _worklog_start(log["jira_started"], log.get("jira_author_time_zone"))
+        return datetime.fromisoformat(log.get("dateStarted", log.get("date_started", ""))).date().isoformat(), {}
+
     def transform_tempo_work_log(
         self,
         tempo_log: dict[str, Any],
@@ -237,6 +243,7 @@ class TimeEntryTransformer:
             # Extract basic information
             author_username = (
                 tempo_log.get("author", {}).get("name")
+                or tempo_log.get("author", {}).get("username")
                 or tempo_log.get("author", {}).get("key")
                 or tempo_log.get("author", {}).get("accountId")
                 or tempo_log.get("author", {}).get("emailAddress")
@@ -248,11 +255,7 @@ class TimeEntryTransformer:
                 msg = "Work log audience cannot be represented on a native time entry."
                 raise ValueError(msg)
             final_hours = _worklog_hours(tempo_log)
-            spent_on = (
-                datetime.fromisoformat(tempo_log.get("dateStarted", tempo_log.get("date_started", "")))
-                .date()
-                .isoformat()
-            )
+            spent_on, start = self._tempo_worklog_start(tempo_log)
             description = _worklog_comment(tempo_log.get("description", tempo_log.get("comment")) or "")
 
             # Build OpenProject time entry
@@ -266,6 +269,7 @@ class TimeEntryTransformer:
                     "jira_worklog_id": tempo_log.get("jiraWorklogId", tempo_log.get("jira_worklog_id")),
                     "jira_issue_key": issue_key,
                     "tempo_author": author_username,
+                    **start,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
                     "jira_worklog_key": self._tempo_worklog_key(tempo_log, issue_key),
                 },
@@ -540,7 +544,7 @@ class TimeEntryTransformer:
                     return activity_id
 
         # Fall back to comment-based detection
-        description = tempo_log.get("description", "")
+        description = tempo_log.get("description", tempo_log.get("comment")) or ""
         return self._detect_activity(description)
 
     def _handle_tempo_specific_fields(
@@ -556,12 +560,13 @@ class TimeEntryTransformer:
 
         """
         # Add Tempo metadata
-        time_entry["_meta"]["tempo_billable"] = tempo_log.get("billableSeconds", 0) > 0
+        billable = tempo_log.get("billable_seconds", tempo_log.get("billableSeconds"))
+        time_entry["_meta"]["tempo_billable"] = billable is not None and billable > 0
         time_entry["_meta"]["tempo_location"] = tempo_log.get("location")
 
         # Handle billing information
-        if "billableSeconds" in tempo_log:
-            billable_hours = tempo_log["billableSeconds"] / 3600.0
+        if billable is not None:
+            billable_hours = billable / 3600.0
             time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 2)
 
         # Handle work attributes
