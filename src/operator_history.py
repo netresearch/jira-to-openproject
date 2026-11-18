@@ -17,12 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyrage
-import requests
 from pyrage import x25519
 
 from src.comment_archive.archive import encoded
 from src.comment_archive.cli import input_file
-from src.comment_archive.transport import ArchiveError, Endpoint, publish, require
+from src.comment_archive.transport import Endpoint, publish, require
 from src.infrastructure.jira.comment_audience import has_comment_audience, may_copy_history_item
 
 _FORMAT = "j2o-operator-field-history/1"
@@ -152,13 +151,20 @@ def snapshot(issues: list[dict], fields: list[dict], project: str, jira: str, ap
 
 def _private_create(path: Path, data: bytes) -> None:
     """Publish a finished private file atomically, keeping an existing archive intact."""
-    with tempfile.TemporaryDirectory(dir=path.parent) as staging:
+    directory = path.parent.resolve(strict=True)
+    leaf = path.name
+    require(leaf not in ("", ".", "..") and not path.is_symlink(), "Expected a regular output filename")
+    with tempfile.TemporaryDirectory(dir=directory) as staging:
         name = Path(staging) / "complete"
         with os.fdopen(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as tmp:
             tmp.write(data)
             tmp.flush()
             os.fsync(tmp.fileno())
-        os.link(name, path)
+        parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.link(name, leaf, dst_dir_fd=parent, follow_symlinks=False)
+        finally:
+            os.close(parent)
 
 
 def decrypt(data: bytes, identity: x25519.Identity) -> dict:
@@ -265,8 +271,6 @@ def main(argv: list[str] | None = None) -> int:
                     data,
                 )
     except (
-        ArchiveError,
-        requests.RequestException,
         OSError,
         ValueError,
         KeyError,

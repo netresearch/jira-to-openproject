@@ -104,7 +104,8 @@ def test_native_archive_restoration_retry_and_drift(tmp_path):
     ]
     assert main(args) == 0
     original = archive.read_bytes()
-    assert main(args) == 0 and archive.read_bytes() == original
+    assert main(args) == 0
+    assert archive.read_bytes() == original
     restored = tmp_path / "restored.json"
     assert main(["restore", "--identity", str(private), "--archive", str(archive), "--output", str(restored)]) == 0
     assert json.loads(restored.read_text()) == decrypt(original, identity)
