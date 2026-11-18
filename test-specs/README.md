@@ -111,7 +111,7 @@ ports:
 ```yaml
 services:
   mock-jira:
-    image: stoplight/prism:4
+    image: stoplight/prism:5.15.10
     command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml  # Container networking
     ports:
       - "127.0.0.1:4010:4010"  # Host security
@@ -170,7 +170,7 @@ Mock services are defined in `compose.yml` under the `testing` profile:
 # Mock Jira API server for testing
 # SECURITY: Mock services use localhost-only binding for development security
 mock-jira:
-  image: stoplight/prism:4
+  image: stoplight/prism:5.15.10
   command: mock -h 0.0.0.0 -p 4010 /specs/jira-openapi.yml
   ports:
     - "127.0.0.1:4010:4010"  # Localhost-only access
@@ -180,7 +180,7 @@ mock-jira:
 # Mock OpenProject API server for testing
 # SECURITY: Consistent with localhost-only binding pattern across all services
 mock-openproject:
-  image: stoplight/prism:4
+  image: stoplight/prism:5.15.10
   command: mock -h 0.0.0.0 -p 4011 /specs/openproject-openapi.yml
   ports:
     - "127.0.0.1:4011:4011"  # Localhost-only access

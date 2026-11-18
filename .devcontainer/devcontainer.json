@@ -2,25 +2,20 @@
     "name": "Jira to OpenProject Migration",
     "dockerComposeFile": "../compose.yml",
     "service": "app",
-    "remoteUser": "vscode",
+    "remoteUser": "appuser",
     "workspaceFolder": "/app",
     "customizations": {
         "vscode": {
             "extensions": [
                 "ms-python.python",
                 "ms-python.vscode-pylance",
-                "ms-python.black-formatter",
-                "ms-python.isort",
                 "streetsidesoftware.code-spell-checker",
                 "eamodio.gitlens",
-                "ms-azuretools.vscode-docker"
+                "ms-azuretools.vscode-docker",
+                "charliermarsh.ruff"
             ],
             "settings": {
-                "python.defaultInterpreterPath": "/home/vscode/.local/bin/python",
-                "python.linting.enabled": true,
-                "python.linting.flake8Enabled": true,
-                "python.linting.mypyEnabled": true,
-                "python.formatting.provider": "black",
+                "python.defaultInterpreterPath": "/opt/venv/bin/python",
                 "editor.formatOnSave": true,
                 "editor.codeActionsOnSave": {
                     "source.organizeImports": "explicit"
@@ -32,7 +27,10 @@
                         "path": "/bin/bash"
                     }
                 },
-                "terminal.integrated.defaultProfile.linux": "bash"
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "[python]": {
+                    "editor.defaultFormatter": "charliermarsh.ruff"
+                }
             }
         }
     },
@@ -41,5 +39,7 @@
         4010,
         4011
     ],
-    "runArgs": ["--profile", "dev"]
+    "runServices": [
+        "app"
+    ]
 }

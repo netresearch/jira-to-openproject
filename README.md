@@ -421,3 +421,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 5. **Run full test suite** before submitting changes
 
 For architecture changes, see [System Architecture](docs/ARCHITECTURE.md) for design patterns and component responsibilities.
+
+
+### Upgrading the local Compose database
+
+The migration tool's Compose database now uses PostgreSQL 18.7. An existing PostgreSQL 17 data volume requires a major-version upgrade before starting the new database service. Keep the old database and a verified logical backup, restore it into a fresh 18 cluster and compare the restored databases, roles and application tables before switching. The explicit `PGDATA` keeps the old mount visible so startup fails on incompatible data. The Compose database is separate from OpenProject. Preserve the migration tool’s SQLite checkpoints and mappings in the mounted `var/` directory independently.
