@@ -1,25 +1,13 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Migrate Jira Software boards and sprints into OpenProject equivalents.
-
-Phase 7d note
--------------
-This migration is intentionally left structurally unchanged in the
-typed-pipeline sweep. It does not consume the ``work_package`` mapping
-(no ``wp_map`` polymorphic ladder to retire here), and the Jira-side
-input is uniform REST dicts whose keys are well-defined — there is no
-polymorphic ladder of the kind phase 7 targets. The ``project`` mapping
-``isinstance(..., dict)`` check is for an unrelated polymorphic shape
-and is left as-is. Modelling boards/sprints as Pydantic types would be
-mostly cosmetic at this site, so it is deferred until a downstream
-caller benefits.
-"""
+"""Migrate Jira board membership into private project queries and map owned sprints to versions."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -41,79 +29,28 @@ class AgileBoardMigration(BaseMigration):
     # ------------------------------------------------------------------ #
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities from Jira for a specific type.
-
-        This method enables idempotent workflow caching by providing a standard
-        interface for entity retrieval. Called by run_with_change_detection() to fetch data
-        with automatic thread-safe caching.
-
-        Args:
-            entity_type: The type of entities to retrieve (e.g., "agile_boards", "sprints")
-
-        Returns:
-            List containing aggregated board and sprint data
-
-        Raises:
-            ValueError: If entity_type is not supported by this migration
-
-        """
-        # Check if this is one of the entity types we handle
+        """Read one change-detection snapshot of board memberships and owned sprints."""
         if entity_type not in ("agile_boards", "sprints"):
-            msg = (
-                f"AgileBoardMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['agile_boards', 'sprints']"
-            )
+            msg = f"Unsupported agile migration entity type: {entity_type}"
             raise ValueError(msg)
 
-        boards = self.jira_client.get_boards()
-        board_payloads: list[dict[str, Any]] = []
-        sprint_payloads: list[dict[str, Any]] = []
-
+        board_payloads = []
+        sprint_payloads = []
         read_errors = []
-        for board in boards:
-            board_id = board.get("id")
-            if board_id is None:
-                continue
-
+        targets = self._board_work_package_mapping()
+        configured = config.migration_config.get("jira_project_filter")
+        if isinstance(configured, str):
+            configured = [configured]
+        selected = set(configured) if configured else None
+        for board in self._list_boards(selected):
             try:
-                configuration = self.jira_client.get_board_configuration(board_id)
-                board_sprints = [] if board.get("type") == "kanban" else self.jira_client.get_board_sprints(board_id)
-                project_key, candidates = self._board_project(board, board_id)
+                boards, sprints = self._read_board(board, selected, targets)
             except Exception as exc:
-                self.logger.exception("Failed reading Jira board %s", board_id)
-                read_errors.append({"board_id": board_id, "error": str(exc)})
+                self.logger.exception("Failed reading Jira board %s", board.get("id"))
+                read_errors.append({"board_id": board.get("id"), "error": str(exc)})
                 continue
-
-            statuses = self._column_statuses(configuration)
-
-            query = configuration.get("filter", {}) or {}
-            filter_jql = query.get("query") or query.get("queryString") or ""
-
-            board_payloads.append(
-                {
-                    "id": board_id,
-                    "name": board.get("name"),
-                    "type": board.get("type"),
-                    "project_key": project_key,
-                    "candidate_projects": candidates,
-                    "statuses": statuses,
-                    "filter_jql": filter_jql,
-                },
-            )
-
-            for sprint in self._owned_sprints(board_sprints, board_id):
-                sprint_payloads.append(
-                    {
-                        "board_id": board_id,
-                        "project_key": project_key,
-                        "id": sprint.get("id"),
-                        "name": sprint.get("name"),
-                        "goal": sprint.get("goal"),
-                        "state": sprint.get("state"),
-                        "startDate": sprint.get("startDate"),
-                        "endDate": sprint.get("endDate"),
-                    },
-                )
+            board_payloads.extend(boards)
+            sprint_payloads.extend(sprints)
 
         inventory = {
             "id": "jira-agile-inventory",
@@ -123,6 +60,37 @@ class AgileBoardMigration(BaseMigration):
             "total_count": len(board_payloads),
         }
         return [self._with_targets(inventory)]
+
+    def _read_board(
+        self, board: dict, selected: set[str] | None, targets: dict[str, int]
+    ) -> tuple[list[dict], list[dict]]:
+        board_id = board["id"]
+        home, candidates = self._board_project(board, board_id)
+        allowed = set(self.project_mapping) if selected is None else selected
+        scopes = sorted(allowed.intersection(candidates))
+        configuration = self.jira_client.get_board_configuration(board_id)
+        query = configuration.get("filter") or {}
+        common = {
+            "id": board_id,
+            "name": board.get("name"),
+            "type": board.get("type"),
+            "candidate_projects": candidates,
+            "statuses": self._column_statuses(configuration),
+            "filter_jql": query.get("query") or query.get("queryString") or "",
+        }
+        snapshots = [
+            {**common, "project_key": key, "work_package_ids": self._board_work_package_ids(board_id, key, targets)}
+            for key in scopes
+        ]
+        if not snapshots:
+            snapshots.append({**common, "project_key": None, "work_package_ids": None})
+
+        if board.get("type") == "kanban" or (selected is not None and home and home not in selected):
+            return snapshots, []
+        owned = self._owned_sprints(self.jira_client.get_board_sprints(board_id), board_id)
+        fields = ("id", "name", "goal", "state", "startDate", "endDate")
+        sprints = [{"board_id": board_id, "project_key": home, **{k: s.get(k) for k in fields}} for s in owned]
+        return snapshots, sprints
 
     @staticmethod
     def _owned_sprints(sprints: list[dict], board_id: int) -> list[dict]:
@@ -198,25 +166,19 @@ class AgileBoardMigration(BaseMigration):
                 )
                 continue
 
-            description_parts = [
-                f"Imported from Jira board '{board.get('name')}' ({board.get('type')})",
-            ]
-            if board.get("filter_jql"):
-                description_parts.append(f"Original JQL: {board['filter_jql']}")
-            if board.get("statuses"):
-                description_parts.append(
-                    "Columns / statuses: " + ", ".join(board["statuses"]),
-                )
-
+            ids = board.get("work_package_ids")
+            if ids is None:
+                skipped_boards.append({"board_id": board["id"], "reason": "missing_board_membership"})
+                continue
             query_payloads.append(
                 {
-                    "name": f"[Board] {board.get('name')}",
-                    "description": "\n".join(description_parts),
+                    "name": f"[Jira Board {board['id']}] {board.get('name')}",
                     "project_id": op_project_id,
-                    "is_public": None,  # private on creation; respect subsequent operator sharing decisions
+                    "is_public": False,
                     "options": {
-                        "filters": [],
-                        "columns": [],
+                        "board_work_package_ids": ids,
+                        "jira_board_id": board["id"],
+                        "include_subprojects": False,
                     },
                 },
             )
@@ -322,18 +284,40 @@ class AgileBoardMigration(BaseMigration):
             )
         return result
 
+    def _board_work_package_mapping(self) -> dict[str, int]:
+        work_packages = self.mappings.get_mapping("work_package") or {}
+        targets = {}
+        for outer_key, value in work_packages.items():
+            key = self._inner_jira_key(outer_key, value)
+            target = self._resolve_wp_id(work_packages, outer_key)
+            if key and target:
+                if key in targets and targets[key] != target:
+                    msg = "Ambiguous Jira work package mapping"
+                    raise ValueError(msg)
+                targets[key] = target
+        return targets
+
+    def _board_work_package_ids(self, board_id: int, key: str, targets: dict[str, int]) -> list[int]:
+        issue_keys = self.jira_client.get_board_issue_keys(board_id, key)
+        ids = [targets[issue] for issue in issue_keys]
+        if len(set(ids)) != len(ids):
+            msg = "Distinct board issues map to the same work package"
+            raise ValueError(msg)
+        return sorted(ids)
+
+    def _list_boards(self, selected: set[str] | None) -> list[dict[str, Any]]:
+        if selected is None:
+            return self.jira_client.get_boards()
+        by_id = {b["id"]: b for key in sorted(selected) for b in self.jira_client.get_boards_for_project(key)}
+        return [by_id[i] for i in sorted(by_id)]
+
     def _board_project(self, board: dict, board_id: int) -> tuple[str | None, list[str]]:
-        """Resolve the owning project or preserve the cross-project candidates."""
-        candidates: list[str] = []
+        """Use the filter's projects for cards, and the board's home for its sprints."""
+        projects = self.jira_client.get_board_projects(board_id)
+        candidates = sorted({p["key"] for p in projects if p.get("key")})
         location = board.get("location") or {}
-        project_key = location.get("projectKey") or board.get("locationProjectKey")
-        if not project_key:
-            # A cross-project filter does not identify a single owning project.
-            projects = self.jira_client.get_board_projects(board_id)
-            candidates = sorted({p["key"] for p in projects if p.get("key")})
-            if len(candidates) == 1:
-                project_key = candidates[0]
-        return project_key, candidates
+        home = location.get("projectKey") or board.get("locationProjectKey")
+        return home or (candidates[0] if len(candidates) == 1 else None), candidates
 
     @staticmethod
     def _column_statuses(configuration: dict) -> list[str]:
@@ -394,6 +378,7 @@ class AgileBoardMigration(BaseMigration):
                     if result.get("created"):
                         created_queries += 1
                 else:
+                    self.logger.error("Could not verify board query: %s", result.get("error"))
                     errors += 1
             except Exception as exc:
                 errors += 1

@@ -29,6 +29,13 @@ class DummyJira:
     def get_boards(self):
         return self._boards
 
+    def get_board_projects(self, board_id):
+        board = next(row for row in self._boards if row["id"] == board_id)
+        return [{"key": board["location"]["projectKey"]}] if board.get("location") else []
+
+    def get_board_issue_keys(self, board_id, project_key):
+        return []
+
     def get_board_configuration(self, board_id):
         return self._configs.get(board_id, {})
 
@@ -193,7 +200,7 @@ def test_server_board_without_location_uses_projects_endpoint(_mock_mappings, mo
     result = mig.run_with_change_detection("agile_boards")
     assert result.success
     assert op.created_queries[0]["project_id"] == 11
-    assert op.created_queries[0]["is_public"] is None
+    assert op.created_queries[0]["is_public"] is False
 
 
 def test_ambiguous_board_projects_are_reported(_mock_mappings, monkeypatch):
@@ -234,3 +241,61 @@ def test_filtered_board_does_not_claim_the_origin_boards_sprint(_mock_mappings):
     assert [(row["id"], row["board_id"]) for row in extracted.data["sprints"]] == [(8, 20)]
     assert mig._load(mig._map(extracted)).success
     assert len(op.created_versions) == 1
+
+
+def test_shared_board_is_split_into_exact_mapped_project_snapshots(_mock_mappings, monkeypatch):
+    from src import config
+
+    config.mappings.set_mapping("project", {"A": {"openproject_id": 11}, "B": {"openproject_id": 12}})
+    config.mappings.set_mapping("work_package", {"91": {"jira_key": "A-1", "openproject_id": 25}, "A-2": 26})
+    jira = DummyJira(boards=[{"id": 23, "name": "Shared", "type": "kanban"}])
+    monkeypatch.setattr(jira, "get_board_projects", lambda _: [{"key": key} for key in ("A", "B", "C")], raising=False)
+    monkeypatch.setattr(jira, "get_board_issue_keys", lambda _, project: {"A": ["A-1"], "B": []}[project])
+    op = DummyOp()
+    assert AgileBoardMigration(jira, op).run().success
+    assert [(p["project_id"], p["options"]["board_work_package_ids"]) for p in op.created_queries] == [
+        (11, [25]),
+        (12, []),
+    ]
+    monkeypatch.setattr(jira, "get_board_issue_keys", lambda _, project: ["A-999"])
+    assert not AgileBoardMigration(jira, op).run().success
+    assert len(op.created_queries) == 2
+
+
+def test_board_pagination_requires_all_issue_keys_in_the_requested_project():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from src.infrastructure.jira.jira_agile_service import JiraAgileService
+    from src.infrastructure.jira.jira_client import JiraApiError
+
+    session = Mock()
+    service = JiraAgileService(SimpleNamespace(base_url="https://jira.invalid", jira=SimpleNamespace(_session=session)))
+
+    def page(offset, key):
+        return {"startAt": offset, "total": 2, "issues": [{"key": key, "fields": {"project": {"key": "A"}}}]}
+
+    session.get.return_value.json.side_effect = [page(0, "A-1"), page(1, "A-2")]
+    assert service.get_board_issue_keys(12, "A") == ["A-1", "A-2"]
+    assert [c.kwargs["params"]["startAt"] for c in session.get.call_args_list] == [0, 1]
+    session.get.return_value.json.side_effect = [page(0, "A-1"), page(1, "A-1")]
+    with pytest.raises(JiraApiError, match="duplicate"):
+        service.get_board_issue_keys(12, "A")
+    session.get.return_value.json.side_effect = [page(0, "B-1")]
+    with pytest.raises(JiraApiError, match="outside"):
+        service.get_board_issue_keys(12, "A")
+
+
+def test_project_filter_can_select_a_shared_board_with_a_different_home(_mock_mappings, monkeypatch):
+    from src import config
+
+    board = {"id": 31, "name": "Shared", "type": "scrum", "location": {"projectKey": "OTHER"}}
+    jira = DummyJira(boards=[board], sprints_by_board={31: [{"id": 12, "name": "Other project sprint"}]})
+    monkeypatch.setitem(config.migration_config, "jira_project_filter", ["PROJ"])
+    monkeypatch.setattr(jira, "get_boards", lambda: pytest.fail("Unscoped board listing"))
+    monkeypatch.setattr(jira, "get_boards_for_project", lambda key: [board] if key == "PROJ" else [], raising=False)
+    monkeypatch.setattr(jira, "get_board_projects", lambda _: [{"key": "PROJ"}, {"key": "OTHER"}])
+    op = DummyOp()
+    assert AgileBoardMigration(jira, op).run().success
+    assert [q["project_id"] for q in op.created_queries] == [11]
+    assert not op.created_versions
