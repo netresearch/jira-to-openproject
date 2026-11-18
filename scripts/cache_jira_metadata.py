@@ -73,14 +73,14 @@ def fetch_metadata_batch(
         for issue in issues:
             fields = issue.fields
             metadata[issue.key] = {
-                "priority": getattr(fields.priority, "name", None) if fields.priority else None,
-                "priority_id": getattr(fields.priority, "id", None) if fields.priority else None,
-                "assignee": getattr(fields.assignee, "name", None) if fields.assignee else None,
-                "assignee_key": getattr(fields.assignee, "key", None) if fields.assignee else None,
-                "assignee_display": getattr(fields.assignee, "displayName", None) if fields.assignee else None,
-                "reporter": getattr(fields.reporter, "name", None) if fields.reporter else None,
-                "reporter_key": getattr(fields.reporter, "key", None) if fields.reporter else None,
-                "reporter_display": getattr(fields.reporter, "displayName", None) if fields.reporter else None,
+                "priority": getattr(fields.priority, "name", None),
+                "priority_id": getattr(fields.priority, "id", None),
+                "assignee": getattr(fields.assignee, "name", None),
+                "assignee_key": getattr(fields.assignee, "key", None),
+                "assignee_display": getattr(fields.assignee, "displayName", None),
+                "reporter": getattr(fields.reporter, "name", None),
+                "reporter_key": getattr(fields.reporter, "key", None),
+                "reporter_display": getattr(fields.reporter, "displayName", None),
                 "created": fields.created,
                 "updated": fields.updated,
             }
