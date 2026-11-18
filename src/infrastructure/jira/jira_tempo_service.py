@@ -43,13 +43,52 @@ from src.infrastructure.jira.jira_client import (
 from src.utils.timezone import UTC
 
 
+def _work_attributes(work_log: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reconcile Tempo Server's nested and flat attributes against the same Jira worklog."""
+    flat = work_log.get("worklogAttributes", work_log.get("workAttributes", []))
+    values = work_log.get("workAttributeValues", [])
+    if not values:
+        return flat
+    nested = []
+    for value in values:
+        if str(value["worklogId"]) != str(work_log["jiraWorklogId"]):
+            msg = "Tempo returned an attribute for a different work log."
+            raise JiraApiError(msg)
+        nested.append({"key": value["workAttribute"]["key"], "value": value["value"]})
+    if flat and sorted(flat, key=lambda item: item["key"]) != sorted(nested, key=lambda item: item["key"]):
+        msg = "Conflicting Tempo work attribute representations."
+        raise JiraApiError(msg)
+    return nested
+
+
+def _requested_project(project: str | None, issue: str | None) -> str | None:
+    if not issue:
+        return project
+    issue_project, _, number = issue.rpartition("-")
+    if not issue_project or not number.isdecimal() or (project and project != issue_project):
+        msg = "Issue key does not belong to the requested project."
+        raise JiraApiError(msg)
+    return issue_project
+
+
+def _matches_scope(row: dict[str, Any], project: str | None, issue: str | None, user: str | None) -> bool:
+    issue_key = row.get("issue_key") or ""
+    if project and issue_key.rpartition("-")[0] != project:
+        msg = "Tempo returned a work log outside the requested project."
+        raise JiraApiError(msg)
+    author = row.get("author") or {}
+    return (not issue or issue_key == issue) and (
+        not user or user in (author.get("key"), author.get("username"), author.get("account_id"))
+    )
+
+
 def _visible_tempo_record(work_log: dict[str, Any]) -> dict[str, Any]:
     if has_comment_audience(work_log):
         msg = "Cannot expose audience-restricted Tempo work logs."
         raise JiraApiError(msg)
 
     return {
-        "tempo_worklog_id": work_log.get("tempoWorklogId"),
+        "tempo_worklog_id": work_log.get("tempoWorklogId", work_log.get("id")),
         "jira_worklog_id": work_log.get("jiraWorklogId"),
         "issue_key": work_log.get("issue", {}).get("key"),
         "issue_id": work_log.get("issue", {}).get("id"),
@@ -64,9 +103,10 @@ def _visible_tempo_record(work_log: dict[str, Any]) -> dict[str, Any]:
         "date_started": work_log.get("dateStarted"),
         "time_started": work_log.get("timeStarted"),
         "comment": work_log.get("comment"),
-        "created": work_log.get("created"),
-        "updated": work_log.get("updated"),
-        "work_attributes": work_log.get("workAttributes", []),
+        "created": work_log.get("dateCreated", work_log.get("created")),
+        "updated": work_log.get("dateUpdated", work_log.get("updated")),
+        "work_attributes": _work_attributes(work_log),
+        "work_attribute_values": work_log.get("workAttributeValues", []),
         "account": work_log.get("account", {}),
         "approval_status": work_log.get("approvalStatus"),
         "external_hours": work_log.get("externalHours"),
@@ -252,18 +292,9 @@ class JiraTempoService:
 
         """
         try:
-            # Build query parameters
-            params = {"limit": limit}
-            if issue_key:
-                params["issue"] = issue_key
-            if project_key:
-                params["project"] = project_key
-            if date_from:
-                params["dateFrom"] = date_from
-            if date_to:
-                params["dateTo"] = date_to
-            if user_key:
-                params["user"] = user_key
+            project_key = _requested_project(project_key, issue_key)
+            filters = {"projectKey": project_key, "username": user_key, "dateFrom": date_from, "dateTo": date_to}
+            params = {"limit": limit, **{key: value for key, value in filters.items() if value}}
 
             # Use Tempo Timesheets API v3 endpoint
             path = "/rest/tempo-timesheets/3/worklogs"
@@ -277,17 +308,17 @@ class JiraTempoService:
                 params=params,
             )
 
-            _assert_json_response(response, path=path)
-
             if response.status_code != HTTP_OK:
                 msg = f"Failed to retrieve Tempo work logs: HTTP {response.status_code}"
                 self._logger.error(msg)
                 raise JiraApiError(msg)
+            _assert_json_response(response, path=path)
 
             work_logs = response.json()
             self._logger.info("Successfully retrieved %s Tempo work logs", len(work_logs))
 
-            return [_visible_tempo_record(row) for row in work_logs]
+            records = (_visible_tempo_record(row) for row in work_logs)
+            return [row for row in records if _matches_scope(row, project_key, issue_key, user_key)][:limit]
 
         except JiraServiceUnavailableError as e:
             self._logger.warning(
@@ -355,7 +386,7 @@ class JiraTempoService:
 
         # Build query parameters
         params = {
-            "project": project_key,
+            "projectKey": project_key,
             "limit": limit,
             "offset": offset,
         }
@@ -376,12 +407,11 @@ class JiraTempoService:
         # Record response for rate limiting adaptation
         self._client.rate_limiter.record_response(response_time, response.status_code)
 
-        _assert_json_response(response, path=path)
-
         if response.status_code != HTTP_OK:
             msg = f"Failed to retrieve Tempo work logs for project {project_key}: HTTP {response.status_code}"
             self._logger.error(msg)
             raise JiraApiError(msg)
+        _assert_json_response(response, path=path)
 
         return response.json()
 
@@ -392,7 +422,7 @@ class JiraTempoService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get all Tempo work logs for a project with pagination handling."""
+        """Read a complete project response. Pass date bounds to override the Tempo Server default period."""
         try:
             self._logger.info(
                 "Fetching all Tempo work logs for project '%s' from %s to %s",
@@ -404,18 +434,25 @@ class JiraTempoService:
             all_work_logs = []
             limit = 1000
             offset = 0
+            seen = set()
 
             while True:
                 work_logs_batch = self._project_worklog_page(project_key, offset, limit, date_from, date_to)
                 if not work_logs_batch:
                     break
 
-                all_work_logs.extend(_visible_tempo_record(row) for row in work_logs_batch)
+                rows = [_visible_tempo_record(row) for row in work_logs_batch]
+                ids = {str(row["jira_worklog_id"] or row["tempo_worklog_id"]) for row in rows}
+                if "None" in ids or len(ids) != len(rows) or seen.intersection(ids):
+                    msg = "Tempo returned missing, repeated or overlapping work log IDs."
+                    raise JiraApiError(msg)
+                seen.update(ids)
+                all_work_logs.extend(row for row in rows if _matches_scope(row, project_key, None, None))
 
-                # Check if we've reached the end
-                if len(work_logs_batch) < limit:
+                # Server v3 may return its entire unpaginated array; older paged
+                # implementations return at most the requested number of records.
+                if len(rows) != limit:
                     break
-
                 offset += limit
 
             self._logger.info(
@@ -425,14 +462,6 @@ class JiraTempoService:
             )
             return all_work_logs
 
-        except JiraServiceUnavailableError as e:
-            self._logger.warning(
-                "Tempo work-logs endpoint unavailable for project %s, returning partial result (%d collected so far). Details: %s",
-                project_key,
-                len(all_work_logs),
-                e,
-            )
-            return all_work_logs
         except Exception as e:
             error_msg = f"Failed to retrieve all Tempo work logs for project {project_key}: {e!s}"
             self._logger.exception(error_msg)
@@ -471,7 +500,11 @@ class JiraTempoService:
                 self._logger.error(msg)
                 raise JiraApiError(msg)
 
-            return _visible_tempo_record(response.json())
+            record = _visible_tempo_record(response.json())
+            if str(record["tempo_worklog_id"]) != str(tempo_worklog_id):
+                msg = "Tempo returned a different work log than requested."
+                raise JiraApiError(msg)
+            return record
 
         except Exception as e:
             if "not found" in str(e).lower():
@@ -539,46 +572,12 @@ class JiraTempoService:
     ) -> list[dict[str, Any]]:
         all_time_entries = []
         for project_key in project_keys:
-            try:
-                project_work_logs = self.get_tempo_all_work_logs_for_project(
-                    project_key=project_key,
-                    date_from=date_from,
-                    date_to=date_to,
-                )
-
-                # Filter by user if specified. The enhanced
-                # worklog shape produced by
-                # ``get_tempo_all_work_logs_for_project`` only
-                # populates ``author.username`` /
-                # ``author.display_name`` / ``author.account_id``
-                # — there is no ``author.key``. Match against
-                # any of the populated identifiers so callers
-                # can pass either a username or an accountId.
-                if user_key:
-                    project_work_logs = [
-                        log
-                        for log in project_work_logs
-                        if user_key
-                        in (
-                            log.get("author", {}).get("username"),
-                            log.get("author", {}).get("account_id"),
-                        )
-                    ]
-
-                all_time_entries.extend(project_work_logs)
-                self._logger.debug(
-                    "Retrieved %d entries for project %s",
-                    len(project_work_logs),
-                    project_key,
-                )
-
-            except Exception as e:
-                self._logger.warning(
-                    "Failed to get Tempo entries for project %s: %s",
-                    project_key,
-                    e,
-                )
-                continue
+            project_work_logs = self.get_tempo_all_work_logs_for_project(
+                project_key=project_key, date_from=date_from, date_to=date_to
+            )
+            all_time_entries.extend(
+                row for row in project_work_logs if _matches_scope(row, project_key, None, user_key)
+            )
         return all_time_entries
 
     def get_tempo_time_entries(

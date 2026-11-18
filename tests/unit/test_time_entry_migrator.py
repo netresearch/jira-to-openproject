@@ -700,9 +700,11 @@ class TestTimeEntryMigratorOrchestration:
             {"jira_key": "PROJ-2", "work_package_id": 2, "project_id": 1},
         ]
 
-        mock_jira_client.get_work_logs_for_issue.return_value = [{"id": "work_log_1"}]
+        mock_jira_client.get_work_logs_for_issue.side_effect = [
+            [{"id": str(i), "started": "2014-04-18T12:00:00Z"}] for i in (1, 2)
+        ]
         mock_jira_client.get_tempo_time_entries.return_value = [
-            {"tempoWorklogId": "tempo_1", "issue_key": "PROJ-1"},
+            {"tempoWorklogId": "tempo_1", "jiraWorklogId": 1, "issue_key": "PROJ-1"},
         ]
 
         mock_transformer_instance = MockTransformer.return_value
@@ -732,9 +734,11 @@ class TestTimeEntryMigratorOrchestration:
         """Verify the complete migration pipeline works end-to-end."""
         # Arrange
         issue_keys = ["PROJ-1", "PROJ-2"]
-        mock_jira_client.get_work_logs_for_issue.return_value = [{"id": "work_log_1"}]
+        mock_jira_client.get_work_logs_for_issue.side_effect = [
+            [{"id": str(i), "started": "2014-04-18T12:00:00Z"}] for i in (1, 2)
+        ]
         mock_jira_client.get_tempo_time_entries.return_value = [
-            {"tempoWorklogId": "tempo_1", "issue_key": "PROJ-2"},
+            {"tempoWorklogId": "tempo_1", "jiraWorklogId": 2, "issue_key": "PROJ-2"},
         ]
 
         mock_transformer_instance = MockTransformer.return_value
@@ -924,3 +928,38 @@ def test_worklog_comparison_uses_complete_source_and_verified_target_receipts(
     assert migrator._worklog_receipts.counts()["DEMO"] == {"source": 1}
     migrator._create_time_entry(sample_openproject_time_entry, parallel=False)
     assert migrator._worklog_receipts.counts()["DEMO"] == {"source": 1, "target": 1}
+
+
+def test_tempo_uses_observed_issue_ids_and_historical_dates(migrator, mock_jira_client):
+    mock_jira_client.get_work_logs_for_issue.side_effect = [
+        [{"id": "71", "started": "2012-03-02T01:00:00+0100", "author": {"time_zone": "America/New_York"}}],
+        [{"id": "84", "started": "2012-03-08T23:00:00-0400"}],
+    ]
+    migrator.extract_jira_work_logs_for_issues(["ABC-1", "ABC-2"], save_to_file=False)
+    allowed = {"issue_key": "ABC-1", "jira_worklog_id": 71}
+    mock_jira_client.get_tempo_time_entries.return_value = [
+        allowed,
+        {**allowed, "issue_key": "ABC-2"},
+        {**allowed, "jira_worklog_id": 72},
+    ]
+    selected = migrator.extract_tempo_time_entries(["ABC"], save_to_file=False)
+    assert selected == [
+        {**allowed, "jira_started": "2012-03-02T01:00:00+0100", "jira_author_time_zone": "America/New_York"}
+    ]
+    from src.utils.time_entry_transformer import TimeEntryTransformer
+
+    row = TimeEntryTransformer().transform_tempo_work_log(
+        {**selected[0], "date_started": "2012-03-02 00:00:00.000", "time_spent_seconds": 60}
+    )
+    assert row["spentOn"] == "2012-03-01"
+    assert row["_meta"]["jira_start_minute"] == 19 * 60
+    mock_jira_client.get_tempo_time_entries.assert_called_once_with(
+        project_keys=["ABC"], date_from="2012-03-01", date_to="2012-03-09"
+    )
+    mock_jira_client.get_tempo_time_entries.return_value = [{**allowed, "comment": "different note"}]
+    assert migrator.extract_tempo_time_entries(["ABC"], save_to_file=False) == []
+    assert migrator._tempo_read_failed
+    mock_jira_client.get_tempo_time_entries.side_effect = RuntimeError("service error")
+    assert migrator.extract_tempo_time_entries(["ABC"], save_to_file=False) == []
+    assert migrator._tempo_read_failed
+    assert migrator.extracted_tempo_entries == []

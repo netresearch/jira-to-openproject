@@ -386,3 +386,56 @@ class TestJiraClientWorkLog:
             assert all(wl["author"]["username"] == "john.doe" for wl in result)
             assert result[0]["time_spent_seconds"] == 3600
             assert result[1]["time_spent_seconds"] == 1800
+
+    def test_server_worklog_through_transformer(self, mock_jira_client):
+        from src.utils.time_entry_transformer import TimeEntryTransformer
+
+        canonical = {"key": "billable_flag", "value": False}
+        nested = {"worklogId": 14, "workAttribute": {"id": 3, "key": canonical["key"]}, "value": canonical["value"]}
+        row = {
+            "id": 71,
+            "jiraWorklogId": 14,
+            "issue": {"key": "TEST-2"},
+            "author": {"name": "worker", "key": "stable"},
+            "timeSpentSeconds": 90,
+            "dateStarted": "2011-05-02 23:45:00.000",
+            "dateCreated": "2011-05-03 02:00:00.000",
+            "dateUpdated": "2011-05-04 09:00:00.000",
+            "worklogAttributes": [canonical],
+            "workAttributeValues": [nested],
+        }
+        get = mock_jira_client.jira._session.get
+        get.return_value = Mock(status_code=200, json=Mock(return_value=[row, {**row, "issue": {"key": "TEST-3"}}]))
+        result = mock_jira_client.get_tempo_work_logs(issue_key="TEST-2", user_key="worker")
+        assert get.call_args.kwargs["params"] == {"projectKey": "TEST", "username": "worker", "limit": 1000}
+        assert len(result) == 1
+        source = result[0]
+        assert (source["tempo_worklog_id"], source["created"], source["updated"]) == (
+            71,
+            row["dateCreated"],
+            row["dateUpdated"],
+        )
+        assert source["work_attribute_values"] == [nested]
+        target = TimeEntryTransformer(
+            user_mapping={"stable": 4}, work_package_mapping={"TEST-2": 9}
+        ).transform_tempo_work_log(source)
+        assert target["spentOn"] == "2011-05-02"
+        assert target["_meta"]["jira_worklog_key"] == "TEST-2:14"
+        assert target["_meta"]["tempo_attributes"] == {"billable_flag": False}
+        for wrong in (
+            {**row, "issue": {"key": "OTHER-2"}},
+            {**row, "workAttributeValues": [{**nested, "worklogId": 15}]},
+            {**row, "worklogAttributes": [{**canonical, "value": True}]},
+        ):
+            get.return_value.json.return_value = [wrong]
+            with pytest.raises(JiraApiError):
+                mock_jira_client.get_tempo_work_logs(project_key="TEST")
+
+    def test_repeated_page_or_later_failure_is_reported(self, mock_jira_client):
+        rows = [{"jiraWorklogId": idx, "issue": {"key": "TEST-2"}} for idx in range(1, 1001)]
+        first = Mock(status_code=200, json=Mock(return_value=rows))
+        session = mock_jira_client.jira._session
+        for second in (first, Mock(status_code=403)):
+            session.get.side_effect = [first, second]
+            with pytest.raises(JiraApiError):
+                mock_jira_client.get_tempo_time_entries(project_keys=["TEST"])

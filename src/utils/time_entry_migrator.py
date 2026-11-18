@@ -16,7 +16,7 @@ import json
 import os
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -694,8 +694,64 @@ class TimeEntryMigrator:
 
     def _tempo_allowed(self, row: dict[str, Any]) -> bool:
         issue_key = row.get("issue_key") or (row.get("issue") or {}).get("key")
-        selected = self._requested_issues is None or issue_key in self._requested_issues
-        return selected and issue_key not in self._failed_worklog_issues and not has_comment_audience(row)
+        if issue_key in self._failed_worklog_issues or has_comment_audience(row):
+            return False
+        if self._requested_issues is None:
+            return True
+        jira_id = row.get("jira_worklog_id", row.get("jiraWorklogId"))
+        return issue_key in self._requested_issues and str(jira_id) in self._worklog_receipts.inventory.get(
+            issue_key, set()
+        )
+
+    @staticmethod
+    def _verified_tempo_entry(row: dict[str, Any], canonical: dict[str, Any]) -> dict[str, Any]:
+        # Tempo Server sends local times without a zone. Anchor the entry to the
+        # independently read Jira worklog and reject any different note or worker.
+        author = canonical.get("author") or {}
+        fields = (
+            (author.get("key"), (row.get("author") or {}).get("key")),
+            (canonical.get("time_spent_seconds"), row.get("time_spent_seconds")),
+        )
+        if any(expected is not None and observed != expected for expected, observed in fields):
+            msg = "Tempo and Jira disagree about the identity or duration of a work log."
+            raise ValueError(msg)
+        if (canonical.get("comment") or "") != (row.get("description", row.get("comment")) or ""):
+            msg = "Tempo and Jira disagree about the work log comment."
+            raise ValueError(msg)
+        return {**row, "jira_started": canonical["started"], "jira_author_time_zone": author.get("time_zone")}
+
+    def _selected_tempo_entries(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        jira_rows = {(issue, str(row["id"])): row for issue, logs in self.extracted_work_logs.items() for row in logs}
+        result = []
+        for row in entries:
+            if not self._tempo_allowed(row):
+                continue
+            issue = row.get("issue_key") or (row.get("issue") or {}).get("key")
+            identifier = row.get("jira_worklog_id", row.get("jiraWorklogId"))
+            canonical = jira_rows.get((issue, str(identifier)))
+            if canonical is None and self._requested_issues is not None:
+                continue
+            if canonical:
+                row = self._verified_tempo_entry(row, canonical)
+            clock = canonical or row
+            if self._ff_accept(clock.get("created"), clock.get("updated")):
+                result.append(row)
+        return result
+
+    def _read_tempo_entries(
+        self, project_keys: list[str] | None, date_from: str | None, date_to: str | None
+    ) -> list[dict[str, Any]]:
+        if self._requested_issues is not None and not (date_from and date_to):
+            # Without dates Server returns a recent period. Pad the source days
+            # for offsets between Jira timestamps and Tempo's local calendar.
+            days = [
+                date.fromisoformat(row["started"][:10]) for rows in self.extracted_work_logs.values() for row in rows
+            ]
+            if not days:
+                return []
+            date_from = date_from or (min(days) - timedelta(days=1)).isoformat()
+            date_to = date_to or (max(days) + timedelta(days=1)).isoformat()
+        return self.jira_client.get_tempo_time_entries(project_keys=project_keys, date_from=date_from, date_to=date_to)
 
     def extract_tempo_time_entries(
         self,
@@ -717,6 +773,7 @@ class TimeEntryMigrator:
             List of Tempo time entry dictionaries
 
         """
+        self.extracted_tempo_entries = []
         self._tempo_read_failed = False
         self.logger.info("Extracting Tempo time entries")
         start_time = datetime.now(tz=UTC)
@@ -729,25 +786,11 @@ class TimeEntryMigrator:
                 )
                 return []
 
-            # Extract Tempo entries with all metadata
-            tempo_entries = self.jira_client.get_tempo_time_entries(
-                project_keys=project_keys,
-                date_from=date_from,
-                date_to=date_to,
-            )
+            tempo_entries = self._read_tempo_entries(project_keys, date_from, date_to)
 
             result_entries: list[dict[str, Any]] = []
             if tempo_entries:
-                # Fast-forward filter for Tempo using created/updated
-                filtered = []
-                for te in tempo_entries:
-                    created = te.get("created")
-                    updated = te.get("updated")
-                    try:
-                        if self._tempo_allowed(te) and self._ff_accept(created, updated):
-                            filtered.append(te)
-                    except Exception:
-                        continue
+                filtered = self._selected_tempo_entries(tempo_entries)
                 self.extracted_tempo_entries = filtered
                 self.migration_results["tempo_entries_extracted"] = len(filtered)
                 self.migration_results["total_work_logs_found"] += len(filtered)
@@ -769,6 +812,7 @@ class TimeEntryMigrator:
             return result_entries
 
         except Exception as e:
+            self._tempo_read_failed = True
             error_msg = f"Failed to extract Tempo time entries: {e}"
             self.logger.exception(error_msg)
             self.migration_results["errors"].append(error_msg)

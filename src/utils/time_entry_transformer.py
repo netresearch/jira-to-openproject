@@ -4,7 +4,7 @@
 """Time entry transformation utilities for Jira to OpenProject migration."""
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -218,6 +218,12 @@ class TimeEntryTransformer:
                 "href": f"/api/v3/work_packages/{work_package_id}",
             }
 
+    @staticmethod
+    def _tempo_worklog_start(log: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        if log.get("jira_started"):
+            return _worklog_start(log["jira_started"], log.get("jira_author_time_zone"))
+        return datetime.fromisoformat(log.get("dateStarted", log.get("date_started", ""))).date().isoformat(), {}
+
     def transform_tempo_work_log(
         self,
         tempo_log: dict[str, Any],
@@ -237,6 +243,7 @@ class TimeEntryTransformer:
             # Extract basic information
             author_username = (
                 tempo_log.get("author", {}).get("name")
+                or tempo_log.get("author", {}).get("username")
                 or tempo_log.get("author", {}).get("key")
                 or tempo_log.get("author", {}).get("accountId")
                 or tempo_log.get("author", {}).get("emailAddress")
@@ -248,7 +255,7 @@ class TimeEntryTransformer:
                 msg = "Work log audience cannot be represented on a native time entry."
                 raise ValueError(msg)
             final_hours = _worklog_hours(tempo_log)
-            spent_on = date.fromisoformat(tempo_log.get("dateStarted", tempo_log.get("date_started", ""))).isoformat()
+            spent_on, start = self._tempo_worklog_start(tempo_log)
             description = _worklog_comment(tempo_log.get("description", tempo_log.get("comment")) or "")
 
             # Build OpenProject time entry
@@ -262,6 +269,7 @@ class TimeEntryTransformer:
                     "jira_worklog_id": tempo_log.get("jiraWorklogId", tempo_log.get("jira_worklog_id")),
                     "jira_issue_key": issue_key,
                     "tempo_author": author_username,
+                    **start,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
                     "jira_worklog_key": self._tempo_worklog_key(tempo_log, issue_key),
                 },
@@ -524,10 +532,10 @@ class TimeEntryTransformer:
 
         """
         # Check Tempo work attributes first
-        work_attributes = tempo_log.get("workAttributes", [])
+        work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))
         for attr in work_attributes:
             attr_key = attr.get("key", "").lower()
-            attr_value = attr.get("value", "").lower()
+            attr_value = str(attr.get("value", "")).lower()
 
             # Look for activity-related attributes
             if "activity" in attr_key or "type" in attr_key:
@@ -536,7 +544,7 @@ class TimeEntryTransformer:
                     return activity_id
 
         # Fall back to comment-based detection
-        description = tempo_log.get("description", "")
+        description = tempo_log.get("description", tempo_log.get("comment")) or ""
         return self._detect_activity(description)
 
     def _handle_tempo_specific_fields(
@@ -552,22 +560,26 @@ class TimeEntryTransformer:
 
         """
         # Add Tempo metadata
-        time_entry["_meta"]["tempo_billable"] = tempo_log.get("billableSeconds", 0) > 0
+        billable = tempo_log.get("billable_seconds", tempo_log.get("billableSeconds"))
+        time_entry["_meta"]["tempo_billable"] = billable is not None and billable > 0
         time_entry["_meta"]["tempo_location"] = tempo_log.get("location")
 
         # Handle billing information
-        if "billableSeconds" in tempo_log:
-            billable_hours = tempo_log["billableSeconds"] / 3600.0
+        if billable is not None:
+            billable_hours = billable / 3600.0
             time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 2)
 
         # Handle work attributes
-        work_attributes = tempo_log.get("workAttributes", [])
+        work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))
         if work_attributes:
             attributes = {}
             for attr in work_attributes:
                 key = attr.get("key", "")
                 value = attr.get("value", "")
-                if key and value:
+                if key and key in attributes:
+                    msg = "Tempo contains duplicate work attribute keys."
+                    raise ValueError(msg)
+                if key and value is not None:
                     attributes[key] = value
             if attributes:
                 time_entry["_meta"]["tempo_attributes"] = attributes
