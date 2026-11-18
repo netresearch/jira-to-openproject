@@ -172,14 +172,14 @@ class TimeEntryTransformer:
             return result_entry
 
     @staticmethod
-    def _tempo_worklog_key(tempo_log, issue_key) -> str | None:
+    def _tempo_worklog_key(tempo_log: dict[str, Any], issue_key: str | None) -> str | None:
         if (jira_id := tempo_log.get("jiraWorklogId")) is not None:
             return f"{issue_key}:{jira_id}"
         if (tempo_id := tempo_log.get("tempoWorklogId")) is not None:
             return f"tempo:{tempo_id}"
         return None
 
-    def _link_tempo_principals(self, tempo_log, issue_key, time_entry):
+    def _link_tempo_principals(self, tempo_log: dict[str, Any], issue_key: str, time_entry: dict[str, Any]) -> None:
         # Map user
         user_id = self._map_user_multi(tempo_log.get("author", {}))
         if user_id:

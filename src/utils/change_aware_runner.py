@@ -144,59 +144,63 @@ class ChangeAwareRunner:
 
         # Snapshot for next-run change detection (best-effort; failure does
         # not fail the migration itself).
-        if result.success:
-            try:
-                current_entities = snapshot_entities() if snapshot_entities else get_cached_entities(entity_type)
-                # Call back through the migration so subclass overrides of
-                # create_snapshot take effect.
-                snapshot_path = self.migration.create_snapshot(current_entities, entity_type)
-                self.logger.info(
-                    "Created snapshot for %s: %s",
-                    entity_type,
-                    snapshot_path,
-                )
-                if not result.details:
-                    result.details = {}
-                result.details.update(
-                    {
-                        "snapshot_created": str(snapshot_path),
-                        "change_report": change_report,
-                        "cache_stats": self._cache_stats_snapshot(
-                            len(local_cache),
-                            total_cache_invalidations,
-                        ),
-                    },
-                )
-            except MigrationError as e:
-                if isinstance(e.__cause__, (ValueError, NotImplementedError)):
-                    # The entity fetch raised ``ValueError`` (transformation-only
-                    # convention) or ``NotImplementedError`` (``BaseMigration``'s
-                    # default when the subclass never overrode
-                    # ``_get_current_entities_for_type``).  Both signal "snapshot
-                    # not supported by design" — this is not a failure.  Log at
-                    # debug to avoid spurious WARNINGs on every run for
-                    # WorkPackageContentMigration, watchers, time_entries,
-                    # wp_metadata_backfill, category_defaults, etc.
-                    self.logger.debug(
-                        "Skipping snapshot for %s (no change-detection support): %s",
-                        entity_type,
-                        e,
-                    )
-                else:
-                    # Any other MigrationError (e.g. network timeout, 500
-                    # response wrapped by ``_get_cached_entities``) is a real
-                    # failure and must stay visible.
-                    self.logger.warning(
-                        "Failed to create snapshot after successful migration: %s",
-                        e,
-                    )
-            except Exception as e:
-                self.logger.warning(
-                    "Failed to create snapshot after successful migration: %s",
-                    e,
-                )
+        if not result.success:
+            return result
+        try:
+            current_entities = snapshot_entities() if snapshot_entities else get_cached_entities(entity_type)
+            # Call back through the migration so subclass overrides of
+            # create_snapshot take effect.
+            snapshot_path = self.migration.create_snapshot(current_entities, entity_type)
+            self.logger.info(
+                "Created snapshot for %s: %s",
+                entity_type,
+                snapshot_path,
+            )
+            if not result.details:
+                result.details = {}
+            result.details.update(
+                {
+                    "snapshot_created": str(snapshot_path),
+                    "change_report": change_report,
+                    "cache_stats": self._cache_stats_snapshot(
+                        len(local_cache),
+                        total_cache_invalidations,
+                    ),
+                },
+            )
+        except MigrationError as e:
+            self._report_snapshot_error(entity_type, e)
+        except Exception as e:
+            self.logger.warning(
+                "Failed to create snapshot after successful migration: %s",
+                e,
+            )
 
         return result
+
+    def _report_snapshot_error(self, entity_type: str, error: MigrationError) -> None:
+        if isinstance(error.__cause__, (ValueError, NotImplementedError)):
+            # The entity fetch raised ``ValueError`` (transformation-only
+            # convention) or ``NotImplementedError`` (``BaseMigration``'s
+            # default when the subclass never overrode
+            # ``_get_current_entities_for_type``).  Both signal "snapshot
+            # not supported by design" — this is not a failure.  Log at
+            # debug to avoid spurious WARNINGs on every run for
+            # WorkPackageContentMigration, watchers, time_entries,
+            # wp_metadata_backfill, category_defaults, etc.
+            self.logger.debug(
+                "Skipping snapshot for %s (no change-detection support): %s",
+                entity_type,
+                error,
+            )
+        else:
+            # Any other MigrationError (e.g. network timeout, 500
+            # response wrapped by ``_get_cached_entities``) is a real
+            # failure and must stay visible.
+            self.logger.warning(
+                "Failed to create snapshot after successful migration: %s",
+                error,
+            )
 
     def should_skip(
         self,

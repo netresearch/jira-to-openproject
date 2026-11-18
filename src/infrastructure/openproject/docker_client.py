@@ -26,6 +26,28 @@ from src.utils.file_manager import FileManager
 logger = configure_logging("INFO", None)
 
 
+def _validate_run_limits(user: str | None, memory_limit: str | None, cpu_limit: str | None) -> None:
+    # INPUT VALIDATION: Validate critical parameters to prevent errors
+
+    if user and not re.fullmatch(r"\w++(?::\w*)?", user):
+        msg = f"Invalid user format: {user}. Expected format: 'user' or 'uid:gid'"
+        raise ValueError(
+            msg,
+        )
+
+    if memory_limit and not re.fullmatch(r"\d+[mgMGT]?", memory_limit):
+        msg = f"Invalid memory_limit format: {memory_limit}. Expected format: '512m', '1g', etc."
+        raise ValueError(
+            msg,
+        )
+
+    if cpu_limit and not re.fullmatch(r"(?:\d++(?:\.\d+)?|\.\d+)", cpu_limit):
+        msg = f"Invalid cpu_limit format: {cpu_limit}. Expected format: '0.5', '1', '2.0', etc."
+        raise ValueError(
+            msg,
+        )
+
+
 class DockerClient:
     """Client for interacting with Docker containers on remote servers.
 
@@ -372,25 +394,7 @@ class DockerClient:
         command: str | None = None,
     ) -> tuple[str, str, int]:
         """Run a new Docker container with security and resource constraints."""
-        # INPUT VALIDATION: Validate critical parameters to prevent errors
-
-        if user and not re.match(r"^[\w]+:?[\w]*$", user):
-            msg = f"Invalid user format: {user}. Expected format: 'user' or 'uid:gid'"
-            raise ValueError(
-                msg,
-            )
-
-        if memory_limit and not re.match(r"^\d+[mgMGT]?$", memory_limit):
-            msg = f"Invalid memory_limit format: {memory_limit}. Expected format: '512m', '1g', etc."
-            raise ValueError(
-                msg,
-            )
-
-        if cpu_limit and not re.match(r"^\d*\.?\d+$", cpu_limit):
-            msg = f"Invalid cpu_limit format: {cpu_limit}. Expected format: '0.5', '1', '2.0', etc."
-            raise ValueError(
-                msg,
-            )
+        _validate_run_limits(user, memory_limit, cpu_limit)
 
         # Build docker run command
         docker_cmd = ["docker", "run"]

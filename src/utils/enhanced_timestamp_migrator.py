@@ -125,8 +125,15 @@ class EnhancedTimestampMigrator:
         return None
 
     def _record_creation_timestamp(
-        self, extracted, work_package_data, use_rails_for_immutable, result, *, jira_key, author_id
-    ):
+        self,
+        extracted: dict[str, Any],
+        work_package_data: dict[str, Any],
+        use_rails_for_immutable: bool,
+        result: TimestampMigrationResult,
+        *,
+        jira_key: str,
+        author_id: int | None,
+    ) -> None:
         # Migrate creation timestamp
         creation_result = self._migrate_creation_timestamp(
             extracted,
@@ -155,7 +162,7 @@ class EnhancedTimestampMigrator:
         if creation_result["warnings"]:
             result["warnings"].extend(creation_result["warnings"])
 
-    def _align_due_date(self, work_package_data):
+    def _align_due_date(self, work_package_data: dict[str, Any]) -> None:
         if "due_date" in work_package_data and "start_date" in work_package_data:
             due_date_str = work_package_data.get("due_date")
             start_date_str = work_package_data.get("start_date")
@@ -171,7 +178,7 @@ class EnhancedTimestampMigrator:
                     )
                     work_package_data["due_date"] = start_date_str
 
-    def _extract_start_date(self, jira_issue, custom_fields, timestamps):
+    def _extract_start_date(self, jira_issue: Any, custom_fields: Any, timestamps: dict[str, Any]) -> None:
         for field_id in self.start_date_fields:
             value = None
             try:
@@ -191,7 +198,7 @@ class EnhancedTimestampMigrator:
                     }
                     break
 
-    def _extract_time_tracking(self, jira_issue, timestamps):
+    def _extract_time_tracking(self, jira_issue: Any, timestamps: dict[str, Any]) -> None:
 
         # Extract time tracking information
         if hasattr(jira_issue.fields, "timetracking"):
@@ -213,7 +220,7 @@ class EnhancedTimestampMigrator:
                     }
 
     @staticmethod
-    def _parse_timestamp(timestamp_str) -> datetime:
+    def _parse_timestamp(timestamp_str: str | datetime) -> datetime:
         if isinstance(timestamp_str, datetime):
             return timestamp_str
         try:

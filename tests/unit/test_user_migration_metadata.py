@@ -392,3 +392,15 @@ def test_discover_users_drops_dicts_without_account_or_name(logger_stub, tmp_pat
     # Only the user with a usable identity survives.
     assert len(discovered) == 1
     assert discovered[0]["accountId"] == "real"
+
+
+def test_name_cleanup_retains_valid_name_and_handles_literal_suffixes():
+    from src.application.components.user_migration import UserMigration
+
+    for display, expected in [
+        ("Grace O'Neil [Org]", ("Grace", "O'Neil")),
+        ("Dana Smith (Team) [Org]", ("Dana", "Smith")),
+        ("Alex", ("Alex", "source-user")),
+        ("Rita De (la) Cruz", ("Rita", "De la Cruz")),
+    ]:
+        assert UserMigration._user_names({"jira_display_name": display, "jira_name": "source-user"}) == expected

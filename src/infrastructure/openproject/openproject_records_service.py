@@ -36,6 +36,7 @@ work unchanged.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from src.infrastructure.exceptions import (
@@ -43,6 +44,7 @@ from src.infrastructure.exceptions import (
     QueryExecutionError,
     RecordNotFoundError,
 )
+from src.infrastructure.openproject.batch_records import index_batch_rows
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.rails_console_client import RubyError
 from src.utils.idempotency_decorators import batch_idempotent
@@ -52,6 +54,23 @@ from src.utils.idempotency_decorators import batch_idempotent
 # referencing the client's ``BATCH_LABEL_SAMPLE`` to avoid a stale
 # import surface if the constant is later relocated.
 BATCH_LABEL_SAMPLE = 3
+
+
+def _ruby_hash(attributes: dict[str, Any]) -> str:
+    from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+
+    def literal(value: Any) -> str:
+        if isinstance(value, str):
+            return f"'{escape_ruby_single_quoted(value)}'"
+        if value is None:
+            return "nil"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (list, dict)):
+            return f"JSON.parse('{escape_ruby_single_quoted(json.dumps(value, allow_nan=False))}')"
+        return json.dumps(value, allow_nan=False)
+
+    return ", ".join(f"{literal(str(key))} => {literal(value)}" for key, value in attributes.items())
 
 
 class OpenProjectRecordsService:
@@ -87,7 +106,6 @@ class OpenProjectRecordsService:
         # out of module-load time.
         from src.infrastructure.openproject.openproject_client import (
             _validate_model_name,
-            escape_ruby_single_quoted,
         )
 
         _validate_model_name(model)
@@ -95,26 +113,7 @@ class OpenProjectRecordsService:
             if isinstance(id_or_conditions, int):
                 query = f"{model}.find_by(id: {id_or_conditions})&.as_json"
             else:
-                # Build a Ruby hash literal explicitly. The previous
-                # ``json.dumps(...).replace('"', "'")`` shortcut broke
-                # for two common cases: (a) string values containing a
-                # literal apostrophe would unbalance the swap and emit
-                # invalid Ruby; (b) ``None`` became Ruby's ``null``
-                # (NameError) instead of ``nil``. Mirror the same
-                # ``format_cond_value`` shape used by ``find_all_records``
-                # so all CRUD helpers share one escaping policy.
-                def _format_cond_value(v: object) -> str:
-                    if isinstance(v, bool):
-                        return "true" if v else "false"
-                    if isinstance(v, str):
-                        return f"'{escape_ruby_single_quoted(v)}'"
-                    if v is None:
-                        return "nil"
-                    return str(v)
-
-                cond_parts = [f"'{k}' => {_format_cond_value(v)}" for k, v in id_or_conditions.items()]
-                conditions_str = "{" + ", ".join(cond_parts) + "}"
-                query = f"{model}.find_by({conditions_str})&.as_json"
+                query = f"{model}.find_by({{{_ruby_hash(id_or_conditions)}}})&.as_json"
 
             result = self._client.execute_json_query(query)
         except (QueryExecutionError, JsonParseError) as e:
@@ -204,22 +203,7 @@ class OpenProjectRecordsService:
                     jitter=True,
                 )
 
-                if batch_results:
-                    # Ensure we have a list
-                    if isinstance(batch_results, dict):
-                        batch_results = [batch_results]
-
-                    # Optimize ID mapping - create lookup sets for O(1) performance
-                    batch_id_set = {str(bid) for bid in batch_ids}
-                    original_id_map = {str(bid): bid for bid in batch_ids}
-
-                    # Map results by ID with O(1) lookups
-                    for record in batch_results:
-                        if isinstance(record, dict) and "id" in record:
-                            record_id_str = str(record["id"])
-                            if record_id_str in batch_id_set:
-                                original_id = original_id_map[record_id_str]
-                                results[original_id] = record
+                results.update(index_batch_rows(batch_results, batch_ids, "id", stringify=True))
 
             except Exception as e:
                 self._logger.warning(
@@ -277,27 +261,16 @@ class OpenProjectRecordsService:
 
         # Add conditions if provided (with safe escaping)
         if conditions:
-
-            def format_cond_value(v: object) -> str:
-                if isinstance(v, bool):
-                    return "true" if v else "false"
-                if isinstance(v, str):
-                    return f"'{escape_ruby_single_quoted(v)}'"
-                if v is None:
-                    return "nil"
-                return str(v)
-
-            cond_parts = [f"'{k}' => {format_cond_value(v)}" for k, v in conditions.items()]
-            query += f".where({{{', '.join(cond_parts)}}})"
+            query += f".where({{{_ruby_hash(conditions)}}})"
 
         # Add includes if provided
         if includes:
-            symbols = ", ".join(f":{inc}" for inc in includes)
+            symbols = ", ".join(f"'{escape_ruby_single_quoted(inc)}'" for inc in includes)
             query += f".includes({symbols})"
 
         # Add limit if provided
         if limit:
-            query += f".limit({limit})"
+            query += f".limit({int(limit)})"
 
         # Build Ruby expression that returns array/dicts directly
         ruby_expr = f"{query}.as_json"
@@ -306,7 +279,7 @@ class OpenProjectRecordsService:
             # Prefer file-based for multi-record results to avoid console artifacts
             data = client.execute_large_query_to_json_file(
                 ruby_expr,
-                container_file=f"/tmp/j2o_{model.lower()}_records.json",
+                container_file=client._generate_unique_temp_filename(f"{model.lower()}_records"),
                 timeout=60,
             )
             if data is None:
@@ -335,7 +308,6 @@ class OpenProjectRecordsService:
         # Lazy imports avoid the service ↔ client cycle.
         from src.infrastructure.openproject.openproject_client import (
             _validate_model_name,
-            escape_ruby_single_quoted,
         )
 
         client = self._client
@@ -349,18 +321,7 @@ class OpenProjectRecordsService:
         # column) rather than the bare token ``None``, which the
         # Rails parser would treat as a constant lookup and raise
         # ``NameError``.
-        def format_value(v: object) -> str:
-            if isinstance(v, bool):
-                return "true" if v else "false"
-            if isinstance(v, str):
-                return f"'{escape_ruby_single_quoted(v)}'"
-            if v is None:
-                return "nil"
-            return str(v)
-
-        attributes_str = ", ".join(
-            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()],
-        )
+        attributes_str = _ruby_hash(attributes)
         command = (
             f"record = {model}.new({{{attributes_str}}}); "
             f"record.save ? record.as_json : {{'error' => record.errors.full_messages}}"
@@ -373,66 +334,10 @@ class OpenProjectRecordsService:
             # Check if we got a valid dictionary
             if isinstance(result, dict):
                 return result
-
-            # If result is None, empty, or not a dict, try the fallback method
-            if result is None or not isinstance(result, dict):
-                self._logger.debug(
-                    "First method returned invalid result (%s), trying fallback",
-                    type(result),
-                )
-
-                # Fallback to simpler command with execute_json_query
-                # Use the safely-escaped attributes_str (not the unsafe ruby_hash)
-                simple_command = f"""
-                record = {model}.create({{{attributes_str}}})
-                if record.persisted?
-                  record.as_json
-                else
-                  raise "Failed to create record: #{{record.errors.full_messages.join(', ')}}"
-                end
-                """
-                result = client.execute_json_query(simple_command)
-
-            # Final validation
-            if not isinstance(result, dict):
-                # If we still don't have a dict, but the command didn't raise an error,
-                # assume success and try to get the record by its attributes
-                self._logger.warning(
-                    (
-                        "Could not parse JSON response from %s creation, but command executed. "
-                        "Attempting to find created record."
-                    ),
-                    model,
-                )
-
-                # Try to find the record we just created
-                try:
-                    # Use a subset of attributes that are likely to be unique
-                    search_attrs = {}
-                    for key in ["name", "title", "identifier", "email"]:
-                        if key in attributes:
-                            search_attrs[key] = attributes[key]
-                            break
-
-                    if search_attrs:
-                        found_record = self.find_record(model, search_attrs)
-                        if found_record:
-                            self._logger.info("Successfully found created %s record", model)
-                            return found_record
-                except Exception as e:
-                    self._logger.debug("Could not find created record: %s", e)
-
-                # If all else fails, create a minimal response
-                self._logger.warning("Creating minimal response for %s creation", model)
-                return {
-                    "id": None,
-                    "created": True,
-                    "model": model,
-                    "attributes": attributes,
-                }
-
-            return result
-
+            msg = f"Cannot confirm creation of {model} from the target response. Verify the target before retrying."
+            raise QueryExecutionError(msg)
+        except QueryExecutionError:
+            raise
         except RubyError as e:
             msg = f"Failed to create {model}."
             raise QueryExecutionError(msg) from e
@@ -463,27 +368,13 @@ class OpenProjectRecordsService:
         """
         from src.infrastructure.openproject.openproject_client import (
             _validate_model_name,
-            escape_ruby_single_quoted,
         )
 
         client = self._client
         _validate_model_name(model)
 
         # Build safely-escaped attributes for Ruby
-        def format_value(v: object) -> str:
-            if isinstance(v, bool):
-                return "true" if v else "false"
-            if isinstance(v, str):
-                return f"'{escape_ruby_single_quoted(v)}'"
-            if v is None:
-                return "nil"
-            return str(v)
-
-        attributes_str = ", ".join(
-            [f"'{k}' => {format_value(v)}" for k, v in attributes.items()],
-        )
-
-        # Build command to update the record
+        attributes_str = _ruby_hash(attributes)
         command = f"""
         record = {model}.find_by(id: {record_id})
         if record.nil?

@@ -12,6 +12,7 @@ migration runs, enabling incremental and idempotent migration operations.
 
 import hashlib
 import json
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
@@ -269,64 +270,44 @@ class ChangeDetector:
             Change detection report
 
         """
+        return self._compare_snapshot(current_entities, entity_type, self._load_baseline_snapshot(entity_type))
+
+    def _compare_snapshot(
+        self,
+        current_entities: list[dict[str, Any]],
+        entity_type: str,
+        baseline: dict[str, Any] | None,
+    ) -> ChangeReport:
         detection_timestamp = datetime.now(tz=UTC).isoformat()
-
-        # Load current snapshot
-        baseline_snapshots = self._load_baseline_snapshot(entity_type)
-        baseline_timestamp = None
-        baseline_entities = {}
-
-        if baseline_snapshots:
-            baseline_timestamp = baseline_snapshots.get("timestamp")
-            for snapshot in baseline_snapshots.get("snapshots", []):
-                baseline_entities[snapshot["entity_id"]] = snapshot
+        baseline = baseline or {}
+        baseline_timestamp = baseline.get("timestamp")
+        baseline_entities = {snapshot["entity_id"]: snapshot for snapshot in baseline.get("snapshots", [])}
 
         # Build current entities lookup
-        current_entities_lookup = {}
-        for entity in current_entities:
-            entity_id = self._get_entity_id(entity, entity_type)
-            if entity_id:
-                current_entities_lookup[entity_id] = entity
+        current_entities_lookup = {
+            identifier: entity
+            for entity in current_entities
+            if (identifier := self._get_entity_id(entity, entity_type))
+        }
 
         changes: list[EntityChange] = []
 
         # Find created and updated entities
         for entity_id, current_entity in current_entities_lookup.items():
-            if entity_id not in baseline_entities:
-                # New entity
-                change = EntityChange(
+            previous = baseline_entities.get(entity_id)
+            if previous and self._calculate_entity_checksum(current_entity) == previous["checksum"]:
+                continue
+            change_type = "updated" if previous else "created"
+            changes.append(
+                EntityChange(
                     entity_id=entity_id,
                     entity_type=entity_type,
-                    change_type="created",
-                    old_data=None,
+                    change_type=change_type,
+                    old_data=previous["data"] if previous else None,
                     new_data=current_entity,
-                    priority=self._calculate_change_priority(
-                        entity_type,
-                        "created",
-                        current_entity,
-                    ),
+                    priority=self._calculate_change_priority(entity_type, change_type, current_entity),
                 )
-                changes.append(change)
-            else:
-                # Check for updates
-                baseline_entity = baseline_entities[entity_id]
-                current_checksum = self._calculate_entity_checksum(current_entity)
-
-                if current_checksum != baseline_entity["checksum"]:
-                    change = EntityChange(
-                        entity_id=entity_id,
-                        entity_type=entity_type,
-                        change_type="updated",
-                        old_data=baseline_entity["data"],
-                        new_data=current_entity,
-                        priority=self._calculate_change_priority(
-                            entity_type,
-                            "updated",
-                            current_entity,
-                            baseline_entity["data"],
-                        ),
-                    )
-                    changes.append(change)
+            )
 
         # Find deleted entities
         for entity_id, baseline_entity in baseline_entities.items():
@@ -341,16 +322,12 @@ class ChangeDetector:
                         entity_type,
                         "deleted",
                         None,
-                        baseline_entity["data"],
                     ),
                 )
                 changes.append(change)
 
         # Calculate summary statistics
-        changes_by_type = {}
-        for change in changes:
-            change_type = change["change_type"]
-            changes_by_type[change_type] = changes_by_type.get(change_type, 0) + 1
+        changes_by_type = dict(Counter(change["change_type"] for change in changes))
 
         # Sort changes by priority (highest first)
         changes.sort(key=lambda x: x["priority"], reverse=True)
@@ -415,7 +392,6 @@ class ChangeDetector:
         entity_type: str,
         change_type: str,
         new_data: dict[str, Any] | None,
-        old_data: dict[str, Any] | None = None,
     ) -> int:
         """Calculate priority for a detected change.
 
@@ -423,7 +399,6 @@ class ChangeDetector:
             entity_type: Type of entity
             change_type: Type of change (created, updated, deleted)
             new_data: New entity data
-            old_data: Old entity data (for updates/deletes)
 
         Returns:
             Priority score (1-10, higher is more important)
@@ -467,7 +442,7 @@ class ChangeDetector:
         entity_type: str,
         since_timestamp: str,
     ) -> ChangeReport | None:
-        """Get changes for an entity type since a specific timestamp.
+        """Compare the latest captured state with the newest snapshot at or before a timestamp.
 
         Args:
             entity_type: Type of entities
@@ -477,10 +452,34 @@ class ChangeDetector:
             Change report or None if no baseline found
 
         """
-        # This would require fetching current data from Jira
-        # For now, return None as this needs integration with Jira client
-        self.logger.warning("get_changes_since_timestamp not yet implemented")
-        return None
+        latest = self._load_baseline_snapshot(entity_type)
+        if latest is None:
+            return None
+        cutoff = self._utc_timestamp(since_timestamp)
+        baseline = None
+        baseline_time = None
+        for path in (self.snapshot_dir / "archive").glob("*.json"):
+            if not path.name.startswith(f"{entity_type}_"):
+                continue
+            try:
+                snapshot = json.loads(path.read_bytes())
+                captured = self._utc_timestamp(snapshot["timestamp"])
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self.logger.warning("Could not read archived snapshot %s: %s", path, exc)
+                continue
+            if snapshot.get("entity_type") != entity_type or captured > cutoff:
+                continue
+            if baseline_time is None or captured > baseline_time:
+                baseline, baseline_time = snapshot, captured
+        if baseline is None:
+            return None
+        entities = [record["data"] for record in latest["snapshots"]]
+        return self._compare_snapshot(entities, entity_type, baseline)
+
+    @staticmethod
+    def _utc_timestamp(value: str) -> datetime:
+        timestamp = datetime.fromisoformat(value)
+        return timestamp.astimezone(UTC) if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)
 
     def cleanup_old_snapshots(self, keep_days: int = 30) -> int:
         """Clean up old snapshot files to save disk space.

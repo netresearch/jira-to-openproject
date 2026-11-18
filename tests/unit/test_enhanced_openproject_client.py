@@ -377,22 +377,17 @@ class TestBulkGetWorkPackages:
 
         mock_executor.submit.side_effect = [mock_future1, mock_future2]
 
-        # Mock as_completed
-        with patch(
-            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
-            return_value=[mock_future1, mock_future2],
-        ):
-            client = EnhancedOpenProjectClient(
-                server="https://openproject.example.com",
-                username="admin",
-                password="password",
-            )
+        client = EnhancedOpenProjectClient(
+            server="https://openproject.example.com",
+            username="admin",
+            password="password",
+        )
 
-            results = client.bulk_get_work_packages([1, 2])
+        results = client.bulk_get_work_packages([1, 2])
 
-            assert len(results) == 2
-            assert results[1] == wp1
-            assert results[2] == wp2
+        assert len(results) == 2
+        assert results[1] == wp1
+        assert results[2] == wp2
 
     @patch("src.infrastructure.openproject.enhanced_openproject_client.requests.Session")
     @patch("src.infrastructure.openproject.enhanced_openproject_client.ThreadPoolExecutor")
@@ -412,22 +407,17 @@ class TestBulkGetWorkPackages:
 
         mock_executor.submit.side_effect = [mock_future1, mock_future2]
 
-        # Mock as_completed
-        with patch(
-            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
-            return_value=[mock_future1, mock_future2],
-        ):
-            client = EnhancedOpenProjectClient(
-                server="https://openproject.example.com",
-                username="admin",
-                password="password",
-            )
+        client = EnhancedOpenProjectClient(
+            server="https://openproject.example.com",
+            username="admin",
+            password="password",
+        )
 
-            results = client.bulk_get_work_packages([1, 2])
+        results = client.bulk_get_work_packages([1, 2])
 
-            assert len(results) == 2
-            assert results[1] == wp1
-            assert results[2] is None
+        assert len(results) == 2
+        assert results[1] == wp1
+        assert results[2] is None
 
 
 class TestGetWorkPackageSafe:
@@ -745,24 +735,19 @@ class TestErrorHandlingAndResilience:
 
         mock_executor.submit.side_effect = [mock_future1, mock_future2]
 
-        # Mock as_completed
-        with patch(
-            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
-            return_value=[mock_future1, mock_future2],
-        ):
-            client = EnhancedOpenProjectClient(
-                server="https://openproject.example.com",
-                username="admin",
-                password="password",
-            )
+        client = EnhancedOpenProjectClient(
+            server="https://openproject.example.com",
+            username="admin",
+            password="password",
+        )
 
-            results = client.bulk_get_work_packages([1, 2])
+        results = client.bulk_get_work_packages([1, 2])
 
-            # Should have successful result and failed result
-            assert 1 in results
-            assert 2 in results
-            assert results[1] is not None
-            assert results[2] is None
+        # Should have successful result and failed result
+        assert 1 in results
+        assert 2 in results
+        assert results[1] is not None
+        assert results[2] is None
 
 
 class TestOptimizedRailsOperations:
@@ -877,25 +862,20 @@ class TestMemoryEfficiencyAndScalability:
 
         mock_executor.submit.side_effect = mock_futures
 
-        # Mock as_completed
-        with patch(
-            "src.infrastructure.openproject.enhanced_openproject_client.as_completed",
-            return_value=mock_futures,
-        ):
-            client = EnhancedOpenProjectClient(
-                server="https://openproject.example.com",
-                username="admin",
-                password="password",
-                max_workers=10,
-            )
+        client = EnhancedOpenProjectClient(
+            server="https://openproject.example.com",
+            username="admin",
+            password="password",
+            max_workers=10,
+        )
 
-            results = client.bulk_get_work_packages(work_package_ids)
+        results = client.bulk_get_work_packages(work_package_ids)
 
-            assert len(results) == 100
-            assert all(wp_id in results for wp_id in work_package_ids)
+        assert len(results) == 100
+        assert all(wp_id in results for wp_id in work_package_ids)
 
-            # Should submit as many tasks as work packages
-            assert mock_executor.submit.call_count == 100
+        # Should submit as many tasks as work packages
+        assert mock_executor.submit.call_count == 100
 
 
 if __name__ == "__main__":

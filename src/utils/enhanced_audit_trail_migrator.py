@@ -146,6 +146,72 @@ class EnhancedAuditTrailMigrator:
         except Exception as e:
             self.logger.warning(f"Failed to load project mapping: {e}")
 
+    @staticmethod
+    def _has_comment_audience(record: Any) -> bool:
+        """A comment audience marker makes even an otherwise recognized history field ambiguous."""
+        fields = record if isinstance(record, dict) else getattr(record, "__dict__", {})
+        raw = fields.get("raw")
+        if isinstance(raw, dict):
+            fields = {**raw, **fields}
+        return bool(
+            fields.get("visibility") is not None
+            or fields.get("properties")
+            or any(key in fields for key in ("internal", "isInternal", "public", "jsdPublic"))
+        )
+
+    @classmethod
+    def _history_entry(cls, history: Any) -> dict[str, Any]:
+        author = getattr(history, "author", None)
+        items = []
+        for raw in history.items:
+            if cls._has_comment_audience(raw):
+                continue
+            item = {
+                key: getattr(raw, key, None)
+                for key in ("field", "fieldtype", "fieldId", "from", "fromString", "to", "toString")
+            }
+            if may_copy_history_item(item):
+                items.append(item)
+        return {
+            "id": history.id,
+            "created": history.created,
+            "author": {key: getattr(author, key, None) for key in ("name", "displayName", "emailAddress")},
+            "items": items,
+        }
+
+    def _audit_author(self, entry: dict[str, Any], jira_issue_key: str) -> tuple[int, str | None]:
+        # Map user
+        user_id = None
+        user_name = None
+        if entry.get("author") and entry["author"].get("name"):
+            user_name = entry["author"]["name"]
+            user_id = self.user_mapping.get(user_name)
+
+        if not user_id:
+            self.migration_results["user_attribution_failures"] += 1
+            self.migration_results["warnings"].append(
+                f"No user mapping found for {user_name} in issue {jira_issue_key}",
+            )
+            # Use system user as fallback
+            user_id = 1  # Assuming admin user ID is 1
+        return user_id, user_name
+
+    def _queue_grouped_events(self, audit_events: list[AuditEventData]) -> None:
+        grouped = {}
+        for event in audit_events:
+            changelog_id = str(event.get("jira_changelog_id", ""))
+            if changelog_id not in grouped:
+                grouped[changelog_id] = {**event, "changes": dict(event.get("changes") or {})}
+                continue
+            grouped[changelog_id]["changes"].update(event.get("changes") or {})
+            comment = event.get("comment")
+            if comment:
+                grouped[changelog_id]["comment"] = "\n".join(
+                    filter(None, (grouped[changelog_id].get("comment"), comment))
+                )
+        for event in grouped.values():
+            self.rails_operations.append({"operation": "create_audit_event", "data": event})
+
     def extract_changelog_from_issue(self, jira_issue: Any) -> list[dict[str, Any]]:
         """Extract changelog data from a Jira issue.
 
@@ -168,33 +234,10 @@ class EnhancedAuditTrailMigrator:
             )
 
             for history in jira_issue.changelog.histories:
+                if self._has_comment_audience(history):
+                    continue
                 # Extract basic history information
-                entry = {
-                    "id": history.id,
-                    "created": history.created,
-                    "author": {
-                        "name": (getattr(history.author, "name", None) if history.author else None),
-                        "displayName": (getattr(history.author, "displayName", None) if history.author else None),
-                        "emailAddress": (getattr(history.author, "emailAddress", None) if history.author else None),
-                    },
-                    "items": [],
-                }
-
-                # Process individual changes within this history entry
-                for item in history.items:
-                    change_item = {
-                        "field": item.field,
-                        "fieldtype": getattr(item, "fieldtype", None),
-                        "fieldId": getattr(item, "fieldId", None),
-                        # BUG #11 FIX: Use "from"/"to" for IDs, not fromString/toString
-                        # Jira API provides: from=ID (e.g., "1"), fromString=name (e.g., "Open")
-                        "from": getattr(item, "from", None),
-                        "fromString": getattr(item, "fromString", None),
-                        "to": getattr(item, "to", None),
-                        "toString": getattr(item, "toString", None),
-                    }
-                    if may_copy_history_item(change_item):
-                        entry["items"].append(change_item)
+                entry = self._history_entry(history)
 
                 if entry["items"]:
                     changelog_entries.append(entry)
@@ -236,46 +279,10 @@ class EnhancedAuditTrailMigrator:
         audit_events = []
 
         for entry in changelog_entries:
+            if self._has_comment_audience(entry):
+                continue
             try:
-                # Map user
-                user_id = None
-                user_name = None
-                if entry.get("author") and entry["author"].get("name"):
-                    user_name = entry["author"]["name"]
-                    user_id = self.user_mapping.get(user_name)
-
-                if not user_id:
-                    self.migration_results["user_attribution_failures"] += 1
-                    self.migration_results["warnings"].append(
-                        f"No user mapping found for {user_name} in issue {jira_issue_key}",
-                    )
-                    # Use system user as fallback
-                    user_id = 1  # Assuming admin user ID is 1
-
-                # Process each change item in the entry
-                for item in entry.get("items", []) or []:
-                    if not may_copy_history_item(item):
-                        continue
-                    # Map field changes to OpenProject audit format
-                    changes = self._map_field_changes(item)
-
-                    if changes:
-                        audit_event: AuditEventData = {
-                            "jira_issue_key": jira_issue_key,
-                            "jira_changelog_id": entry.get("id", "unknown"),
-                            "openproject_work_package_id": openproject_work_package_id,
-                            "user_id": user_id,
-                            "user_name": user_name,
-                            "created_at": entry.get("created", "1970-01-01T00:00:00Z"),
-                            "action": "update",
-                            "auditable_type": "WorkPackage",
-                            "auditable_id": openproject_work_package_id,
-                            "version": 1,  # Will be calculated properly during insertion
-                            "comment": self._generate_audit_comment(item),
-                            "changes": changes,
-                        }
-                        audit_events.append(audit_event)
-
+                self._collect_audit_events(entry, jira_issue_key, openproject_work_package_id, audit_events)
             except Exception as e:
                 self.logger.exception(
                     f"Error transforming changelog entry {entry.get('id', 'unknown')} for {jira_issue_key}: {e}",
@@ -285,6 +292,39 @@ class EnhancedAuditTrailMigrator:
                 )
 
         return audit_events
+
+    def _collect_audit_events(
+        self,
+        entry: dict[str, Any],
+        jira_issue_key: str,
+        openproject_work_package_id: int,
+        audit_events: list[AuditEventData],
+    ) -> None:
+        user_id, user_name = self._audit_author(entry, jira_issue_key)
+
+        # Process each change item in the entry
+        for item in entry.get("items", []) or []:
+            if self._has_comment_audience(item) or not may_copy_history_item(item):
+                continue
+            # Map field changes to OpenProject audit format
+            changes = self._map_field_changes(item)
+
+            if changes:
+                audit_event: AuditEventData = {
+                    "jira_issue_key": jira_issue_key,
+                    "jira_changelog_id": entry.get("id", "unknown"),
+                    "openproject_work_package_id": openproject_work_package_id,
+                    "user_id": user_id,
+                    "user_name": user_name,
+                    "created_at": entry.get("created", "1970-01-01T00:00:00Z"),
+                    "action": "update",
+                    "auditable_type": "WorkPackage",
+                    "auditable_id": openproject_work_package_id,
+                    "version": 1,  # Will be calculated properly during insertion
+                    "comment": self._generate_audit_comment(item),
+                    "changes": changes,
+                }
+                audit_events.append(audit_event)
 
     def _map_field_changes(
         self,
@@ -557,22 +597,7 @@ class EnhancedAuditTrailMigrator:
                     openproject_work_package_id,
                 )
 
-                # Group multiple changes in the same Jira changelog entry
-                grouped: dict[str, dict[str, Any]] = {}
-                for ev in audit_events:
-                    cid = str(ev.get("jira_changelog_id", ""))
-                    if cid not in grouped:
-                        grouped[cid] = ev.copy()
-                    else:
-                        merged = grouped[cid].get("changes", {}) or {}
-                        for k, v in (ev.get("changes", {}) or {}).items():
-                            merged[k] = v
-                        grouped[cid]["changes"] = merged
-
-                for event in grouped.values():
-                    self.rails_operations.append(
-                        {"operation": "create_audit_event", "data": event},
-                    )
+                self._queue_grouped_events(audit_events)
 
                 self.migration_results["processed_entries"] += len(entries)
 
@@ -621,319 +646,60 @@ class EnhancedAuditTrailMigrator:
             f"Executing {len(self.rails_operations)} audit trail Rails operations",
         )
 
+        total = len(self.rails_operations)
         try:
-            from src import config as _cfg
+            activities = [self._audit_activity(op) for op in self.rails_operations]
+            response = self.op_client.bulk_create_work_package_activities(activities)
+            processed = int(response.get("created", 0)) + int(response.get("skipped", 0))
+            errors = list(response.get("errors") or [])
+            if response.get("error"):
+                errors.append(str(response["error"]))
+            success = bool(response.get("success") and not errors and processed == total)
+        except Exception as exc:
+            processed, errors, success = 0, [str(exc)], False
 
-            use_client_exec = bool(_cfg.migration_config.get("audit_use_client", False))
-        except Exception:
-            use_client_exec = False
-
-        events: list[dict[str, Any]] = []
-        for op in self.rails_operations:
-            if isinstance(op, dict) and "operation" in op:
-                data = op.get("data", {})
-            else:
-                data = op
-            if isinstance(data, dict):
-                if "work_package_id" not in data and "openproject_work_package_id" in data:
-                    data["work_package_id"] = data["openproject_work_package_id"]
-                events.append(data)
-
-        total_ops = len(events)
-        processed = 0
-        errors: list[str] = []
-        status = "error"
-
-        if use_client_exec:
-            try:
-                ruby_runner = self._generate_audit_creation_runner_from_input()
-                result = self.op_client.execute_script_with_data(ruby_runner, events)
-
-                if isinstance(result, dict):
-                    status = str(result.get("status", "error"))
-                    processed = int(result.get("processed", 0) or 0)
-                    if result.get("errors"):
-                        errors = list(result.get("errors"))
-                elif isinstance(result, bool):
-                    status = "success" if result else "error"
-                    processed = total_ops if result else 0
-                else:
-                    status = "success"
-                    processed = total_ops
-
-                if status == "success":
-                    self.logger.success("Successfully executed audit event operations via client")
-                    self.rails_operations.clear()
-                else:
-                    if not errors:
-                        errors = [f"Unexpected audit execution response: {result}"]
-                    self.logger.error("Audit event execution via client failed: %s", result)
-            except Exception as e:
-                error_msg = f"Failed to execute audit Rails operations via client: {e}"
-                self.logger.exception(error_msg)
-                self.migration_results["errors"].append(error_msg)
-                errors = [error_msg]
-        else:
-            try:
-                ruby_script = self._generate_audit_creation_script(self.rails_operations)
-
-                import subprocess
-
-                completed = subprocess.run(
-                    [
-                        "bash",
-                        "-lc",
-                        ruby_script,
-                    ],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if completed.returncode == 0:
-                    self.logger.success("Successfully executed audit event operations")
-                    status = "success"
-                    processed = total_ops
-                    self.rails_operations.clear()
-                else:
-                    stderr = completed.stderr.strip()
-                    error_msg = stderr or "Unknown Rails execution error"
-                    self.logger.error(f"Rails audit operations failed: {error_msg}")
-                    errors = [error_msg]
-            except Exception as e:
-                error_msg = f"Failed to execute audit Rails operations: {e}"
-                self.logger.exception(error_msg)
-                self.migration_results["errors"].append(error_msg)
-                errors = [error_msg]
-
-        if status == "success":
-            processed = min(processed, total_ops)
+        self.migration_results["rails_execution_success"] = success
+        if success:
+            self.rails_operations.clear()
             self.migration_results["successful_migrations"] += processed
-            self.migration_results["rails_execution_success"] = True
         else:
-            self.migration_results["failed_migrations"] += total_ops
-            self.migration_results["rails_execution_success"] = False
-            if errors:
-                self.migration_results["errors"].extend(errors)
+            if not errors:
+                errors.append(f"OpenProject processed {processed} of {total} audit activities")
+            self.migration_results["failed_migrations"] += max(0, total - processed)
+            self.migration_results["errors"].extend(errors)
+        return {"status": "success" if success else "error", "processed": processed, "total": total, "errors": errors}
 
+    @classmethod
+    def _audit_activity(cls, operation: dict[str, Any]) -> dict[str, Any]:
+        """Build a repeatable, dated history note for the OpenProject activity writer."""
+        import hashlib
+        import json
+
+        event = operation.get("data", operation)
+        if cls._has_comment_audience(operation) or cls._has_comment_audience(event):
+            msg = "Refusing an audit event with comment audience metadata"
+            raise ValueError(msg)
+        note = event.get("comment") or event.get("notes") or ""
+        changes = event.get("changes") or {}
+        if changes:
+            details = json.dumps(changes, ensure_ascii=False, sort_keys=True)
+            note = "\n\n".join(filter(None, (note, details)))
+        if not note:
+            msg = "Audit event is missing its history description"
+            raise ValueError(msg)
+        source_id = event.get("jira_changelog_id")
+        # Old exports can lack a Jira changelog ID. Hash their canonical contents
+        # so retrying a partially completed batch cannot duplicate history notes.
+        if not str(source_id).isdecimal():
+            canonical = json.dumps(event, sort_keys=True, ensure_ascii=False)
+            source_id = hashlib.sha256(canonical.encode()).hexdigest()
         return {
-            "status": status,
-            "processed": processed,
-            "total": total_ops,
-            "errors": errors,
+            "work_package_id": int(event.get("work_package_id") or event["openproject_work_package_id"]),
+            "user_id": event.get("user_id"),
+            "created_at": event.get("created_at"),
+            "comment": note,
+            "jira_comment_id": f"history-{source_id}",
         }
-
-    def _generate_audit_creation_script(self, operations: list[dict[str, Any]]) -> str:
-        """Generate Ruby script for creating audit events.
-
-        Args:
-            operations: List of audit operations to execute
-
-        Returns:
-            Ruby script as string
-
-        """
-        # Normalize input into data expected by legacy tests: list of dicts with
-        # work_package_id, user_id, created_at, notes, and changes array
-        audit_events_data: list[dict[str, Any]] = []
-        for op in operations or []:
-            if isinstance(op, dict) and "operation" in op:
-                data = op.get("data", {})
-            else:
-                data = op
-            if not isinstance(data, dict):
-                continue
-            # Map alternative keys used by transform pipeline
-            if "openproject_work_package_id" in data and "work_package_id" not in data:
-                data["work_package_id"] = data["openproject_work_package_id"]
-            if "comment" in data and "notes" not in data:
-                data["notes"] = data["comment"]
-            if "changes" in data and isinstance(data["changes"], dict):
-                # Convert {field: [old, new]} to array of hashes for ruby script expectations
-                converted = []
-                for field, values in data["changes"].items():
-                    old_val, new_val = values[0] if len(values) > 0 else None, values[1] if len(values) > 1 else None
-                    converted.append({"field": field, "old_value": old_val, "new_value": new_val})
-                data["changes"] = converted
-            audit_events_data.append(data)
-
-        # If no events, return empty script
-        if not audit_events_data:
-            return ""
-
-        # Helper to render Ruby hash literal with symbol-like keys to satisfy tests
-        def _ruby_literal(value: Any) -> str:
-            if isinstance(value, dict):
-                items = []
-                for k, v in value.items():
-                    key = str(k)
-                    # prefer snake_case keys without quotes
-                    items.append(f"{key}: {_ruby_literal(v)}")
-                return "{ " + ", ".join(items) + " }"
-            if isinstance(value, list):
-                return "[" + ", ".join(_ruby_literal(v) for v in value) + "]"
-            if isinstance(value, bool):
-                return "true" if value else "false"
-            if value is None:
-                return "nil"
-            if isinstance(value, (int, float)):
-                return str(value)
-            # strings
-            s = str(value).replace("\\", "\\\\").replace('"', '\\"')
-            return f'"{s}"'
-
-        ruby_events = "[\n  " + ",\n  ".join(_ruby_literal(ev) for ev in audit_events_data) + "\n]"
-
-        # Ruby script for audit event creation
-        return f"""
-        require 'json'
-        require 'time'
-
-        begin
-          # Audit events data
-          audit_events = {ruby_events}
-
-          created_count = 0
-          errors = []
-
-          audit_events.each do |event_data|
-            begin
-              # Find the work package
-              wp = WorkPackage.find_by(id: event_data['openproject_work_package_id'] || event_data['work_package_id'])
-              unless wp
-                errors << "Work package #{{event_data['openproject_work_package_id']}} not found for " \
-                         "{{event_data['jira_issue_key']}}"
-                next
-              end
-
-              # Find or create user
-              user_id = event_data['user_id'] || 1  # Fallback to admin
-              user = User.find_by(id: user_id) || User.where(admin: true).first
-
-              # Prevent phantom journals ("The changes were retracted" appears when
-              # journals have no actual notes or field changes)
-              notes = (event_data['comment'] || event_data['notes']).to_s.strip
-              changes = event_data['changes'] || []
-              if notes.empty? && changes.empty?
-                next  # Skip - no actual content to record
-              end
-
-              # Calculate next version number
-              current_version = wp.journals.maximum(:version) || 0
-              next_version = current_version + 1
-
-              # Parse timestamp
-              created_at = Time.parse(event_data['created_at'])
-
-              # Create journal entry (OpenProject's audit system)
-              journal = Journal.create!(
-                journable: wp,
-                user: user,
-                version: next_version,
-                activity_type: 'work_packages',
-                created_at: created_at,
-                notes: event_data['comment']
-              )
-
-              # Create journal details for field changes
-              event_data['changes'].each do |change|
-                field = change['field']
-                old_value = change['old_value']
-                new_value = change['new_value']
-
-                JournalDetail.create!(
-                  journal: journal,
-                  property: 'attr',
-                  prop_key: field,
-                  old_value: old_value&.to_s,
-                  value: new_value&.to_s
-                )
-              end
-
-              created_count += 1
-               puts "Created audit event for {{event_data['jira_issue_key'] || 'unknown'}} (WP #{{wp.id}})"
-
-            rescue => e
-              error_msg = "Failed to create audit event for {{event_data['jira_issue_key']}}: {{e.message}}"
-              errors << error_msg
-              puts error_msg
-            end
-          end
-
-          result = {{
-            'status' => 'success',
-            'processed' => created_count,
-            'errors' => errors,
-            'total' => audit_events.length
-          }}
-
-          puts "Audit trail migration completed: {{created_count}}/{{audit_events.length}} events created"
-          result
-
-        rescue => e
-          error_result = {{
-            'status' => 'error',
-            'message' => e.message,
-            'processed' => 0,
-            'errors' => [e.message]
-          }}
-          puts "Audit trail migration failed: {{e.message}}"
-          error_result
-        end
-        """
-
-    def _generate_audit_creation_runner_from_input(self) -> str:
-        """Generate Ruby script that reads audit events from `input_data`.
-
-        The surrounding Python execution will serialize events to JSON and make them
-        available in Ruby as the `input_data` variable via execute_script_with_data().
-        The script must print JSON between JSON_OUTPUT_START/JSON_OUTPUT_END markers.
-        """
-        return (
-            "require 'json'\n"
-            "require 'time'\n\n"
-            "begin\n"
-            "  audit_events = input_data\n"
-            "  created_count = 0\n"
-            "  errors = []\n"
-            "  audit_events.each do |event_data|\n"
-            "    begin\n"
-            "      wp = WorkPackage.find_by(id: event_data['openproject_work_package_id'] || event_data['work_package_id'])\n"
-            "      unless wp\n"
-            "        errors << \"Work package #{event_data['openproject_work_package_id']} not found for #{event_data['jira_issue_key']}\"\n"
-            "        next\n"
-            "      end\n"
-            "      user_id = event_data['user_id'] || 1\n"
-            "      user = User.find_by(id: user_id) || User.where(admin: true).first\n"
-            "      current_version = wp.journals.maximum(:version) || 0\n"
-            "      next_version = current_version + 1\n"
-            "      begin\n"
-            "        created_at = Time.parse(event_data['created_at'])\n"
-            "      rescue\n"
-            "        created_at = Time.now\n"
-            "      end\n"
-            "      journal = Journal.create!(journable: wp, user: user, version: next_version, activity_type: 'work_packages', created_at: created_at, notes: event_data['comment'])\n"
-            "      (event_data['changes'] || []).each do |change|\n"
-            "        field = change['field']\n"
-            "        old_value = change['old_value']\n"
-            "        new_value = change['new_value']\n"
-            "        JournalDetail.create!(journal: journal, property: 'attr', prop_key: field, old_value: old_value&.to_s, value: new_value&.to_s)\n"
-            "      end\n"
-            "      created_count += 1\n"
-            "    rescue => e\n"
-            "      errors << \"Failed to create audit event for #{event_data['jira_issue_key']}: #{e.message}\"\n"
-            "    end\n"
-            "  end\n"
-            "  result = { 'status' => 'success', 'processed' => created_count, 'errors' => errors, 'total' => audit_events.length }\n"
-            "  puts 'JSON_OUTPUT_START'\n"
-            "  puts JSON.dump(result)\n"
-            "  puts 'JSON_OUTPUT_END'\n"
-            "rescue => e\n"
-            "  error_result = { 'status' => 'error', 'message' => e.message, 'processed' => 0, 'errors' => [e.message] }\n"
-            "  puts 'JSON_OUTPUT_START'\n"
-            "  puts JSON.dump(error_result)\n"
-            "  puts 'JSON_OUTPUT_END'\n"
-            "end\n"
-        )
 
     def generate_audit_trail_report(self) -> str:
         """Generate comprehensive audit trail migration report.

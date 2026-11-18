@@ -533,119 +533,113 @@ class TestEnhancedAuditTrailMigrator:
         assert "hidden edit" not in repr(operations)
         assert migrator.migration_results["comments_processed"] == 0
 
-    @patch("subprocess.run")
-    def test_execute_rails_audit_operations_success(
-        self,
-        mock_subprocess,
-        migrator_with_mocks,
-    ) -> None:
-        """Test successful Rails audit operations execution."""
-        mock_subprocess.return_value = Mock(returncode=0, stdout="Success", stderr="")
-
+    def test_hidden_history_never_reaches_audit_activity_or_logs(self, migrator_with_mocks, caplog):
         migrator = migrator_with_mocks
-        migrator.rails_operations = [
+        sentinel = "restricted-history-fixture"
+        mixed = [
+            {"field": "Kommentar", "fieldId": "comment", "toString": sentinel},
+            {"field": "summary", "toString": sentinel, "visibility": {"type": "role"}},
             {
-                "work_package_id": 1001,
-                "user_id": 123,
-                "created_at": "2023-01-15T10:30:00.000+0000",
-                "notes": "Test change",
-                "changes": [
-                    {"field": "subject", "old_value": "old", "new_value": "new"},
-                ],
+                "field": "summary",
+                "toString": sentinel,
+                "properties": [{"key": "sd.public.comment", "value": {"internal": True}}],
             },
+            {"field": "summary", "toString": "Allowed summary"},
         ]
 
-        result = migrator.execute_rails_audit_operations()
+        def history(items, **extra):
+            return {"id": "4711", "created": "2020-01-01T00:00:00Z", "author": None, "items": items, **extra}
 
-        assert result["status"] == "success"
-        assert result["processed"] == 1
-        assert result["total"] == 1
+        cached = [history(mixed), history([{"field": "summary", "toString": sentinel}], jsdPublic=False)]
+        issue = SimpleNamespace(
+            key="TEST-1",
+            changelog=SimpleNamespace(
+                histories=[
+                    SimpleNamespace(**{**row, "items": [SimpleNamespace(**item) for item in row["items"]]})
+                    for row in cached
+                ]
+            ),
+        )
+        extracted = migrator.extract_changelog_from_issue(issue)
+        assert sentinel not in json.dumps(extracted)
+        for entries in (extracted, cached):
+            migrator.changelog_data = {"TEST-1": entries}
+            migrator.op_client.bulk_create_work_package_activities.return_value = {"success": True, "created": 1}
+            assert migrator.execute_rails_audit_operations({"TEST-1": 1})["status"] == "success"
+            written = json.dumps(migrator.op_client.bulk_create_work_package_activities.call_args.args[0])
+            assert "Allowed summary" in written
+            assert sentinel not in written
+
+        migrator.rails_operations = [{"work_package_id": 1, "notes": sentinel, "internal": True}]
+        migrator.op_client.bulk_create_work_package_activities.reset_mock()
+        report = migrator.execute_rails_audit_operations()
+        assert report["status"] == "error"
+        migrator.op_client.bulk_create_work_package_activities.assert_not_called()
+        assert sentinel not in json.dumps(report)
+        assert sentinel not in caplog.text
+
+    def test_execute_rails_audit_operations_success(self, migrator_with_mocks) -> None:
+        migrator = migrator_with_mocks
+        writer = migrator.op_client.bulk_create_work_package_activities
+        writer.return_value = {"success": True, "created": 0, "skipped": 1}
+        event = {
+            "work_package_id": 1001,
+            "jira_changelog_id": "321",
+            "user_id": 123,
+            "created_at": "2023-01-15T10:30:00Z",
+            "notes": "Changed subject",
+        }
+        migrator.rails_operations = [event]
+        assert migrator.execute_rails_audit_operations() == {
+            "status": "success",
+            "processed": 1,
+            "total": 1,
+            "errors": [],
+        }
         assert migrator.rails_operations == []
-        assert migrator.migration_results["rails_execution_success"] is True
-        mock_subprocess.assert_called_once()
-
-    @patch("subprocess.run")
-    def test_execute_rails_audit_operations_failure(
-        self,
-        mock_subprocess,
-        migrator_with_mocks,
-    ) -> None:
-        """Test failed Rails audit operations execution."""
-        mock_subprocess.return_value = Mock(
-            returncode=1,
-            stdout="",
-            stderr="Error occurred",
+        writer.assert_called_once_with(
+            [
+                {
+                    "work_package_id": 1001,
+                    "jira_comment_id": "history-321",
+                    "user_id": 123,
+                    "created_at": "2023-01-15T10:30:00Z",
+                    "comment": "Changed subject",
+                }
+            ]
         )
 
+    def test_legacy_audit_event_keeps_comment_and_change_values(self, migrator_with_mocks):
+        event = {"work_package_id": 1, "comment": "Updated estimate", "changes": {"estimated_hours": [0, 2]}}
+        activity = migrator_with_mocks._audit_activity(event)
+        assert activity["comment"].splitlines()[0] == "Updated estimate"
+        assert '"estimated_hours": [0, 2]' in activity["comment"]
+
+    def test_execute_rails_audit_operations_failure_keeps_retryable_queue(self, migrator_with_mocks) -> None:
         migrator = migrator_with_mocks
+        writer = migrator.op_client.bulk_create_work_package_activities
+        writer.return_value = {"success": False, "created": 1, "skipped": 0, "errors": ["Entry failed"]}
         migrator.rails_operations = [
-            {
-                "work_package_id": 1001,
-                "user_id": 123,
-                "created_at": "2023-01-15T10:30:00.000+0000",
-                "notes": "Test change",
-                "changes": [],
-            },
+            {"work_package_id": 1001, "notes": "First"},
+            {"work_package_id": 1001, "notes": "Second"},
         ]
+        report = migrator.execute_rails_audit_operations()
+        assert report == {"status": "error", "processed": 1, "total": 2, "errors": ["Entry failed"]}
+        original = writer.call_args.args[0]
+        writer.return_value = {"success": True, "created": 1, "skipped": 1}
+        assert migrator.execute_rails_audit_operations()["status"] == "success"
+        assert writer.call_args.args[0] == original
+        assert original[0]["jira_comment_id"] != original[1]["jira_comment_id"]
 
-        result = migrator.execute_rails_audit_operations()
-
-        assert result["status"] == "error"
-        assert result["processed"] == 0
-        assert result["total"] == 1
-        assert result["errors"] == ["Error occurred"]
-        assert migrator.rails_operations  # operations remain for retry
-        assert migrator.migration_results["rails_execution_success"] is False
-        mock_subprocess.assert_called_once()
-
-    @patch("subprocess.run")
-    def test_execute_rails_audit_operations_empty_cache(
-        self,
-        mock_subprocess,
-        migrator_with_mocks,
-    ) -> None:
-        """Test Rails execution with empty operations cache."""
+    def test_execute_rails_audit_operations_empty_cache(self, migrator_with_mocks) -> None:
         migrator = migrator_with_mocks
-        migrator.rails_operations = []
-
-        result = migrator.execute_rails_audit_operations()
-
-        assert result == {"status": "skipped", "processed": 0, "total": 0, "errors": []}
-        mock_subprocess.assert_not_called()
-
-    def test_generate_audit_creation_script(self, migrator_with_mocks) -> None:
-        """Test generating Rails audit creation script."""
-        migrator = migrator_with_mocks
-
-        audit_events = [
-            {
-                "work_package_id": 1001,
-                "user_id": 123,
-                "created_at": "2023-01-15T10:30:00.000+0000",
-                "notes": "Changed subject",
-                "changes": [
-                    {"field": "subject", "old_value": "old", "new_value": "new"},
-                ],
-            },
-        ]
-
-        script = migrator._generate_audit_creation_script(audit_events)
-
-        assert "Journal.create!" in script
-        assert "JournalDetail.create!" in script
-        assert "work_package_id: 1001" in script
-        assert "user_id: 123" in script
-        assert "Changed subject" in script
-
-    def test_generate_audit_creation_script_empty_events(
-        self,
-        migrator_with_mocks,
-    ) -> None:
-        """Test generating script with empty events."""
-        migrator = migrator_with_mocks
-        script = migrator._generate_audit_creation_script([])
-
-        assert script.strip() == ""
+        assert migrator.execute_rails_audit_operations() == {
+            "status": "skipped",
+            "processed": 0,
+            "total": 0,
+            "errors": [],
+        }
+        migrator.op_client.bulk_create_work_package_activities.assert_not_called()
 
     def test_generate_audit_trail_report(
         self,

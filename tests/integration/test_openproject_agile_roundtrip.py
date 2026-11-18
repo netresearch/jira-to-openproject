@@ -376,3 +376,17 @@ def test_comment_readers_on_private_work_package(rails, monkeypatch):
     assert collected["comments_held"] == len(source)
     with pytest.raises(ValueError, match="restore a clean pre-import snapshot"):
         migration._bulk_process_collected_content([collected])
+
+
+def test_unsupported_cleanup_preserves_every_work_package_type(rails):
+    from src.infrastructure.exceptions import QueryExecutionError
+    from src.infrastructure.openproject.openproject_admin_cleanup_service import OpenProjectAdminCleanupService
+
+    client, query = rails
+    original = query("Type.order(:id).pluck(:id, :name)")
+    assert original
+    assert query('(["is_default", "is_standard"] - Type.column_names).any?')
+    service = OpenProjectAdminCleanupService(client)
+    with pytest.raises(QueryExecutionError, match="all types were preserved"):
+        service.delete_non_default_issue_types()
+    assert query("Type.order(:id).pluck(:id, :name)") == original

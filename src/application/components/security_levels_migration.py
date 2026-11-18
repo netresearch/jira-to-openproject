@@ -78,12 +78,8 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
             entry = self._work_package_entry(jira_key, wp_map.get(jira_key))
             if entry is None:
                 continue
-            wp_id = int(entry.openproject_id)
-            # Track project for selective enablement
-            if entry.openproject_project_id is not None:
-                projects_with_values.add(int(entry.openproject_project_id))
             try:
-                result = self._write_work_package_custom_value(wp_id, cf_id, sec_name, return_project=False)
+                result = self._write_work_package_custom_value(entry, cf_id, sec_name, projects_with_values)
                 if result:
                     updated += 1
             except Exception:

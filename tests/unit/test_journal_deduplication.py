@@ -163,32 +163,12 @@ class TestPhantomJournalPrevention:
         assert len(events) == 1, "Valid changes should create journal events"
         assert events[0]["changes"] == {"subject": ["Old Title", "New Title"]}
 
-    def test_journal_script_includes_changes_check(self, migrator):
-        """Test that generated Rails script checks for actual changes before creating journal."""
-        audit_events = [
-            {
-                "work_package_id": 1001,
-                "user_id": 123,
-                "created_at": "2023-01-15T10:30:00.000+0000",
-                "notes": "",  # Empty notes
-                "changes": [],  # Empty changes - this should be filtered earlier
-            },
-        ]
-
-        script = migrator._generate_audit_creation_script(audit_events)
-
-        # The script should have safeguards to prevent phantom journals
-        if script.strip():
-            # Check for validation that prevents creating empty journals
-            assert (
-                "notes.empty? && changes.empty?" in script
-                or "notes.present?" in script
-                or "changes.present?" in script
-                or "skip" in script.lower()
-            ), (
-                "Rails script should validate that journals have actual content "
-                "before creating them to prevent phantom 'retracted' entries"
-            )
+    def test_reject_empty_audit_activity(self, migrator):
+        migrator.rails_operations = [{"work_package_id": 1001, "notes": "", "changes": []}]
+        result = migrator.execute_rails_audit_operations()
+        assert result["status"] == "error"
+        assert result["processed"] == 0
+        migrator.op_client.bulk_create_work_package_activities.assert_not_called()
 
 
 class TestDuplicateResolutionPrevention:

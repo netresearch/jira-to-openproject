@@ -809,16 +809,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
             results_list = result.get("results", [])
 
             # Match results back to Jira issues by index
-            mappings: list[tuple[str, str, int]] = []
-            failed_details: list[str] = []
-            for i, res in enumerate(results_list):
-                if res.get("status") == "created" and res.get("id"):
-                    jira_id, jira_key = jira_info[i]
-                    mappings.append((jira_id, jira_key, res["id"]))
-                elif res.get("status") == "failed":
-                    jira_id, jira_key = jira_info[i] if i < len(jira_info) else ("?", "?")
-                    errors = res.get("errors", []) or [res.get("error", "Unknown error")]
-                    failed_details.append(f"{jira_key}: {', '.join(errors)}")
+            mappings, failed_details = self._batch_mapping_rows(results_list, jira_info)
 
             self.logger.info(
                 "  Batch result: %d created, %d failed in %s",
@@ -898,82 +889,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 )
                 continue
 
-            project_results = {
-                "processed": 0,
-                "created": 0,
-                "skipped": 0,
-                "failed": 0,
-            }
-
-            self.logger.info("Processing project %s", project_key)
-
-            # Collect issues into batches
-            batch_payloads: list[dict[str, Any]] = []
-            batch_issues: list[Issue] = []
-
-            for issue in self.iter_project_issues(project_key):
-                project_results["processed"] += 1
-                jira_id = str(issue.id)
-
-                # Skip if already migrated
-                if jira_id in self.work_package_mapping:
-                    project_results["skipped"] += 1
-                    continue
-
-                # Build payload for batch
-                payload = self._build_skeleton_payload(issue, project_id, j2o_cf_id)
-                if payload:
-                    batch_payloads.append(payload)
-                    batch_issues.append(issue)
-                else:
-                    project_results["failed"] += 1
-
-                # Process batch when full
-                if len(batch_payloads) >= self.batch_size:
-                    created, failed, mappings = self._create_skeletons_batch(
-                        batch_payloads,
-                        project_key,
-                    )
-                    project_results["created"] += created
-                    project_results["failed"] += failed
-
-                    # Update mappings
-                    for jira_id, jira_key, wp_id in mappings:
-                        pkey = issue.fields.project.key if hasattr(issue.fields, "project") else project_key
-                        self.work_package_mapping[jira_id] = {
-                            "jira_key": jira_key,
-                            "openproject_id": wp_id,
-                            "project_key": pkey,
-                        }
-
-                    self.logger.info(
-                        "  Created %d skeletons for %s (batch)",
-                        project_results["created"],
-                        project_key,
-                    )
-                    self._save_mapping()
-
-                    # Reset batch
-                    batch_payloads = []
-                    batch_issues = []
-
-            # Process remaining items in last batch
-            if batch_payloads:
-                created, failed, mappings = self._create_skeletons_batch(
-                    batch_payloads,
-                    project_key,
-                )
-                project_results["created"] += created
-                project_results["failed"] += failed
-
-                # Update mappings
-                for jira_id, jira_key, wp_id in mappings:
-                    self.work_package_mapping[jira_id] = {
-                        "jira_key": jira_key,
-                        "openproject_id": wp_id,
-                        "project_key": project_key,
-                    }
-                self._save_mapping()
+            project_results = self._create_project_skeletons(project_key, project_id, j2o_cf_id)
 
             # Aggregate results
             results["projects"][project_key] = project_results
@@ -1156,3 +1072,80 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 start_time=start_time.isoformat(),
                 duration_seconds=duration_seconds,
             )
+
+    @staticmethod
+    def _batch_mapping_rows(results_list: list, jira_info: list) -> tuple[list, list]:
+        """Associate target row acknowledgements and errors with their source issues."""
+        mappings: list[tuple[str, str, int]] = []
+        failed_details: list[str] = []
+        for i, res in enumerate(results_list):
+            if res.get("status") == "created" and res.get("id"):
+                jira_id, jira_key = jira_info[i]
+                mappings.append((jira_id, jira_key, res["id"]))
+            elif res.get("status") == "failed":
+                jira_id, jira_key = jira_info[i] if i < len(jira_info) else ("?", "?")
+                errors = res.get("errors", []) or [res.get("error", "Unknown error")]
+                failed_details.append(f"{jira_key}: {', '.join(errors)}")
+        return mappings, failed_details
+
+    def _create_project_skeletons(self, project_key: str, project_id: int, j2o_cf_id: int) -> dict:
+        """Create missing skeletons and persist the confirmed target IDs per batch."""
+        project_results = {
+            "processed": 0,
+            "created": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        self.logger.info("Processing project %s", project_key)
+
+        # Collect issues into batches
+        batch_payloads: list[dict[str, Any]] = []
+        batch_issues: list[Issue] = []
+
+        for issue in self.iter_project_issues(project_key):
+            project_results["processed"] += 1
+            jira_id = str(issue.id)
+
+            # Skip if already migrated
+            if jira_id in self.work_package_mapping:
+                project_results["skipped"] += 1
+                continue
+
+            # Build payload for batch
+            payload = self._build_skeleton_payload(issue, project_id, j2o_cf_id)
+            if payload:
+                batch_payloads.append(payload)
+                batch_issues.append(issue)
+            else:
+                project_results["failed"] += 1
+
+            # Process batch when full
+            if len(batch_payloads) >= self.batch_size:
+                self._flush_skeletons(batch_payloads, batch_issues, project_key, project_results)
+                self.logger.info("  Created %d skeletons for %s (batch)", project_results["created"], project_key)
+
+                # Reset batch
+                batch_payloads = []
+                batch_issues = []
+
+        # Process remaining items in last batch
+        if batch_payloads:
+            self._flush_skeletons(batch_payloads, batch_issues, project_key, project_results)
+        return project_results
+
+    def _flush_skeletons(self, payloads: list, issues: list, project_key: str, counters: dict) -> None:
+        created, failed, mappings = self._create_skeletons_batch(payloads, project_key)
+        counters["created"] += created
+        counters["failed"] += failed
+        source_projects = {
+            str(issue.id): getattr(getattr(issue.fields, "project", None), "key", None) or project_key
+            for issue in issues
+        }
+        for jira_id, jira_key, wp_id in mappings:
+            self.work_package_mapping[jira_id] = {
+                "jira_key": jira_key,
+                "openproject_id": wp_id,
+                "project_key": source_projects[jira_id],
+            }
+        self._save_mapping()

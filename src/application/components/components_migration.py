@@ -94,7 +94,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         return map_project_records(self, extracted, "Category")
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        category_map: dict[str, dict[str, int]] = (mapped.data or {}).get("category_map", {}) if mapped.data else {}
+        category_map: dict[str, dict[str, int]] = (mapped.data or {}).get("category_map", {})
         if not category_map:
             return ComponentResult(success=True, updated=0)
 
@@ -104,7 +104,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         # Use cached issues from extract phase to avoid second Jira API call.
         # Cache keys match the ``jira_key`` form used during ``_extract``
         # (inner ``jira_key`` when present, outer key otherwise).
-        issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
+        issues: dict[str, Any] = (mapped.data or {}).get("issues", {})
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
             fallback_keys = [self._component_issue_key(key, entry) for key, entry in wp_map.items()]
