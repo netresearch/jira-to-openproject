@@ -19,6 +19,8 @@ through :class:`WorkPackageMappingEntry.from_legacy`.
 from __future__ import annotations
 
 import re
+from decimal import Decimal
+from functools import cached_property
 from typing import Any
 
 from src import config
@@ -26,6 +28,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.description_tasks import description_tasks
 from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.jira.sidebar_tasks import sidebar_tasks
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 
@@ -61,10 +64,35 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
         )
         raise ValueError(msg)
 
+    @cached_property
+    def _task_count_field(self) -> str | None:
+        for field in self.jira_client.get_custom_fields():
+            if field.get("schema", {}).get("custom") == "com.topshelfsolution.simpletasklists:all-tasks-count-cftype":
+                return field["id"]
+        return None
+
+    def _issue_tasks(self, key: str) -> tuple[list[dict], int]:
+        count_field = self._task_count_field
+        fields = f"description,project,{count_field}" if count_field else "description"
+        raw = self.jira_client.jira.issue(key, fields=fields, expand="renderedFields").raw
+        tasks = description_tasks(key, raw)
+        if not count_field or raw["fields"].get(count_field) is None:
+            return tasks, 0
+        count = Decimal(str(raw["fields"][count_field]))
+        if not count.is_finite() or count != count.to_integral_value() or count < len(tasks):
+            msg = "Inconsistent source task count."
+            raise ValueError(msg)
+        total = int(count)
+        if total > len(tasks) and raw["fields"]["project"].get("projectTypeKey") == "software":
+            rows = self.jira_client.get_issue_simpletasks(key)
+            tasks.extend(sidebar_tasks(raw, tasks, rows, total))
+        return tasks, total - len(tasks)
+
     def _extract(self) -> ComponentResult:
         """Extract checklist data for all migrated issues using work_package mapping."""
         wp_map = self.mappings.get_mapping("work_package") or {}
         extracted: dict[str, Any] = {}
+        held = 0
         for jira_key, raw_entry in wp_map.items():
             k = str(jira_key)
             try:
@@ -79,11 +107,11 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
             if prop is not None:
                 extracted[k] = prop
             else:
-                issue = self.jira_client.jira.issue(key, fields="description", expand="renderedFields")
-                tasks = description_tasks(key, issue.raw)
+                tasks, unknown_origin = self._issue_tasks(key)
+                held += unknown_origin
                 if tasks:
                     extracted[k] = [{**task, "title": self._literal_title(task["title"])} for task in tasks]
-        return ComponentResult(success=True, data={"extracted": extracted})
+        return ComponentResult(success=True, data={"extracted": extracted}, details={"unverified_task_audience": held})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         """Map extracted tasks to Markdown checklist per issue."""
@@ -181,6 +209,10 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
                 )
 
             result = self._load(mapped)
+            held = extracted.details.get("unverified_task_audience", 0)
+            if held:
+                result.add_warning(f"Withheld {held} task(s) with an unverified source audience.")
+                result.details["unverified_task_audience"] = held
             logger.info(
                 "Simpletasks migration completed: success=%s, updated=%s, failed=%s",
                 result.success,

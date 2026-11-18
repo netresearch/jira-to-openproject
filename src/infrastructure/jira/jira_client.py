@@ -469,6 +469,10 @@ class JiraClient:
         """Thin delegator over ``self.search.get_priorities``."""
         return self.search.get_priorities()
 
+    def get_issue_simpletasks(self, issue_key: str) -> list[dict[str, Any]]:
+        """Read the same issue-scoped task list as the Jira Software sidebar."""
+        return self._make_request("/rest/tasklist/1.0/tasks", params={"issue": issue_key}).json()
+
     def get_issue_property(self, issue_key: str, property_key: str) -> dict[str, Any] | None:
         """Thin delegator over ``self.fields.get_issue_property``."""
         return self.fields.get_issue_property(issue_key, property_key)

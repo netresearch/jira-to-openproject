@@ -7,7 +7,7 @@ import re
 from html.parser import HTMLParser
 
 _TASK_START = re.compile(r"\{task(?=[:}])")
-_TASK_ID = re.compile(r"\{task:id=([0-9]+)\}")
+_TASK_ID = re.compile(r"\{task:id=(\d+)\}", re.ASCII)
 
 
 def _macro_titles(source: str) -> dict[str, str]:

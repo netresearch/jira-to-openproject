@@ -908,9 +908,12 @@ macro to its rendered checkbox by issue key and task ID. An inconsistent render 
 import before writing work packages.
 
 OpenProject stores the titles and completion states in a marked Markdown checklist in each
-work package description. Reruns update that section and preserve surrounding text. The
-description fallback covers inline description tasks only. Sidebar tasks, comment macros
-and tasks in other fields require their own source and audience checks.
+work package description. Reruns update that section and preserve surrounding text.
+
+If the Simple Tasklists count field reports additional tasks for a Jira Software issue,
+the importer reads the plugin's per-issue list. It imports directly created sidebar tasks after
+checking their project and issue IDs. Other task origins and project types retain their
+existing audience and are reported as withheld. See the [vendor’s task location and visibility documentation](https://simpletasks.tss.io/faq).
 
 **Implementation:** `src/application/components/simpletasks_migration.py`
 
