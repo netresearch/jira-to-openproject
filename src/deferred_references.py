@@ -83,19 +83,28 @@ def _linked_reference(link: dict, source: dict, mapped: dict) -> dict | None:
     }
 
 
+def _epic_id(epic: Any, key: str, mapped: dict, identities: dict) -> str | None:
+    embedded = epic.get("id") if isinstance(epic, dict) else None
+    ids = {_id(value) for value in (embedded, identities.get(key)) if value is not None}
+    if len(ids) > 1 or (key in mapped and ids and mapped[key][0] not in ids):
+        msg = "Epic key belongs to conflicting immutable Jira IDs"
+        raise ValueError(msg)
+    return next(iter(ids), None)
+
+
 def _case_links(issue: dict, mapped: dict, epic_field: str, identities: dict) -> list[dict]:
     fields = issue["fields"]
     source = {"key": _key(issue["key"]), "id": _id(issue["id"])}
     result = [ref for link in fields["issuelinks"] if (ref := _linked_reference(link, source, mapped))]
     if epic := fields[epic_field]:
         key = _key(epic["key"] if isinstance(epic, dict) else epic)
+        target_id = _epic_id(epic, key, mapped, identities)
         if key not in mapped:
-            raw_id = epic.get("id") if isinstance(epic, dict) else identities.get(key)
             result.append(
                 {
                     "kind": "epic",
                     "source": source,
-                    "target": {"key": key, "id": _id(raw_id) if raw_id else None},
+                    "target": {"key": key, "id": target_id},
                     "direct_parent": _key(fields["parent"]["key"]) if fields.get("parent") else None,
                 }
             )

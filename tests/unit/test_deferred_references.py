@@ -143,3 +143,20 @@ def test_refuses_to_reuse_an_archive_symlink(tmp_path):
     alias.symlink_to(original)
     with pytest.raises(ValueError, match="regular archive destination"):
         write_snapshot(alias, snapshot, identity)
+
+
+def test_key_only_epic_object_uses_verified_identity_and_rejects_conflicting_ids():
+    issues = records()
+    epic = {"key": "EXT-4"}
+    issues[0]["fields"]["customfield_42"] = epic
+    options = {
+        "project": "APP",
+        "jira": "https://jira.example",
+        "epic_field": "customfield_42",
+        "identities": {"EXT-4": "13"},
+    }
+    mapped = {"APP-1": ("10", 31)}
+    assert inventory(issues, mapped, **options) == sample()
+    epic["id"] = "14"
+    with pytest.raises(ValueError, match="conflicting immutable"):
+        inventory(issues, mapped, **options)
