@@ -141,6 +141,10 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 - Confirm project modules (`work_package_tracking`, `wiki`, `time_tracking`, `costs`, `calendar`, `news`) stay enabled post-migration; the project component now enables time tracking/costs for Tempo-linked projects and calendar/news when categories or project types are present, then persists provenance (`Jira Project Lead`, `Jira Project Category`, `Jira Project Type`, `Jira Project URL`, `Jira Project Avatar URL`).
 - If you need to rebuild the work-package fast-forward database (e.g., after a rehearsal restore or when corruption is detected) run `uv run python -m src.main migrate --reset-wp-checkpoints --components work_packages`.
 
+### Migrating projects in stages
+
+[Capture unresolved Jira issue links and epic references](docs/deferred-references.md) before retiring Jira. The operator can restore the encrypted snapshot and apply native links when both endpoints have been migrated.
+
 ### Watch a migration
 
 From the configured checkout, start the dashboard in one terminal:

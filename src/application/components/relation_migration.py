@@ -39,11 +39,16 @@ class RelationMigration(BaseMigration):
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client, op_client)
 
+        self.direction_map = self.supported_directions()
+
+    @staticmethod
+    def supported_directions() -> dict[tuple[str, str], tuple[str, bool]]:
+        """Map Jira relation vocabulary to OpenProject types and edge orientation."""
         # Inverse/direction mapping table
         # tuple of (jira_link_name_lower, direction) -> (op_type, swap)
         # direction is 'outward' or 'inward' from the Jira issue perspective
         # Note: Jira link type names vary by instance - these are for Netresearch Jira
-        self.direction_map: dict[tuple[str, str], tuple[str, bool]] = {
+        return {
             # Standard relation types
             ("relates", "outward"): ("relates", False),
             ("relates", "inward"): ("relates", False),
@@ -200,6 +205,8 @@ class RelationMigration(BaseMigration):
         # bucket dominates.
         relations_to_create, skip_reasons = self._collect_relations(issues)
 
+        if skip_reasons["target_wp_unmigrated"]:
+            logger.info("Use j2o-references capture to retain links to work packages scheduled for a later cutover.")
         skipped = sum(skip_reasons.values())
         if skipped:
             logger.info(
