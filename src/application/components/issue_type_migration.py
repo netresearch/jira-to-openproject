@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -44,11 +43,25 @@ from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.display import console
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, MigrationError
 
 _USER_STORY_TYPE = "User Story"
 _JIRA_ISSUE_TYPES_FILE = "jira_issue_types.json"
+
+
+_FIND_OR_CREATE_TYPE = """
+name = input_data.fetch('name')
+type = Type.where('lower(name) = ?', name.downcase).first
+unless type
+  color = Color.find_by(hexcode: input_data['color'].to_s.delete_prefix('#')) || Color.first
+  type = Type.create!(name: name, color_id: color&.id, is_milestone: input_data['milestone'],
+                      position: (Type.maximum(:position) || 0) + 1)
+end
+puts $j2o_start_marker
+puts JSON.generate({id: type.id, name: type.name})
+puts $j2o_end_marker
+"""
 
 
 @register_entity_types("issue_types", "work_package_types")
@@ -504,165 +517,19 @@ class IssueTypeMigration(BaseMigration):
             Dictionary with operation result status
 
         """
-        type_name = type_data.get("openproject_name", "")
-        type_color = type_data.get("color", "#1A67A3")
-        is_milestone = type_data.get("is_milestone", False)
-
-        self.logger.info(
-            "Creating work package type '%s' via Rails console...",
-            type_name,
+        name = type_data.get("openproject_name", "")
+        result = self.op_client.execute_script_with_data(
+            _FIND_OR_CREATE_TYPE,
+            {
+                "name": name,
+                "color": type_data.get("color", "#1A67A3"),
+                "milestone": bool(type_data.get("is_milestone")),
+            },
         )
-
-        # Check if the type already exists to avoid duplicates
-        # Use parameterized query to prevent Rails injection
-        safe_type_name = escape_ruby_single_quoted(type_name)
-        check_command = f"existing_type = Type.where(\"name ilike ?\", '{safe_type_name}').first"
-        check_result = self.op_client.execute_query(check_command)
-        self.logger.debug(
-            f"check_result type: {type(check_result)}, value: {check_result}",
-        )
-        if not isinstance(check_result, dict):
-            self.logger.error(
-                f"Expected dict from execute_query, got {type(check_result)}: {check_result}",
-            )
-            return {
-                "status": "error",
-                "error": "Invalid result type from execute_query (check_result)",
-            }
-
-        exists_command = "existing_type.present?"
-        exists_result = self.op_client.execute_query(exists_command)
-        self.logger.debug(
-            f"exists_result type: {type(exists_result)}, value: {exists_result}",
-        )
-        if not isinstance(exists_result, dict):
-            self.logger.error(
-                f"Expected dict from execute_query, got {type(exists_result)}: {exists_result}",
-            )
-            return {
-                "status": "error",
-                "error": "Invalid result type from execute_query (exists_result)",
-            }
-
-        if exists_result["status"] == "success" and "true" in exists_result["output"]:
-            self.logger.info(
-                "Work package type '%s' already exists, retrieving ID",
-                type_name,
-            )
-            id_command = "existing_type.id"
-            id_result = self.op_client.execute_query(id_command)
-            self.logger.debug(f"id_result type: {type(id_result)}, value: {id_result}")
-            if not isinstance(id_result, dict):
-                self.logger.error(
-                    f"Expected dict from execute_query, got {type(id_result)}: {id_result}",
-                )
-                return {
-                    "status": "error",
-                    "error": "Invalid result type from execute_query (id_result)",
-                }
-
-            if id_result["status"] == "success" and id_result["output"].strip().isdigit():
-                type_id = int(id_result["output"].strip())
-                return {
-                    "status": "success",
-                    "message": "Work package type already exists",
-                    "id": type_id,
-                }
-            self.logger.warning(
-                "Failed to retrieve ID for existing type '%s'",
-                type_name,
-            )
-
-        # Create the type with proper escaping to prevent Rails injection
-        milestone_flag = "true" if is_milestone else "false"
-        safe_type_color = escape_ruby_single_quoted(type_color)
-
-        command = f"""
-        begin
-          type = Type.create!(
-            name: '{safe_type_name}',
-            color: '{safe_type_color}',
-            is_milestone: {milestone_flag},
-            is_default: false,
-            is_standard: true,
-            position: Type.count + 1,
-            attribute_groups: Type.new.default_attribute_groups
-          )
-          type_id = type.id
-          {{id: type_id, name: type.name, status: :success}}
-        rescue => e
-          {{status: :error, message: e.message}}
-        end
-        """
-
-        result = self.op_client.execute_query(command)
-        self.logger.debug(f"result type: {type(result)}, value: {result}")
-        if not isinstance(result, dict):
-            self.logger.error(
-                f"Expected dict from execute_query, got {type(result)}: {result}",
-            )
-            return {
-                "status": "error",
-                "error": "Invalid result type from execute_query (result)",
-            }
-
-        # Parse the result
-        output = result.get("output", "")
-
-        if "status: :error" in output:
-            error_msg = "Unknown error"
-            error_match = re.search(r'message: "([^"]+)"', output)
-            if error_match:
-                error_msg = error_match.group(1)
-
-            self.logger.error(
-                "Error creating work package type '%s': %s",
-                type_name,
-                error_msg,
-            )
-            return {"status": "error", "error": error_msg}
-
-        # Extract ID if successful
-        id_match = re.search(r"id: (\d+)", output)
-        if id_match:
-            type_id = int(id_match.group(1))
-            self.logger.info(
-                "Created work package type '%s' with ID %s",
-                type_name,
-                type_id,
-            )
-
-            # Verify the type exists by querying it (type_id is safe as it's an integer)
-            verify_command = f"Type.find({type_id}).present? rescue false"
-            verify_result = self.op_client.execute_query(verify_command)
-            self.logger.debug(
-                f"verify_result type: {type(verify_result)}, value: {verify_result}",
-            )
-            if not isinstance(verify_result, dict):
-                self.logger.error(
-                    f"Expected dict from execute_query, got {type(verify_result)}: {verify_result}",
-                )
-                return {
-                    "status": "error",
-                    "error": "Invalid result type from execute_query (verify_result)",
-                }
-
-            if verify_result["status"] == "success" and "true" in verify_result["output"]:
-                self.logger.info(
-                    "Verified work package type '%s' with ID %s exists",
-                    type_name,
-                    type_id,
-                )
-                return {"status": "success", "id": type_id, "name": type_name}
-            self.logger.warning(
-                "Created type but failed verification: %s",
-                verify_result.get("output", "Unknown error"),
-            )
-
-        self.logger.warning("Failed to parse type ID from Rails response: %s", output)
-
-        # If we reached here without returning, assume success but couldn't get ID
-        return {"status": "success", "name": type_name}
+        row = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(row, dict) or not row.get("id"):
+            return {"status": "error", "error": f"Could not confirm OpenProject type {name!r}"}
+        return {"status": "success", "id": row["id"], "name": row["name"]}
 
     def _resolve_name_taken_errors(
         self,
@@ -704,10 +571,7 @@ class IssueTypeMigration(BaseMigration):
                 unresolved.append(err)
                 continue
 
-            for mapping in self.issue_type_mapping.values():
-                if mapping.get("openproject_name") == taken_name and mapping.get("openproject_id") is None:
-                    mapping["openproject_id"] = existing_id
-                    mapping["matched_by"] = "found_existing_after_create"
+            self._assign_new_type_id(taken_name, existing_id, "found_existing_after_create")
 
             self.logger.info(
                 "Resolved 'Name has already been taken' for type '%s' -> existing OP id %s",
@@ -736,92 +600,12 @@ class IssueTypeMigration(BaseMigration):
             self.create_issue_type_mapping()
 
         # Get existing types to avoid creating duplicates
-        existing_types = self.check_existing_work_package_types()
-        existing_names = [type_data.get("name", "").lower() for type_data in existing_types]
-
-        # Create lookup dictionary for O(1) access instead of O(n) linear search
-        # This optimizes the algorithm from O(n²) to O(n)
-        existing_types_by_name = {}
-        for type_data in existing_types:
-            type_name_lower = type_data.get("name", "").lower()
-            if type_name_lower:
-                existing_types_by_name[type_name_lower] = type_data
-
-        # Collect types to create
-        types_to_create: list[dict[str, str | bool]] = []
-        for type_name, type_data in self.issue_type_mapping.items():
-            if type_data.get("openproject_id") is None:
-                op_type_name = type_data.get("openproject_name", "")
-                op_type_name_lower = op_type_name.lower()
-
-                # Skip if already exists (case insensitive check)
-                if op_type_name_lower in existing_names:
-                    # Try to update mapping with existing ID using O(1) lookup
-                    existing_type_data = existing_types_by_name.get(op_type_name_lower)
-                    if existing_type_data:
-                        existing_id = existing_type_data.get("id")
-                        if existing_id:
-                            self.logger.info(
-                                "Work package type '%s' already exists, updating mapping",
-                                op_type_name,
-                            )
-                            self.issue_type_mapping[type_name]["openproject_id"] = existing_id
-                            self.issue_type_mapping[type_name]["matched_by"] = "found_existing"
-                    continue
-
-                # Only add unique type names to prevent duplicates
-                if not any(t.get("name") == op_type_name for t in types_to_create):
-                    types_to_create.append(
-                        {
-                            "name": op_type_name,
-                            "color": type_data.get("color", "#1A67A3"),
-                            "is_milestone": type_data.get("is_milestone", False),
-                            "is_default": op_type_name.lower() == "task",
-                            "jira_type_name": type_name,  # Store original Jira type name for mapping
-                        },
-                    )
-
-        if not types_to_create:
-            self.logger.info("No new work package types to create")
-            # Persist the current in-memory mapping so orchestrator can see it
-            config.mappings.set_mapping("issue_type", self.issue_type_mapping)
-            # Also persist the ID mapping for downstream components
-            final_mapping: dict[int, int] = {}
-            for mapping in self.issue_type_mapping.values():
-                jira_id = mapping.get("jira_id")
-                op_id = mapping.get("openproject_id")
-                if jira_id is not None and op_id:
-                    final_mapping[jira_id] = op_id
-            config.mappings.set_mapping("issue_type_id", final_mapping)
+        records = self._prepare_type_records(self.check_existing_work_package_types())
+        if not records:
+            self._persist_type_ids()
             return
 
-        self.logger.info(
-            "Preparing to create %s work package types in bulk",
-            len(types_to_create),
-        )
-
-        # Use generic bulk create helper for Type
         try:
-            # Build records/meta from mapping that need creation
-            records: list[dict[str, Any]] = []
-            meta: list[dict[str, Any]] = []
-            for mapping in self.issue_type_mapping.values():
-                if mapping.get("openproject_id") is None:
-                    meta.append(
-                        {
-                            "jira_type_name": mapping.get("jira_name"),
-                            "proposed_name": mapping.get("openproject_name"),
-                        },
-                    )
-                    records.append(
-                        {
-                            "name": mapping.get("openproject_name"),
-                            "is_milestone": bool(mapping.get("is_milestone", False)),
-                            "is_default": bool(mapping.get("is_default", False)),
-                            # Color creation/linking moved to Python pre-processing later if needed
-                        },
-                    )
-
             result = self.op_client.bulk_create_records(
                 model="Type",
                 records=records,
@@ -830,75 +614,30 @@ class IssueTypeMigration(BaseMigration):
             )
 
             if not isinstance(result, dict) or result.get("status") != "success":
-                raise MigrationError(result.get("message", "Bulk type creation failed"))
+                msg = (
+                    result.get("message", "Bulk type creation failed")
+                    if isinstance(result, dict)
+                    else "Invalid bulk type result"
+                )
+                raise MigrationError(msg)
 
             created = result.get("created", []) or []
             errors = result.get("errors", []) or []
 
             for item in created:
                 idx = item.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(meta):
-                    proposed_name = meta[idx].get("proposed_name")
-                    # Update issue_type_mapping entries matching proposed_name
-                    for mapping in self.issue_type_mapping.values():
-                        if mapping.get("openproject_name") == proposed_name and mapping.get("openproject_id") is None:
-                            mapping["openproject_id"] = item.get("id")
-                            mapping["matched_by"] = "created"
+                if isinstance(idx, int) and 0 <= idx < len(records) and item.get("id"):
+                    self._assign_new_type_id(records[idx]["name"], item["id"], "created")
 
             # Recover from "Name has already been taken." validation errors by
             # looking up the existing OP type id. Done before persistence so
             # the resolved mappings get saved + included in provenance below.
             if errors:
-                try:
-                    refreshed_existing = self.check_existing_work_package_types()
-                except Exception as fetch_err:
-                    self.logger.warning(
-                        "Could not refresh existing types for taken-name recovery: %s",
-                        fetch_err,
-                    )
-                    refreshed_existing = []
-                resolved, errors = self._resolve_name_taken_errors(
-                    errors,
-                    records,
-                    refreshed_existing,
-                )
-                if resolved:
-                    self.logger.info(
-                        "Recovered %d 'Name has already been taken' errors via lookup",
-                        resolved,
-                    )
+                errors = self._recover_type_errors(errors, records)
 
-            # Persist mappings
-            config.mappings.set_mapping("issue_type", self.issue_type_mapping)
-            final_mapping = {}
-            for m in self.issue_type_mapping.values():
-                jira_id = m["jira_id"]
-                op_id = m.get("openproject_id")
-                if op_id:
-                    final_mapping[jira_id] = op_id
-            config.mappings.set_mapping("issue_type_id", final_mapping)
+            self._persist_type_ids()
 
-            # Record provenance for successfully migrated issue types
-            # This enables restoration of mappings from OP alone without local files
-            provenance_mappings = [
-                {
-                    "jira_key": str(m.get("jira_id", "")),  # Use Jira type ID as key
-                    "jira_name": m.get("jira_name"),
-                    "op_entity_id": m["openproject_id"],
-                }
-                for m in self.issue_type_mapping.values()
-                if m.get("openproject_id")
-            ]
-            if provenance_mappings:
-                try:
-                    result = self.op_client.bulk_record_entity_provenance("type", provenance_mappings)
-                    self.logger.info(
-                        "Recorded type provenance: %d success, %d failed",
-                        result.get("success", 0),
-                        result.get("failed", 0),
-                    )
-                except Exception as prov_err:
-                    self.logger.warning("Failed to record type provenance: %s", prov_err)
+            self._record_type_provenance()
 
             if errors:
                 self.logger.warning("Some work package types failed to create: %s", len(errors))
@@ -909,6 +648,131 @@ class IssueTypeMigration(BaseMigration):
             msg = f"Error during Type bulk creation: {e}"
             self.logger.exception(msg)
             raise MigrationError(msg) from e
+
+    def _assign_new_type_id(self, name, target_id, matched_by):
+        for mapping in self.issue_type_mapping.values():
+            if mapping.get("openproject_name") == name and mapping.get("openproject_id") is None:
+                mapping.update(openproject_id=target_id, matched_by=matched_by)
+
+    def _persist_type_ids(self):
+        config.mappings.set_mapping("issue_type", self.issue_type_mapping)
+        ids = {
+            row["jira_id"]: row["openproject_id"]
+            for row in self.issue_type_mapping.values()
+            if row.get("jira_id") is not None and row.get("openproject_id")
+        }
+        config.mappings.set_mapping("issue_type_id", ids)
+
+    def _prepare_type_records(self, existing_types):
+        existing = {row["name"].casefold(): row.get("id") for row in existing_types if row.get("name")}
+        records = {}
+        for mapping in self.issue_type_mapping.values():
+            if mapping.get("openproject_id") is not None:
+                continue
+            name = mapping.get("openproject_name", "")
+            target_id = existing.get(name.casefold())
+            if target_id:
+                mapping.update(openproject_id=target_id, matched_by="found_existing")
+                continue
+            records.setdefault(
+                name,
+                {
+                    "name": name,
+                    "is_milestone": bool(mapping.get("is_milestone")),
+                    "is_default": bool(mapping.get("is_default")),
+                },
+            )
+        return list(records.values())
+
+    def _recover_type_errors(self, errors, records):
+        try:
+            refreshed_existing = self.check_existing_work_package_types()
+        except Exception as fetch_err:
+            self.logger.warning(
+                "Could not refresh existing types for taken-name recovery: %s",
+                fetch_err,
+            )
+            refreshed_existing = []
+        resolved, errors = self._resolve_name_taken_errors(
+            errors,
+            records,
+            refreshed_existing,
+        )
+        if resolved:
+            self.logger.info(
+                "Recovered %d 'Name has already been taken' errors via lookup",
+                resolved,
+            )
+        return errors
+
+    def _record_type_provenance(self):
+        # Record provenance for successfully migrated issue types
+        # This enables restoration of mappings from OP alone without local files
+        provenance_mappings = [
+            {
+                "jira_key": str(m.get("jira_id", "")),  # Use Jira type ID as key
+                "jira_name": m.get("jira_name"),
+                "op_entity_id": m["openproject_id"],
+            }
+            for m in self.issue_type_mapping.values()
+            if m.get("openproject_id")
+        ]
+        if provenance_mappings:
+            try:
+                result = self.op_client.bulk_record_entity_provenance("type", provenance_mappings)
+                self.logger.info(
+                    "Recorded type provenance: %d success, %d failed",
+                    result.get("success", 0),
+                    result.get("failed", 0),
+                )
+            except Exception as prov_err:
+                self.logger.warning("Failed to record type provenance: %s", prov_err)
+
+    def _types_for_mapping_update(self):
+        mock_mode = os.environ.get("J2O_USE_MOCK_APIS", "false").lower() == "true"
+        self.logger.debug(
+            "Mock mode: Using mock work package types for mapping update",
+        )
+
+        if mock_mode:
+            # In mock mode, use the mock work package types
+            op_types = [
+                {
+                    "id": 1,
+                    "name": "Task",
+                    "color": "#0000FF",
+                    "position": 1,
+                    "is_default": True,
+                    "is_milestone": False,
+                },
+                {
+                    "id": 2,
+                    "name": "Bug",
+                    "color": "#FF0000",
+                    "position": 2,
+                    "is_default": False,
+                    "is_milestone": False,
+                },
+                {
+                    "id": 3,
+                    "name": "Feature",
+                    "color": "#00FF00",
+                    "position": 3,
+                    "is_default": False,
+                    "is_milestone": False,
+                },
+            ]
+            self.logger.info(
+                "Mock mode: Using mock work package types for mapping update",
+            )
+        else:
+            # Use the robust file-based retrieval only (single consistent path)
+            op_types = self.check_existing_work_package_types()
+            if not op_types:
+                msg = "Failed to retrieve work package types from OpenProject"
+                self.logger.error(msg)
+                raise MigrationError(msg)
+        return op_types
 
     def migrate_issue_types(self) -> dict[str, Any]:
         """Prepare for migrating issue types from Jira to OpenProject.
@@ -1064,49 +928,7 @@ class IssueTypeMigration(BaseMigration):
         )
 
         # Check if we're in mock mode
-        mock_mode = os.environ.get("J2O_USE_MOCK_APIS", "false").lower() == "true"
-        self.logger.debug(
-            "Mock mode: Using mock work package types for mapping update",
-        )
-
-        if mock_mode:
-            # In mock mode, use the mock work package types
-            op_types = [
-                {
-                    "id": 1,
-                    "name": "Task",
-                    "color": "#0000FF",
-                    "position": 1,
-                    "is_default": True,
-                    "is_milestone": False,
-                },
-                {
-                    "id": 2,
-                    "name": "Bug",
-                    "color": "#FF0000",
-                    "position": 2,
-                    "is_default": False,
-                    "is_milestone": False,
-                },
-                {
-                    "id": 3,
-                    "name": "Feature",
-                    "color": "#00FF00",
-                    "position": 3,
-                    "is_default": False,
-                    "is_milestone": False,
-                },
-            ]
-            self.logger.info(
-                "Mock mode: Using mock work package types for mapping update",
-            )
-        else:
-            # Use the robust file-based retrieval only (single consistent path)
-            op_types = self.check_existing_work_package_types()
-            if not op_types:
-                msg = "Failed to retrieve work package types from OpenProject"
-                self.logger.error(msg)
-                raise MigrationError(msg)
+        op_types = self._types_for_mapping_update()
 
         # Create a dictionary of name to type mapping for easy lookup
         op_types_by_name = {type_data.get("name"): type_data for type_data in op_types}
