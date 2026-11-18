@@ -134,7 +134,7 @@ class IdempotencyKeyManager:
         return {1, existing}
     else
         -- Key doesn't exist, set it with TTL
-        redis.call('SETEX', key, ttl, value)
+        redis.call('SET', key, value, 'EX', ttl)
         return {0, value}
     end
     """
@@ -345,7 +345,7 @@ class IdempotencyKeyManager:
         # Try Redis first, fallback to memory only if Redis fails
         if self._redis_available and self._redis_client:
             try:
-                self._redis_client.setex(cache_key, ttl, serialized_result)
+                self._redis_client.set(cache_key, serialized_result, ex=ttl)
                 logger.debug("Cached result in Redis for key: %s", idempotency_key)
 
                 with self._lock:
@@ -424,7 +424,7 @@ class IdempotencyKeyManager:
             try:
                 if self._redis_available and self._redis_client:
                     serialized_result = safe_json_dumps(result)
-                    self._redis_client.setex(cache_key, ttl, serialized_result)
+                    self._redis_client.set(cache_key, serialized_result, ex=ttl)
                     self._metrics["keys_cached"] += 1
                     return IdempotencyResult(found=False, value=result, source="redis")
             except RedisError as e:
