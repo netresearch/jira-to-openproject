@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pyrage import x25519
 
+from src.comment_archive.cli import input_file, load
 from src.deferred_references import inventory, mappings, read_snapshot, write_snapshot
 from src.deferred_references_replay import apply
 
@@ -30,7 +31,7 @@ def main(argv: list[str] | None = None) -> None:
     commands.add_parser("apply")
     commands.add_parser("read", help="Write the authenticated reference snapshot to standard output")
     args = parser.parse_args(argv)
-    identity = x25519.Identity.from_str(args.identity.read_text().strip())
+    identity = x25519.Identity.from_str(input_file(args.identity).read_text().strip())
     if args.command == "read":
         sys.stdout.write(json.dumps(read_snapshot(args.archive, identity), ensure_ascii=False, indent=2) + "\n")
         return
@@ -38,9 +39,9 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("capture and apply require --mapping")
     mapped = mappings(args.mapping)
     if args.command == "capture":
-        raw = json.loads(args.issues.read_bytes())
+        raw = load(args.issues)
         source = list(raw.values()) if isinstance(raw, dict) else raw
-        known = json.loads(args.known_ids.read_bytes()) if args.known_ids else {}
+        known = load(args.known_ids) if args.known_ids else {}
         data = inventory(
             source, mapped, project=args.project, jira=args.jira, epic_field=args.epic_field, identities=known
         )

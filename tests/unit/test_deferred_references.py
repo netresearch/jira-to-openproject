@@ -121,3 +121,24 @@ def test_applying_requires_exact_target_acknowledgement():
     maps = {"APP-1": ("10", 31), "EXT-3": ("12", 33), "EXT-4": ("13", 34)}
     with pytest.raises(ValueError, match="Incomplete target"):
         apply(data, maps, client)
+
+
+def test_rejects_missing_requested_epic_field_and_stale_internal_link():
+    mapped = {"APP-1": ("10", 31)}
+    issues = records()
+    options = {"project": "APP", "jira": "https://jira.example", "epic_field": "customfield_42", "identities": {}}
+    with pytest.raises(ValueError, match="immutable Jira ID"):
+        inventory(issues, {**mapped, "EXT-3": ("111", 43)}, **options)
+    del issues[0]["fields"]["customfield_42"]
+    with pytest.raises(KeyError, match="customfield_42"):
+        inventory(issues, mapped, **options)
+
+
+def test_refuses_to_reuse_an_archive_symlink(tmp_path):
+    identity = x25519.Identity.generate()
+    original = tmp_path / "original.age"
+    write_snapshot(original, sample(), identity)
+    alias = tmp_path / "alias.age"
+    alias.symlink_to(original)
+    with pytest.raises(ValueError, match="regular archive destination"):
+        write_snapshot(alias, sample(), identity)

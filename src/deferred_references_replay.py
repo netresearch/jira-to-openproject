@@ -80,18 +80,21 @@ def apply(data: dict, mapped: dict, client: Any) -> dict[str, int]:
         elif ref["kind"] != "epic" or ref["direct_parent"]:
             continue
         rows.append(row)
-    result = {"held": len(data["references"]) - len(rows), "confirmed": 0, "created": 0}
-    if rows:
-        response = client.execute_script_with_data(_APPLY, {"jira": data["jira"], "rows": rows})
-        counts = response.get("data") or {}
-        created = counts.get("created")
-        if (
-            response.get("status") != "success"
-            or counts.get("confirmed") != len(rows)
-            or type(created) is not int
-            or not 0 <= created <= len(rows)
-        ):
-            msg = "Incomplete target acknowledgement for deferred references"
-            raise ValueError(msg)
-        result.update(confirmed=counts["confirmed"], created=counts["created"])
-    return result
+    count = len(rows)
+    observed = _replay(rows, data["jira"], client) if rows else 0
+    return {"held": len(data["references"]) - count, "confirmed": count, "created": observed}
+
+
+def _replay(rows: list[dict], jira: str, client: Any) -> int:
+    response = client.execute_script_with_data(_APPLY, {"jira": jira, "rows": rows})
+    counts = response.get("data") or {}
+    created = counts.get("created")
+    if (
+        response.get("status") != "success"
+        or counts.get("confirmed") != len(rows)
+        or type(created) is not int
+        or not 0 <= created <= len(rows)
+    ):
+        msg = "Incomplete target acknowledgement for deferred references"
+        raise ValueError(msg)
+    return created

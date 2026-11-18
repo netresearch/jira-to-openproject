@@ -57,6 +57,19 @@ def test_replay_uses_both_verified_endpoints_and_rechecks_native_records(rails):
         [JSON.parse(wp.body)["_links"]["parent"]["href"],JSON.parse(rel.body)["_links"]["from"]["href"],JSON.parse(rel.body)["_links"]["to"]["href"]]
       ensure;token.destroy!;end
     """) == [f"/api/v3/work_packages/{n}" for n in (epic, linked, local)]
+    # OpenProject stores scheduling relations with the successor in the "from" column.
+    scheduling = {
+        "kind": "link",
+        "direction": "outward",
+        "type": {"name": "Precedes"},
+        "source": {"key": "EXT-3", "id": "12"},
+        "target": {"key": "EXT-4", "id": "13"},
+    }
+    schedule = {**data, "references": [scheduling]}
+    assert apply(schedule, mapped, client)["created"] == 1
+    scheduling.update(direction="inward", source=scheduling["target"], target=scheduling["source"])
+    assert apply(schedule, mapped, client)["created"] == 0
+    assert query(f"Relation.where(from_id:{epic},to_id:{linked},relation_type:'follows').count") == 1
     query(f"WorkPackage.find({epic}).project.update!(public:true);true")
     with pytest.raises(ValueError, match="Incomplete target"):
         apply(data, mapped, client)

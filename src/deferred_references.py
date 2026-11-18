@@ -18,6 +18,7 @@ import pyrage
 from pyrage import x25519
 
 from src.comment_archive.archive import encoded
+from src.comment_archive.cli import input_file, load
 
 _ISSUE = re.compile(r"[A-Z][A-Z\d_]*-\d+", re.ASCII)
 
@@ -41,7 +42,7 @@ def mappings(paths: list[Path]) -> dict[str, tuple[str, int]]:
     """Read numeric-ID work-package mappings, rejecting ambiguous or conflicting identities."""
     result: dict[str, tuple[str, int]] = {}
     for path in paths:
-        for outer, value in json.loads(path.read_bytes()).items():
+        for outer, value in load(path).items():
             key = _key(value["jira_key"])
             pair = (_id(value.get("jira_id", outer)), int(_id(value["openproject_id"])))
             if result.setdefault(key, pair) != pair:
@@ -61,7 +62,11 @@ def _linked_reference(link: dict, source: dict, mapped: dict) -> dict | None:
     direction = directions[0]
     target = link[direction + "Issue"]
     key = _key(target["key"])
+    target_id = _id(target["id"])
     if key in mapped:
+        if mapped[key][0] != target_id:
+            msg = "Linked issue does not match its immutable Jira ID"
+            raise ValueError(msg)
         return None
     kind = link["type"]
     labels = {name: kind[name] for name in ("name", "inward", "outward")}
@@ -71,7 +76,7 @@ def _linked_reference(link: dict, source: dict, mapped: dict) -> dict | None:
     return {
         "kind": "link",
         "source": source,
-        "target": {"key": key, "id": _id(target["id"])},
+        "target": {"key": key, "id": target_id},
         "link_id": _id(link["id"]),
         "direction": direction,
         "type": {"id": _id(kind["id"]), **labels},
@@ -82,7 +87,7 @@ def _case_links(issue: dict, mapped: dict, epic_field: str, identities: dict) ->
     fields = issue["fields"]
     source = {"key": _key(issue["key"]), "id": _id(issue["id"])}
     result = [ref for link in fields["issuelinks"] if (ref := _linked_reference(link, source, mapped))]
-    if epic := fields.get(epic_field):
+    if epic := fields[epic_field]:
         key = _key(epic["key"] if isinstance(epic, dict) else epic)
         if key not in mapped:
             raw_id = epic.get("id") if isinstance(epic, dict) else identities.get(key)
@@ -134,17 +139,22 @@ def inventory(issues: list[dict], mapped: dict, *, project: str, jira: str, epic
 
 def write_snapshot(path: Path, data: dict, identity: x25519.Identity) -> None:
     """Never overwrite an earlier snapshot or accept a conflicting retry."""
+    if path.name in {"", ".", ".."} or path.is_symlink():
+        msg = "Expected a regular archive destination"
+        raise ValueError(msg)
+    directory = path.parent.resolve(strict=True)
+    destination = directory / path.name
     plaintext = encoded(data)
     signed = {"snapshot": data, "proof": _proof(plaintext, identity)}
     packet = pyrage.encrypt(encoded(signed), [identity.to_public()])
-    with NamedTemporaryFile(dir=path.parent) as temp:
+    with NamedTemporaryFile(dir=directory) as temp:
         temp.write(packet)
         temp.flush()
         os.fsync(temp.fileno())
         try:
-            os.link(temp.name, path)
+            os.link(temp.name, destination)
         except FileExistsError:
-            if read_snapshot(path, identity) != data:
+            if read_snapshot(destination, identity) != data:
                 msg = "Existing archive differs; select a new path for this snapshot"
                 raise ValueError(msg) from None
 
@@ -155,7 +165,7 @@ def _proof(payload: bytes, identity: x25519.Identity) -> str:
 
 def read_snapshot(path: Path, identity: x25519.Identity) -> dict:
     """Verify the operator wrote the archive before using it to change a target."""
-    bundle = json.loads(pyrage.decrypt(path.read_bytes(), [identity]))
+    bundle = json.loads(pyrage.decrypt(input_file(path).read_bytes(), [identity]))
     data = bundle["snapshot"]
     if data["version"] != 1 or not hmac.compare_digest(bundle["proof"], _proof(encoded(data), identity)):
         msg = "Invalid deferred reference snapshot"

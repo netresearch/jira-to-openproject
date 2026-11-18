@@ -9,7 +9,7 @@ j2o-references --identity /private/recovery/ref.agekey --archive APP.age \
   --project APP --jira https://jira.example --epic-field customfield_10008
 ```
 
-Use the site's actual Jira Epic Link field ID. The issue file can be a list of raw Jira issues or a key-indexed cache. Each selected mapped issue must be present with its link list. Repeat `--mapping` for additional mapping files. Input mappings use numeric Jira issue IDs with `jira_key` and `openproject_id`. A Jira epic field sometimes contains only an issue key. Supply an independently checked `--known-ids` JSON object mapping such keys to their immutable Jira IDs for later native replay.
+Use the site's actual Jira Epic Link field ID. The issue file can be a list of raw Jira issues or a key-indexed cache. Each selected mapped issue must be present with its link list and its explicitly selected epic field, including null values. Repeat `--mapping` for additional mapping files. Input mappings use numeric Jira issue IDs with `jira_key` and `openproject_id`. A Jira epic field sometimes contains only an issue key. Supply an independently checked `--known-ids` JSON object mapping such keys to their immutable Jira IDs for later native replay.
 
 The encrypted archive retains source and target identities, original link ID, type vocabulary, direction and the epic or direct-parent information. Linked issue contents and personal fields are omitted. The file can be attached to a private migration record in OpenProject and downloaded after Jira shutdown. The same operator identity authenticates the archive before replay. Test key recovery from separate storage. Repeating capture accepts an identical existing snapshot. A changed snapshot needs a new filename.
 

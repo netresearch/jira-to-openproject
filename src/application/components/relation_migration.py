@@ -65,8 +65,8 @@ class RelationMigration(BaseMigration):
             ("blockade", "outward"): ("blocks", False),  # Netresearch: "Blockade"
             ("blockade", "inward"): ("blocks", True),
             # Precedes/Follows
-            ("precedes", "outward"): ("precedes", False),
-            ("precedes", "inward"): ("follows", True),
+            ("precedes", "outward"): ("follows", True),
+            ("precedes", "inward"): ("follows", False),
             # Additional Netresearch link types mapped to relates
             ("cause", "outward"): ("relates", False),
             ("cause", "inward"): ("relates", False),
