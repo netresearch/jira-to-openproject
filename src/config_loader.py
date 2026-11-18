@@ -47,6 +47,9 @@ def is_test_environment() -> bool:
     return os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
 
 
+LOCAL_ENV_FILE = ".env.local"
+
+
 class ConfigLoader:
     """Loads and provides access to configuration settings from YAML files and environment variables."""
 
@@ -101,8 +104,8 @@ class ConfigLoader:
 
             # In test mode, load both .env.local and .env.test
             # with test having higher precedence
-            if Path(".env.local").exists():
-                load_dotenv(".env.local", override=True)
+            if Path(LOCAL_ENV_FILE).exists():
+                load_dotenv(LOCAL_ENV_FILE, override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
             # Always load .env.test in test mode
@@ -118,8 +121,8 @@ class ConfigLoader:
             config_logger.debug("Running in development/production environment")
 
             # In non-test mode, only load .env.local if it exists
-            if Path(".env.local").exists():
-                load_dotenv(".env.local", override=True)
+            if Path(LOCAL_ENV_FILE).exists():
+                load_dotenv(LOCAL_ENV_FILE, override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
     def _load_yaml_config(self, config_file_path: Path) -> Config:

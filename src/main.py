@@ -333,18 +333,8 @@ def _run_migrate_command(args: argparse.Namespace) -> None:
         ),
     )
 
-    # Exit with appropriate code
-    if hasattr(result, "overall"):
-        # MigrationResult object
-        if result.overall.get("status") == "success":
-            sys.exit(0)
-        else:
-            sys.exit(1)
-    # Plain dict (from tests)
-    elif result.get("status") == "success":
-        sys.exit(0)
-    else:
-        sys.exit(1)
+    overall = getattr(result, "overall", result)
+    sys.exit(0 if overall.get("status") == "success" else 1)
 
 
 if __name__ == "__main__":
