@@ -16,6 +16,11 @@ from typing import Any
 
 from rich.console import Console
 
+if __package__:
+    from .operator_files import read_operator_text
+else:
+    from operator_files import read_operator_text
+
 console = Console()
 
 
@@ -30,8 +35,7 @@ def summarize_custom_fields(json_file: Path) -> dict[str, Any]:
 
     """
     # Read the JSON file
-    with json_file.open("r") as f:
-        custom_fields = json.load(f)
+    custom_fields = json.loads(read_operator_text(json_file))
 
     # Collect summary information
     field_count = len(custom_fields)

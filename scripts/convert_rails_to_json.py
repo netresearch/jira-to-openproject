@@ -12,6 +12,11 @@ import re
 import sys
 from pathlib import Path
 
+if __package__:
+    from .operator_files import read_operator_text, write_operator_json
+else:
+    from operator_files import read_operator_text, write_operator_json
+
 
 def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
     """Convert Ruby hash syntax to valid JSON.
@@ -22,8 +27,7 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
 
     """
     # Read the input file
-    with Path(input_file).open() as f:
-        ruby_str = f.read()
+    ruby_str = read_operator_text(Path(input_file))
 
     # Extract the array portion
     start = ruby_str.find("[{")
@@ -47,8 +51,7 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
         data = json.loads(json_str)
 
         # Write to output file
-        with Path(output_file).open("w") as f:
-            json.dump(data, f, indent=2)
+        write_operator_json(Path(output_file), data)
 
         print(f"Successfully converted {len(data)} records to JSON")
         print(f"Saved to {output_file}")

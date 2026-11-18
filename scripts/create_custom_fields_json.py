@@ -8,10 +8,14 @@ This script parses a custom fields list captured from the Rails console
 and creates a JSON file with the custom field data.
 """
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
+
+if __package__:
+    from .operator_files import read_operator_text, write_operator_json
+else:
+    from operator_files import read_operator_text, write_operator_json
 
 
 def parse_custom_fields_list(input_file: Path) -> list[dict[str, Any]]:
@@ -27,8 +31,7 @@ def parse_custom_fields_list(input_file: Path) -> list[dict[str, Any]]:
     custom_fields = []
 
     # Read the input file
-    with input_file.open() as f:
-        lines = f.readlines()
+    lines = read_operator_text(input_file).splitlines()
 
     # Find the start and end markers
     start_idx = -1
@@ -80,8 +83,7 @@ def main() -> int:
         return 1
 
     # Save to output file
-    with output_file.open("w") as f:
-        json.dump(custom_fields, f, indent=2)
+    write_operator_json(output_file, custom_fields)
 
     print(f"Successfully saved {len(custom_fields)} custom fields to {output_file}")
 

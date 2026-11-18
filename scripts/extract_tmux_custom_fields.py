@@ -8,13 +8,17 @@ This script extracts the custom fields data directly from
 the tmux session output and saves it to a JSON file.
 """
 
-import json
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+
+if __package__:
+    from .operator_files import write_operator_json
+else:
+    from operator_files import write_operator_json
 
 console = Console()
 
@@ -86,9 +90,6 @@ def main() -> int:
     if len(sys.argv) > 1:
         output_file = Path(sys.argv[1])
 
-    # Create the output directory if it doesn't exist
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-
     # Capture the tmux output
     output = capture_tmux_output(lines=10000)  # Capture a lot of history
 
@@ -100,8 +101,7 @@ def main() -> int:
         return 1
 
     # Save the fields to the output file
-    with output_file.open("w") as f:
-        json.dump(fields, f, indent=2)
+    write_operator_json(output_file, fields)
 
     console.print(f"Successfully saved {len(fields)} custom fields to {output_file}")
 
