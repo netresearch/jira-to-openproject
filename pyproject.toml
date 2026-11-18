@@ -35,7 +35,7 @@ dependencies = [
     # Console display and progress
     "rich>=15.0.0",
 
-    # Redis for caching and idempotency
+    # Redis-compatible client for the Compose Valkey cache
     "redis>=8.1.0",
 
     # Error recovery and resilience
@@ -51,7 +51,7 @@ dependencies = [
     "jsonschema>=4.26.0",
 
     # Web dashboard
-    "fastapi>=0.163.2",
+    "fastapi>=0.164.0",
     "uvicorn>=0.54.0",
     "websockets>=17.4",
     "jinja2>=3.1.6",
@@ -76,7 +76,7 @@ dev = [
     "types-aiofiles>=25.1.0.20261107",
     "types-requests>=2.33.0.20261030",
     # Architecture enforcement: see .importlinter for Cosmic Python layer contracts.
-    "import-linter>=2.16,<3",
+    "import-linter>=2.17,<3",
 ]
 
 [project.scripts]
