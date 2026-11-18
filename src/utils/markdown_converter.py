@@ -10,10 +10,8 @@ visual fidelity and functionality while adapting to OpenProject's dialect.
 
 import logging
 import re
+from html import escape
 from typing import Any
-
-_UNMAPPED_ATTACHMENT_MESSAGE = "No attachment mapping for %s in %s, using filename"
-
 
 logger = logging.getLogger(__name__)
 
@@ -94,16 +92,16 @@ class MarkdownConverter:
         self.monospace_pattern = re.compile(r"\{\{([^}]+)\}\}")
 
         # Heading patterns (h1-h6)
-        self.heading_pattern = re.compile(r"^h([1-6])\.\s*(.+)$", re.MULTILINE)
+        self.heading_pattern = re.compile(r"^h([1-6])\.[ \t]*+(.+)$", re.MULTILINE)
 
         # List patterns (be careful not to match markdown headings or bold text)
         # For unordered lists, require * to be followed by space or another *
-        self.unordered_list_pattern = re.compile(r"^(\s*)(\*+)\s+(.+)$", re.MULTILINE)
+        self.unordered_list_pattern = re.compile(r"^(\s*+)(\*++)[ \t]++(.+)$", re.MULTILINE)
         # Jira ordered lists: # followed by space, not markdown headings which are #+ word
-        self.ordered_list_pattern = re.compile(r"^(\s*)(#+)\s+(.+)$", re.MULTILINE)
+        self.ordered_list_pattern = re.compile(r"^(\s*+)(#++)[ \t]++(.+)$", re.MULTILINE)
 
         # Block quote pattern
-        self.blockquote_pattern = re.compile(r"^bq\.\s*(.+)$", re.MULTILINE)
+        self.blockquote_pattern = re.compile(r"^bq\.[ \t]*+(.+)$", re.MULTILINE)
 
         # Horizontal rule pattern
         self.hr_pattern = re.compile(r"^----+$", re.MULTILINE)
@@ -117,7 +115,7 @@ class MarkdownConverter:
 
         # Link patterns - avoid matching markdown images, user mentions, and already-converted markdown links
         # Negative lookahead (?!\() ensures we don't match [text] if immediately followed by (url)
-        self.link_pattern = re.compile(r"(?<!\!)\[([^|\]~][^|\]]*)\|?([^\]]*)\](?!\()")
+        self.link_pattern = re.compile(r"(?<!!)\[([^|\]~][^\]]*+)\](?!\()")
 
         # Issue reference patterns
         self.issue_ref_pattern = re.compile(r"\b([A-Z][A-Z0-9_]*-\d+)\b")
@@ -126,7 +124,6 @@ class MarkdownConverter:
         # Jira Server format: [~username]
         self.user_mention_pattern = re.compile(r"\[~([^]]+)\]")
         # Jira Cloud format: [~accountId:xxx]
-        self.account_id_mention_pattern = re.compile(r"\[~accountId:([^\]]+)\]")
 
         # Attachment and embedded content patterns
         self.image_pattern = re.compile(r"!([^!|\s]+)(?:\|([^!]*))?!")
@@ -174,7 +171,6 @@ class MarkdownConverter:
             re.DOTALL,
         )
         self.tabs_pattern = re.compile(r"\{tabs\}(.*?)\{tabs\}", re.DOTALL)
-        self.tab_pattern = re.compile(r"\{tab:([^}]+)\}(.*?)(?=\{tab:|$)", re.DOTALL)
         self.color_pattern = re.compile(r"\{color:([^}]+)\}(.*?)\{color\}", re.DOTALL)
 
         # Jira emoticon mappings (symbol -> UTF-8 emoji/character)
@@ -342,13 +338,9 @@ class MarkdownConverter:
         """Convert Jira links to markdown links."""
 
         def replace_link(match: re.Match[str]) -> str:
-            first_part = match.group(1).strip()
-            second_part = match.group(2).strip() if match.group(2) else ""
-
-            if second_part:  # [title|url] format
-                return f"[{first_part}]({second_part})"
-            # [url] format (or [title] for internal)
-            return f"[{first_part}]({first_part})"
+            title, _, target = match.group(1).partition("|")
+            title = title.strip()
+            return f"[{title}]({target.strip() or title})"
 
         return self.link_pattern.sub(replace_link, text)
 
@@ -400,86 +392,37 @@ class MarkdownConverter:
         if not jira_markup or not isinstance(jira_markup, str):
             return set()
 
-        mentioned_ids: set[int] = set()
-
-        # Check Jira Cloud [~accountId:xxx] format
-        for match in self.account_id_mention_pattern.finditer(jira_markup):
-            account_id = match.group(1).strip()
-            if self.account_id_mapping and account_id in self.account_id_mapping:
-                user_data = self.account_id_mapping[account_id]
-                if isinstance(user_data, dict):
-                    op_id = user_data.get("op_id")
-                    if op_id:
-                        mentioned_ids.add(int(op_id))
-
-        # Check Jira Server [~username] format
+        mentioned_ids = set()
         for match in self.user_mention_pattern.finditer(jira_markup):
-            username = match.group(1).strip()
-            if username.startswith("accountId:"):
-                continue  # Skip, handled above
-            if self.user_mapping and username in self.user_mapping:
-                user_data = self.user_mapping[username]
-                if isinstance(user_data, dict):
-                    op_id = user_data.get("op_id")
-                    if op_id:
-                        mentioned_ids.add(int(op_id))
-
+            _, mapping = self._mention_mapping(match.group(1).strip())
+            if isinstance(mapping, dict) and mapping.get("op_id"):
+                mentioned_ids.add(int(mapping["op_id"]))
         return mentioned_ids
 
+    def _mention_mapping(self, key: str) -> tuple[str, Any]:
+        if key.startswith("accountId:"):
+            identifier = key.removeprefix("accountId:").strip()
+            return identifier, (self.account_id_mapping or {}).get(identifier)
+        return key, (self.user_mapping or {}).get(key)
+
+    def _format_mention(self, match: re.Match[str]) -> str:
+        identifier, mapping = self._mention_mapping(match.group(1).strip())
+        if mapping is None:
+            return match.group(0)
+        if not isinstance(mapping, dict):
+            return f"@{mapping}"
+        login = mapping.get("op_login") or mapping.get("login") or identifier
+        if not (op_id := mapping.get("op_id")):
+            return f"@{login}"
+        safe_login = escape(str(login))
+        return (
+            f'<mention class="mention" data-id="{escape(str(op_id))}" '
+            f'data-type="user" data-text="@{safe_login}">@{safe_login}</mention>'
+        )
+
     def _convert_user_mentions(self, text: str) -> str:
-        """Convert Jira user mentions to OpenProject user mentions.
-
-        Handles both Jira Server format [~username] and Jira Cloud format [~accountId:xxx].
-        Generates proper OpenProject HTML mention format for clickable user links.
-        """
-
-        def _format_op_mention(op_id: int | str | None, op_login: str) -> str:
-            """Format a proper OpenProject HTML mention if we have the user ID."""
-            if op_id:
-                # OpenProject expects HTML mention format for clickable links
-                return (
-                    f'<mention class="mention" data-id="{op_id}" '
-                    f'data-type="user" data-text="@{op_login}">@{op_login}</mention>'
-                )
-            # Fallback to plain @mention if no ID available
-            return f"@{op_login}"
-
-        def replace_account_id_mention(match: re.Match[str]) -> str:
-            """Replace Jira Cloud [~accountId:xxx] format."""
-            account_id = match.group(1).strip()
-            if self.account_id_mapping and account_id in self.account_id_mapping:
-                user_data = self.account_id_mapping[account_id]
-                if isinstance(user_data, dict):
-                    op_id = user_data.get("op_id")
-                    op_login = user_data.get("op_login") or user_data.get("login") or account_id
-                    return _format_op_mention(op_id, op_login)
-                # Legacy format: user_data is just the login string
-                return f"@{user_data}"
-            # Return original format if no mapping exists
-            return match.group(0)
-
-        def replace_user_mention(match: re.Match[str]) -> str:
-            """Replace Jira Server [~username] format."""
-            username = match.group(1).strip()
-            # Skip if this is actually an accountId format (handled separately)
-            if username.startswith("accountId:"):
-                return match.group(0)
-            if self.user_mapping and username in self.user_mapping:
-                user_data = self.user_mapping[username]
-                # user_data is a dict with 'op_id' and 'op_login' keys
-                if isinstance(user_data, dict):
-                    op_id = user_data.get("op_id")
-                    op_login = user_data.get("op_login") or user_data.get("login") or username
-                    return _format_op_mention(op_id, op_login)
-                # Fallback: if user_data is already a string (legacy format)
-                return f"@{user_data}"
-            # Return original format if no mapping exists or user not found
-            return match.group(0)
-
-        # Process accountId format first (more specific)
-        text = self.account_id_mention_pattern.sub(replace_account_id_mention, text)
-        # Then process username format
-        return self.user_mention_pattern.sub(replace_user_mention, text)
+        """Resolve both server usernames and cloud account IDs in a single pass."""
+        return self.user_mention_pattern.sub(self._format_mention, text)
 
     def _convert_emoticons(self, text: str) -> str:
         """Convert Jira emoticons to UTF-8 emoji/symbols.
@@ -495,164 +438,71 @@ class MarkdownConverter:
             text = text.replace(jira_emoticon, unicode_char)
         return text
 
+    def _attachment_target(self, filename: str) -> str:
+        files = (
+            self.attachment_mapping.get(self._current_jira_key, {})
+            if self._current_jira_key and self.attachment_mapping
+            else {}
+        )
+        attachment_id = files.get(filename)
+        if not attachment_id:
+            attachment_id = next((value for name, value in files.items() if name.lower() == filename.lower()), None)
+        if attachment_id is not None:
+            return f"/api/v3/attachments/{attachment_id}/content"
+        logger.debug(
+            "No attachment mapping for %s in %s, using filename", filename, self._current_jira_key or "unknown"
+        )
+        return filename
+
     def _convert_images(self, text: str) -> str:
-        """Convert Jira images to markdown images with OpenProject attachment URLs.
-
-        If an attachment mapping is available and the current Jira key is set,
-        image references are converted to OpenProject API attachment URLs:
-        - `!image.png!` → `![image.png](/api/v3/attachments/{id}/content)`
-
-        Without mapping, falls back to filename-only (may not render correctly):
-        - `!image.png!` → `![](image.png)`
-        """
+        """Convert inline image names to their OpenProject content URLs when mapped."""
 
         def replace_image(match: re.Match[str]) -> str:
             filename = match.group(1).strip()
-            alt_text = match.group(2).strip() if match.group(2) else filename
-
-            # Try to resolve to OpenProject attachment URL
-            if self._current_jira_key and self.attachment_mapping:
-                issue_attachments = self.attachment_mapping.get(self._current_jira_key, {})
-                attachment_id = issue_attachments.get(filename)
-                if attachment_id:
-                    return f"![{alt_text}](/api/v3/attachments/{attachment_id}/content)"
-                # Try case-insensitive lookup
-                for att_filename, att_id in issue_attachments.items():
-                    if att_filename.lower() == filename.lower():
-                        return f"![{alt_text}](/api/v3/attachments/{att_id}/content)"
-
-            # Fallback: use filename only (OpenProject may not resolve this)
-            logger.debug(
-                _UNMAPPED_ATTACHMENT_MESSAGE,
-                filename,
-                self._current_jira_key or "unknown",
-            )
-            return f"![{alt_text}]({filename})"
+            alt = match.group(2).strip() if match.group(2) else filename
+            return f"![{alt}]({self._attachment_target(filename)})"
 
         return self.image_pattern.sub(replace_image, text)
 
     def _convert_attachments(self, text: str) -> str:
-        """Convert Jira attachments to markdown links with OpenProject attachment URLs.
-
-        If an attachment mapping is available and the current Jira key is set,
-        attachment references are converted to OpenProject API attachment URLs:
-        - `[doc|file.pdf]` → `[doc](/api/v3/attachments/{id}/content)`
-        - `[^file.pdf]` → `[file.pdf](/api/v3/attachments/{id}/content)`
-
-        Without mapping, falls back to filename-only (may not work):
-        - `[doc|file.pdf]` → `[doc](file.pdf)`
-        - `[^file.pdf]` → `[file.pdf](file.pdf)`
-        """
+        """Resolve both [title|filename] and [^filename] references."""
 
         def replace_attachment(match: re.Match[str]) -> str:
-            """Handle [title|filename] pattern."""
             title = match.group(1).strip()
-            filename = match.group(2).strip()
+            filename = match.group(match.lastindex or 1).strip()
+            return f"[{title}]({self._attachment_target(filename)})"
 
-            # Try to resolve to OpenProject attachment URL
-            if self._current_jira_key and self.attachment_mapping:
-                issue_attachments = self.attachment_mapping.get(self._current_jira_key, {})
-                attachment_id = issue_attachments.get(filename)
-                if attachment_id:
-                    return f"[{title}](/api/v3/attachments/{attachment_id}/content)"
-                # Try case-insensitive lookup
-                for att_filename, att_id in issue_attachments.items():
-                    if att_filename.lower() == filename.lower():
-                        return f"[{title}](/api/v3/attachments/{att_id}/content)"
-
-            # Fallback: use filename only
-            logger.debug(
-                _UNMAPPED_ATTACHMENT_MESSAGE,
-                filename,
-                self._current_jira_key or "unknown",
-            )
-            return f"[{title}]({filename})"
-
-        def replace_attachment_ref(match: re.Match[str]) -> str:
-            """Handle [^filename] pattern."""
-            filename = match.group(1).strip()
-
-            # Try to resolve to OpenProject attachment URL
-            if self._current_jira_key and self.attachment_mapping:
-                issue_attachments = self.attachment_mapping.get(self._current_jira_key, {})
-                attachment_id = issue_attachments.get(filename)
-                if attachment_id:
-                    return f"[{filename}](/api/v3/attachments/{attachment_id}/content)"
-                # Try case-insensitive lookup
-                for att_filename, att_id in issue_attachments.items():
-                    if att_filename.lower() == filename.lower():
-                        return f"[{filename}](/api/v3/attachments/{att_id}/content)"
-
-            # Fallback: use filename only
-            logger.debug(
-                _UNMAPPED_ATTACHMENT_MESSAGE,
-                filename,
-                self._current_jira_key or "unknown",
-            )
-            return f"[{filename}]({filename})"
-
-        # Apply both patterns
         text = self.attachment_pattern.sub(replace_attachment, text)
-        return self.attachment_ref_pattern.sub(replace_attachment_ref, text)
+        return self.attachment_ref_pattern.sub(replace_attachment, text)
 
     def _convert_horizontal_rules(self, text: str) -> str:
         """Convert Jira horizontal rules to markdown horizontal rules."""
         return self.hr_pattern.sub("---", text)
 
     def _convert_tables(self, text: str) -> str:
-        """Convert Jira tables to markdown tables."""
-        lines = text.split("\n")
-        result_lines = []
-        in_table = False
-        table_rows = []
-
-        for line in lines:
-            stripped = line.strip()
-            is_header_row = stripped.startswith("||")
-            if is_header_row or self.table_row_pattern.match(line):
-                # This is a table row (header or data)
-                if not in_table:
-                    in_table = True
-                    table_rows = []
-
-                if is_header_row:
-                    # Jira header row: ||col1||col2||col3|| — split on || separator.
-                    # Strip the outer leading/trailing | characters introduced by the
-                    # mandatory || delimiters, then split on ||.  Empty strings that
-                    # arise from the leading/trailing || are pruned by stripping the
-                    # string BEFORE splitting; intentionally empty interior cells
-                    # (e.g. ||col1|| ||col3||) are preserved so column alignment
-                    # is not silently corrupted.
-                    raw = stripped.strip("|")
-                    raw_cells = raw.split("||")
-                    # Prune only the edge fragments that are empty due to leading/trailing ||
-                    if raw_cells and raw_cells[0].strip() == "":
-                        raw_cells = raw_cells[1:]
-                    if raw_cells and raw_cells[-1].strip() == "":
-                        raw_cells = raw_cells[:-1]
-                    cells = [c.strip() for c in raw_cells]
-                else:
-                    # Normal data row: |cell1|cell2| — split on single |
-                    cells = [cell.strip() for cell in line.strip("|").split("|")]
-                table_rows.append(cells)
-
+        """Accumulate consecutive Jira rows and flush each table at its boundary."""
+        result = []
+        rows = []
+        for line in text.split("\n"):
+            if line.strip().startswith("||"):
+                rows.append(self._table_header_cells(line))
+            elif self.table_row_pattern.match(line):
+                rows.append([cell.strip() for cell in line.strip("|").split("|")])
             else:
-                # Not a table row
-                if in_table:
-                    # End of table - convert and add to result
-                    converted_table = self._format_markdown_table(table_rows)
-                    result_lines.extend(converted_table)
-                    in_table = False
-                    table_rows = []
+                result.extend(self._format_markdown_table(rows))
+                rows.clear()
+                result.append(line)
+        result.extend(self._format_markdown_table(rows))
+        return "\n".join(result)
 
-                result_lines.append(line)
-
-        # Handle table at end of text
-        if in_table and table_rows:
-            converted_table = self._format_markdown_table(table_rows)
-            result_lines.extend(converted_table)
-
-        return "\n".join(result_lines)
+    @staticmethod
+    def _table_header_cells(line: str) -> list[str]:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("||")]
+        if cells and not cells[0]:
+            cells.pop(0)
+        if cells and not cells[-1]:
+            cells.pop()
+        return cells
 
     def _format_markdown_table(self, table_rows: list[list[str]]) -> list[str]:
         """Format table rows as markdown table."""
@@ -737,6 +587,30 @@ class MarkdownConverter:
 
         return self.panel_pattern.sub(replace_panel, text)
 
+    @staticmethod
+    def _format_tabs(match: re.Match[str]) -> str:
+        tabs_content = match.group(1)
+
+        # Extract individual tabs
+        tabs = []
+        for tab in tabs_content.split("{tab:")[1:]:
+            title, separator, body = tab.partition("}")
+            if title and separator:
+                tabs.append((title.strip(), body.strip()))
+
+        if not tabs:
+            return tabs_content  # Fallback if no tabs found
+
+        # Convert to markdown with clear section headers
+        result = []
+        for i, (title, content) in enumerate(tabs):
+            if i == 0:
+                result.append(f"**📑 {title}**\n\n{content}")
+            else:
+                result.append(f"**📑 {title}** *(Alternative View)*\n\n{content}")
+
+        return "\n\n---\n\n".join(result)
+
     def _convert_advanced_macros(self, text: str) -> str:
         """Convert advanced Jira macros to markdown equivalents."""
 
@@ -761,30 +635,7 @@ class MarkdownConverter:
         text = self.expand_pattern.sub(replace_expand, text)
 
         # Tabs: {tabs}{tab:Tab1}content1{tab:Tab2}content2{tabs}
-        def replace_tabs(match: re.Match[str]) -> str:
-            tabs_content = match.group(1)
-
-            # Extract individual tabs
-            tabs = []
-            for tab_match in self.tab_pattern.finditer(tabs_content):
-                tab_title = tab_match.group(1).strip()
-                tab_content = tab_match.group(2).strip()
-                tabs.append((tab_title, tab_content))
-
-            if not tabs:
-                return tabs_content  # Fallback if no tabs found
-
-            # Convert to markdown with clear section headers
-            result = []
-            for i, (title, content) in enumerate(tabs):
-                if i == 0:
-                    result.append(f"**📑 {title}**\n\n{content}")
-                else:
-                    result.append(f"**📑 {title}** *(Alternative View)*\n\n{content}")
-
-            return "\n\n---\n\n".join(result)
-
-        text = self.tabs_pattern.sub(replace_tabs, text)
+        text = self.tabs_pattern.sub(self._format_tabs, text)
 
         # Color formatting: {color:red}text{color}
         def replace_color(match: re.Match[str]) -> str:

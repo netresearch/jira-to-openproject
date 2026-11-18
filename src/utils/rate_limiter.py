@@ -9,7 +9,7 @@ and implements exponential backoff for different types of errors.
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from threading import Lock
 from typing import Any
@@ -136,7 +136,7 @@ class RateLimitState:
     consecutive_failures: int = 0
     circuit_breaker_open: bool = False
     circuit_breaker_reset_time: float = 0.0
-    response_time_history: list = None
+    response_time_history: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Initialize default mutable fields safely."""
@@ -348,43 +348,19 @@ class RateLimiter:
                 self.config.max_delay,
             )
 
+    @staticmethod
+    def _rate_limit_value(headers: dict[str, str], name: str) -> int | None:
+        for key in (f"X-RateLimit-{name}", f"x-ratelimit-{name.lower()}", f"X-Rate-Limit-{name}"):
+            try:
+                return int(headers[key])
+            except KeyError, ValueError:
+                continue
+        return None
+
     def _parse_rate_limit_headers(self, headers: dict[str, str]) -> None:
-        """Parse rate limit headers and adjust accordingly."""
-        # Common rate limit headers
-        remaining_headers = [
-            "X-RateLimit-Remaining",
-            "x-ratelimit-remaining",
-            "X-Rate-Limit-Remaining",
-        ]
-        limit_headers = ["X-RateLimit-Limit", "x-ratelimit-limit", "X-Rate-Limit-Limit"]
-        reset_headers = ["X-RateLimit-Reset", "x-ratelimit-reset", "X-Rate-Limit-Reset"]
-
-        remaining = None
-        limit = None
-
-        for header in remaining_headers:
-            if header in headers:
-                try:
-                    remaining = int(headers[header])
-                    break
-                except ValueError:
-                    continue
-
-        for header in limit_headers:
-            if header in headers:
-                try:
-                    limit = int(headers[header])
-                    break
-                except ValueError:
-                    continue
-
-        for header in reset_headers:
-            if header in headers:
-                try:
-                    int(headers[header])
-                    break
-                except ValueError:
-                    continue
+        """Adjust delay from the remaining budget reported by the server."""
+        remaining = self._rate_limit_value(headers, "Remaining")
+        limit = self._rate_limit_value(headers, "Limit")
 
         # Adjust delay based on remaining requests
         if remaining is not None and limit is not None:
