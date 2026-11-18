@@ -954,13 +954,12 @@ class CompanyMigration(BaseMigration):
             }
 
             # Contact information if available
-            if "lead" in tempo_company:
-                lead = tempo_company.get("lead")
-                if isinstance(lead, dict):
-                    metadata["lead_key"] = lead.get("key", "")
-                    metadata["lead_display_name"] = lead.get("displayName", "")
-                elif isinstance(lead, str):
-                    metadata["lead_key"] = lead
+            lead = tempo_company.get("lead")
+            if isinstance(lead, dict):
+                metadata["lead_key"] = lead.get("key", "")
+                metadata["lead_display_name"] = lead.get("displayName", "")
+            elif isinstance(lead, str):
+                metadata["lead_key"] = lead
 
             # Additional information from raw data if available
             for field in [
