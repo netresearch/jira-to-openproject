@@ -8,7 +8,6 @@ This script orchestrates the complete migration process with performance optimiz
 
 import argparse
 import asyncio
-import inspect
 import json
 import shutil
 import subprocess
@@ -29,7 +28,7 @@ from src.application.components.agile_board_migration import AgileBoardMigration
 from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
 from src.application.components.attachment_recovery_migration import AttachmentRecoveryMigration
 from src.application.components.attachments_migration import AttachmentsMigration
-from src.application.components.base_migration import BaseMigration
+from src.application.components.base_migration import BaseMigration, EntityTypeRegistry
 from src.application.components.category_defaults_migration import CategoryDefaultsMigration
 from src.application.components.company_migration import CompanyMigration
 from src.application.components.components_migration import ComponentsMigration
@@ -151,148 +150,73 @@ def _backfill_user_mapping_at_startup(op_client: Any, mappings: Any, logger: Any
 # ``success=False`` / ``errors``-list / explicit ``error`` / failed status)
 # OR when failures exist with **zero** successes is the component flagged
 # as errored.
+def _count_value(source: dict, key: str) -> int:
+    return int(source.get(key) or 0)
+
+
+def _source_count(details: dict, data: dict, key: str) -> int:
+    for source in (details, data):
+        if key in source:
+            try:
+                return _count_value(source, key)
+            except TypeError, ValueError, OverflowError:
+                continue
+    return 0
+
+
 def _component_has_errors(result: ComponentResult | None) -> bool:
-    """Return True iff the component result indicates a real failure.
-
-    Failure conditions:
-    - result is None
-    - ``success`` is False
-    - ``errors`` list is non-empty or ``error`` field is set
-    - ``details.status`` is ``"failed"`` / ``"error"`` / ``"errors"``
-    - failed counters > 0 **and no successes** (nothing migrated)
-    """
-    if result is None:
+    if not result or not result.success or getattr(result, "errors", None) or getattr(result, "error", None):
         return True
-    if not getattr(result, "success", False):
+    details = result.details if isinstance(result.details, dict) else {}
+    if str(details.get("status", "")).lower() in ("failed", "error", "errors"):
         return True
-    if getattr(result, "errors", None) and len(result.errors) > 0:
-        return True
-    if getattr(result, "error", None):
-        return True
-    details = getattr(result, "details", None) or {}
-    if isinstance(details, dict):
-        status = str(details.get("status", "")).lower()
-        if status in ("failed", "error", "errors"):
-            return True
-
-    # Use the same robust counter extraction as the summary line — partial
-    # successes (some migrated, some failed) are tolerated here. ``run()``
-    # already returned ``success=True`` so the migration considers its work
-    # complete; failures alongside successes are warnings, not errors. Only
-    # all-failed (failed_count > 0 AND success_count == 0) flips this to a
-    # real failure.
-    success_count, failed_count, _total = _extract_counts(result)
-    if failed_count > 0 and success_count == 0:
-        return True
-    # Catch legacy counters not surfaced via _extract_counts (e.g. a
-    # migration sets only ``failed`` / ``failed_types`` / ``failed_issues``
-    # without any success counter). If we got zero success_count from the
-    # robust extractor and any of these are non-zero, treat as all-failed.
-    if success_count == 0:
-        legacy_failed = (
-            int(getattr(result, "failed", 0) or 0)
-            + int(getattr(result, "failed_types", 0) or 0)
-            + int(getattr(result, "failed_issues", 0) or 0)
-            + int(details.get("failed", 0) or 0 if isinstance(details, dict) else 0)
-        )
-        if legacy_failed > 0:
-            return True
-    return False
+    succeeded, failed, _ = _extract_counts(result)
+    if succeeded:
+        return False
+    legacy = sum(int(getattr(result, key, 0) or 0) for key in ("failed", "failed_types", "failed_issues"))
+    return failed > 0 or legacy + _count_value(details, "failed") > 0
 
 
-# Helper: robustly extract success/failed/total counts for summaries
+def _derive_counts(result: ComponentResult, counts: tuple[int, int, int], details: dict) -> tuple[int, int, int]:
+    succeeded, failed, total = counts
+    data = result.data if isinstance(result.data, dict) else {}
+    succeeded = succeeded or _source_count(details, data, "total_created")
+    issue_count = _source_count(details, data, "total_issues") or _source_count(details, data, "total")
+    if issue_count:
+        total = total or issue_count
+        if succeeded and not failed:
+            failed = max(total - succeeded, 0)
+    time_entries = details.get("total_time_entries")
+    if isinstance(time_entries, dict) and (not total or not (succeeded or failed)):
+        migrated = _count_value(time_entries, "migrated")
+        errors = _count_value(time_entries, "failed")
+        succeeded = succeeded or migrated
+        failed = failed or errors
+        total = total or migrated + errors
+    generic_total = _source_count(details, data, "total")
+    generic_errors = _source_count(details, data, "error_count")
+    if generic_total or generic_errors:
+        total = total or generic_total
+        failed = failed or generic_errors
+        succeeded = succeeded or max(total - failed, 0)
+    return succeeded, failed, total or succeeded + failed
+
+
 def _extract_counts(result: ComponentResult) -> tuple[int, int, int]:
-    """Return (success_count, failed_count, total_count) using robust fallbacks.
-
-    Priority:
-    1) details.success_count/failed_count/total_count
-    2) model fields success_count/failed_count/total_count
-    3) derive from common detail/data shapes (e.g., total_created/total_issues,
-       total_time_entries {migrated, failed}, generic 'total'/'error_count')
-    4) final fallback: total = success + failed
-    """
+    """Prefer explicit detail/model counters, then derive counts from older component reports."""
+    details = result.details if isinstance(result.details, dict) else {}
+    names = ("success_count", "failed_count", "total_count")
+    model_counts = tuple(int(getattr(result, key, 0) or 0) for key in names)
     try:
-        details = getattr(result, "details", None) or {}
-
-        # 1) Direct counts in details dict
-        if isinstance(details, dict):
-            d_succ = int(details.get("success_count", 0) or 0)
-            d_fail = int(details.get("failed_count", 0) or 0)
-            d_total = int(details.get("total_count", 0) or 0)
-        else:
-            d_succ = d_fail = d_total = 0
-
-        # 2) Model-level fields
-        m_succ = int(getattr(result, "success_count", 0) or 0)
-        m_fail = int(getattr(result, "failed_count", 0) or 0)
-        m_total = int(getattr(result, "total_count", 0) or 0)
-
-        success_count = d_succ or m_succ
-        failed_count = d_fail or m_fail
-        total_count = d_total or m_total
-
-        # 3) Derive from common shapes when still missing
-        if (success_count == 0 and failed_count == 0) or total_count == 0:
-            # Work packages: total_created / total_issues (either in details or data)
-            def _find(key: str) -> int:
-                try:
-                    if isinstance(details, dict) and key in details:
-                        return int(details.get(key, 0) or 0)
-                except Exception:
-                    pass
-                data = getattr(result, "data", None)
-                try:
-                    if isinstance(data, dict) and key in data:
-                        return int(data.get(key, 0) or 0)
-                except Exception:
-                    pass
-                return 0
-
-            total_created = _find("total_created")
-            total_issues = _find("total_issues") or _find("total")
-
-            if total_created or total_issues:
-                success_count = success_count or total_created
-                # If we have total_issues and no failed_count, derive failed
-                if total_issues:
-                    total_count = total_count or total_issues
-                    if failed_count == 0 and success_count:
-                        failed_count = max(total_count - success_count, 0)
-
-            # Time entries: total_time_entries { migrated, failed }
-            if (success_count == 0 and failed_count == 0) or total_count == 0:
-                te = None
-                if isinstance(details, dict):
-                    te = details.get("total_time_entries")
-                if te and isinstance(te, dict):
-                    migrated = int(te.get("migrated", 0) or 0)
-                    failed = int(te.get("failed", 0) or 0)
-                    success_count = success_count or migrated
-                    failed_count = failed_count or failed
-                    total_count = total_count or (migrated + failed)
-
-            # Generic totals: derive even if total is present but success/failed missing
-            err_cnt = _find("error_count")
-            tot = _find("total")
-            if tot or err_cnt:
-                if total_count == 0 and tot:
-                    total_count = tot
-                if failed_count == 0 and err_cnt:
-                    failed_count = err_cnt
-                if success_count == 0 and total_count >= failed_count:
-                    success_count = total_count - failed_count
-
-        # 4) Final fallback
-        if total_count == 0:
-            total_count = success_count + failed_count
-
-        return int(success_count), int(failed_count), int(total_count)
-    except Exception:
-        # Extremely defensive fallback
-        sc = int(getattr(result, "success_count", 0) or 0)
-        fc = int(getattr(result, "failed_count", 0) or 0)
-        tc = int(getattr(result, "total_count", 0) or (sc + fc))
-        return sc, fc, tc
+        succeeded, failed, total = (
+            _count_value(details, key) or count for key, count in zip(names, model_counts, strict=True)
+        )
+        if total and (succeeded or failed):
+            return succeeded, failed, total
+        return _derive_counts(result, (succeeded, failed, total), details)
+    except TypeError, ValueError, OverflowError:
+        succeeded, failed, total = model_counts
+        return succeeded, failed, total or succeeded + failed
 
 
 def _first_error_message(result: ComponentResult | None) -> str:
@@ -645,6 +569,383 @@ def restore_backup(backup_dir: Path) -> bool:
     return True
 
 
+async def _announce_migration_mode(effective_components: list[str]) -> None:
+    if config.migration_config.get("dry_run", False):
+        allow_unsafe = bool(config.migration_config.get("allow_unsafe_dry_run", False))
+        level, lines, abort = _build_dry_run_banner(
+            requested=effective_components,
+            allow_unsafe=allow_unsafe,
+        )
+        log = config.logger.error if level == "error" else config.logger.warning
+        for line in lines:
+            log(line)
+        if abort:
+            msg = (
+                "Aborting --dry-run: requested components include "
+                "unsafe migrations. See log above; pass "
+                "--allow-unsafe-dry-run to acknowledge."
+            )
+            raise SystemExit(msg)
+        if lines:
+            await asyncio.sleep(1)  # Give the user a moment to see this warning
+        mode = "DRY RUN"
+    else:
+        mode = "PRODUCTION"
+
+    config.logger.info(
+        f"Starting Jira to OpenProject migration - mode='{mode}'",
+    )
+
+
+def _create_migration_clients(
+    batch_size: int, max_concurrent: int
+) -> tuple[JiraClient, OpenProjectClient, HealthCheckClient]:
+    # Initialize clients
+    config.logger.info("Initializing API clients...")
+
+    # Debug: print available config keys to help identify the correct ones
+    config.logger.info(
+        "Available OpenProject config keys: %s",
+        list(config.openproject_config.keys()),
+    )
+
+    # Create clients - fail fast if config is missing
+    ssh_client = SSHClient(
+        host=str(config.openproject_config.get("server", "openproject.local")),
+        user=config.openproject_config.get("user", None),
+        key_file=(
+            str(config.openproject_config.get("key_file", "")) if config.openproject_config.get("key_file") else None
+        ),
+    )
+
+    docker_client = DockerClient(
+        container_name=str(
+            config.openproject_config.get(
+                "container_name",
+                config.openproject_config.get("container", "openproject"),
+            ),
+        ),
+        ssh_client=ssh_client,
+    )
+
+    rails_client = RailsConsoleClient(
+        tmux_session_name=config.openproject_config.get(
+            "tmux_session_name",
+            "rails_console",
+        ),
+    )
+
+    # Get performance configuration from migration config
+    performance_config = {
+        "cache_size": config.migration_config.get("cache_size", 2000),
+        "cache_ttl": config.migration_config.get("cache_ttl", 1800),
+        "batch_size": batch_size,
+        "max_workers": max_concurrent,
+        "rate_limit": config.migration_config.get("rate_limit_per_sec", 15.0),
+    }
+
+    jira_client = JiraClient(**performance_config)
+
+    # Adjust performance config for OpenProject (typically lower rates)
+    op_performance_config = performance_config.copy()
+    op_performance_config.update(
+        {
+            "cache_size": config.migration_config.get("op_cache_size", 1500),
+            "cache_ttl": config.migration_config.get("op_cache_ttl", 2400),
+            "batch_size": config.migration_config.get("op_batch_size", 50),
+            "rate_limit": config.migration_config.get(
+                "op_rate_limit_per_sec",
+                12.0,
+            ),
+        },
+    )
+
+    op_client = OpenProjectClient(
+        container_name=config.openproject_config.get("container", None),
+        ssh_host=config.openproject_config.get("server", None),
+        ssh_user=config.openproject_config.get("user", None),
+        tmux_session_name=config.openproject_config.get(
+            "tmux_session_name",
+            None,
+        ),
+        # Reuse previously initialized clients to avoid duplicate init/logging
+        ssh_client=ssh_client,
+        docker_client=docker_client,
+        rails_client=rails_client,
+        **op_performance_config,
+    )
+
+    config.logger.success("All clients initialized successfully")
+
+    # Initialize health check client for pre-migration and during-migration monitoring
+    health_client = HealthCheckClient(
+        ssh_client=ssh_client,
+        docker_client=docker_client,
+        container_name=config.openproject_config.get(
+            "container_name",
+            config.openproject_config.get("container", "openproject"),
+        ),
+    )
+    return jira_client, op_client, health_client
+
+
+def _check_initial_health(health_client: HealthCheckClient, results: MigrationResult) -> bool:
+    config.logger.info("Running pre-migration health checks...")
+    health_ok, health_issues = health_client.run_pre_migration_checks()
+    if not health_ok:
+        config.logger.error("Pre-migration health checks failed:")
+        for issue in health_issues:
+            config.logger.error("  - %s", issue)
+        # Optionally abort migration on critical health issues
+        if any("CRITICAL" in issue.upper() for issue in health_issues):
+            config.logger.error("Aborting migration due to critical health issues")
+            results.overall["status"] = "failed"
+            results.overall["health_check_failed"] = True
+            results.overall["health_issues"] = health_issues
+            return False
+        config.logger.warning("Continuing migration despite health warnings")
+        results.overall["health_warnings"] = health_issues
+    else:
+        config.logger.success("All pre-migration health checks passed")
+    return True
+
+
+def _work_package_preflight() -> ComponentResult | None:
+    required = ("project", "user", "issue_type", "issue_type_id", "status")
+    missing = [name for name in required if not config.mappings.get_mapping(name)]
+    if not missing:
+        return None
+    message = f"Missing required mappings: {', '.join(missing)}"
+    config.logger.error("Preflight failed: %s. Run prerequisite components first.", message)
+    return ComponentResult(
+        success=False,
+        message=message,
+        errors=[f"missing_mapping:{name}" for name in missing],
+        details={"status": "failed", "failed_reason": "missing_required_mappings", "missing": missing},
+    )
+
+
+def _invoke_component(name: str, component: BaseMigration) -> ComponentResult:
+    if name == "work_packages" and getattr(type(component), "run", None) is BaseMigration.run:
+        legacy = getattr(component, "migrate_work_packages", None)
+        if legacy is not None:
+            data = legacy()
+            return ComponentResult(
+                success=data.get("status") == "success",
+                data=data,
+                details={
+                    "status": data.get("status", "unknown"),
+                    "total_count": data.get("total", 0),
+                    "failed_count": data.get("error_count", 0),
+                },
+            )
+    run_with_changes = getattr(component, "run_with_change_detection", None)
+    if run_with_changes is None:
+        return component.run()
+    try:
+        entity_type = EntityTypeRegistry.resolve(type(component))
+    except ValueError, AttributeError:
+        entity_type = None
+    return run_with_changes(entity_type=entity_type)
+
+
+def _run_component(name: str, component: BaseMigration) -> ComponentResult:
+    start = time.monotonic()
+    try:
+        result = _invoke_component(name, component)
+        if result is None:
+            return ComponentResult(success=False, message=f"Component '{name}' did not return a result")
+        details = result.details or {}
+        duration = details.get("time", details.get("duration_seconds", time.monotonic() - start))
+        level, message = _format_component_outcome(name, result, duration)
+        getattr(config.logger, level)(message)
+        return result
+    except KeyboardInterrupt:
+        config.logger.warning("Component '%s' was interrupted by user", name)
+        return ComponentResult(
+            success=False,
+            message="Component was interrupted by user",
+            details={"status": "interrupted", "time": time.monotonic() - start},
+        )
+    except Exception as exc:
+        config.logger.exception("Error during '%s' migration: %s", name, exc)
+        return ComponentResult(
+            success=False,
+            errors=[str(exc)],
+            message=f"Error during component execution: {exc}",
+            details={"status": "failed", "time": time.monotonic() - start, "error": str(exc)},
+        )
+
+
+def _monitor_health(health_client: HealthCheckClient) -> None:
+    try:
+        health_status = health_client.run_during_migration_check()
+        if not health_status["healthy"]:
+            for warning in health_status.get("warnings", []):
+                config.logger.warning("Health check: %s", warning)
+            # Auto-cleanup temp files if threshold exceeded
+            if health_status.get("temp_files_exceeded"):
+                config.logger.info("Auto-cleaning old temp files...")
+                cleanup_result = health_client.cleanup_temp_files(max_age_minutes=30)
+                if cleanup_result.success:
+                    config.logger.info(
+                        "Cleaned up %d temp files, freed %s",
+                        cleanup_result.files_removed,
+                        cleanup_result.space_freed_human,
+                    )
+                else:
+                    config.logger.warning("Temp file cleanup failed: %s", cleanup_result.error)
+    except Exception as health_err:
+        config.logger.debug("During-migration health check failed: %s", health_err)
+
+
+async def _continue_after_component(name: str, next_name: str, results: MigrationResult) -> bool:
+    component = results.components[name]
+    outcome = "[bold green]SUCCEEDED[/bold green]" if component.success else "[bold red]FAILED[/bold red]"
+    if component.errors:
+        outcome = f"[bold red]FAILED[/bold red] with errors: {component.errors}"
+    console.rule(f"Component '{name}' has {outcome}.")
+    if results.overall["status"] != "success":
+        console.print("WARNING: Previous component had errors.")
+    answer = await asyncio.to_thread(input, f"\nContinue to next component: {next_name}? [Y/n]: ")
+    if answer.strip().lower() in ("", "y", "yes"):
+        return True
+    config.logger.warning("Migration paused by user")
+    results.overall.update(status="interrupted", message="Migration was paused by user")
+    return False
+
+
+def _must_stop(name: str, result: ComponentResult, results: MigrationResult, *, stop_on_error: bool) -> bool:
+    if result.details and result.details.get("status") == "interrupted":
+        results.overall["status"] = "interrupted"
+        return True
+    if not _component_has_errors(result):
+        return False
+    results.overall["status"] = "failed"
+    if stop_on_error:
+        config.logger.error("Component '%s' reported errors and --stop-on-error is set, aborting migration", name)
+        return True
+    if not result.success and name in ("users", "projects"):
+        config.logger.error("Critical component '%s' failed, aborting migration", name)
+        return True
+    return False
+
+
+async def _run_components(
+    names: list[str],
+    factories: dict[str, Callable[[], BaseMigration]],
+    results: MigrationResult,
+    health_client: HealthCheckClient,
+    *,
+    stop_on_error: bool,
+    no_confirm: bool,
+) -> None:
+    try:
+        for index, name in enumerate(names):
+            print_component_header(name)
+            preflight = _work_package_preflight() if name == "work_packages" else None
+            result = preflight or _run_component(name, factories[name]())
+            results.components[name] = result
+            if _must_stop(name, result, results, stop_on_error=stop_on_error):
+                break
+            if preflight:
+                continue
+            _monitor_health(health_client)
+            if not no_confirm and index + 1 < len(names):
+                if not await _continue_after_component(name, names[index + 1], results):
+                    break
+    except KeyboardInterrupt:
+        config.logger.warning("Migration interrupted by user")
+        results.overall.update(status="interrupted", message="Migration was interrupted by user")
+
+
+def _finish_migration(results: MigrationResult, migration_timestamp: str, health_client: HealthCheckClient) -> None:
+    # Add end time to results
+    results.overall["end_time"] = datetime.now(tz=UTC).isoformat()
+
+    # Calculate total time
+    start_time = datetime.fromisoformat(results.overall["start_time"])
+    end_time = datetime.fromisoformat(results.overall["end_time"])
+    total_seconds = (end_time - start_time).total_seconds()
+    results.overall["total_time_seconds"] = total_seconds
+
+    focus_components = [
+        "workflows",
+        "agile_boards",
+        "sprint_epic",
+        "admin_schemes",
+        "reporting",
+    ]
+    summary_payload: dict[str, Any] = {
+        "timestamp": migration_timestamp,
+        "overall_status": results.overall.get("status"),
+        "components": {},
+    }
+    for component_name in focus_components:
+        component_result = results.components.get(component_name)
+        if not component_result:
+            continue
+        summary_payload["components"][component_name] = {
+            "success": component_result.success,
+            "message": component_result.message,
+            "details": component_result.details,
+        }
+
+    if summary_payload["components"]:
+        summary_file = f"migration_summary_{migration_timestamp}.json"
+        data_handler.save_results(
+            summary_payload,
+            filename=summary_file,
+        )
+        config.logger.info(
+            "Focused migration summary saved to %s",
+            summary_file,
+        )
+
+    # Post-migration cleanup and final health check
+    try:
+        config.logger.info("Running post-migration cleanup...")
+        cleanup_result = health_client.cleanup_temp_files(max_age_minutes=5)
+        if cleanup_result.success and cleanup_result.files_removed > 0:
+            config.logger.info(
+                "Post-migration cleanup: removed %d temp files, freed %s",
+                cleanup_result.files_removed,
+                cleanup_result.space_freed_human,
+            )
+        # Get final health snapshot for results
+        final_snapshot = health_client.get_health_snapshot()
+        results.overall["final_health"] = {
+            "container_disk_free_mb": final_snapshot.container_disk_free_mb,
+            "temp_file_count": final_snapshot.temp_file_count,
+            "local_disk_free_mb": final_snapshot.local_disk_free_mb,
+            "remote_disk_free_mb": final_snapshot.remote_disk_free_mb,
+        }
+    except Exception as cleanup_err:
+        config.logger.debug("Post-migration cleanup failed: %s", cleanup_err)
+
+    # Print final status
+    if results.overall.get("status") == "success":
+        config.logger.success(
+            f"Migration completed successfully in {total_seconds:.2f} seconds.",
+        )
+    else:
+        config.logger.error(
+            "Migration completed with status '%s' in %.2f seconds.",
+            results.overall["status"],
+            total_seconds,
+        )
+
+    # Save results to file
+    results_file = f"migration_results_{migration_timestamp}.json"
+    data_handler.save_results(
+        results,
+        filename=results_file,
+    )
+
+    config.logger.info("Migration results saved to %s", results_file)
+    config.logger.info("Migration complete")
+
+
 async def run_migration(
     *,
     components: list[ComponentName] | None = None,
@@ -677,35 +978,7 @@ async def run_migration(
         # and let the run proceed — re-introducing the #260 honesty bug.
         effective_components = list(components) if components else list(DEFAULT_COMPONENT_SEQUENCE)
 
-        # Check if we need a migration mode header
-        if config.migration_config.get("dry_run", False):
-            allow_unsafe = bool(config.migration_config.get("allow_unsafe_dry_run", False))
-            level, lines, abort = _build_dry_run_banner(
-                requested=effective_components,
-                allow_unsafe=allow_unsafe,
-            )
-            log = config.logger.error if level == "error" else config.logger.warning
-            for line in lines:
-                log(line)
-            if abort:
-                msg = (
-                    "Aborting --dry-run: requested components include "
-                    "unsafe migrations. See log above; pass "
-                    "--allow-unsafe-dry-run to acknowledge."
-                )
-                raise SystemExit(msg)
-            if lines:
-                import asyncio as _asyncio
-
-                await _asyncio.sleep(1)  # Give the user a moment to see this warning
-            mode = "DRY RUN"
-        else:
-            mode = "PRODUCTION"
-
-        config.logger.info(
-            f"Starting Jira to OpenProject migration - mode='{mode}'",
-        )
-
+        await _announce_migration_mode(effective_components)
         # Create a timestamp for this migration run
         migration_timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -728,134 +1001,15 @@ async def run_migration(
             },
         )
 
-        # Create a backup if not disabled
-        backup_path = None
-        # Heuristic no-op plan detection (placeholder for future preflight analysis)
-        plan_noop = False
-        if (
-            not config.migration_config.get(
-                "no_backup",
-                False,
-            )
-            and not config.migration_config.get("dry_run", False)
-            and not plan_noop
-        ):
-            config.logger.info("Creating backup before migration...")
+        if not config.migration_config.get("no_backup", False) and not config.migration_config.get("dry_run", False):
             backup_path = create_backup()
             if backup_path:
                 results.overall["backup_path"] = backup_path
                 config.logger.success("Backup created at: %s", backup_path)
-            else:
-                config.logger.warning("No backup created (no data to back up)")
 
-        # Initialize clients
-        config.logger.info("Initializing API clients...")
-
-        # Debug: print available config keys to help identify the correct ones
-        config.logger.info(
-            "Available OpenProject config keys: %s",
-            list(config.openproject_config.keys()),
-        )
-
-        # Create clients - fail fast if config is missing
-        ssh_client = SSHClient(
-            host=str(config.openproject_config.get("server", "openproject.local")),
-            user=config.openproject_config.get("user", None),
-            key_file=(
-                str(config.openproject_config.get("key_file", ""))
-                if config.openproject_config.get("key_file")
-                else None
-            ),
-        )
-
-        docker_client = DockerClient(
-            container_name=str(
-                config.openproject_config.get(
-                    "container_name",
-                    config.openproject_config.get("container", "openproject"),
-                ),
-            ),
-            ssh_client=ssh_client,
-        )
-
-        rails_client = RailsConsoleClient(
-            tmux_session_name=config.openproject_config.get(
-                "tmux_session_name",
-                "rails_console",
-            ),
-        )
-
-        # Get performance configuration from migration config
-        performance_config = {
-            "cache_size": config.migration_config.get("cache_size", 2000),
-            "cache_ttl": config.migration_config.get("cache_ttl", 1800),
-            "batch_size": batch_size,
-            "max_workers": max_concurrent,
-            "rate_limit": config.migration_config.get("rate_limit_per_sec", 15.0),
-        }
-
-        jira_client = JiraClient(**performance_config)
-
-        # Adjust performance config for OpenProject (typically lower rates)
-        op_performance_config = performance_config.copy()
-        op_performance_config.update(
-            {
-                "cache_size": config.migration_config.get("op_cache_size", 1500),
-                "cache_ttl": config.migration_config.get("op_cache_ttl", 2400),
-                "batch_size": config.migration_config.get("op_batch_size", 50),
-                "rate_limit": config.migration_config.get(
-                    "op_rate_limit_per_sec",
-                    12.0,
-                ),
-            },
-        )
-
-        op_client = OpenProjectClient(
-            container_name=config.openproject_config.get("container", None),
-            ssh_host=config.openproject_config.get("server", None),
-            ssh_user=config.openproject_config.get("user", None),
-            tmux_session_name=config.openproject_config.get(
-                "tmux_session_name",
-                None,
-            ),
-            # Reuse previously initialized clients to avoid duplicate init/logging
-            ssh_client=ssh_client,
-            docker_client=docker_client,
-            rails_client=rails_client,
-            **op_performance_config,
-        )
-
-        config.logger.success("All clients initialized successfully")
-
-        # Initialize health check client for pre-migration and during-migration monitoring
-        health_client = HealthCheckClient(
-            ssh_client=ssh_client,
-            docker_client=docker_client,
-            container_name=config.openproject_config.get(
-                "container_name",
-                config.openproject_config.get("container", "openproject"),
-            ),
-        )
-
-        # Run pre-migration health checks
-        config.logger.info("Running pre-migration health checks...")
-        health_ok, health_issues = health_client.run_pre_migration_checks()
-        if not health_ok:
-            config.logger.error("Pre-migration health checks failed:")
-            for issue in health_issues:
-                config.logger.error("  - %s", issue)
-            # Optionally abort migration on critical health issues
-            if any("CRITICAL" in issue.upper() for issue in health_issues):
-                config.logger.error("Aborting migration due to critical health issues")
-                results.overall["status"] = "failed"
-                results.overall["health_check_failed"] = True
-                results.overall["health_issues"] = health_issues
-                return results
-            config.logger.warning("Continuing migration despite health warnings")
-            results.overall["health_warnings"] = health_issues
-        else:
-            config.logger.success("All pre-migration health checks passed")
-
+        jira_client, op_client, health_client = _create_migration_clients(batch_size, max_concurrent)
+        if not _check_initial_health(health_client, results):
+            return results
         # Initialize mappings once via config accessor to avoid double loads
         # Accessing any attribute on config.mappings triggers lazy init via proxy
         _ = config.mappings.get_all_mappings()
@@ -879,428 +1033,23 @@ async def run_migration(
             jira_client=jira_client,
             op_client=op_client,
         )
-
-        # If components parameter is not provided, use default component order
-        if not components:
-            components = DEFAULT_COMPONENT_SEQUENCE.copy()
-
-        # Validate requested components and filter to supported ones
-        requested_components = components or []
-        available_names = set(available_component_factories.keys())
-        unknown_components = [c for c in requested_components if c not in available_names]
-        if unknown_components:
+        available = set(available_component_factories)
+        unknown = [name for name in effective_components if name not in available]
+        if unknown:
             config.logger.warning(
-                "Unknown component(s) requested: %s. Valid components: %s",
-                unknown_components,
-                sorted(available_names),
+                "Unknown component(s) requested: %s. Valid components: %s", unknown, sorted(available)
             )
-        components = [c for c in requested_components if c in available_component_factories]
-
-        # Show which components will be run
-        config.logger.info(
-            "Migration will run the following components in order: %s",
-            components,
-        )
-
-        # WorkPackageMigration is already constructed in available_components above
-        # Avoid re-instantiation here to prevent duplicate initializer side-effects
-
-        # Note: Order-aware preflight for work_packages moved to just-in-time before execution
-
-        # Run each component in order
-        try:
-            for component_name in components:
-                # Lazily construct the component instance
-                factory = available_component_factories.get(component_name)
-                if factory is None:
-                    config.logger.warning("Unknown component '%s' - skipping", component_name)
-                    continue
-                component = factory()
-
-                # Header for this component in logs
-                print_component_header(component_name)
-
-                # Track timing
-                component_start_time = time.time()
-
-                # Just-in-time preflight for work_packages before execution
-                if component_name == "work_packages":
-                    try:
-                        # Critical prerequisites for WP migration
-                        required = {
-                            "project": bool(config.mappings.get_mapping("project")),
-                            "user": bool(config.mappings.get_mapping("user")),
-                            "issue_type": bool(config.mappings.get_mapping("issue_type")),
-                            "issue_type_id": bool(config.mappings.get_mapping("issue_type_id")),
-                            "status": bool(config.mappings.get_mapping("status")),
-                        }
-                        # Note: custom_field removed from required mappings per ADR 2025-10-20
-                        # (Idempotency Requirements). Work packages migration now handles
-                        # custom field mapping idempotently by querying OpenProject metadata
-                        # when cache is missing, rather than blocking execution.
-                        missing = [k for k, ok in required.items() if not ok]
-                        if missing:
-                            config.logger.error(
-                                "Preflight failed: missing mappings for %s. Run prerequisite components first.",
-                                ", ".join(missing),
-                            )
-                            # Record a failed component result and honor --stop-on-error
-                            failed_result = ComponentResult(
-                                success=False,
-                                message=f"Missing required mappings: {', '.join(missing)}",
-                                errors=[f"missing_mapping:{m}" for m in missing],
-                                details={
-                                    "status": "failed",
-                                    "failed_reason": "missing_required_mappings",
-                                    "missing": missing,
-                                },
-                            )
-                            results.components[component_name] = failed_result
-                            results.overall["status"] = "failed"
-                            if stop_on_error:
-                                break
-                            # Skip executing this component but continue with others
-                            continue
-                    except Exception as e:
-                        config.logger.warning("Preflight mapping check error: %s", e)
-
-                # Run the component (diagnose if base run is invoked)
-                try:
-                    try:
-                        from src.application.components.base_migration import (
-                            BaseMigration,  # local import to avoid cycles
-                        )
-
-                        if component.__class__.run is BaseMigration.run:
-                            src_file = inspect.getsourcefile(component.__class__) or "<unknown>"
-                            config.logger.warning(
-                                "Component '%s' (%s) is using BaseMigration.run; override likely missing. "
-                                "Class file: %s",
-                                component_name,
-                                component.__class__.__name__,
-                                src_file,
-                            )
-                            try:
-                                has_own = "run" in component.__class__.__dict__
-                                config.logger.warning(
-                                    "Class __dict__ has own 'run': %s; available keys (truncated): %s",
-                                    has_own,
-                                    sorted(component.__class__.__dict__.keys())[:12],
-                                )
-                                # Fallback: if this is the work_packages component and subclass didn't override run,
-                                # directly call its migrate_work_packages() wrapper to proceed.
-                                if (
-                                    component_name == "work_packages"
-                                    and not has_own
-                                    and hasattr(component, "migrate_work_packages")
-                                ):
-                                    config.logger.warning(
-                                        "Falling back to migrate_work_packages() because run() is not overridden",
-                                    )
-                                    data = component.migrate_work_packages()
-                                    component_result = ComponentResult(
-                                        success=(data.get("status") == "success"),
-                                        details={
-                                            "status": data.get("status", "unknown"),
-                                            "total_count": data.get("total", 0),
-                                            "failed_count": data.get("error_count", 0),
-                                        },
-                                        data=data,
-                                    )
-                                    # Store and continue to next component
-                                    results.components[component_name] = component_result
-                                    if (not component_result.success) or _component_has_errors(component_result):
-                                        results.overall["status"] = "failed"
-                                    # Skip the normal run() call
-                                    continue
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-
-                    # j2o-50: Use idempotent workflow with caching by default
-                    # All migrations now use run_with_change_detection() as the standard approach
-                    # This provides: thread-safe caching, change detection, API call reduction
-
-                    # Try to determine entity_type for the component
-                    entity_type = None
-                    try:
-                        from src.application.components.base_migration import EntityTypeRegistry
-
-                        entity_type = EntityTypeRegistry.resolve(component.__class__)
-                    except (
-                        ValueError,
-                        AttributeError,
-                    ):
-                        # If entity type can't be resolved, run_with_change_detection will fall back to run()
-                        pass
-
-                    try:
-                        # Call run_with_change_detection() which provides:
-                        # - Thread-safe cached entity retrieval (30-50% API reduction)
-                        # - Change detection to skip unnecessary migrations (25-35% performance gain)
-                        # - Automatic snapshot creation for rollback capability
-                        component_result = component.run_with_change_detection(entity_type=entity_type)
-                    except AttributeError:
-                        # Fallback for transformation-only migrations that don't support idempotent workflow
-                        config.logger.debug(
-                            f"Component '{component_name}' does not implement run_with_change_detection(), "
-                            f"using legacy run() method",
-                        )
-                        component_result = component.run()
-
-                    if component_result:
-                        # Store result in the results dictionary
-                        results.components[component_name] = component_result
-
-                        # Mapping controller now handles consistency; no ad-hoc reloads needed
-
-                        # Update overall status if component failed OR has errors
-                        if (not component_result.success) or _component_has_errors(component_result):
-                            results.overall["status"] = "failed"
-
-                        # Print component summary based on robust count extraction
-                        details = component_result.details or {}
-                        component_time = details.get("time", details.get("duration_seconds", 0))
-
-                        level, summary_line = _format_component_outcome(
-                            component_name,
-                            component_result,
-                            component_time,
-                        )
-                        if level == "success":
-                            config.logger.success(summary_line)
-                        elif level == "warning":
-                            config.logger.warning(summary_line)
-                        else:
-                            config.logger.error(summary_line)
-                    else:
-                        # Handle case where component didn't return a result (should not happen with dataclass)
-                        config.logger.warning(
-                            "Component '%s' did not return a result",
-                            component_name,
-                        )
-                        results.components[component_name] = component_result
-
-                except KeyboardInterrupt:
-                    # Handle user interruption within a component
-                    config.logger.warning(
-                        "Component '%s' was interrupted by user",
-                        component_name,
-                    )
-                    # Create a basic result reflecting interruption
-                    interrupted_result = ComponentResult(
-                        success=False,
-                        message="Component was interrupted by user",
-                        details={
-                            "status": "interrupted",
-                            "time": time.time() - component_start_time,
-                        },
-                    )
-                    results.components[component_name] = interrupted_result
-                    results.overall["status"] = "interrupted"
-                    break
-
-                except Exception as e:
-                    # Handle unexpected errors during component execution
-                    config.logger.exception(
-                        f"Error during '{component_name}' migration: {e}",
-                    )
-                    # Create a basic result reflecting the error
-                    error_result = ComponentResult(
-                        success=False,
-                        message=f"Error during component execution: {e}",
-                        errors=[str(e)],
-                        details={
-                            "status": "failed",
-                            "time": time.time() - component_start_time,
-                            "error": str(e),  # Keep error in details for compatibility
-                        },
-                    )
-                    results.components[component_name] = error_result
-                    results.overall["status"] = "failed"
-
-                    # Check if we should stop on error immediately after an exception
-                    if stop_on_error:
-                        config.logger.error(
-                            f"Component '{component_name}' failed with exception and "
-                            f"--stop-on-error is set, aborting migration",
-                        )
-                        break
-
-                # Check if component failed or has any errors and we should stop on error (before user confirmation)
-                component_result_obj = results.components.get(component_name)
-                if stop_on_error and _component_has_errors(component_result_obj):
-                    config.logger.error(
-                        f"Component '{component_name}' reported errors and --stop-on-error is set, aborting migration",
-                    )
-                    break
-
-                # During-migration health check after each component
-                try:
-                    health_status = health_client.run_during_migration_check()
-                    if not health_status["healthy"]:
-                        for warning in health_status.get("warnings", []):
-                            config.logger.warning("Health check: %s", warning)
-                        # Auto-cleanup temp files if threshold exceeded
-                        if health_status.get("temp_files_exceeded"):
-                            config.logger.info("Auto-cleaning old temp files...")
-                            cleanup_result = health_client.cleanup_temp_files(max_age_minutes=30)
-                            if cleanup_result.success:
-                                config.logger.info(
-                                    "Cleaned up %d temp files, freed %s",
-                                    cleanup_result.files_removed,
-                                    cleanup_result.space_freed_human,
-                                )
-                            else:
-                                config.logger.warning("Temp file cleanup failed: %s", cleanup_result.error)
-                except Exception as health_err:
-                    config.logger.debug("During-migration health check failed: %s", health_err)
-
-                # Pause for user confirmation between components
-                if (
-                    component_name != components[-1] and not no_confirm
-                ):  # Skip after the last component or if no_confirm is set
-                    try:
-                        result: str = "[dim]UNKNOWN RESULT[/dim]"
-                        current_result = results.components.get(component_name)
-                        if current_result:
-                            if hasattr(current_result, "success"):
-                                if current_result.success:
-                                    result = "[bold green]SUCCEEDED[/bold green]"
-                                else:
-                                    result = "[bold red]FAILED[/bold red]"
-                            if hasattr(current_result, "errors") and current_result.errors:
-                                result = f"[bold red]FAILED[/bold red] with errors: {current_result.errors}"
-
-                        console.rule(f"Component '{component_name}' has {result}.")
-
-                        if results.overall["status"] != "success":
-                            console.print("WARNING: Previous component had errors.")
-
-                        next_component = components[components.index(component_name) + 1]
-
-                        answer = await asyncio.to_thread(
-                            input, f"\nContinue to next component: {next_component}? [Y/n]: "
-                        )
-                        if answer.strip().lower() not in ("", "y", "yes"):
-                            config.logger.warning("Migration paused by user")
-                            results.overall["status"] = "interrupted"
-                            results.overall["message"] = "Migration was paused by user"
-                            break
-                    except KeyboardInterrupt:
-                        config.logger.warning("Migration interrupted by user")
-                        results.overall["status"] = "interrupted"
-                        results.overall["message"] = "Migration was interrupted by user"
-                        break
-
-                # Break out if critical components failed
-                component_result_data = results.components
-                current_component_result = component_result_data.get(
-                    component_name,
-                    ComponentResult(),
-                )
-
-                # Check if component failed - use success flag as primary indicator
-                component_failed = not current_component_result.success if current_component_result else True
-
-                # Stop for critical components regardless of stop_on_error flag
-                if component_failed and component_name in ["users", "projects"]:
-                    config.logger.error(
-                        f"Critical component '{component_name}' failed, aborting migration",
-                    )
-                    break
-
-        except KeyboardInterrupt:
-            # Handle user interruption at the top level
-            config.logger.warning("Migration interrupted by user")
-            results.overall["status"] = "interrupted"
-            results.overall["message"] = "Migration was interrupted by user"
-
-        # Add end time to results
-        results.overall["end_time"] = datetime.now(tz=UTC).isoformat()
-
-        # Calculate total time
-        start_time = datetime.fromisoformat(results.overall["start_time"])
-        end_time = datetime.fromisoformat(results.overall["end_time"])
-        total_seconds = (end_time - start_time).total_seconds()
-        results.overall["total_time_seconds"] = total_seconds
-
-        focus_components = [
-            "workflows",
-            "agile_boards",
-            "sprint_epic",
-            "admin_schemes",
-            "reporting",
-        ]
-        summary_payload: dict[str, Any] = {
-            "timestamp": migration_timestamp,
-            "overall_status": results.overall.get("status"),
-            "components": {},
-        }
-        for component_name in focus_components:
-            component_result = results.components.get(component_name)
-            if not component_result:
-                continue
-            summary_payload["components"][component_name] = {
-                "success": component_result.success,
-                "message": component_result.message,
-                "details": component_result.details,
-            }
-
-        if summary_payload["components"]:
-            summary_file = f"migration_summary_{migration_timestamp}.json"
-            data_handler.save_results(
-                summary_payload,
-                filename=summary_file,
-            )
-            config.logger.info(
-                "Focused migration summary saved to %s",
-                summary_file,
-            )
-
-        # Post-migration cleanup and final health check
-        try:
-            config.logger.info("Running post-migration cleanup...")
-            cleanup_result = health_client.cleanup_temp_files(max_age_minutes=5)
-            if cleanup_result.success and cleanup_result.files_removed > 0:
-                config.logger.info(
-                    "Post-migration cleanup: removed %d temp files, freed %s",
-                    cleanup_result.files_removed,
-                    cleanup_result.space_freed_human,
-                )
-            # Get final health snapshot for results
-            final_snapshot = health_client.get_health_snapshot()
-            results.overall["final_health"] = {
-                "container_disk_free_mb": final_snapshot.container_disk_free_mb,
-                "temp_file_count": final_snapshot.temp_file_count,
-                "local_disk_free_mb": final_snapshot.local_disk_free_mb,
-                "remote_disk_free_mb": final_snapshot.remote_disk_free_mb,
-            }
-        except Exception as cleanup_err:
-            config.logger.debug("Post-migration cleanup failed: %s", cleanup_err)
-
-        # Print final status
-        if results.overall.get("status") == "success":
-            config.logger.success(
-                f"Migration completed successfully in {total_seconds:.2f} seconds.",
-            )
-        else:
-            config.logger.error(
-                "Migration completed with status '%s' in %.2f seconds.",
-                results.overall["status"],
-                total_seconds,
-            )
-
-        # Save results to file
-        results_file = f"migration_results_{migration_timestamp}.json"
-        data_handler.save_results(
+        names = [name for name in effective_components if name in available]
+        config.logger.info("Migration will run the following components in order: %s", names)
+        await _run_components(
+            names,
+            available_component_factories,
             results,
-            filename=results_file,
+            health_client,
+            stop_on_error=stop_on_error,
+            no_confirm=no_confirm,
         )
-
-        config.logger.info("Migration results saved to %s", results_file)
-        config.logger.info("Migration complete")
+        _finish_migration(results, migration_timestamp, health_client)
         return results
 
     except Exception as e:
@@ -1473,6 +1222,64 @@ def setup_tmux_session() -> bool:
         return False
 
 
+def _update_selected_mapping() -> None:
+    jira, op, _ = _create_migration_clients(
+        config.migration_config.get("batch_size", 100),
+        config.migration_config.get("max_workers", 5),
+    )
+    choices = {"1": (CustomFieldMigration, "Custom field"), "2": (IssueTypeMigration, "Issue type")}
+    console.print("\nSelect mapping to update:")
+    console.print("1. Custom Field mapping")
+    console.print("2. Issue Type mapping")
+    try:
+        while (choice := input("Enter choice (1-2): ")) not in choices:
+            config.logger.error("Invalid choice. Please enter 1 or 2.")
+        migration_class, label = choices[choice]
+        if migration_class(jira_client=jira, op_client=op).update_mapping_file():
+            config.logger.success("%s mapping updated successfully.", label)
+        else:
+            config.logger.warning("No updates were made to %s mapping.", label.lower())
+    except KeyboardInterrupt:
+        config.logger.warning("Operation cancelled by user.")
+
+
+def _log_run_summary(migration_result: MigrationResult) -> None:
+    overall_status = migration_result.overall.get("status", "unknown")
+    if overall_status == "success":
+        config.logger.success("Migration completed successfully")
+    elif overall_status == "interrupted":
+        config.logger.warning("Migration was interrupted before completion")
+    else:
+        config.logger.error("Migration completed with errors")
+    config.logger.info("Component results:")
+    for component, result in migration_result.components.items():
+        status = (result.details or {}).get("status", "unknown")
+        if status == "success":
+            config.logger.success("✓ %s: %s", component, status)
+        elif status == "interrupted":
+            config.logger.warning("⚠ %s: %s", component, status)
+        else:
+            config.logger.error("✗ %s: %s", component, status)
+    if "performance_summary" in migration_result.overall:
+        perf_summary = migration_result.overall["performance_summary"]
+        timing = perf_summary.get("timing", {})
+        throughput = perf_summary.get("throughput", {})
+
+        config.logger.info("Performance Summary:")
+        config.logger.info(
+            f"  Total processing time: {timing.get('total_time_seconds', 0):.2f}s",
+        )
+        config.logger.info(
+            f"  Overall throughput: {throughput.get('items_per_second', 0):.1f} items/sec",
+        )
+        config.logger.info(
+            f"  Success rate: {throughput.get('success_rate', 0):.1%}",
+        )
+        config.logger.info(
+            f"  Processing efficiency: {timing.get('processing_efficiency', 0):.1%}",
+        )
+
+
 def main() -> None:
     """Run the migration tool."""
     # Parse command-line arguments
@@ -1480,8 +1287,10 @@ def main() -> None:
 
     try:
         if args.setup_tmux:
-            setup_tmux_session()
-            config.logger.success("tmux session setup complete.")
+            if setup_tmux_session():
+                config.logger.success("tmux session setup complete.")
+            else:
+                sys.exit(1)
             return
 
         if args.backup_dir:
@@ -1493,118 +1302,7 @@ def main() -> None:
             return
 
         if args.update_mapping:
-            # Initialize clients properly using dependency injection
-            # Create clients in the correct hierarchical order
-
-            # Debug: print available config keys
-            config.logger.info(
-                "Available OpenProject config keys: %s",
-                list(config.openproject_config.keys()),
-            )
-
-            ssh_client = SSHClient(
-                host=str(
-                    config.openproject_config.get("server", "openproject.local"),
-                ),
-                user=config.openproject_config.get("user", None),
-                key_file=config.openproject_config.get("key_file", None),
-            )
-
-            DockerClient(
-                container_name=str(
-                    config.openproject_config.get(
-                        "container_name",
-                        config.openproject_config.get("container", "openproject"),
-                    ),
-                ),
-                ssh_client=ssh_client,
-            )
-
-            RailsConsoleClient(
-                tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name",
-                    "rails_console",
-                ),
-            )
-
-            # Use default performance config for main() function
-            default_performance_config = {
-                "cache_size": config.migration_config.get("cache_size", 2000),
-                "cache_ttl": config.migration_config.get("cache_ttl", 1800),
-                "batch_size": config.migration_config.get("batch_size", 100),
-                "max_workers": config.migration_config.get("max_workers", 5),
-                "rate_limit": config.migration_config.get("rate_limit_per_sec", 15.0),
-            }
-
-            jira_client = JiraClient(**default_performance_config)
-
-            # Adjust performance config for OpenProject
-            op_performance_config = default_performance_config.copy()
-            op_performance_config.update(
-                {
-                    "cache_size": config.migration_config.get("op_cache_size", 1500),
-                    "cache_ttl": config.migration_config.get("op_cache_ttl", 2400),
-                    "batch_size": config.migration_config.get("op_batch_size", 50),
-                    "rate_limit": config.migration_config.get(
-                        "op_rate_limit_per_sec",
-                        12.0,
-                    ),
-                },
-            )
-
-            op_client = OpenProjectClient(
-                container_name=config.openproject_config.get("container", None),
-                ssh_host=config.openproject_config.get("server", None),
-                ssh_user=config.openproject_config.get("user", None),
-                tmux_session_name=config.openproject_config.get(
-                    "tmux_session_name",
-                    None,
-                ),
-                **op_performance_config,
-            )
-
-            # List options to choose which mapping to update
-            console.print("\nSelect mapping to update:")
-            console.print("1. Custom Field mapping")
-            console.print("2. Issue Type mapping")
-
-            while True:
-                try:
-                    choice = input("Enter choice (1-2): ")
-                    if choice == "1":
-                        custom_field_migration = CustomFieldMigration(
-                            jira_client=jira_client,
-                            op_client=op_client,
-                        )
-                        cf_mapping_update_result = custom_field_migration.update_mapping_file()
-                        if cf_mapping_update_result:
-                            config.logger.success(
-                                "Custom field mapping updated successfully.",
-                            )
-                        else:
-                            config.logger.warning(
-                                "No updates were made to custom field mapping.",
-                            )
-                        break
-                    if choice == "2":
-                        issue_type_migration = IssueTypeMigration(
-                            jira_client=jira_client,
-                            op_client=op_client,
-                        )
-                        issue_type_mapping_update_result = issue_type_migration.update_mapping_file()
-                        if issue_type_mapping_update_result:
-                            config.logger.success(
-                                "Issue type mapping updated successfully.",
-                            )
-                        else:
-                            config.logger.warning(
-                                "No updates were made to issue type mapping.",
-                            )
-                        break
-                    config.logger.error("Invalid choice. Please enter 1 or 2.")
-                except KeyboardInterrupt:
-                    config.logger.warning("Operation cancelled by user.")
-                    return
+            _update_selected_mapping()
             return
 
         # dump args
@@ -1629,58 +1327,8 @@ def main() -> None:
             ),
         )
 
-        # Display migration results summary
         if migration_result:
-            # Access overall dict's status key (overall is a dict, not an object)
-            overall_status = (
-                migration_result.overall.get("status", "unknown") if hasattr(migration_result, "overall") else "unknown"
-            )
-
-            # Show summary header based on status
-            if overall_status == "success":
-                config.logger.success("Migration completed successfully")
-            elif overall_status == "interrupted":
-                config.logger.warning("Migration was interrupted before completion")
-            else:
-                config.logger.error("Migration completed with errors")
-
-            # Print component results
-            config.logger.info("Component results:")
-            # Fix: Access components property correctly
-            component_items = migration_result.components.items() if hasattr(migration_result, "components") else {}
-            for component, comp_result in component_items:
-                # Access status from details
-                status = comp_result.details.get("status", "unknown") if comp_result.details else "unknown"
-                if status == "success":
-                    config.logger.success("✓ %s: %s", component, status)
-                elif status == "interrupted":
-                    config.logger.warning("⚠ %s: %s", component, status)
-                else:
-                    config.logger.error("✗ %s: %s", component, status)
-
-            # Show performance summary if available
-            if (
-                hasattr(migration_result, "overall")
-                and isinstance(migration_result.overall, dict)
-                and "performance_summary" in migration_result.overall
-            ):
-                perf_summary = migration_result.overall["performance_summary"]
-                timing = perf_summary.get("timing", {})
-                throughput = perf_summary.get("throughput", {})
-
-                config.logger.info("Performance Summary:")
-                config.logger.info(
-                    f"  Total processing time: {timing.get('total_time_seconds', 0):.2f}s",
-                )
-                config.logger.info(
-                    f"  Overall throughput: {throughput.get('items_per_second', 0):.1f} items/sec",
-                )
-                config.logger.info(
-                    f"  Success rate: {throughput.get('success_rate', 0):.1%}",
-                )
-                config.logger.info(
-                    f"  Processing efficiency: {timing.get('processing_efficiency', 0):.1%}",
-                )
+            _log_run_summary(migration_result)
 
     except KeyboardInterrupt:
         console.print("\nMigration manually interrupted. Exiting...")
