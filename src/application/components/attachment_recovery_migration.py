@@ -65,6 +65,8 @@ _JIRA_PROJECT_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]+\z")
 
 
 class AttachmentDifferences(NamedTuple):
+    """Missing and extra filenames grouped by source issue, with summary counts."""
+
     missing: dict[str, list[str]]
     clean: int
     extra_total: int
@@ -183,7 +185,8 @@ class AttachmentRecoveryMigration(BaseMigration):
 
         underlying = self.jira_client.jira
         if underlying is None:
-            raise ValueError("Jira is unavailable for the attachment inventory")
+            msg = "Jira is unavailable for the attachment inventory"
+            raise ValueError(msg)
         jql = f'project = "{jira_project_key}"'
 
         def fetch(offset, size):
@@ -260,14 +263,16 @@ puts end_marker
             envelope = self.op_client.execute_script_with_data(script, [])
             data = envelope.get("data") if isinstance(envelope, dict) else None
             if not isinstance(data, dict) or envelope.get("status") != "success":
-                raise ValueError("OpenProject did not confirm the attachment inventory")
+                msg = "OpenProject did not confirm the attachment inventory"
+                raise ValueError(msg)
             for key, filenames in data.items():
                 if (
                     int(key) not in batch
                     or not isinstance(filenames, list)
                     or not all(isinstance(n, str) for n in filenames)
                 ):
-                    raise ValueError("Invalid OpenProject attachment inventory")
+                    msg = "Invalid OpenProject attachment inventory"
+                    raise ValueError(msg)
                 merged[int(key)] = filenames
         return merged
 
@@ -541,7 +546,7 @@ puts end_marker
         return merged_mapping, recovered, failed
 
     @staticmethod
-    def _collect_uploaded_ids(merged_mapping, mapping):
+    def _collect_uploaded_ids(merged_mapping, mapping) -> None:
         if isinstance(mapping, dict):
             for jk, file_map in mapping.items():
                 if not isinstance(file_map, dict):

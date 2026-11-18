@@ -24,7 +24,8 @@ def _check_page_keys(page: list[Issue], previous_keys: set[str], offset: int, co
     for row in page:
         key = row.get("key") if isinstance(row, dict) else getattr(row, "key", None)
         if not isinstance(key, str) or not key.strip():
-            raise JiraApiError(f"{context}: Jira returned an issue without a key")
+            msg_0 = f"{context}: Jira returned an issue without a key"
+            raise JiraApiError(msg_0)
         keys.add(key)
     if len(keys) != len(page) or not keys.isdisjoint(previous_keys):
         msg = f"{context}: duplicate issue keys across Jira search results"
