@@ -90,6 +90,42 @@ class OpenProjectWorkPackageContentService:
 
     # ── description sections ─────────────────────────────────────────────
 
+    def set_checklist_section(self, work_package_id: int, markdown: str) -> bool:
+        """Persist the delimited checklist in one locked transaction, using separate input data."""
+        script = r"""
+          verified = WorkPackage.transaction do
+            wp = WorkPackage.lock.find(input_data.fetch("id"))
+            start_tag = "<!-- j2o:checklist:begin -->"
+            end_tag = "<!-- j2o:checklist:end -->"
+            body = input_data.fetch("markdown")
+            raise "Checklist contains reserved delimiters" if [start_tag, end_tag].any? { |tag| body.include?(tag) }
+            section = [start_tag, "## Jira checklist", body, end_tag].join("\n")
+            description = wp.description.to_s
+            if description.include?(start_tag) || description.include?(end_tag)
+              before, opening, rest = description.partition(start_tag)
+              inside, closing, after = rest.partition(end_tag)
+              unless opening == start_tag && closing == end_tag &&
+                  (before.empty? || before.end_with?("\n")) && (after.empty? || after.start_with?("\n")) &&
+                  inside.start_with?("\n") && inside.end_with?("\n") &&
+                  description.scan(start_tag).one? && description.scan(end_tag).one?
+                raise "Ambiguous checklist delimiters in work package description"
+              end
+              expected = before + section + after
+            else
+              expected = description.empty? ? section : description + "\n\n" + section
+            end
+            if description != expected
+              wp.description = expected
+              wp.save!(touch: false)
+            end
+            raise "Checklist readback failed" unless wp.reload.description == expected
+            true
+          end
+          puts $j2o_start_marker, { verified: verified }.to_json, $j2o_end_marker
+        """
+        result = self._client.execute_script_with_data(script, {"id": int(work_package_id), "markdown": markdown})
+        return result.get("status") == "success" and result.get("data") == {"verified": True}
+
     def upsert_work_package_description_section(
         self,
         work_package_id: int,
