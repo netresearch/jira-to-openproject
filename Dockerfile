@@ -13,28 +13,28 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Build-time OS deps (compilers, headers). Kept only in this stage.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        libffi-dev \
-        libssl-dev \
-        python3-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # Upstream publishes a rolling binary image and has no major-only uv:0 tag.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Resolve + install dependencies into /opt/venv. The venv lives outside /app
 # so compose's bind mount of the source tree over /app does not hide it.
 COPY pyproject.toml uv.lock ./
+COPY scripts/locked_pyyaml_requirement.py /tmp/
+# PyYAML has no CPython 3.15 Linux wheel. Only this hash-locked dependency
+# may build from source. Install every other third-party package wheel-only.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv venv --python /usr/local/bin/python /opt/venv \
+    && python /tmp/locked_pyyaml_requirement.py > /tmp/j2o-pyyaml.txt \
+    && uv pip install --python /opt/venv/bin/python --require-hashes --no-deps -r /tmp/j2o-pyyaml.txt
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --inexact --no-build --no-install-package pyyaml --no-install-project
 
 # Now copy sources and install the project itself
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen
+    uv build --wheel --out-dir /tmp/j2o-dist . \
+    && uv pip install --python /opt/venv/bin/python --no-build --no-deps /tmp/j2o-dist/*.whl
 
 # ===== Stage 2: runtime =====
 FROM python:3-slim AS runtime
@@ -47,6 +47,7 @@ LABEL maintainer="Netresearch DTT GmbH <sebastian.mendel@netresearch.de>" \
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
     PATH="/opt/venv/bin:${PATH}"
 
 WORKDIR /app
@@ -65,8 +66,7 @@ RUN apt-get update \
 
 
 # Copy the venv and the sources from the build stage. The project is
-# installed editable, so the venv imports it from /app: the copied sources
-# here, or the host tree when compose bind-mounts it over /app.
+# installed from a wheel. PYTHONPATH keeps a Compose checkout at /app active.
 COPY --from=build /opt/venv /opt/venv
 COPY --from=build --chown=appuser:appuser /app /app
 
