@@ -166,7 +166,8 @@ def test_recovers_missing_work_package_mapping_from_project_origin_keys(migratio
         {"id": 90, "jira_issue_key": None},
     ]
     result = mig.run()
-    assert result.success and result.updated == 3
+    assert result.success
+    assert result.updated == 3
     assert not mappings["work_package"]  # A key-only recovery cannot replace the shared Jira ID mapping.
     mig.op_client.get_project_wp_cf_snapshot.assert_called_once_with(4)
     mig.op_client.get_project_wp_cf_snapshot.return_value.append({"id": 11, "jira_issue_key": "DEMO-1"})

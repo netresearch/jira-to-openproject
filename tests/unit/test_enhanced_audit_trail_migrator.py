@@ -527,8 +527,10 @@ class TestEnhancedAuditTrailMigrator:
 
         assert result is True
         operations = migrator.rails_operations
-        assert operations and all(op["operation"] == "create_audit_event" for op in operations)
-        assert "Reviewed change" not in repr(operations) and "hidden edit" not in repr(operations)
+        assert operations
+        assert all(op["operation"] == "create_audit_event" for op in operations)
+        assert "Reviewed change" not in repr(operations)
+        assert "hidden edit" not in repr(operations)
         assert migrator.migration_results["comments_processed"] == 0
 
     @patch("subprocess.run")
