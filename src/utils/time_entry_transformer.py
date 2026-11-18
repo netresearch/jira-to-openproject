@@ -4,13 +4,40 @@
 """Time entry transformation utilities for Jira to OpenProject migration."""
 
 import logging
-import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from src import config
+from src.infrastructure.jira.comment_audience import has_comment_audience
 
 logger = logging.getLogger(__name__)
+
+
+def _worklog_hours(log: dict[str, Any]) -> float:
+    seconds = log.get("time_spent_seconds", log.get("timeSpentSeconds"))
+    if type(seconds) is not int or seconds <= 0:
+        msg = "The work log does not have a positive integer duration in seconds."
+        raise ValueError(msg)
+    return seconds / 3600
+
+
+def _worklog_comment(value: str) -> str:
+    if len(value) > 1000:
+        msg = "The work log comment exceeds the target limit of 1000 characters."
+        raise ValueError(msg)
+    return value
+
+
+def _worklog_start(value: str, zone: str | None) -> tuple[str, dict[str, Any]]:
+    """Keep the original instant when OpenProject's wall clock cannot encode it."""
+    stamp = datetime.fromisoformat(value)
+    local = stamp.astimezone(ZoneInfo(zone)) if zone and stamp.tzinfo else stamp
+    details: dict[str, Any] = {"jira_started": value}
+    if zone and stamp.tzinfo:
+        details["jira_time_zone"] = zone
+        if not (local.fold or local.second or local.microsecond):
+            details["jira_start_minute"] = local.hour * 60 + local.minute
+    return local.date().isoformat(), details
 
 
 class TimeEntryTransformer:
@@ -88,26 +115,17 @@ class TimeEntryTransformer:
                 author.get("name")
                 or author.get("key")
                 or author.get("accountId")
+                or author.get("account_id")
                 or author.get("emailAddress")
                 or "unknown"
             )
 
-            # Parse time spent (seconds). ``jira_worklog_service.extract_work_logs``
-            # produces ``time_spent_seconds`` (snake_case); raw Jira REST
-            # uses ``timeSpentSeconds`` (camelCase). Try both so the
-            # transformer is robust to either upstream shape — the
-            # snake_case path was silently returning 0 in production
-            # before this fix, collapsing every entry to the min-hour
-            # floor (0.01 h).
-            time_spent_seconds = work_log.get("time_spent_seconds") or work_log.get("timeSpentSeconds") or 0
-            hours = time_spent_seconds / 3600.0
-            # Clamp minimum hours to avoid zero-hour entries after rounding
-            min_hours = float(config.migration_config.get("min_time_entry_hours", 0.01))
-            final_hours = round(max(hours, min_hours if hours <= 0 or round(hours, 2) <= 0 else hours), 2)
-
-            # Parse date (Jira format: "2023-12-01T10:30:00.000+0000")
-            started_date = work_log.get("started", "")
-            spent_on = self._parse_jira_date(started_date)
+            if has_comment_audience(work_log):
+                msg = "Work log audience cannot be represented on a native time entry."
+                raise ValueError(msg)
+            final_hours = _worklog_hours(work_log)
+            zone = author.get("timeZone") or author.get("time_zone")
+            spent_on, start = _worklog_start(work_log.get("started", ""), zone)
 
             # Extract comment/description
             comment = work_log.get("comment", "")
@@ -115,15 +133,11 @@ class TimeEntryTransformer:
                 # Rich text format - extract plain text
                 comment = self._extract_text_from_jira_content(comment)
 
-            # Truncate comment to OpenProject's 1000 char limit
-            if comment and len(comment) > 1000:
-                comment = comment[:997] + "..."
-
             # Build OpenProject time entry
             time_entry = {
                 "spentOn": spent_on,
                 "hours": final_hours,
-                "comment": comment or f"Work log imported from Jira issue {issue_key}",
+                "comment": _worklog_comment(comment or ""),
                 "_embedded": {},
                 "_meta": {
                     "jira_work_log_id": work_log.get("id"),
@@ -132,6 +146,8 @@ class TimeEntryTransformer:
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
                     "jira_worklog_key": f"{issue_key}:{work_log.get('id')}" if work_log.get("id") is not None else None,
                     # Carry source timestamps for fast-forward/upsert logic
+                    **start,
+                    **self._worklog_editor(work_log),
                     "jira_created_at": work_log.get("created"),
                     "jira_updated_at": work_log.get("updated"),
                 },
@@ -171,11 +187,21 @@ class TimeEntryTransformer:
         else:
             return result_entry
 
+    def _worklog_editor(self, work_log: dict[str, Any]) -> dict[str, int]:
+        editor = work_log.get("update_author", work_log.get("updateAuthor"))
+        if editor is None:
+            return {}
+        identifier = self._map_user_multi(editor)
+        if identifier is None:
+            msg = "The work log update author has no unambiguous target identity."
+            raise ValueError(msg)
+        return {"jira_update_author_id": identifier}
+
     @staticmethod
     def _tempo_worklog_key(tempo_log: dict[str, Any], issue_key: str | None) -> str | None:
-        if (jira_id := tempo_log.get("jiraWorklogId")) is not None:
+        if (jira_id := tempo_log.get("jiraWorklogId", tempo_log.get("jira_worklog_id"))) is not None:
             return f"{issue_key}:{jira_id}"
-        if (tempo_id := tempo_log.get("tempoWorklogId")) is not None:
+        if (tempo_id := tempo_log.get("tempoWorklogId", tempo_log.get("tempo_worklog_id"))) is not None:
             return f"tempo:{tempo_id}"
         return None
 
@@ -216,38 +242,24 @@ class TimeEntryTransformer:
                 or tempo_log.get("author", {}).get("emailAddress")
                 or "unknown"
             )
-            issue_key = tempo_log.get("issue", {}).get("key", "")
+            issue_key = tempo_log.get("issue_key") or tempo_log.get("issue", {}).get("key", "")
 
-            # Parse time spent (seconds). Same dual-key handling as the
-            # Jira path (``time_spent_seconds`` snake_case vs
-            # ``timeSpentSeconds`` camelCase) so Tempo is symmetrically
-            # safe even though our Tempo extractor currently emits
-            # camelCase.
-            time_spent_seconds = tempo_log.get("time_spent_seconds") or tempo_log.get("timeSpentSeconds") or 0
-            hours = time_spent_seconds / 3600.0
-            min_hours = float(config.migration_config.get("min_time_entry_hours", 0.01))
-            final_hours = round(max(hours, min_hours if hours <= 0 or round(hours, 2) <= 0 else hours), 2)
-
-            # Parse date (Tempo format: "2023-12-01")
-            date_started = tempo_log.get("dateStarted", "")
-            spent_on = date_started  # Already in YYYY-MM-DD format
-
-            # Extract description/comment
-            description = tempo_log.get("description", "")
-
-            # Truncate description to OpenProject's 1000 char limit
-            if description and len(description) > 1000:
-                description = description[:997] + "..."
+            if has_comment_audience(tempo_log):
+                msg = "Work log audience cannot be represented on a native time entry."
+                raise ValueError(msg)
+            final_hours = _worklog_hours(tempo_log)
+            spent_on = date.fromisoformat(tempo_log.get("dateStarted", tempo_log.get("date_started", ""))).isoformat()
+            description = _worklog_comment(tempo_log.get("description", tempo_log.get("comment")) or "")
 
             # Build OpenProject time entry
             time_entry = {
                 "spentOn": spent_on,
                 "hours": final_hours,
-                "comment": description or f"Tempo work log imported from issue {issue_key}",
+                "comment": description,
                 "_embedded": {},
                 "_meta": {
-                    "tempo_worklog_id": tempo_log.get("tempoWorklogId"),
-                    "jira_worklog_id": tempo_log.get("jiraWorklogId"),
+                    "tempo_worklog_id": tempo_log.get("tempoWorklogId", tempo_log.get("tempo_worklog_id")),
+                    "jira_worklog_id": tempo_log.get("jiraWorklogId", tempo_log.get("jira_worklog_id")),
                     "jira_issue_key": issue_key,
                     "tempo_author": author_username,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
@@ -358,37 +370,11 @@ class TimeEntryTransformer:
         )
         return transformed_entries
 
-    def _parse_jira_date(self, date_string: str) -> str:
-        """Parse Jira date format to OpenProject date format (YYYY-MM-DD).
-
-        Args:
-            date_string: Jira date string like "2023-12-01T10:30:00.000+0000"
-
-        Returns:
-            Date string in YYYY-MM-DD format
-
-        """
-        try:
-            # Handle various Jira date formats
-            if not date_string:
-                return datetime.now(tz=UTC).strftime("%Y-%m-%d")
-
-            # Remove timezone info and parse
-            date_clean = re.sub(r"[+\-]\d{4}$", "", date_string)
-            date_clean = re.sub(r"\.\d{3}$", "", date_clean)
-
-            # Parse the datetime
-            if "T" in date_clean:
-                dt = datetime.fromisoformat(date_clean)
-            else:
-                # naive date only; treat as UTC for determinism
-                dt = datetime.strptime(date_clean, "%Y-%m-%d").replace(tzinfo=UTC)
-
-            return dt.strftime("%Y-%m-%d")
-
-        except Exception as e:
-            logger.warning("Failed to parse date '%s': %s", date_string, e)
-            return datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    @staticmethod
+    def _parse_jira_date(date_string: str, time_zone: str | None = None) -> str:
+        """Use the source actor's local date when the API supplied a zoned timestamp."""
+        day, _ = _worklog_start(date_string, time_zone)
+        return day
 
     def _extract_text_from_jira_content(self, content: dict[str, Any]) -> str:
         """Extract plain text from Jira rich text content.
@@ -459,14 +445,15 @@ class TimeEntryTransformer:
         return user_id
 
     def _map_user_multi(self, author: dict[str, Any] | str) -> int | None:
-        """Map user using primary Jira username ('name') only for determinism in tests."""
+        """Resolve stable source identities and decline conflicting aliases."""
         if isinstance(author, str):
             return self.user_mapping.get(author)
-        username = author.get("name")
-        if username and username in self.user_mapping:
-            return self.user_mapping[username]
-        logger.warning("No user mapping found for username: %s", username)
-        return None
+        stable = {author[key] for key in ("key", "accountId", "account_id") if author.get(key)}
+        if stable and not stable.intersection(self.user_mapping):
+            return None
+        aliases = stable.union((author.get("name"), author.get("username")))
+        matches = {self.user_mapping[key] for key in aliases if key in self.user_mapping}
+        return next(iter(matches)) if len(matches) == 1 else None
 
     def _map_work_package(self, issue_key: str) -> int | None:
         """Map Jira issue key to OpenProject work package ID.

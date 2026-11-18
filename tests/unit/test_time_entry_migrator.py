@@ -514,6 +514,7 @@ class TestTimeEntryMigratorTransformation:
         migrator.extracted_tempo_entries = [{"tempoWorklogId": "tempo_1"}]
 
         mock_transformer_instance = MockTransformer.return_value
+        mock_transformer_instance.last_unmappable_count = 0
         mock_transformer_instance.batch_transform_work_logs.side_effect = [
             [sample_openproject_time_entry],  # Jira transformation
             [sample_openproject_time_entry],  # Tempo transformation
@@ -539,6 +540,7 @@ class TestTimeEntryMigratorTransformation:
         migrator.extracted_tempo_entries = [{"tempoWorklogId": "tempo_1"}]
 
         mock_transformer_instance = MockTransformer.return_value
+        mock_transformer_instance.last_unmappable_count = 0
         mock_transformer_instance.batch_transform_work_logs.side_effect = [
             Exception("Transformation Error"),  # Jira fails
             [{"hours": 1.0}],  # Tempo succeeds
@@ -562,6 +564,7 @@ class TestTimeEntryMigratorTransformation:
         """Verify handling when no data has been extracted."""
         # Arrange - no extracted data
         mock_transformer_instance = MockTransformer.return_value
+        mock_transformer_instance.last_unmappable_count = 0
 
         # Act
         result = migrator.transform_all_time_entries()
@@ -699,12 +702,13 @@ class TestTimeEntryMigratorOrchestration:
 
         mock_jira_client.get_work_logs_for_issue.return_value = [{"id": "work_log_1"}]
         mock_jira_client.get_tempo_time_entries.return_value = [
-            {"tempoWorklogId": "tempo_1"},
+            {"tempoWorklogId": "tempo_1", "issue_key": "PROJ-1"},
         ]
 
         mock_transformer_instance = MockTransformer.return_value
-        mock_transformer_instance.batch_transform_work_logs.return_value = [
-            sample_openproject_time_entry,
+        mock_transformer_instance.last_unmappable_count = 0
+        mock_transformer_instance.batch_transform_work_logs.side_effect = lambda rows, **_: [
+            sample_openproject_time_entry.copy() for _ in rows
         ]
 
         # Act
@@ -730,10 +734,11 @@ class TestTimeEntryMigratorOrchestration:
         issue_keys = ["PROJ-1", "PROJ-2"]
         mock_jira_client.get_work_logs_for_issue.return_value = [{"id": "work_log_1"}]
         mock_jira_client.get_tempo_time_entries.return_value = [
-            {"tempoWorklogId": "tempo_1"},
+            {"tempoWorklogId": "tempo_1", "issue_key": "PROJ-2"},
         ]
 
         mock_transformer_instance = MockTransformer.return_value
+        mock_transformer_instance.last_unmappable_count = 0
         mock_transformer_instance.batch_transform_work_logs.return_value = [
             sample_openproject_time_entry,
         ]

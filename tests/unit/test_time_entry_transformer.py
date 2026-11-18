@@ -177,7 +177,7 @@ class TestTimeEntryTransformer:
         sample_jira_work_log,
     ) -> None:
         """Test Jira work log with unmapped user."""
-        sample_jira_work_log["author"]["name"] = "unknown.user"
+        sample_jira_work_log["author"] = {"key": "unknown", "name": "unknown.user"}
 
         result = transformer.transform_jira_work_log(sample_jira_work_log, "TEST-123")
 
@@ -245,14 +245,9 @@ class TestTimeEntryTransformer:
         # Date only
         assert transformer._parse_jira_date("2023-12-01") == "2023-12-01"
 
-        # Empty dates fall back to today
-        result = transformer._parse_jira_date("")
-        assert len(result) == 10  # YYYY-MM-DD format
-        assert result.count("-") == 2  # Two dashes in date
-
-        # Invalid dates also fall back to today
-        result = transformer._parse_jira_date("invalid")
-        assert len(result) == 10  # YYYY-MM-DD format
+        for invalid in ("", "invalid"):
+            with pytest.raises(ValueError):
+                transformer._parse_jira_date(invalid)
 
     def test_detect_activity_from_comment(self, transformer) -> None:
         """Test activity detection from work log comments."""
@@ -383,27 +378,12 @@ class TestTimeEntryTransformer:
 
     def test_error_handling_in_transform_jira(self, transformer) -> None:
         """Test handling of incomplete Jira work logs."""
-        # The transformer is more robust than expected - it handles missing fields gracefully
-        invalid_work_log = {"invalid": "data"}
-
-        # Should succeed but with default values
-        result = transformer.transform_jira_work_log(invalid_work_log, "TEST-123")
-        assert result is not None
-        assert result["spentOn"] is not None  # Gets today's date
-        assert result["hours"] == 0.01  # Default min time per clamp
-        assert result["_meta"]["jira_issue_key"] == "TEST-123"
+        with pytest.raises(ValueError, match="positive integer"):
+            transformer.transform_jira_work_log({}, "TEST-123")
 
     def test_error_handling_in_transform_tempo(self, transformer) -> None:
-        """Test handling of incomplete Tempo work logs."""
-        # The transformer is more robust than expected - it handles missing fields gracefully
-        invalid_tempo_log = {"invalid": "data"}
-
-        # Should succeed but with default values
-        result = transformer.transform_tempo_work_log(invalid_tempo_log)
-        assert result is not None
-        assert result["spentOn"] == ""  # Empty date from Tempo
-        assert result["hours"] == 0.01  # Default min time per clamp
-        assert result["_meta"]["tempo_author"] == "unknown"
+        with pytest.raises(ValueError, match="positive integer"):
+            transformer.transform_tempo_work_log({})
 
     def test_batch_transform_with_failures(
         self,
@@ -631,3 +611,54 @@ class TestUnmappableTempoEntries:
 
         assert len(result) == 1, "Fully-resolved entry must not be dropped"
         assert transformer.last_unmappable_count == 0
+
+
+@pytest.mark.parametrize(
+    ("stamp", "day", "minute"),
+    [
+        ("2024-01-15T23:15:00.000+0000", "2024-01-16", 15),
+        ("2024-10-27T00:15:00.000+0000", "2024-10-27", 135),
+        ("2024-10-27T01:15:00.000+0000", "2024-10-27", None),
+        ("2024-01-15T23:15:01.001+0000", "2024-01-16", None),
+    ],
+)
+def test_native_writer_receives_source_time_and_update_author(stamp, day, minute):
+    from src.infrastructure.openproject.openproject_time_entry_service import OpenProjectTimeEntryService
+
+    transformer = TimeEntryTransformer({"actor-key": 10, "editor-key": 11}, {"TEST-1": 5}, default_activity_id=7)
+    log = {
+        "id": "1",
+        "started": stamp,
+        "created": "2024-01-16T08:05:00.000+0000",
+        "updated": "2024-02-21T12:10:00.000+0000",
+        "time_spent_seconds": 17,
+        "comment": "  original\n  note  ",
+        "author": {"key": "actor-key", "name": "renamed", "time_zone": "Europe/Berlin"},
+        "update_author": {"key": "editor-key"},
+    }
+    row = OpenProjectTimeEntryService._entry_row(transformer.transform_jira_work_log(log, "TEST-1"), 0)
+    assert (row["work_package_id"], row["user_id"], row["jira_update_author_id"]) == (5, 10, 11)
+    assert row["spent_on"] == day
+    assert row["jira_time_zone"] == "Europe/Berlin"
+    assert row.get("jira_start_minute") == minute
+    assert row["jira_started"] == stamp
+    assert (row["jira_created_at"], row["jira_updated_at"]) == (log["created"], log["updated"])
+    assert row["comments"] == log["comment"]
+    assert row["hours"] * 3600 == pytest.approx(17)
+
+
+@pytest.mark.parametrize("note", ["", "x" * 1000])
+def test_notes_within_the_target_limit_are_exact(note):
+    transformer = TimeEntryTransformer()
+    row = {"started": "2024-01-15", "time_spent_seconds": 1, "comment": note}
+    assert transformer.transform_jira_work_log(row, "TEST-1")["comment"] == note
+
+
+def test_unrepresentable_worklogs_are_held():
+    transformer = TimeEntryTransformer({"known": 10, "another": 11})
+    row = {"started": "2024-01-15", "time_spent_seconds": 1}
+    with pytest.raises(ValueError, match="1000 characters"):
+        transformer.transform_jira_work_log({**row, "comment": "a" * 1001}, "TEST-1")
+    with pytest.raises(ValueError, match="update author"):
+        transformer.transform_jira_work_log({**row, "updateAuthor": {"key": "missing", "name": "known"}}, "TEST-1")
+    assert transformer._map_user_multi({"key": "known", "name": "another"}) is None

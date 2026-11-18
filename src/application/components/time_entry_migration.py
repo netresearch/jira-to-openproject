@@ -186,7 +186,7 @@ class TimeEntryMigration(BaseMigration):
             result = self.time_entry_migrator.migrate_time_entries_for_issues(
                 migrated_wps,
             )
-            success = result.get("status") in ("success", "partial_success")
+            success = result.get("status") == "success"
             errors: list[str] = []
             if result.get("status") == "failed":
                 # Collect top-level errors
