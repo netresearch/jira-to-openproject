@@ -32,7 +32,7 @@ class ScopedReceipts:
     def counts(self) -> dict[str, dict[str, int]]:
         projects: dict[str, set[str]] = {}
         for issue in self.scope:
-            match = re.fullmatch(r"([A-Z][A-Z0-9_]*)-[0-9]+", issue)
+            match = re.fullmatch(r"([A-Z][A-Z\d_]*)-\d+", issue, flags=re.ASCII)
             if match is None:
                 return {}
             projects.setdefault(match[1], set()).add(issue)

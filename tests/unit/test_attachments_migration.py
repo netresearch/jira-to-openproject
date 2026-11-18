@@ -842,3 +842,17 @@ def test_attachment_comparison_uses_issue_inventory_and_confirmed_digest():
     mig._confirm_attachment_digests(uploads, confirmations)
     mig._confirm_attachment_digests(uploads, confirmations)
     assert mig._receipts.counts() == {"PRJ": {"source": 3, "target": 3}}
+
+
+def test_failed_source_refresh_cannot_turn_cached_bytes_into_a_digest_receipt(monkeypatch):
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())
+    cached = mig.attachment_dir / "7_cached.txt"
+    cached.write_bytes(b"previous source")
+    monkeypatch.setattr(mig, "_download_attachment", lambda *_: None)
+    op = mig._prepare_op_from_item(
+        item={"id": "7", "filename": "cached.txt", "url": "https://jira.invalid/attachment/7"},
+        jira_key="PRJ-1",
+        work_package_id=1,
+    )
+    assert op is None
+    assert cached.read_bytes() == b"previous source"
