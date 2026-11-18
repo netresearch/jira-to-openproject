@@ -567,9 +567,6 @@ class TestCompleteMigrationWorkflow:
             mock_op_class.return_value = mock_op
             _mock_health_class.return_value.run_pre_migration_checks.return_value = (True, [])
 
-            # Configure comprehensive mocks
-            mock_jira, mock_op = configure_comprehensive_mocks(mock_jira, mock_op)
-
             # Configure file operations for custom fields and issue types
             work_package_types_data = [
                 {"id": 1, "name": "User Story"},
@@ -702,6 +699,37 @@ class TestCompleteMigrationWorkflow:
                 "E2E-WP-2": {"openproject_id": 10002},
             }
 
+            # Build the Jira search fixture after seeding the target issue keys.
+            mock_jira, mock_op = configure_comprehensive_mocks(mock_jira, mock_op)
+            issues = list(mock_jira.batch_get_issues.return_value.values())
+
+            def search(jql, *, startAt=0, maxResults=50, fields=None, json_result=False, **kwargs):
+                if json_result:
+                    return {"total": 0}
+                # The work packages already exist. Only attachment searches
+                # by key return rows, capped to one issue per page.
+                if fields != "attachment":
+                    return []
+                return issues[startAt : startAt + min(1, maxResults)]
+
+            def rails_result(script, data):
+                if "Setting.attachment_max_size" in script:
+                    payload = {"value": 1048576}
+                elif "container_path" in script:
+                    payload = {
+                        "results": [
+                            {"jira_key": row["jira_key"], "filename": row["filename"], "attachment_id": i}
+                            for i, row in enumerate(data, 1)
+                        ],
+                        "errors": [],
+                    }
+                else:
+                    payload = {"updated": len(data), "failed": 0}
+                return {"status": "success", "data": payload}
+
+            mock_jira.jira.search_issues.side_effect = search
+            mock_op.execute_script_with_data.side_effect = rails_result
+
             try:
                 # Run migration with specific components
                 adjusted_config = dict(config.migration_config)
@@ -721,7 +749,7 @@ class TestCompleteMigrationWorkflow:
                     ),
                     patch(
                         "src.application.components.attachments_migration.AttachmentsMigration._download_attachment",
-                        side_effect=lambda self, url, dest_path: dest_path.write_bytes(b"stub") or dest_path,
+                        new=lambda self, url, dest_path: dest_path.write_bytes(b"stub"),
                     ),
                 ):
                     result = await run_migration(
@@ -748,6 +776,8 @@ class TestCompleteMigrationWorkflow:
                         component_result = result.components[component]
                         assert isinstance(component_result, ComponentResult)
                         assert component_result.success is True
+
+                    assert result.components["attachments"].updated == 2
 
                     # Note: Client method calls may not occur if migration uses cached data
                     # which is normal behavior for the migration system
