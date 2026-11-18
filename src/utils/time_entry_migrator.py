@@ -52,26 +52,26 @@ def _extract_worklog_keys_from_op_entries(
         meta_key = te.get("jira_worklog_key")
         if isinstance(meta_key, str) and meta_key:
             keys.add(meta_key)
-        for k in ("custom_fields", "customFields", "cfs"):
-            vals = te.get(k)
-            if isinstance(vals, list):
-                for item in vals:
-                    if not isinstance(item, dict):
-                        continue
-                    cf_id = item.get("custom_field_id")
-                    try:
-                        cf_id_int = int(cf_id) if cf_id is not None else None
-                    except TypeError, ValueError:
-                        cf_id_int = None
-                    if cf_id_int == worklog_cf_id:
-                        v = item.get("value")
-                        if isinstance(v, str) and v:
-                            keys.add(v)
-            elif isinstance(vals, dict):
-                # Some old shapes use a cf_id-keyed dict
-                v = vals.get(str(worklog_cf_id)) or vals.get(worklog_cf_id)
-                if isinstance(v, str) and v:
-                    keys.add(v)
+        for name in ("custom_fields", "customFields", "cfs"):
+            keys.update(_worklog_custom_values(te.get(name), worklog_cf_id))
+    return keys
+
+
+def _worklog_custom_values(values, worklog_cf_id):
+    if isinstance(values, dict):
+        value = values.get(str(worklog_cf_id)) or values.get(worklog_cf_id)
+        return {value} if isinstance(value, str) and value else set()
+    keys = set()
+    for item in values if isinstance(values, list) else ():
+        if not isinstance(item, dict):
+            continue
+        try:
+            field_id = int(item.get("custom_field_id"))
+        except TypeError, ValueError:
+            continue
+        value = item.get("value")
+        if field_id == worklog_cf_id and isinstance(value, str) and value:
+            keys.add(value)
     return keys
 
 
@@ -219,6 +219,285 @@ class TimeEntryMigrator:
             return False  # drop if we cannot determine recency
         return ts > self._ff_cutoff
 
+    @staticmethod
+    def _expanded_user_mapping(user_data: dict[str, Any]) -> dict[str, int]:
+        expanded = {}
+        for entry in user_data.values():
+            op_id = entry.get("openproject_id")
+            if op_id:
+                for field in ("jira_username", "jira_name", "jira_key", "jira_email", "jira_display_name"):
+                    if key := entry.get(field):
+                        expanded[str(key)] = op_id
+        return expanded
+
+    def _matching_work_logs(self, issue_key, work_logs):
+        # Add issue_key to each work log for later processing
+        filtered_logs = []
+        for log in work_logs:
+            log["issue_key"] = issue_key
+            # Fast-forward filter
+            try:
+                if self._ff_accept(log.get("created"), log.get("updated")):
+                    filtered_logs.append(log)
+            except Exception:
+                # On parse errors, conservatively drop
+                continue
+        return filtered_logs
+
+    def _existing_worklog_keys(self) -> set[str]:
+        """Read migrated Jira worklog keys from the OpenProject provenance field."""
+        existing_keys: set[str] = set()
+        worklog_cf_id: int | None = None
+        try:
+            cf = self.op_client.ensure_custom_field(
+                name="J2O Origin Worklog Key",
+                field_format="string",
+                cf_type="TimeEntryCustomField",
+            )
+            if isinstance(cf, dict) and cf.get("id"):
+                worklog_cf_id = int(cf["id"])
+        except Exception as cf_err:
+            self.logger.warning("Could not resolve TimeEntry worklog CF id for dedup: %s", cf_err)
+
+        if worklog_cf_id:
+            # Primary probe: query the CustomValue table directly —
+            # matches *every* TimeEntry that already carries a Jira
+            # worklog key, regardless of how many TimeEntries are in
+            # the database. The earlier ``get_time_entries(limit=2000)``
+            # only saw the first 2000 by id, missing recent provenance
+            # and producing duplicates on every re-run (Bug C2).
+            try:
+                key_query = (
+                    f"CustomValue.where(custom_field_id: {worklog_cf_id}, "
+                    "customized_type: 'TimeEntry').where.not(value: [nil, '']).pluck(:value)"
+                )
+                rows = self.op_client.execute_json_query(key_query, timeout=60)
+                if isinstance(rows, list):
+                    existing_keys = {str(v) for v in rows if isinstance(v, str) and v}
+            except Exception as probe_err:
+                self.logger.debug("Direct CustomValue probe failed, falling back: %s", probe_err)
+                existing_keys = set()
+
+            # Fallback: derive worklog keys from the limited
+            # ``get_time_entries`` snapshot via
+            # ``_extract_worklog_keys_from_op_entries``. This won't see
+            # entries past the 2000-row limit (so re-runs after a huge
+            # backfill may still duplicate at the tail), but is better
+            # than no dedup if the direct probe ever stops working.
+            if not existing_keys:
+                try:
+                    recent = self.op_client.get_time_entries(limit=2000)
+                    existing_keys = _extract_worklog_keys_from_op_entries(
+                        recent,
+                        worklog_cf_id,
+                    )
+                except Exception as fb_err:
+                    self.logger.debug("Fallback worklog snapshot failed: %s", fb_err)
+                    existing_keys = set()
+        return existing_keys
+
+    def _migrate_adaptive_chunks(self, entries_to_migrate, batch_size, migration_summary):
+        # Process in chunks to avoid timeout (batch_size entries per Rails execution)
+        # Adaptive chunk sizing: increase if fast, decrease if slow
+        chunk_size = batch_size
+        total_entries = len(entries_to_migrate)
+
+        processed_count = 0
+        chunk_num = 0
+
+        # Adaptive sizing configuration (timeout is 120s in batch_create_time_entries)
+        batch_timeout = 120.0
+        min_chunk_size = 100
+        max_chunk_size = 800  # Capped at 800 - larger sizes risk timeout
+        # Thresholds for adaptive sizing (fraction of timeout)
+        fast_threshold = 0.25  # < 30s: increase chunk size by 1.5x
+        slow_threshold = 0.50  # > 60s: decrease chunk size by 0.75x
+
+        self.logger.info(
+            "Using adaptive batch mode: initial chunk_size=%d, range=[%d-%d], entries=%d",
+            chunk_size,
+            min_chunk_size,
+            max_chunk_size,
+            total_entries,
+        )
+
+        chunk_start = 0
+        while chunk_start < total_entries:
+            chunk_end = min(chunk_start + chunk_size, total_entries)
+            chunk = entries_to_migrate[chunk_start:chunk_end]
+            chunk_num += 1
+            remaining = total_entries - chunk_start
+            est_chunks_left = (remaining + chunk_size - 1) // chunk_size
+
+            try:
+                self.logger.info(
+                    "Processing chunk %d (%d entries, size=%d, ~%d chunks remaining)",
+                    chunk_num,
+                    len(chunk),
+                    chunk_size,
+                    est_chunks_left,
+                )
+                chunk_start_time = time.time()
+                batch_result = self.op_client.batch_create_time_entries(chunk)
+                chunk_elapsed = time.time() - chunk_start_time
+
+                created = int(batch_result.get("created", 0))
+                failed = int(batch_result.get("failed", 0))
+                migration_summary["successful_migrations"] += created
+                migration_summary["failed_migrations"] += failed
+                ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
+                migration_summary["created_time_entry_ids"].extend(ids)
+                processed_count += len(chunk)
+
+                # Adaptive chunk sizing based on elapsed time
+                old_chunk_size = chunk_size
+                time_ratio = chunk_elapsed / batch_timeout
+                if time_ratio < fast_threshold and chunk_size < max_chunk_size:
+                    # Fast execution: increase chunk size by 1.5x (capped at max)
+                    chunk_size = min(int(chunk_size * 1.5), max_chunk_size)
+                elif time_ratio > slow_threshold and chunk_size > min_chunk_size:
+                    # Slow execution: decrease chunk size by 0.75x (capped at min)
+                    chunk_size = max(int(chunk_size * 0.75), min_chunk_size)
+
+                size_change = ""
+                if chunk_size != old_chunk_size:
+                    size_change = f" [chunk_size: {old_chunk_size}→{chunk_size}]"
+
+                self.logger.info(
+                    "Chunk %d done: %d ok, %d fail in %.1fs (%.0f%% timeout) - %d/%d total%s",
+                    chunk_num,
+                    created,
+                    failed,
+                    chunk_elapsed,
+                    time_ratio * 100,
+                    processed_count,
+                    total_entries,
+                    size_change,
+                )
+
+                # Move to next chunk
+                chunk_start = chunk_end
+
+            except Exception as e:
+                self.logger.warning("Batch chunk %d failed: %s - falling back to per-entry", chunk_num, e)
+                migration_summary["errors"].append(f"Batch chunk {chunk_num} failed: {e}")
+
+                # Process remaining entries via per-entry fallback
+                return entries_to_migrate[chunk_start:]
+        return None
+
+    def _record_migration_totals(self, migration_summary, start_time):
+        processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
+        self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
+        self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
+        self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
+        self.migration_results["processing_time_seconds"] += processing_time
+        self.logger.success(
+            "Migration completed: %d successful, %d failed in %.2fs",
+            migration_summary["successful_migrations"],
+            migration_summary["failed_migrations"],
+            processing_time,
+        )
+
+    def _migrate_individual_entries(self, entries, batch_size, existing_keys, summary, heartbeat_sec):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        try:
+            concurrency = int(os.environ.get("J2O_TIME_ENTRY_CONCURRENCY", "8"))
+        except ValueError:
+            concurrency = 8
+        step = max(1, batch_size)
+        processed = 0
+        last_heartbeat = time.time()
+        for offset in range(0, len(entries), step):
+            batch, duplicates = _filter_already_migrated_entries(entries[offset : offset + step], existing_keys)
+            summary["skipped_entries"] += duplicates
+            summary["skipped_details"].extend(
+                {"entry": None, "reason": "duplicate_external_key"} for _ in range(duplicates)
+            )
+            if concurrency > 1:
+                with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                    pending = [executor.submit(self._create_time_entry, entry, parallel=True) for entry in batch]
+                    for future in as_completed(pending):
+                        try:
+                            outcome = future.result()
+                        except Exception as exc:
+                            outcome = ("failed", None, str(exc))
+                        self._record_entry_outcome(summary, outcome, parallel=True)
+                        processed += 1
+                        last_heartbeat = self._log_entry_progress(
+                            summary, processed, len(entries), last_heartbeat, heartbeat_sec
+                        )
+            else:
+                for entry in batch:
+                    outcome = self._create_time_entry(entry, parallel=False)
+                    self._record_entry_outcome(summary, outcome, parallel=False, entry=entry)
+                    if outcome[0] != "skipped":
+                        processed += 1
+                        last_heartbeat = self._log_entry_progress(
+                            summary, processed, len(entries), last_heartbeat, heartbeat_sec
+                        )
+
+    def _create_time_entry(self, entry, *, parallel):
+        valid, reason = self._validate_time_entry_with_reason(entry)
+        if not valid:
+            return "skipped", None, reason
+        try:
+            response = self.op_client.create_time_entry(entry)
+            if isinstance(response, dict) and response.get("id"):
+                identifier = response["id"]
+                return "created", int(identifier) if parallel else identifier, None
+        except Exception as exc:
+            return "failed", None, str(exc)
+        return "failed", None, None
+
+    @staticmethod
+    def _record_entry_outcome(summary, outcome, *, parallel, entry=None) -> None:
+        status, identifier, reason = outcome
+        if reason and (parallel or status == "failed"):
+            summary["errors"].append(reason)
+        if status == "created":
+            summary["successful_migrations"] += 1
+            summary["created_time_entry_ids"].append(identifier)
+        elif status == "skipped":
+            summary["skipped_entries"] += 1
+            summary["skipped_details"].append({"entry": entry, "reason": reason})
+        else:
+            summary["failed_migrations"] += 1
+
+    def _log_entry_progress(self, summary, processed, total, last, interval):
+        now = time.time()
+        if now - last < interval:
+            return last
+        self.logger.info(
+            "Time entries: %d/%d processed (ok=%d, failed=%d, skipped=%d)",
+            processed,
+            total,
+            summary["successful_migrations"],
+            summary["failed_migrations"],
+            summary["skipped_entries"],
+        )
+        return now
+
+    def _load_fast_forward_cutoff(self):
+        # Compute cutoff from existing OP entries if enabled
+        if self._ff_enabled:
+            try:
+                # Gather recent entries and compute max created/updated
+                recent = self.op_client.get_time_entries(limit=2000)
+                best: datetime | None = None
+                for te in recent:
+                    probe = te.get("updated_at") if self._ff_field == "updated" else te.get("created_at")
+                    ts = self._parse_ts(str(probe) if probe is not None else None)
+                    if ts and (best is None or ts > best):
+                        best = ts
+                self._ff_cutoff = best
+                if best:
+                    self.logger.info("Fast-forward enabled: cutoff=%s field=%s", best.isoformat(), self._ff_field)
+            except Exception as e:
+                self.logger.warning("Failed to compute fast-forward cutoff: %s", e)
+                self._ff_cutoff = None
+
     def _load_mappings(self) -> None:
         """Load existing mappings from migration data files."""
         try:
@@ -227,23 +506,7 @@ class TimeEntryMigrator:
             if user_mapping_file.exists():
                 with user_mapping_file.open(encoding="utf-8") as f:
                     user_data = json.load(f)
-                    expanded: dict[str, int] = {}
-                    for entry in user_data.values():
-                        op_id = entry.get("openproject_id")
-                        if not op_id:
-                            continue
-                        # Collect potential Jira identifiers
-                        jira_keys = [
-                            entry.get("jira_username"),
-                            entry.get("jira_name"),
-                            entry.get("jira_key"),
-                            entry.get("jira_email"),
-                            entry.get("jira_display_name"),
-                        ]
-                        for key in jira_keys:
-                            if key:
-                                expanded[str(key)] = op_id
-                    self.user_mapping = expanded
+                    self.user_mapping = self._expanded_user_mapping(user_data)
                 self.logger.info(
                     "Loaded %d user mappings (expanded)",
                     len(self.user_mapping),
@@ -335,18 +598,7 @@ class TimeEntryMigrator:
                 work_logs = self.jira_client.get_work_logs_for_issue(issue_key)
 
                 if work_logs:
-                    # Add issue_key to each work log for later processing
-                    filtered_logs = []
-                    for log in work_logs:
-                        log["issue_key"] = issue_key
-                        # Fast-forward filter
-                        try:
-                            if self._ff_accept(log.get("created"), log.get("updated")):
-                                filtered_logs.append(log)
-                        except Exception:
-                            # On parse errors, conservatively drop
-                            continue
-
+                    filtered_logs = self._matching_work_logs(issue_key, work_logs)
                     extracted_logs[issue_key] = filtered_logs
                     total_logs += len(filtered_logs)
                     self.logger.debug(
@@ -590,56 +842,8 @@ class TimeEntryMigrator:
         # ``J2O Origin Worklog Key`` (matches ``ensure_origin_custom_fields``).
         # OP's serialized ``custom_field_values`` shape carries
         # ``custom_field_id`` but NOT ``name``, so we resolve the CF id
-        # once and match by id (Bug C2 — earlier code matched by name and
-        # missed every entry).
-        existing_keys: set[str] = set()
-        worklog_cf_id: int | None = None
-        try:
-            cf = self.op_client.ensure_custom_field(
-                name="J2O Origin Worklog Key",
-                field_format="string",
-                cf_type="TimeEntryCustomField",
-            )
-            if isinstance(cf, dict) and cf.get("id"):
-                worklog_cf_id = int(cf["id"])
-        except Exception as cf_err:
-            self.logger.warning("Could not resolve TimeEntry worklog CF id for dedup: %s", cf_err)
-
-        if worklog_cf_id:
-            # Primary probe: query the CustomValue table directly —
-            # matches *every* TimeEntry that already carries a Jira
-            # worklog key, regardless of how many TimeEntries are in
-            # the database. The earlier ``get_time_entries(limit=2000)``
-            # only saw the first 2000 by id, missing recent provenance
-            # and producing duplicates on every re-run (Bug C2).
-            try:
-                key_query = (
-                    f"CustomValue.where(custom_field_id: {worklog_cf_id}, "
-                    "customized_type: 'TimeEntry').where.not(value: [nil, '']).pluck(:value)"
-                )
-                rows = self.op_client.execute_json_query(key_query, timeout=60)
-                if isinstance(rows, list):
-                    existing_keys = {str(v) for v in rows if isinstance(v, str) and v}
-            except Exception as probe_err:
-                self.logger.debug("Direct CustomValue probe failed, falling back: %s", probe_err)
-                existing_keys = set()
-
-            # Fallback: derive worklog keys from the limited
-            # ``get_time_entries`` snapshot via
-            # ``_extract_worklog_keys_from_op_entries``. This won't see
-            # entries past the 2000-row limit (so re-runs after a huge
-            # backfill may still duplicate at the tail), but is better
-            # than no dedup if the direct probe ever stops working.
-            if not existing_keys:
-                try:
-                    recent = self.op_client.get_time_entries(limit=2000)
-                    existing_keys = _extract_worklog_keys_from_op_entries(
-                        recent,
-                        worklog_cf_id,
-                    )
-                except Exception as fb_err:
-                    self.logger.debug("Fallback worklog snapshot failed: %s", fb_err)
-                    existing_keys = set()
+        # once and match by id.
+        existing_keys = self._existing_worklog_keys()
 
         # Apply dedup filter BEFORE the batch path takes over. Previously
         # only the per-entry fallback applied this filter, so re-runs in
@@ -672,232 +876,16 @@ class TimeEntryMigrator:
         if config.migration_config.get("unit_test_mode", True):
             use_batch = False
         if use_batch:
-            # Process in chunks to avoid timeout (batch_size entries per Rails execution)
-            # Adaptive chunk sizing: increase if fast, decrease if slow
-            chunk_size = batch_size
-            total_entries = len(entries_to_migrate)
-            batch_success = True
-            processed_count = 0
-            chunk_num = 0
-
-            # Adaptive sizing configuration (timeout is 120s in batch_create_time_entries)
-            batch_timeout = 120.0
-            min_chunk_size = 100
-            max_chunk_size = 800  # Capped at 800 - larger sizes risk timeout
-            # Thresholds for adaptive sizing (fraction of timeout)
-            fast_threshold = 0.25  # < 30s: increase chunk size by 1.5x
-            slow_threshold = 0.50  # > 60s: decrease chunk size by 0.75x
-
-            self.logger.info(
-                "Using adaptive batch mode: initial chunk_size=%d, range=[%d-%d], entries=%d",
-                chunk_size,
-                min_chunk_size,
-                max_chunk_size,
-                total_entries,
-            )
-
-            chunk_start = 0
-            while chunk_start < total_entries:
-                chunk_end = min(chunk_start + chunk_size, total_entries)
-                chunk = entries_to_migrate[chunk_start:chunk_end]
-                chunk_num += 1
-                remaining = total_entries - chunk_start
-                est_chunks_left = (remaining + chunk_size - 1) // chunk_size
-
-                try:
-                    self.logger.info(
-                        "Processing chunk %d (%d entries, size=%d, ~%d chunks remaining)",
-                        chunk_num,
-                        len(chunk),
-                        chunk_size,
-                        est_chunks_left,
-                    )
-                    chunk_start_time = time.time()
-                    batch_result = self.op_client.batch_create_time_entries(chunk)
-                    chunk_elapsed = time.time() - chunk_start_time
-
-                    created = int(batch_result.get("created", 0))
-                    failed = int(batch_result.get("failed", 0))
-                    migration_summary["successful_migrations"] += created
-                    migration_summary["failed_migrations"] += failed
-                    ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
-                    migration_summary["created_time_entry_ids"].extend(ids)
-                    processed_count += len(chunk)
-
-                    # Adaptive chunk sizing based on elapsed time
-                    old_chunk_size = chunk_size
-                    time_ratio = chunk_elapsed / batch_timeout
-                    if time_ratio < fast_threshold and chunk_size < max_chunk_size:
-                        # Fast execution: increase chunk size by 1.5x (capped at max)
-                        chunk_size = min(int(chunk_size * 1.5), max_chunk_size)
-                    elif time_ratio > slow_threshold and chunk_size > min_chunk_size:
-                        # Slow execution: decrease chunk size by 0.75x (capped at min)
-                        chunk_size = max(int(chunk_size * 0.75), min_chunk_size)
-
-                    size_change = ""
-                    if chunk_size != old_chunk_size:
-                        size_change = f" [chunk_size: {old_chunk_size}→{chunk_size}]"
-
-                    self.logger.info(
-                        "Chunk %d done: %d ok, %d fail in %.1fs (%.0f%% timeout) - %d/%d total%s",
-                        chunk_num,
-                        created,
-                        failed,
-                        chunk_elapsed,
-                        time_ratio * 100,
-                        processed_count,
-                        total_entries,
-                        size_change,
-                    )
-
-                    # Move to next chunk
-                    chunk_start = chunk_end
-
-                except Exception as e:
-                    self.logger.warning("Batch chunk %d failed: %s - falling back to per-entry", chunk_num, e)
-                    migration_summary["errors"].append(f"Batch chunk {chunk_num} failed: {e}")
-                    batch_success = False
-                    # Process remaining entries via per-entry fallback
-                    entries_to_migrate = entries_to_migrate[chunk_start:]
-                    break
-
-            if batch_success:
-                processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
-                self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
-                self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
-                self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
-                self.migration_results["processing_time_seconds"] += processing_time
-                self.logger.success(
-                    "Migration completed (batch): %d successful, %d failed in %.2fs",
-                    migration_summary["successful_migrations"],
-                    migration_summary["failed_migrations"],
-                    processing_time,
-                )
+            remaining = self._migrate_adaptive_chunks(entries_to_migrate, batch_size, migration_summary)
+            if remaining is None:
+                self._record_migration_totals(migration_summary, start_time)
                 return migration_summary
+            entries_to_migrate = remaining
 
-        # Per-entry fallback (default path for unit tests) — respect batch_size, add bounded concurrency
-        created_ids: list[int] = []
-        step = max(1, batch_size)
-        # Determine concurrency from env with safe default
-        try:
-            concurrency = int(os.environ.get("J2O_TIME_ENTRY_CONCURRENCY", "8"))
-        except Exception:
-            concurrency = 8
-
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        total_to_process = len(entries_to_migrate)
-        processed_total = 0
-        last_hb = time.time()
-
-        for i in range(0, total_to_process, step):
-            entry_batch = entries_to_migrate[i : i + step]
-            # Filter out entries already migrated by external key if present
-            filtered_batch: list[dict[str, Any]] = []
-            for entry in entry_batch:
-                meta = entry.get("_meta", {})
-                key = meta.get("jira_worklog_key") or meta.get("jira_work_log_id")
-                if key and key in existing_keys:
-                    migration_summary["skipped_entries"] += 1
-                    migration_summary["skipped_details"].append({"entry": None, "reason": "duplicate_external_key"})
-                    continue
-                filtered_batch.append(entry)
-
-            entry_batch = filtered_batch
-            if concurrency > 1 and not dry_run:
-
-                def _create(entry: dict[str, Any]) -> tuple[bool, int | None, str | None]:
-                    is_valid, reason = self._validate_time_entry_with_reason(entry)
-                    if not is_valid:
-                        return False, None, reason
-                    try:
-                        res = self.op_client.create_time_entry(entry)
-                        if isinstance(res, dict) and res.get("id"):
-                            return True, int(res["id"]), None
-                        return False, None, None
-                    except Exception as e:
-                        return False, None, str(e)
-
-                with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
-                    futures = [executor.submit(_create, entry) for entry in entry_batch]
-                    for fut in as_completed(futures):
-                        ok, new_id, err = False, None, None
-                        try:
-                            ok, new_id, err = fut.result()
-                        except Exception as e:
-                            ok, err = False, str(e)
-                        if err:
-                            migration_summary["errors"].append(err)
-                        if ok:
-                            migration_summary["successful_migrations"] += 1
-                            if new_id is not None:
-                                created_ids.append(new_id)
-                        # Distinguish skipped vs failed based on error type
-                        # Known validation reasons should be skipped, API errors should be failed
-                        elif err in ("missing_embedding", "invalid_hours_or_date"):
-                            migration_summary["skipped_entries"] += 1
-                            migration_summary["skipped_details"].append({"entry": None, "reason": err})
-                        else:
-                            # API error (exception message) or no error (failed to get ID) = failed migration
-                            migration_summary["failed_migrations"] += 1
-
-                        # Heartbeat progress
-                        processed_total += 1
-                        now = time.time()
-                        if now - last_hb >= heartbeat_sec:
-                            self.logger.info(
-                                "Time entries: %d/%d processed (ok=%d, failed=%d, skipped=%d)",
-                                processed_total,
-                                total_to_process,
-                                migration_summary["successful_migrations"],
-                                migration_summary["failed_migrations"],
-                                migration_summary["skipped_entries"],
-                            )
-                            last_hb = now
-            else:
-                for entry in entry_batch:
-                    is_valid, reason = self._validate_time_entry_with_reason(entry)
-                    if not is_valid:
-                        migration_summary["skipped_entries"] += 1
-                        migration_summary["skipped_details"].append({"entry": entry, "reason": reason})
-                        continue
-                    try:
-                        res = self.op_client.create_time_entry(entry)
-                        if isinstance(res, dict) and res.get("id"):
-                            migration_summary["successful_migrations"] += 1
-                            created_ids.append(res["id"])
-                        else:
-                            migration_summary["failed_migrations"] += 1
-                    except Exception as e:
-                        migration_summary["failed_migrations"] += 1
-                        migration_summary["errors"].append(str(e))
-
-                    # Heartbeat progress for sequential path
-                    processed_total += 1
-                    now = time.time()
-                    if now - last_hb >= heartbeat_sec:
-                        self.logger.info(
-                            "Time entries: %d/%d processed (ok=%d, failed=%d, skipped=%d)",
-                            processed_total,
-                            total_to_process,
-                            migration_summary["successful_migrations"],
-                            migration_summary["failed_migrations"],
-                            migration_summary["skipped_entries"],
-                        )
-                        last_hb = now
-
-        migration_summary["created_time_entry_ids"].extend(created_ids)
-        processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
-        self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
-        self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
-        self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
-        self.migration_results["processing_time_seconds"] += processing_time
-        self.logger.success(
-            "Migration completed: %d successful, %d failed in %.2fs",
-            migration_summary["successful_migrations"],
-            migration_summary["failed_migrations"],
-            processing_time,
+        self._migrate_individual_entries(
+            entries_to_migrate, batch_size, existing_keys, migration_summary, heartbeat_sec
         )
+        self._record_migration_totals(migration_summary, start_time)
         return migration_summary
 
     def _validate_time_entry_with_reason(self, entry: dict[str, Any]) -> tuple[bool, str]:
@@ -976,8 +964,11 @@ class TimeEntryMigrator:
             failed_count = self.migration_results.get("failed_migrations", 0)
 
             unmappable_count = self.migration_results.get("unmappable_entries", 0)
+            status = "success"
+            if failed_count:
+                status = "partial_success" if migrated_count else "failed"
             return {
-                "status": ("success" if failed_count == 0 else ("partial_success" if migrated_count > 0 else "failed")),
+                "status": status,
                 "jira_work_logs": {
                     "discovered": jira_discovered,
                 },
@@ -1036,23 +1027,7 @@ class TimeEntryMigrator:
                 self._ff_enabled = False
                 self._ff_field = "updated"
 
-            # Compute cutoff from existing OP entries if enabled
-            if self._ff_enabled:
-                try:
-                    # Gather recent entries and compute max created/updated
-                    recent = self.op_client.get_time_entries(limit=2000)
-                    best: datetime | None = None
-                    for te in recent:
-                        probe = te.get("updated_at") if self._ff_field == "updated" else te.get("created_at")
-                        ts = self._parse_ts(str(probe) if probe is not None else None)
-                        if ts and (best is None or ts > best):
-                            best = ts
-                    self._ff_cutoff = best
-                    if best:
-                        self.logger.info("Fast-forward enabled: cutoff=%s field=%s", best.isoformat(), self._ff_field)
-                except Exception as e:
-                    self.logger.warning("Failed to compute fast-forward cutoff: %s", e)
-                    self._ff_cutoff = None
+            self._load_fast_forward_cutoff()
 
             self.extract_jira_work_logs_for_issues(issue_keys)
 
