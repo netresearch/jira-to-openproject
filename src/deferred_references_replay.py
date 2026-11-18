@@ -16,6 +16,7 @@ result=WorkPackage.transaction(requires_new:true) do
   work=WorkPackage.lock.where(id:rows.flat_map{|r|[r['source']['wp'],r['target']['wp']]}.uniq.sort).order(:id).index_by(&:id)
   projects=Project.lock.where(id:work.values.map(&:project_id).uniq.sort).order(:id).to_a
   raise 'Replay requires private cutover projects' if projects.any?(&:public?) || Member.where(project_id:projects.map(&:id)).exists?
+  raise 'Work package module required' unless projects.all?{|p|p.module_enabled?(:work_package_tracking)}
   fields=%w[Key ID URL System].to_h{|n|[n,WorkPackageCustomField.where(name:"J2O Origin #{n}").sole.id]}
   changed=0
   rows.each do |r|
@@ -83,7 +84,13 @@ def apply(data: dict, mapped: dict, client: Any) -> dict[str, int]:
     if rows:
         response = client.execute_script_with_data(_APPLY, {"jira": data["jira"], "rows": rows})
         counts = response.get("data") or {}
-        if response.get("status") != "success" or counts.get("confirmed") != len(rows):
+        created = counts.get("created")
+        if (
+            response.get("status") != "success"
+            or counts.get("confirmed") != len(rows)
+            or type(created) is not int
+            or not 0 <= created <= len(rows)
+        ):
             msg = "Incomplete target acknowledgement for deferred references"
             raise ValueError(msg)
         result.update(confirmed=counts["confirmed"], created=counts["created"])

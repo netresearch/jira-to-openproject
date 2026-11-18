@@ -43,7 +43,7 @@ def sample():
     )
 
 
-def test_cli_capture_is_private_recoverable_and_repeatable(tmp_path):
+def test_cli_capture_is_private_recoverable_and_repeatable(tmp_path, capsys):
     identity = x25519.Identity.generate()
     keyfile, archive = tmp_path / "operator", tmp_path / "links.age"
     keyfile.write_text(str(identity))
@@ -76,6 +76,9 @@ def test_cli_capture_is_private_recoverable_and_repeatable(tmp_path):
     assert archive.read_bytes() == original
     restored = read_snapshot(archive, x25519.Identity.from_str(keyfile.read_text()))
     assert restored == sample()
+    capsys.readouterr()
+    main(["--archive", str(archive), "--identity", str(keyfile), "read"])
+    assert json.loads(capsys.readouterr().out) == restored
     assert len(restored["references"]) == 2
     assert "restricted foreign title" not in json.dumps(restored)
     with pytest.raises(pyrage.DecryptError):

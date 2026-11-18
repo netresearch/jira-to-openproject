@@ -25,6 +25,7 @@ def test_replay_uses_both_verified_endpoints_and_rechecks_native_records(rails):
     ids = query("""
       template=WorkPackage.first!
       projects=%w[one two].map{|n|Project.create!(name:"Deferred #{n}",identifier:"j2o-deferred-#{n}",workspace_type:"project",public:false)}
+      projects.each{|p|p.enabled_module_names = ['work_package_tracking']}
       specs=[['APP-1','10',0],['EXT-3','12',1],['EXT-4','13',1]]
       specs.map do |key,jid,pi|
         wp=WorkPackage.create!(project:projects[pi],type:template.type,status:template.status,priority:template.priority,
@@ -52,7 +53,7 @@ def test_replay_uses_both_verified_endpoints_and_rechecks_native_records(rails):
         rid=Relation.where(from_id:{linked},to_id:{local},relation_type:'blocks').sole.id
         wp=cli.get("http://localhost/api/v3/work_packages/{local}",headers)
         rel=cli.get("http://localhost/api/v3/relations/#{{rid}}",headers)
-        raise 'Unexpected API status' unless wp.status==200 && rel.status==200
+        raise "Unexpected API status #{{wp.status}}/#{{rel.status}}" unless wp.status==200 && rel.status==200
         [JSON.parse(wp.body)["_links"]["parent"]["href"],JSON.parse(rel.body)["_links"]["from"]["href"],JSON.parse(rel.body)["_links"]["to"]["href"]]
       ensure;token.destroy!;end
     """) == [f"/api/v3/work_packages/{n}" for n in (epic, linked, local)]

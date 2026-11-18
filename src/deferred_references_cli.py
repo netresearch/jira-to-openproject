@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--identity", type=Path, required=True)
     parser.add_argument("--archive", type=Path, required=True)
-    parser.add_argument("--mapping", type=Path, action="append", required=True)
+    parser.add_argument("--mapping", type=Path, action="append", default=[])
     commands = parser.add_subparsers(dest="command", required=True)
     capture = commands.add_parser("capture")
     capture.add_argument("--issues", type=Path, required=True)
@@ -28,8 +28,14 @@ def main(argv: list[str] | None = None) -> None:
     capture.add_argument("--epic-field", required=True)
     capture.add_argument("--known-ids", type=Path, help="Optional verified Jira key-to-ID lookup for epic keys")
     commands.add_parser("apply")
+    commands.add_parser("read", help="Write the authenticated reference snapshot to standard output")
     args = parser.parse_args(argv)
     identity = x25519.Identity.from_str(args.identity.read_text().strip())
+    if args.command == "read":
+        sys.stdout.write(json.dumps(read_snapshot(args.archive, identity), ensure_ascii=False, indent=2) + "\n")
+        return
+    if not args.mapping:
+        parser.error("capture and apply require --mapping")
     mapped = mappings(args.mapping)
     if args.command == "capture":
         raw = json.loads(args.issues.read_bytes())

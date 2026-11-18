@@ -13,6 +13,8 @@ Use the site's actual Jira Epic Link field ID. The issue file can be a list of r
 
 The encrypted archive retains source and target identities, original link ID, type vocabulary, direction and the epic or direct-parent information. Linked issue contents and personal fields are omitted. The file can be attached to a private migration record in OpenProject and downloaded after Jira shutdown. The same operator identity authenticates the archive before replay. Test key recovery from separate storage. Repeating capture accepts an identical existing snapshot. A changed snapshot needs a new filename.
 
+To read all authenticated reference records offline, run `j2o-references --identity /private/recovery/ref.agekey --archive APP.age read` in a private terminal.
+
 After importing the remaining projects, download the archive, combine the latest mappings and run the following command against the configured OpenProject cutover instance with its projects still private and without members.
 
 ```sh
