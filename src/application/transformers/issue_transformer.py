@@ -41,6 +41,11 @@ if TYPE_CHECKING:
     from src.domain.enums import JournalEntryType
 
 
+def _dict_fields(value: Any) -> dict[str, Any]:
+    """Read optional Jira fields from dictionary-shaped REST data."""
+    return value if isinstance(value, dict) else {}
+
+
 class IssueTransformer:
     """Pure mapping logic extracted from ``WorkPackageMigration``.
 
@@ -429,8 +434,7 @@ class IssueTransformer:
         if field == "issuetype":
             return owner.issue_type_id_mapping.get(str(raw)) if raw and owner.issue_type_id_mapping else None
         if field == "status":
-            mapping = (owner.status_mapping or {}).get(str(raw)) if raw else None
-            return (mapping or {}).get("openproject_id")
+            return self._journal_status_id(raw)
         if field == "Fix Version":
             if display and owner._current_project_id:
                 return owner._get_or_create_version(display, owner._current_project_id)
@@ -438,6 +442,10 @@ class IssueTransformer:
         if field in ("timeestimate", "timeoriginalestimate"):
             return self._hours_from_seconds(raw)
         return display or raw
+
+    def _journal_status_id(self, raw: Any) -> Any:
+        mapping = self._owner.status_mapping.get(str(raw)) if raw and self._owner.status_mapping else None
+        return (mapping or {}).get("openproject_id")
 
     def _journal_user_id(self, username: Any) -> Any:
         mapping = self._owner.user_mapping
@@ -569,19 +577,16 @@ class IssueTransformer:
     def _mapping_issue_meta(issue: Any, meta: dict[str, Any]) -> None:
         # Dict-like payloads (tests / fallback)
         d = issue or {}
-        record = d if isinstance(d, dict) else {}
-        raw_fields = record.get("fields")
-        fields = raw_fields if isinstance(raw_fields, dict) else {}
+        record = _dict_fields(d)
+        fields = _dict_fields(record.get("fields"))
         meta["jira_key"] = record.get("key")
         meta["jira_id"] = record.get("id")
         for name in ("issuetype", "status", "priority"):
-            value = fields.get(name)
-            obj = value if isinstance(value, dict) else {}
+            obj = _dict_fields(fields.get(name))
             meta[f"{name}_id"] = obj.get("id")
             meta[f"{name}_name"] = obj.get("name")
         for name in ("reporter", "assignee"):
-            value = fields.get(name)
-            obj = value if isinstance(value, dict) else {}
+            obj = _dict_fields(fields.get(name))
             meta[name] = obj.get("name") or obj.get("displayName")
         for name in ("created", "updated", "duedate"):
             meta[name] = fields.get(name) or d.get(name)
