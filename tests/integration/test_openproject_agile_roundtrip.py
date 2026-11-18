@@ -633,7 +633,7 @@ def test_native_completed_sprints_preserve_versions_history_and_project_scope(ra
             wp.update_columns(sprint_id: current.id)
             begin
               JiraCompletedSprints.new(JSON.parse({json.dumps(json.dumps(manifest))})).apply
-            rescue RuntimeError => e
+            rescue JiraCompletedSprints::ImportConflict => e
               observed = [e.message, Sprint.where(project_id: p.id).count, wp.reload.sprint_id == current.id]
             end
             raise ActiveRecord::Rollback
