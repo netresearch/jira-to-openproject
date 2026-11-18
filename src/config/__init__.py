@@ -368,9 +368,8 @@ def update_from_cli_args(args: object) -> None:
 
     """
     # Apply Jira project filter early so downstream modules see it
-    if getattr(args, "jira_project_filter", None):
+    if keys_raw := getattr(args, "jira_project_filter", None):
         try:
-            keys_raw = args.jira_project_filter
             keys = [k.strip() for k in str(keys_raw).split(",") if k.strip()]
             if keys:
                 _config_loader.set_value("jira", "projects", keys)
