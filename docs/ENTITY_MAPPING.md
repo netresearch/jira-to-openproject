@@ -109,6 +109,12 @@ projectType: "software"      ──→  CF: "Jira Project Type"
 | - | CF: "Jira Project URL" | Link to original |
 | `project.avatarUrls` | CF: "Jira Project Avatar URL" | Image link |
 
+#### Restoring types in an earlier pilot project
+
+An older import on OpenProject 17 can leave a private project with work package tracking enabled and an empty list of work package types. The project API then returns an empty collection for `GET /api/v3/projects/{id}/types`. Creating a work package with a configured type can return HTTP 422.
+
+As a project administrator, open the affected project and go to **Project settings → Work packages → Types**. Enable the types that correspond to the Jira issue types used in this project and save. Confirm the selected types appear in the project API or in the **Create work package** form. An existing project's type selection may be intentional, so rerunning the project import preserves it. [OpenProject project settings](https://www.openproject.org/docs/user-guide/projects/project-settings/work-packages/)
+
 **Modules Enabled**:
 - Always: `work_package_tracking`, `wiki`
 - Tempo-linked: `time_tracking`, `costs`

@@ -401,3 +401,42 @@ def test_unsupported_cleanup_preserves_every_work_package_type(rails):
     with pytest.raises(QueryExecutionError, match="all types were preserved"):
         service.delete_non_default_issue_types()
     assert query("Type.order(:id).pluck(:id, :name)") == original
+
+
+def test_migrated_project_allows_native_work_package_creation(rails):
+    from src.application.components.project_migration import ProjectMigration
+
+    client, query = rails
+    migration = ProjectMigration.__new__(ProjectMigration)
+    migration.op_client = client
+    migration.cf_jira_project_key_id = None
+    migration.cf_jira_project_id_id = None
+    migration.cf_jira_base_url_id = None
+    source = {"jira_key": "MODCHECK", "jira_id": "8219", "name": "Project type fixture", "identifier": "modcheck"}
+    target, created = migration._create_or_find_project(source)
+    assert created
+    project_id = int(target["id"])
+    observations = query(f"""
+      project = Project.find({project_id})
+      rest = ActionDispatch::Integration::Session.new(Rails.application)
+      rest.host! "localhost"
+      token = Token::API.create!(user: User.admin.first!).plain_value
+      headers = {{"ACCEPT" => "application/hal+json",
+                  "HTTP_AUTHORIZATION" => ActionController::HttpAuthentication::Basic.encode_credentials("apikey", token)}}
+      type = Type.order(:position).first!
+      rest.get "/api/v3/projects/{project_id}/types", headers: headers
+      types = JSON.parse(rest.response.body).fetch("_embedded").fetch("elements").pluck("id")
+      payload = {{subject: "API type check", _links: {{type: {{href: "/api/v3/types/#{{type.id}}"}},
+                  project: {{href: "/api/v3/projects/{project_id}"}}}}}}
+      rest.post "/api/v3/work_packages", params: payload, headers: headers, as: :json
+      [project.public?, project.module_enabled?(:work_package_tracking), types.include?(type.id),
+       rest.response.status, JSON.parse(rest.response.body)["subject"]]
+    """)
+    assert observations == [False, True, True, 201, "API type check"]
+    # A pilot with deliberately restricted or empty types keeps its administrator's choice on rerun.
+    types = f"project = Project.find({project_id}); project.respond_to?(:project_types) ? project.project_types : project.types"
+    query(f"({types}).clear; true")
+    existing, created_again = migration._create_or_find_project(source)
+    assert existing["id"] == project_id
+    assert not created_again
+    assert query(f"({types}).count") == 0
