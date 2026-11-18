@@ -744,9 +744,17 @@ class JiraClient:
         """Thin delegator over ``self.agile.get_boards``."""
         return self.agile.get_boards()
 
+    def get_boards_for_project(self, project_key: str) -> list[dict[str, Any]]:
+        """List boards associated with the selected Jira project."""
+        return self.agile.get_boards_for_project(project_key)
+
     def get_board_projects(self, board_id: int) -> list[dict[str, Any]]:
         """Return projects covered by the board."""
         return self.agile.get_board_projects(board_id)
+
+    def get_board_issue_keys(self, board_id: int, project_key: str) -> list[str]:
+        """List the board's visible issues within one project."""
+        return self.agile.get_board_issue_keys(board_id, project_key)
 
     def get_board_configuration(self, board_id: int) -> dict[str, Any]:
         """Thin delegator over ``self.agile.get_board_configuration``."""

@@ -31,6 +31,44 @@ from typing import Any
 
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
+_SAVE_BOARD = """
+begin
+  Query.transaction(requires_new: true) do
+    project = Project.lock.find(input.fetch('project_id'))
+    user = User.admin.active.order(:id).first!
+    ids = input.fetch('options').fetch('board_work_package_ids')
+    source_id = Integer(input.fetch('options').fetch('jira_board_id'))
+    prefix = "[Jira Board #{source_id}] "
+    raise 'invalid board identity' unless source_id.positive? && input.fetch('name').start_with?(prefix)
+    raise 'board snapshot must be private' unless input.fetch('is_public') == false
+    raise 'invalid board work package ids' unless ids.is_a?(Array) && ids.all? { |id| id.is_a?(Integer) && id.positive? }
+    raise 'board scope mismatch' unless ids.uniq.size == ids.size && project.work_packages.where(id: ids).count == ids.size
+    existing = Query.where(project: project).where('name LIKE ?', prefix + '%').lock.limit(2).to_a
+    raise 'ambiguous existing board snapshot' if existing.size > 1
+    query = existing.first || Query.new(project: project, user: user, public: false)
+    if query.public? || query.user_id != user.id || (query.persisted? && Member.where(entity: query).exists?)
+      raise 'existing board snapshot has a different audience'
+    end
+    created = query.new_record?
+    query.name = input.fetch('name')
+    query.include_subprojects = false
+    desired = ids.empty? ? ['manual_sort', 'ow', []] : ['id', '=', ids.sort.map(&:to_s)]
+    actual = query.filters.map { |f| [f.name.to_s, f.operator, f.values.map(&:to_s)] }
+    unless actual == [desired]
+      query.filters = []
+      query.add_filter(*desired)
+    end
+    changed = query.changed?
+    query.save! if created || changed
+    matches = User.execute_as(user) { query.reload.results.work_packages.pluck(:id).sort }
+    raise 'target board membership mismatch' unless matches == ids.sort
+    {success: true, id: query.id, created: created, updated: changed || created}
+  end
+rescue => e
+  {success: false, error: e.message}
+end
+"""
+
 
 class OpenProjectContentService:
     """Project-attached content helpers (saved queries, wiki pages)."""
@@ -82,6 +120,8 @@ class OpenProjectContentService:
         # emitting the JSON payload directly here is safe — ``JSON.parse``
         # on the Ruby side treats it as data, not code.
         payload_json = json.dumps(payload, ensure_ascii=False)
+        if "board_work_package_ids" in payload["options"]:
+            return self._save_board_snapshot(payload_json)
         # Drop ``.to_json`` from the terminal expression —
         # ``execute_query_to_json_file`` already wraps the script tail
         # in ``.as_json`` on the Ruby side, so an explicit ``.to_json``
@@ -179,6 +219,11 @@ JSON_DATA
         if isinstance(result, dict):
             return result
         return {"success": False, "error": "unexpected response"}
+
+    def _save_board_snapshot(self, payload_json: str) -> dict[str, Any]:
+        """Replace the migration owner's private board membership atomically."""
+        script = "input = JSON.parse(<<'JIRA_BOARD_DATA')\n" + payload_json + "\nJIRA_BOARD_DATA\n" + _SAVE_BOARD
+        return self._client.execute_query_to_json_file(script, timeout=120)
 
     # ── wiki pages ───────────────────────────────────────────────────────
 

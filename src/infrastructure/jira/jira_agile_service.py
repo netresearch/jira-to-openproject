@@ -16,6 +16,7 @@ no Ruby-script escaping to worry about.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from requests import exceptions
@@ -47,11 +48,52 @@ class JiraAgileService:
         """Return Jira Software boards (Scrum/Kanban)."""
         return self._paged_values("board")
 
+    def get_boards_for_project(self, project_key: str) -> list[dict[str, Any]]:
+        """Return boards Jira associates with this project, including shared boards."""
+        return self._paged_values("board", projectKeyOrId=project_key)
+
     def get_board_projects(self, board_id: int) -> list[dict[str, Any]]:
         """Return projects covered by a Server/DC board's filter."""
         return self._paged_values(f"board/{board_id}/project")
 
-    def _paged_values(self, resource: str) -> list[dict[str, Any]]:
+    def get_board_issue_keys(self, board_id: int, project_key: str) -> list[str]:
+        """Read just this project's issue keys from the board's permission-filtered membership."""
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", project_key, re.ASCII):
+            msg = "Invalid Jira project key for board snapshot"
+            raise ValueError(msg)
+        client = self._client
+        if not client.jira:
+            raise JiraConnectionError(CLIENT_NOT_INITIALIZED)
+        url = f"{client.base_url}/rest/agile/1.0/board/{int(board_id)}/issue"
+        keys: list[str] = []
+        total: int | None = None
+        while total is None or len(keys) < total:
+            params = {
+                "jql": f'project = "{project_key}" ORDER BY id',
+                "fields": "project",
+                "startAt": len(keys),
+                "maxResults": 50,
+            }
+            response = client.jira._session.get(url, params=params)
+            response.raise_for_status()
+            page = response.json()
+            if page["startAt"] != len(keys) or (total is not None and total != page["total"]):
+                msg = "Board membership changed while paging"
+                raise JiraApiError(msg)
+            total = int(page["total"])
+            for issue in page["issues"]:
+                if issue["fields"]["project"]["key"] != project_key or not issue["key"].startswith(project_key + "-"):
+                    msg = "Board returned an issue outside the selected project"
+                    raise JiraApiError(msg)
+                keys.append(issue["key"])
+            if not page["issues"]:
+                break
+        if len(keys) != total or len(set(keys)) != len(keys):
+            msg = "Incomplete or duplicate Jira board issue keys"
+            raise JiraApiError(msg)
+        return keys
+
+    def _paged_values(self, resource: str, **scope: str) -> list[dict[str, Any]]:
         client = self._client
         if not client.jira:
             msg = CLIENT_NOT_INITIALIZED
@@ -60,13 +102,19 @@ class JiraAgileService:
         items: list[dict[str, Any]] = []
         try:
             while True:
-                response = client.jira._session.get(url, params={"startAt": len(items), "maxResults": 50})
+                response = client.jira._session.get(url, params={**scope, "startAt": len(items), "maxResults": 50})
                 response.raise_for_status()
                 page = response.json()
                 values = page["values"]
                 if not isinstance(values, list):
                     msg = f"Expected a page of Jira {resource} values"
                     raise TypeError(msg)
+                if page.get("startAt", len(items)) != len(items):
+                    msg = f"Unexpected page offset for Jira {resource}"
+                    raise JiraApiError(msg)
+                if not values and page.get("isLast") is False:
+                    msg = f"Incomplete Jira {resource} inventory"
+                    raise JiraApiError(msg)
                 items.extend(values)
                 if page.get("isLast") or not values:
                     return items

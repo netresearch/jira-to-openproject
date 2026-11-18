@@ -251,6 +251,7 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
     jira.get_boards.return_value = [{"id": 17, "name": "J2O test board", "type": "scrum"}]
     jira.get_board_configuration.return_value = {}
     jira.get_board_projects.return_value = [{"key": "TEST"}]
+    jira.get_board_issue_keys.return_value = ["TEST-1"]
     jira.get_board_sprints.return_value = [
         {
             "id": 42,
@@ -266,7 +267,7 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
         "TEST-3": {"fields": {"parent": {"key": "TEST-2"}, "epicLink": "TEST-1"}},
         "TEST-2": {"fields": {"sprint": [{"id": 42, "name": "J2O test sprint"}], "epicLink": "TEST-1"}},
     }
-    mappings = {"project": {"TEST": {"openproject_id": project_id}}}
+    mappings = {"project": {"TEST": {"openproject_id": project_id}}, "work_package": {"TEST-1": parent_id}}
     monkeypatch.setattr(
         "src.config.mappings", SimpleNamespace(get_mapping=mappings.get, set_mapping=mappings.__setitem__)
     )
@@ -275,10 +276,15 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
     boards = AgileBoardMigration(jira_client=jira, op_client=client)
     boards.change_detector = ChangeDetector(tmp_path)
     result = boards.run_with_change_detection("agile_boards")
-    assert result.success, result
+    assert result.success, str(result.details)
     version = mappings["sprint"]["42"]
     assert query(f"Version.find({version['openproject_id']}).effective_date.iso8601") == "2026-10-14"
-    assert query(f"Query.find_by!(project_id: {project_id}, name: '[Board] J2O test board').public") is False
+    assert query(f"Query.find_by!(project_id: {project_id}, name: '[Jira Board 17] J2O test board').public") is False
+    saved = f"Query.find_by!(project_id: {project_id}, name: '[Jira Board 17] J2O test board')"
+    assert query(f"{saved}.results.work_packages.pluck(:id)") == [parent_id]
+    jira.get_board_issue_keys.return_value = []
+    assert boards.run_with_change_detection("agile_boards").success
+    assert query(f"{saved}.results.work_packages.pluck(:id)") == []
     mappings["work_package"] = {"TEST-1": parent_id, "TEST-2": child_id, "TEST-3": subtask_id}
     client.ensure_wp_custom_field_id.side_effect = fields.ensure_wp_custom_field_id
     client.bulk_set_wp_custom_field_values.side_effect = OpenProjectWorkPackageCustomFieldService(
