@@ -21,6 +21,26 @@ from tests.integration.test_openproject_agile_roundtrip import rails  # noqa: F4
 pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
 
 
+def openproject_response(query, request):
+    """Send the prepared request through the real target's authentication and HTTP routes."""
+    assert urlsplit(request.url).hostname == "openproject.invalid"
+    response = requests.Response()
+    response.url = request.url
+    body = base64.b64encode(request.body or b"").decode()
+    status, contents = query(f"""
+      body = Base64.strict_decode64({json.dumps(body)})
+      opts = {{input: body, "HTTP_HOST" => "localhost",
+              "CONTENT_TYPE" => {json.dumps(request.headers.get("Content-Type", ""))},
+              "HTTP_AUTHORIZATION" => {json.dumps(request.headers.get("Authorization", ""))} }}
+      res = Rack::MockRequest.new(Rails.application).request({json.dumps(request.method)},
+              {json.dumps("http://localhost" + request.path_url)}, opts)
+      [res.status, Base64.strict_encode64(res.body)]
+    """)
+    response.status_code = status
+    response._content = base64.b64decode(contents)
+    return response
+
+
 @pytest.mark.parametrize("rails", ["committed_archive"], indirect=True)
 @pytest.mark.parametrize("kind", ["software", "service_desk"])
 def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, capsys, kind):  # noqa: F811
@@ -119,19 +139,7 @@ def verify_cutover(query, monkeypatch, tmp_path, capsys, kind):
             response.status_code = status
             response._content = json.dumps(payload).encode()
         else:
-            assert url.hostname == "openproject.invalid"
-            body = base64.b64encode(request.body or b"").decode()
-            status, contents = query(f"""
-              body = Base64.strict_decode64({json.dumps(body)})
-              opts = {{input: body, "HTTP_HOST" => "localhost",
-                      "CONTENT_TYPE" => {json.dumps(request.headers.get("Content-Type", ""))},
-                      "HTTP_AUTHORIZATION" => {json.dumps(request.headers.get("Authorization", ""))} }}
-              res = Rack::MockRequest.new(Rails.application).request({json.dumps(request.method)},
-                      {json.dumps("http://localhost" + request.path_url)}, opts)
-              [res.status, Base64.strict_encode64(res.body)]
-            """)
-            response.status_code = status
-            response._content = base64.b64decode(contents)
+            return openproject_response(query, request)
         return response
 
     monkeypatch.setattr(requests.Session, "send", transport)
