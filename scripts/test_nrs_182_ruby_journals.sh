@@ -19,8 +19,8 @@ echo ""
 WP_MAPPING_FILE="/home/sme/p/j2o/var/data/work_package_mapping.json"
 WP_ID=$(jq -r '.["NRS-182"]' "$WP_MAPPING_FILE")
 
-if [ "$WP_ID" = "null" ] || [ -z "$WP_ID" ]; then
-    echo "❌ ERROR: NRS-182 not found in work package mapping"
+if [[ "$WP_ID" = "null" ]] || [[ -z "$WP_ID" ]]; then
+    echo "❌ ERROR: NRS-182 not found in work package mapping" >&2
     echo "   Run full migration first to create work package"
     exit 1
 fi
@@ -83,9 +83,9 @@ else:
 # Get new work package ID from mapping
 NEW_WP_ID=$(jq -r '.["NRS-182"]' "$WP_MAPPING_FILE")
 
-if [ "$NEW_WP_ID" = "null" ] || [ -z "$NEW_WP_ID" ]; then
+if [[ "$NEW_WP_ID" = "null" ]] || [[ -z "$NEW_WP_ID" ]]; then
     echo ""
-    echo "❌ ERROR: NRS-182 not found in mapping after migration"
+    echo "❌ ERROR: NRS-182 not found in mapping after migration" >&2
     echo "   Migration may have failed"
     exit 1
 fi
@@ -109,12 +109,12 @@ echo "  Improvement: $(printf '%+d' $IMPROVEMENT) journals"
 echo "================================================================================"
 echo ""
 
-if [ "$JOURNAL_COUNT_AFTER" -eq 23 ]; then
+if [[ "$JOURNAL_COUNT_AFTER" -eq 23 ]]; then
     echo "✅ SUCCESS: All 23 journals created!"
     echo "✅ Synthetic timestamp fix resolved EXCLUSION constraint violations!"
     echo "✅ Operations 23-27 now have unique timestamps with microsecond increments"
     exit 0
-elif [ "$JOURNAL_COUNT_AFTER" -gt "$JOURNAL_COUNT_BEFORE" ]; then
+elif [[ "$JOURNAL_COUNT_AFTER" -gt "$JOURNAL_COUNT_BEFORE" ]]; then
     echo "⚠️  PARTIAL SUCCESS: $JOURNAL_COUNT_AFTER/23 journals created"
     echo "   Improvement: +$IMPROVEMENT journals"
     echo "   Missing: $((23 - JOURNAL_COUNT_AFTER)) journals"

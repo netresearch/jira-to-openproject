@@ -118,7 +118,7 @@ uv run python -m src.main migrate --components work_packages --reset-wp-checkpoi
 
 ### Rehearsal Workflow
 
-Use a fresh, private OpenProject target and freeze Jira writes and permission changes for the final snapshot. The default keeps comment bodies in Jira. The **J2O Origin URL** on each new work package leads readers back to Jira, where their own permissions apply. Keep Jira available read-only for these comments. The content migration reports how many comments visible to the migration account were retained at source in `comments_held`. An incomplete source read is an error.
+Use a fresh, private OpenProject target and freeze Jira writes and permission changes for the final snapshot. The default keeps comment bodies in Jira. The **J2O Origin URL** on each new work package leads readers back to Jira, where their own permissions apply. For a Jira shutdown, run the [protected comment archive](docs/protected-comments.md) on the frozen project. It stores independently encrypted reader views on OpenProject work packages. Without the archive the source must remain available for these comments. The content migration reports how many comments visible to the migration account were retained at source in `comments_held`. An incomplete source read is an error.
 
 For an internet-public Jira, set `J2O_COPY_PUBLIC_COMMENTS=1` to copy comments that Jira also returns over HTTPS to a credential-free request identified as anonymous. Each copied ID and text must match both reads. Use the default if a VPN, network allowlist or authenticating proxy limits Jira access. Group, role, internal Service Management and unknown comment restrictions stay at source. Project membership alone does not establish equivalent access.
 
@@ -143,7 +143,7 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 
 ### Optional Tooling
 
-- **Web dashboard** (`src/dashboard`): FastAPI + Vue UI for monitoring migration progress. Requires Redis; skip if a CLI progress log is sufficient.
+- **Web dashboard** (`src/dashboard`): FastAPI + Vue UI for monitoring migration progress. Uses the Compose Valkey cache through the Redis-compatible client.
 - **Automated testing suite** (`src/utils/automated_testing_suite.py`): scaffolding for generating test stubs. Experimental—enable only if you plan to grow automated regression coverage.
 - **Integration testing framework** (`src/utils/integration_testing_framework.py`): utilities for mock/real environment setup. Use when rehearsals need scripted data generation.
 - **Comprehensive logging** (`src/utils/comprehensive_logging.py`): structured JSON logging, metrics collection, and health checks. Optional enhancement over the standard logging already in place.
@@ -425,4 +425,8 @@ For architecture changes, see [System Architecture](docs/ARCHITECTURE.md) for de
 
 ### Upgrading the local Compose database
 
-The migration tool's Compose database now uses PostgreSQL 18.7. An existing PostgreSQL 17 data volume requires a major-version upgrade before starting the new database service. Keep the old database and a verified logical backup, restore it into a fresh 18 cluster and compare the restored databases, roles and application tables before switching. The explicit `PGDATA` keeps the old mount visible so startup fails on incompatible data. The Compose database is separate from OpenProject. Preserve the migration tool’s SQLite checkpoints and mappings in the mounted `var/` directory independently.
+The migration tool's Compose database uses the PostgreSQL 18 Alpine image. An existing PostgreSQL 17 data volume requires a major-version upgrade before starting the new database service. Keep the old database and a verified logical backup, restore it into a fresh 18 cluster and compare the restored databases, roles and application tables before switching. The explicit `PGDATA` keeps the old mount visible so startup fails on incompatible data. The Compose database is separate from OpenProject. Preserve the migration tool’s SQLite checkpoints and mappings in the mounted `var/` directory independently.
+
+Compose follows the Valkey 9, PostgreSQL 18 and Prism 5 image tags. Both Dockerfiles follow Python 3 and Dockerfile syntax 1. The uv binary comes from its upstream rolling image because the registry has no major-only uv tag. Use `docker compose pull` and `docker compose build --pull` to refresh locally cached images. The migration's Python dependencies remain locked in `uv.lock`.
+
+Valkey uses a new `valkey_data` volume. For an existing stack, finish the active migration or stop at a verified checkpoint before switching. Stop and remove the old Redis service container using the previous Compose file, and retain its `redis_data` volume. A fresh run starts with an empty cache. To resume with cached idempotency results, transfer the application's Redis string keys with their remaining lifetimes and check the results before resuming. Keep the application's `var/` checkpoints as well. The new service accepts the existing `redis` network alias and both clients honor `REDIS_URL`.

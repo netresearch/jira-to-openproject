@@ -206,13 +206,14 @@ class TestIdempotencyKeyManager:
         """Test caching result to Redis."""
         test_data = {"test": "data"}
 
-        with patch.object(self.manager._redis_client, "setex") as mock_setex:
-            mock_setex.return_value = True
+        with patch.object(self.manager._redis_client, "set") as mock_set:
+            mock_set.return_value = True
 
             result = self.manager.cache_result("test-key", test_data)
 
             assert result
-            mock_setex.assert_called_once()
+            mock_set.assert_called_once()
+            assert mock_set.call_args.kwargs == {"ex": self.manager.default_ttl}
 
     def test_cache_result_redis_error_fallback_success(self) -> None:
         """Test fallback cache when Redis fails."""
@@ -221,7 +222,7 @@ class TestIdempotencyKeyManager:
         # Simulate Redis errors on both the write and read paths, so the manager
         # must fall through to the in-memory cache.
         with (
-            patch.object(self.manager._redis_client, "setex", side_effect=RedisError("boom")),
+            patch.object(self.manager._redis_client, "set", side_effect=RedisError("boom")),
             patch.object(self.manager._redis_client, "get", side_effect=RedisError("boom")),
         ):
             assert self.manager.cache_result("test-key", test_data) is True
@@ -238,7 +239,7 @@ class TestIdempotencyKeyManager:
         # Seed fakeredis directly so the fast-path GET in atomic_get_or_set
         # finds the key and returns it without invoking the factory.
         cache_key = f"{self.manager.key_prefix}existing-key"
-        self.manager._redis_client.setex(cache_key, 3600, json.dumps(existing_data))
+        self.manager._redis_client.set(cache_key, json.dumps(existing_data), ex=3600)
 
         result = self.manager.atomic_get_or_set("existing-key", lambda: {"new": "data"})
 
@@ -410,3 +411,21 @@ class TestIdempotencyKeyManager:
         retrieved = self.manager.get_cached_result("large-payload")
         assert retrieved.found
         assert len(retrieved.value["items"]) == 10000
+
+
+@pytest.mark.parametrize(
+    ("configured", "explicit", "expected"),
+    [
+        (None, None, "redis://redis:6379"),
+        ("redis://valkey:6379", None, "redis://valkey:6379"),
+        ("redis://valkey:6379", "redis://other:6379/1", "redis://other:6379/1"),
+    ],
+)
+def test_idempotency_cache_url_precedence(monkeypatch, configured, explicit, expected):
+    if configured is None:
+        monkeypatch.delenv("REDIS_URL", raising=False)
+    else:
+        monkeypatch.setenv("REDIS_URL", configured)
+    with patch("redis.Redis.from_url") as connect:
+        IdempotencyKeyManager(redis_url=explicit)
+    assert connect.call_args.args == (expected,)

@@ -206,7 +206,8 @@ def test_run_reports_unread_comments_and_individual_field_failures(tmp_path, _mo
             {"id": 5001, "customField92": {"value": "unknown"}},
         ]
     )
-    assert not result.success and result.failed == 2
+    assert not result.success
+    assert result.failed == 2
     assert result.details["comment_reads_failed"] == result.details["custom_fields_failed"] == 1
     assert result.details["custom_fields_updated"] == 1
 

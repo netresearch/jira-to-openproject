@@ -29,6 +29,10 @@ from src.infrastructure.jira.jira_client import JiraApiError, JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
 
+_REFRESHED_MAPPING_MESSAGE = "Successfully refreshed mapping for %s"
+_ENHANCED_USER_MAPPINGS_FILE = "enhanced_user_mappings.json"
+
+
 # =============================================================================
 # CONFIGURATION CONSTANTS - CENTRALIZED FOR MAINTAINABILITY
 # =============================================================================
@@ -543,7 +547,7 @@ class EnhancedUserAssociationMigrator:
                 with user_mapping_file.open() as f:
                     return json.load(f)
             return {}
-        except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
+        except (OSError, ValueError, TypeError) as e:
             self.logger.warning(
                 "Failed to load user mapping due to file/JSON error: %s",
                 e,
@@ -571,9 +575,9 @@ class EnhancedUserAssociationMigrator:
             if not isinstance(data_path, (str, Path)):
                 data_path = Path("data")
             if isinstance(data_path, str):
-                enhanced_mapping_file = Path(data_path) / "enhanced_user_mappings.json"
+                enhanced_mapping_file = Path(data_path) / _ENHANCED_USER_MAPPINGS_FILE
             else:
-                enhanced_mapping_file = data_path / "enhanced_user_mappings.json"
+                enhanced_mapping_file = data_path / _ENHANCED_USER_MAPPINGS_FILE
             if enhanced_mapping_file.exists():
                 with enhanced_mapping_file.open() as f:
                     raw = f.read()
@@ -617,7 +621,7 @@ class EnhancedUserAssociationMigrator:
             else:
                 # Create enhanced mappings from basic user mapping
                 self._create_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
+        except (OSError, ValueError, KeyError, TypeError) as e:
             self.logger.warning(
                 "Failed to load enhanced user mappings due to file/data error: %s",
                 e,
@@ -751,16 +755,9 @@ class EnhancedUserAssociationMigrator:
         try:
             # Tests patch get_user directly; use it here for compatibility
             return self.op_client.get_user(user_id)
-        except (requests.RequestException, ValueError, KeyError, AttributeError, Exception) as e:
+        except Exception as e:
             self.logger.debug(
                 "Failed to get OpenProject user info for %s due to API/data error: %s",
-                user_id,
-                e,
-            )
-            return None
-        except requests.ConnectionError as e:
-            self.logger.debug(
-                "Connection error getting OpenProject user info for %s: %s",
                 user_id,
                 e,
             )
@@ -796,13 +793,11 @@ class EnhancedUserAssociationMigrator:
                     fallback_users["migration"] = user["id"]
                     break
 
-        except (requests.RequestException, ValueError, KeyError, AttributeError, Exception) as e:
+        except Exception as e:
             self.logger.warning(
                 "Failed to identify fallback users due to API/data error: %s",
                 e,
             )
-        except requests.ConnectionError as e:
-            self.logger.warning("Connection error identifying fallback users: %s", e)
 
         return fallback_users
 
@@ -1444,11 +1439,11 @@ class EnhancedUserAssociationMigrator:
 
                 if isinstance(success, dict):
                     # If refresh returned the full mapping dict, log success, record metrics, and return it
-                    self.logger.debug("Successfully refreshed mapping for %s", username)
+                    self.logger.debug(_REFRESHED_MAPPING_MESSAGE, username)
                     return success
                 if success:
                     # MONITORING: Refresh success logging and metrics
-                    self.logger.debug("Successfully refreshed mapping for %s", username)
+                    self.logger.debug(_REFRESHED_MAPPING_MESSAGE, username)
 
                     # MONITORING: Refresh success metrics (YOLO FIX: defensive metrics)
                     # Ensure mapping is returned for success path per end-to-end expectations
@@ -2101,7 +2096,7 @@ class EnhancedUserAssociationMigrator:
 
             # MONITORING: Refresh success logging
             self.logger.debug("Successfully completed refresh for %s", username)
-            self.logger.info("Successfully refreshed mapping for %s", username)
+            self.logger.info(_REFRESHED_MAPPING_MESSAGE, username)
 
             # Return type depends on path semantics and test expectations
             if used_retry_path:
@@ -2140,7 +2135,7 @@ class EnhancedUserAssociationMigrator:
 
             try:
                 self._save_enhanced_mappings()
-            except (OSError, json.JSONDecodeError, ValueError) as e:
+            except (OSError, ValueError) as e:
                 self.logger.exception(
                     "Failed to save error mapping for %s: %s",
                     username,
@@ -2280,7 +2275,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except OSError, json.JSONDecodeError, ValueError:
+        except OSError, ValueError:
             self.logger.exception(
                 "Failed to save after skip fallback for %s",
                 username,
@@ -2353,7 +2348,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except OSError, json.JSONDecodeError, ValueError:
+        except OSError, ValueError:
             self.logger.exception(
                 "Failed to save after assign_admin fallback for %s",
                 username,
@@ -2416,7 +2411,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except OSError, json.JSONDecodeError, ValueError:
+        except OSError, ValueError:
             self.logger.exception(
                 "Failed to save after create_placeholder fallback for %s",
                 username,
@@ -2787,9 +2782,9 @@ class EnhancedUserAssociationMigrator:
             # YOLO FIX: Handle both Path objects and strings from config
             data_path = config.get_path("data")
             if isinstance(data_path, str):
-                enhanced_mapping_file = Path(data_path) / "enhanced_user_mappings.json"
+                enhanced_mapping_file = Path(data_path) / _ENHANCED_USER_MAPPINGS_FILE
             else:
-                enhanced_mapping_file = data_path / "enhanced_user_mappings.json"
+                enhanced_mapping_file = data_path / _ENHANCED_USER_MAPPINGS_FILE
 
             # YOLO FIX: Convert to serializable format, handling Mock objects
             serializable_mappings = self._make_json_serializable(
@@ -2803,7 +2798,7 @@ class EnhancedUserAssociationMigrator:
                 "Saved enhanced user mappings to %s",
                 enhanced_mapping_file,
             )
-        except (OSError, json.JSONDecodeError, ValueError) as e:
+        except (OSError, ValueError) as e:
             self.logger.exception(
                 "Failed to save enhanced user mappings due to file/JSON error: %s",
                 e,
@@ -2868,7 +2863,7 @@ class EnhancedUserAssociationMigrator:
                 self.fallback_strategy,
             )
 
-        except (OSError, json.JSONDecodeError, ValueError, KeyError) as e:
+        except (OSError, ValueError, KeyError) as e:
             self.logger.warning(
                 "Failed to load staleness configuration due to file/data error: %s",
                 e,

@@ -25,6 +25,9 @@ from src.type_definitions import (
     SectionName,
 )
 
+_LOCAL_ENV_FILE = ".env.local"
+
+
 # Set up basic logging for configuration loading phase
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 config_logger = logging.getLogger("config_loader")
@@ -101,8 +104,8 @@ class ConfigLoader:
 
             # In test mode, load both .env.local and .env.test
             # with test having higher precedence
-            if Path(".env.local").exists():
-                load_dotenv(".env.local", override=True)
+            if Path(_LOCAL_ENV_FILE).exists():
+                load_dotenv(_LOCAL_ENV_FILE, override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
             # Always load .env.test in test mode
@@ -118,8 +121,8 @@ class ConfigLoader:
             config_logger.debug("Running in development/production environment")
 
             # In non-test mode, only load .env.local if it exists
-            if Path(".env.local").exists():
-                load_dotenv(".env.local", override=True)
+            if Path(_LOCAL_ENV_FILE).exists():
+                load_dotenv(_LOCAL_ENV_FILE, override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
     def _load_yaml_config(self, config_file_path: Path) -> Config:
@@ -170,7 +173,7 @@ class ConfigLoader:
                         "POSTGRES_PASSWORD_FILE points outside standard secret directories",
                     )
                 postgres_password = secret_path.read_text().strip()
-            except (OSError, PermissionError, FileNotFoundError) as e:
+            except OSError as e:
                 # Log only exception class name, not the file path
                 config_logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
 
@@ -186,7 +189,7 @@ class ConfigLoader:
                     config_logger.debug(
                         "Successfully loaded PostgreSQL password from Docker secret",
                     )
-                except (OSError, PermissionError) as e:
+                except OSError as e:
                     config_logger.warning(
                         "Failed to read Docker secret: %s",
                         e.__class__.__name__,

@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
+
 if TYPE_CHECKING:
     from jira import Issue
 
@@ -66,7 +68,7 @@ class EnhancedJiraClient(JiraClient):
         if not issue_keys:
             return {}
         if not self.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise RuntimeError(msg)
 
         jql = f"key in ({','.join(issue_keys)})"
@@ -191,7 +193,7 @@ class EnhancedJiraClient(JiraClient):
     ) -> Iterator[Issue]:
         """Stream issues matching JQL without loading everything in memory."""
         if not self.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise RuntimeError(msg)
 
         pages = 0
@@ -252,21 +254,21 @@ class EnhancedJiraClient(JiraClient):
     def get_issue(self, issue_key: str) -> Any:
         """Return a Jira issue by key using the underlying client."""
         if not self.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise RuntimeError(msg)
         return self.jira.issue(issue_key)
 
     def create_issue(self, **fields: object) -> Any:
         """Create a Jira issue via the underlying client."""
         if not self.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise RuntimeError(msg)
         return self.jira.create_issue(**fields)
 
     def search_issues(self, jql: str, **kwargs: object) -> list[Issue]:
         """Search for Jira issues using JQL via the underlying client."""
         if not self.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise RuntimeError(msg)
         return self.jira.search_issues(jql, **kwargs)
 

@@ -204,7 +204,7 @@ def _import_real_jira_module() -> Any:
 
         # Fallback: regular import (may still hit stub if unresolved)
         return importlib.import_module("jira")
-    except ImportError, ModuleNotFoundError, AttributeError, OSError:
+    except ImportError, AttributeError, OSError:
         # ImportError / ModuleNotFoundError: jira package missing or corrupt.
         # AttributeError: site module missing expected accessors.
         # OSError: filesystem error walking site-packages.

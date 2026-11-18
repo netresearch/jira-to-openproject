@@ -70,3 +70,25 @@ async def test_dashboard_api() -> None:
         assert client.get("/").status_code == 200
         assert client.get("/api/migration/status").status_code == 200
         assert client.get("/api/metrics").status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [None, "redis://custom-cache.invalid:6390/1"])
+async def test_dashboard_lifespan_uses_configured_cache(monkeypatch, url):
+    from importlib import import_module
+    from unittest.mock import AsyncMock, Mock
+
+    module = import_module("src.dashboard.app")
+    if url is None:
+        monkeypatch.delenv("REDIS_URL", raising=False)
+    else:
+        monkeypatch.setenv("REDIS_URL", url)
+    cache = AsyncMock()
+    connect = Mock(return_value=cache)
+    monkeypatch.setattr(module.redis.Redis, "from_url", connect)
+    monkeypatch.setattr(module, "collect_system_metrics", AsyncMock())
+    monkeypatch.setattr(module, "update_migration_progress", AsyncMock())
+    async with module.lifespan(module.app):
+        connect.assert_called_once_with(url or "redis://localhost:6379", decode_responses=True)
+        cache.ping.assert_awaited_once_with()
+    cache.aclose.assert_awaited_once_with()

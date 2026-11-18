@@ -59,6 +59,9 @@ from src import config
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
+_JSON_SUFFIX = ".json"
+
+
 # Default script-load mode for bulk-create scripts. ``console`` ships the
 # generated script as a file and ``load``s it inside the persistent tmux
 # Rails console — avoiding the ~5-10s cold-start of ``bundle exec rails
@@ -180,12 +183,12 @@ class OpenProjectBulkCreateService:
             base = re.sub(r"[^A-Za-z0-9._-]", "_", Path(str(result_basename)).name)
             if not base:
                 base = "bulk_result"
-            if not base.endswith(".json"):
+            if not base.endswith(_JSON_SUFFIX):
                 base = f"{base}.json"
             unique_suffix = f"_{int(time.time())}_{os.getpid()}_{os.urandom(2).hex()}"
             # Insert suffix before .json
-            if base.lower().endswith(".json"):
-                result_name = base[:-5] + unique_suffix + ".json"
+            if base.lower().endswith(_JSON_SUFFIX):
+                result_name = base[:-5] + unique_suffix + _JSON_SUFFIX
             else:
                 result_name = base + unique_suffix
         else:
@@ -717,7 +720,7 @@ class OpenProjectBulkCreateService:
         # finally-block cleanup still works if dump raises (e.g. on
         # non-JSON-serialisable data) — otherwise ``unlink`` would
         # raise ``UnboundLocalError`` and mask the original error.
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=_JSON_SUFFIX, delete=False) as f:
             local_json_path = f.name
             json.dump(work_packages, f)
 

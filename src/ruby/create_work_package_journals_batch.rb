@@ -12,6 +12,7 @@
 # Output: JSON with results per WP
 # {"results": [{"wp_id": X, "jira_key": "Y", "created": N, "error": null}, ...]}
 
+journal_timestamp_format = '%Y-%m-%d %H:%M:%S.%6N%:z'
 require 'json'
 
 results = []
@@ -39,7 +40,7 @@ if input_data && input_data.respond_to?(:each)
   ].freeze
 
   # Lambda: Apply field_changes to state hash
-  apply_field_changes_to_state = lambda do |current_state, field_changes, priority_cache, rec|
+  apply_field_changes_to_state = lambda do |current_state, field_changes, priority_cache, _rec|
     return current_state unless field_changes && field_changes.is_a?(Hash)
     field_changes.each do |k, v|
       field_sym = k.to_sym
@@ -85,7 +86,7 @@ if input_data && input_data.respond_to?(:each)
     cache[value.to_s.downcase] || fallback
   end
 
-  input_data.each_with_index do |wp_data, batch_idx|
+  input_data.each_with_index do |wp_data, _batch_idx|
     wp_id = wp_data['wp_id'] || wp_data[:wp_id]
     jira_key = wp_data['jira_key'] || wp_data[:jira_key]
     rails_ops = wp_data['rails_ops'] || wp_data[:rails_ops]
@@ -111,7 +112,7 @@ if input_data && input_data.respond_to?(:each)
       v2_plus_count = v2_plus_journals.count
 
       if v2_plus_count > 0
-        v2_plus_ids = v2_plus_journals.pluck(:id)
+        v2_plus_ids = v2_plus_journals.ids
         if v2_plus_ids.any?
           Journal::CustomizableJournal.where(journal_id: v2_plus_ids).delete_all
           data_ids = v2_plus_journals.pluck(:data_id).compact
@@ -209,10 +210,10 @@ if input_data && input_data.respond_to?(:each)
             v1_journal.save(validate: false)
 
             # Update timestamps via raw SQL
-            target_time_str = target_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+            target_time_str = target_time.strftime(journal_timestamp_format)
             if validity_period.end
               period_end_time = validity_period.end.is_a?(Time) ? validity_period.end : Time.parse(validity_period.end.to_s)
-              period_end_str = period_end_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+              period_end_str = period_end_time.strftime(journal_timestamp_format)
               range_sql = "tstzrange('#{target_time_str}', '#{period_end_str}', '[)')"
             else
               range_sql = "tstzrange('#{target_time_str}', NULL, '[)')"
@@ -284,12 +285,12 @@ if input_data && input_data.respond_to?(:each)
           wp_journal_id = wp_journal_ids[idx]
           next nil unless wp_journal_id
 
-          ts_str = j[:created_at].strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+          ts_str = j[:created_at].strftime(journal_timestamp_format)
           notes_escaped = conn.quote(j[:notes].to_s)
 
           if j[:validity_period].end
             period_end = j[:validity_period].end.is_a?(Time) ? j[:validity_period].end : Time.parse(j[:validity_period].end.to_s)
-            period_end_str = period_end.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+            period_end_str = period_end.strftime(journal_timestamp_format)
             range_sql = "tstzrange('#{ts_str}', '#{period_end_str}', '[)')"
           else
             range_sql = "tstzrange('#{ts_str}', NULL, '[)')"

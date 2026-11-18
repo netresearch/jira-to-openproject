@@ -506,7 +506,8 @@ def test_load_logs_sample_when_rails_returns_per_op_errors(
     with caplog.at_level(logging.WARNING, logger="migration"):
         mig._load(mp)
     joined = " ".join(rec.getMessage() for rec in caplog.records)
-    assert "boom-1" in joined and "boom-2" in joined, joined
+    assert "boom-1" in joined, joined
+    assert "boom-2" in joined, joined
     assert mig._loss_counters["load_rails_per_op_error"] == 2
 
 
@@ -792,7 +793,8 @@ def test_prepare_op_uses_attachment_id_to_disambiguate_local_path(tmp_path: Path
 
     op_a = mig._prepare_op_from_item(item=item_a, jira_key="K-1", work_package_id=1)
     op_b = mig._prepare_op_from_item(item=item_b, jira_key="K-2", work_package_id=2)
-    assert op_a is not None and op_b is not None
+    assert op_a is not None
+    assert op_b is not None
     assert op_a["local_path"] != op_b["local_path"], (op_a["local_path"], op_b["local_path"])
     # The user-visible filename stays the original — only the local
     # path differs. The Rails attach script writes the filename

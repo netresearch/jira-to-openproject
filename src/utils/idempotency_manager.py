@@ -19,6 +19,7 @@ Features:
 
 import json
 import logging
+import os
 import threading
 import uuid
 from dataclasses import dataclass
@@ -134,14 +135,14 @@ class IdempotencyKeyManager:
         return {1, existing}
     else
         -- Key doesn't exist, set it with TTL
-        redis.call('SETEX', key, ttl, value)
+        redis.call('SET', key, value, 'EX', ttl)
         return {0, value}
     end
     """
 
     def __init__(
         self,
-        redis_url: str = "redis://redis:6379",
+        redis_url: str | None = None,
         fallback_cache_size: int = 1000,
         default_ttl: int = DEFAULT_TTL,
         key_prefix: str = "idempotency:",
@@ -151,7 +152,7 @@ class IdempotencyKeyManager:
         redis_ssl_cert_reqs: str = "required",
     ) -> None:
         """Initialize the IdempotencyKeyManager."""
-        self.redis_url = redis_url
+        self.redis_url = redis_url if redis_url is not None else os.environ.get("REDIS_URL", "redis://redis:6379")
         self.default_ttl = default_ttl
         self.key_prefix = key_prefix
         self.redis_ssl = redis_ssl
@@ -345,7 +346,7 @@ class IdempotencyKeyManager:
         # Try Redis first, fallback to memory only if Redis fails
         if self._redis_available and self._redis_client:
             try:
-                self._redis_client.setex(cache_key, ttl, serialized_result)
+                self._redis_client.set(cache_key, serialized_result, ex=ttl)
                 logger.debug("Cached result in Redis for key: %s", idempotency_key)
 
                 with self._lock:
@@ -424,7 +425,7 @@ class IdempotencyKeyManager:
             try:
                 if self._redis_available and self._redis_client:
                     serialized_result = safe_json_dumps(result)
-                    self._redis_client.setex(cache_key, ttl, serialized_result)
+                    self._redis_client.set(cache_key, serialized_result, ex=ttl)
                     self._metrics["keys_cached"] += 1
                     return IdempotencyResult(found=False, value=result, source="redis")
             except RedisError as e:

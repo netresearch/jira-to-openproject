@@ -86,6 +86,9 @@ from src.models import ComponentResult, MigrationResult
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
 
+_BACKUP_METADATA_FILE = "backup_metadata.json"
+
+
 console = Console()
 
 # DEFAULT_COMPONENT_SEQUENCE and PREDEFINED_PROFILES live in
@@ -587,7 +590,7 @@ def create_backup(backup_dir: BackupDir | None = None) -> BackupDir:
         "files_backed_up": [file.name for file in backup_files],
     }
 
-    with (backup_dir / "backup_metadata.json").open("w") as f:
+    with (backup_dir / _BACKUP_METADATA_FILE).open("w") as f:
         json.dump(metadata, f, indent=2)
 
     return backup_dir
@@ -616,7 +619,7 @@ def restore_backup(backup_dir: Path) -> bool:
     config.logger.info("Restoring from backup: %s", backup_dir)
 
     # Check for metadata file to verify it's a valid backup
-    metadata_path = backup_dir / "backup_metadata.json"
+    metadata_path = backup_dir / _BACKUP_METADATA_FILE
     if metadata_path.exists():
         try:
             with metadata_path.open("r") as f:
@@ -631,7 +634,7 @@ def restore_backup(backup_dir: Path) -> bool:
     restored_count = 0
     for file_path in backup_dir.iterdir():
         # Skip metadata file
-        if file_path.name == "backup_metadata.json":
+        if file_path.name == _BACKUP_METADATA_FILE:
             continue
 
         if file_path.is_file():

@@ -225,7 +225,7 @@ class EnhancedTimestampMigrator:
         try:
             ZoneInfo(timezone_id)
             return timezone_id
-        except (ValueError, FileNotFoundError, OSError) as e:
+        except (ValueError, OSError) as e:
             self.logger.warning(
                 "Invalid timezone ID '%s': %s, falling back to UTC",
                 timezone_id,

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -31,6 +32,10 @@ from src.config import bootstrap
 from src.config import logger as _migration_logger
 from src.display import ExtendedLogger
 
+_INTERNAL_SERVER_ERROR = "Internal server error"
+_NO_ACTIVE_MIGRATION = "No migration is running"
+
+
 # No migration component imports needed for dashboard
 
 # Phase 6a (ADR-002): the dashboard logger is the same lazy ``migration``
@@ -51,16 +56,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     bootstrap()
 
     try:
-        redis_client = redis.Redis(
-            host="localhost",
-            port=6379,
-            db=0,
+        redis_client = redis.Redis.from_url(
+            os.environ.get("REDIS_URL", "redis://localhost:6379"),
             decode_responses=True,
         )
         await redis_client.ping()
-        logger.info("Connected to Redis")
+        logger.info("Connected to the dashboard cache")
     except Exception:
-        logger.warning("Could not connect to Redis")
+        logger.warning("Could not connect to the dashboard cache")
         redis_client = None
 
     t_metrics: asyncio.Task[object] = asyncio.create_task(collect_system_metrics())
@@ -77,7 +80,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         if redis_client:
-            await redis_client.close()
+            await redis_client.aclose()
         logger.info("Dashboard shutdown complete")
 
 
@@ -312,10 +315,10 @@ async def collect_system_metrics() -> None:
                     "cpu_usage_percent": cpu_percent,
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
-                await redis_client.setex(
+                await redis_client.set(
                     "system_metrics",
-                    60,
-                    json.dumps(metrics_data),  # 1 minute TTL
+                    json.dumps(metrics_data),
+                    ex=60,
                 )
 
             await asyncio.sleep(5)  # Update every 5 seconds
@@ -561,7 +564,7 @@ async def get_progress(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting progress")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.get("/api/metrics")
@@ -602,7 +605,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting metrics")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.get("/api/metrics/csv")
@@ -632,7 +635,7 @@ async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error generating CSV")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.get("/api/migration/status")
@@ -653,7 +656,7 @@ async def get_migration_status() -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting migration status")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/start")
@@ -678,7 +681,7 @@ async def start_migration(
 
     except Exception as e:
         logger.exception("Error starting migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/stop")
@@ -686,7 +689,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Stop current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
         # Stop migration in background
         background_tasks.add_task(stop_migration_background)
@@ -695,7 +698,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error stopping migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/pause")
@@ -703,7 +706,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Pause current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
         if migration_state["pause_time"]:
             raise HTTPException(status_code=400, detail="Migration is already paused")
@@ -715,7 +718,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error pausing migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/resume")
@@ -723,7 +726,7 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Resume paused migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
         if not migration_state["pause_time"]:
             raise HTTPException(status_code=400, detail="Migration is not paused")
@@ -735,7 +738,7 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error resuming migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.websocket("/ws/dashboard")
