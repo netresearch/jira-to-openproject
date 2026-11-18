@@ -25,7 +25,10 @@ COPY scripts/locked_pyyaml_requirement.py /tmp/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv --python /usr/local/bin/python /opt/venv \
     && python /tmp/locked_pyyaml_requirement.py > /tmp/j2o-pyyaml.txt \
-    && uv pip install --python /opt/venv/bin/python --require-hashes --no-deps -r /tmp/j2o-pyyaml.txt
+    && UV_PROJECT_ENVIRONMENT=/tmp/j2o-builder uv sync --frozen --only-group image-build --no-build \
+    && python -m pip --python /tmp/j2o-builder/bin/python wheel --no-build-isolation --require-hashes \
+        --no-deps -r /tmp/j2o-pyyaml.txt --wheel-dir /tmp/j2o-pyyaml \
+    && uv pip install --python /opt/venv/bin/python --no-build --no-deps /tmp/j2o-pyyaml/*.whl
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --inexact --no-build --no-install-package pyyaml --no-install-project
@@ -33,7 +36,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Now copy sources and install the project itself
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv build --wheel --out-dir /tmp/j2o-dist . \
+    uv build --python /tmp/j2o-builder/bin/python --no-build-isolation --wheel --out-dir /tmp/j2o-dist . \
     && uv pip install --python /opt/venv/bin/python --no-build --no-deps /tmp/j2o-dist/*.whl
 
 # ===== Stage 2: runtime =====
