@@ -165,3 +165,17 @@ def test_refresh_failure_retains_preexisting_project_version_ids():
     assert result.created_types == 1
     migration.op_client.bulk_create_records.assert_called_once_with("Version", [{"name": "Two", "project_id": 4}])
     migration.mappings.set_mapping.assert_called_once_with("version", {"4": {"One": 11}})
+
+
+def test_fix_versions_require_every_reference_to_resolve():
+    migration = VersionsMigration(jira_client=DummyJira(), op_client=DummyOp())
+    issues = {"PRJ-1": {"fields": {"fixVersions": [{"name": "v1"}, {"name": "v2"}]}}}
+    projects = {"PRJ": {"openproject_id": 11}}
+    versions = {"11": {"v1": 101, "v2": 102}}
+    assert migration._version_assignment("PRJ-1", 123, issues, projects, versions) == {
+        "id": 123,
+        "target_version_ids": [101, 102],
+    }
+    del versions["11"]["v2"]
+    with pytest.raises(KeyError):
+        migration._version_assignment("PRJ-1", 123, issues, projects, versions)
