@@ -555,7 +555,7 @@ class OpenProjectRailsRunnerService:
             return
         try:
             output = self._client.rails_client.execute(
-                f"load '{escape_ruby_single_quoted(script)}'", timeout=timeout, suppress_output=True
+                f"load '{escape_ruby_single_quoted(script)}'", timeout=timeout
             )
             self.check_console_output_for_errors(output or "", context="structured Rails script")
         except ConsoleNotReadyError:

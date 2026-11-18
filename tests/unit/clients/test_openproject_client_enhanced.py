@@ -427,7 +427,7 @@ class TestResourceLeakPrevention:
         )
 
         # Act: Cleanup should not raise exception
-        op_client._cleanup_script_files(["test_script.rb"])
+        op_client._cleanup_script_files(None, Path("/private/test_script.rb"))
 
         # Assert: Should attempt cleanup despite failures
         mock_clients["ssh_client"].execute_command.assert_called()
@@ -449,7 +449,7 @@ class TestResourceLeakPrevention:
         # Act: Multiple operations with failed cleanup
         for i in range(10):
             try:
-                op_client._cleanup_script_files([f"script_{i}.rb"])
+                op_client._cleanup_script_files(None, Path("/private") / f"script_{i}.rb")
             except Exception:
                 pass  # Cleanup failures are suppressed
 
