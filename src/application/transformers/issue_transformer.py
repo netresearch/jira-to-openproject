@@ -34,6 +34,7 @@ The transformer remains independently testable: tests can construct an
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -302,7 +303,7 @@ class IssueTransformer:
         ]  # Keep under 8KB URL limit (200 keys × ~10 chars = ~2KB)
         if not limited:
             return None
-        return f"key NOT IN ({','.join(limited)})"
+        return f"key NOT IN ({','.join(json.dumps(key) for key in limited)})"
 
     # ------------------------------------------------------------------ #
     # Start date resolution
