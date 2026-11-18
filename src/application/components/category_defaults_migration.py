@@ -113,18 +113,9 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
                 continue
             project_id = int(proj_entry["openproject_id"])  # type: ignore[arg-type]
 
-            for comp in comps:
-                try:
-                    ok = self._assign_component_lead(project_id, comp)
-                    if ok is None:
-                        continue
-                    if ok:
-                        updated += 1
-                    else:
-                        failed += 1
-                except Exception:
-                    logger.exception("Failed to set category default for %s/%s", jira_key, comp.name)
-                    failed += 1
+            assigned, errors = self._apply_project_defaults(jira_key, project_id, comps)
+            updated += assigned
+            failed += errors
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
@@ -146,3 +137,22 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
     def run(self) -> ComponentResult:
         """Run Category defaults migration."""
         return self._run_etl_pipeline("Category defaults")
+
+    def _apply_project_defaults(
+        self, jira_key: str, project_id: int, comps: list[JiraProjectComponent]
+    ) -> tuple[int, int]:
+        updated = failed = 0
+        for comp in comps:
+            try:
+                ok = self._assign_component_lead(project_id, comp)
+                if ok is None:
+                    continue
+                if ok:
+                    updated += 1
+                else:
+                    failed += 1
+            except Exception:
+                logger.exception("Failed to set category default for %s/%s", jira_key, comp.name)
+                failed += 1
+
+        return updated, failed
