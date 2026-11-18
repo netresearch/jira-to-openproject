@@ -290,7 +290,11 @@ class TestDockerClient(unittest.TestCase):
     def test_copy_file_from_container_success(self) -> None:
         """Test copying a file from the container."""
         # Setup mock for ssh_client execute_command and check_remote_file_exists
-        self.mock_ssh_client.execute_command.return_value = ("", "", 0)
+        self.mock_ssh_client.execute_command.side_effect = [
+            ("/private/j2o-transfer.1234567890", "", 0),
+            ("", "", 0),
+            ("", "", 0),
+        ]
         self.mock_ssh_client.check_remote_file_exists.return_value = True
         self.mock_ssh_client.get_remote_file_size.return_value = 1024
         local_test_path = Path(self.temp_dir) / "local_file.txt"
