@@ -1,3 +1,12 @@
+{% macro comparison_table(rows, heading) -%}
+    <table class="comparison">
+        <caption>{{ heading }}</caption>
+        <thead><tr><th scope="col">Data type</th><th scope="col">Jira <small>Source</small></th><th scope="col">OpenProject <small>Target</small></th></tr></thead>
+        <tbody>{% for name, pair in rows.items() %}
+            <tr><th scope="row">{{ name }}</th>{% for value in (pair.source, pair.target) %}{% if value is none %}<td class="unmeasured">Not checked</td>{% else %}<td>{{ value }}</td>{% endif %}{% endfor %}</tr>
+        {% endfor %}</tbody>
+    </table>
+{%- endmacro %}
 {% macro fact_list(pairs) -%}
 <dl class="counts">
     {% for name, value in pairs %}<div><dt>{{ name }}</dt><dd>{{ value }}</dd></div>{% endfor %}
@@ -9,15 +18,10 @@
     <p>{{ notice }}</p>
     {% else %}
     {{ fact_list(facts) }}
-    {% if comparison_counts %}
-    <table class="comparison">
-        <caption>Source and target</caption>
-        <thead><tr><th scope="col">Data type</th><th scope="col">Jira <small>Source</small></th><th scope="col">OpenProject <small>Target</small></th></tr></thead>
-        <tbody>{% for name, pair in comparison_counts.items() %}
-            <tr><th scope="row">{{ name }}</th>{% for value in (pair.source, pair.target) %}{% if value is none %}<td class="unmeasured">Not checked</td>{% else %}<td>{{ value }}</td>{% endif %}{% endfor %}</tr>
-        {% endfor %}</tbody>
-    </table>
-    {% endif %}
+    {% if comparison_counts %}{{ comparison_table(comparison_counts, "Source and target") }}{% endif %}
+    {% for project, rows in (project_comparisons or {}).items() %}
+    <details><summary>{{ project }}</summary>{{ comparison_table(rows, project) }}</details>
+    {% endfor %}
     {% if counts %}
     <h2>Reported counts</h2>
     {{ fact_list(counts) }}

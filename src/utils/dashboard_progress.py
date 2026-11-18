@@ -47,6 +47,7 @@ class MigrationProgress(BaseModel):
     finished_at: AwareDatetime | None = None
     current_component: Label | None = None
     phases: list[ProgressPhase] = Field(default_factory=list)
+    project_comparisons: dict[Label, dict[Label, ComparisonCount]] = Field(default_factory=dict)
     comparison_counts: dict[Label, ComparisonCount] = Field(default_factory=dict)
     verified_counts: dict[Label, Count] = Field(default_factory=dict)
     pending_checks: list[Label] = Field(default_factory=list)

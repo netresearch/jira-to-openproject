@@ -83,3 +83,6 @@ button:disabled { cursor: default; color: #65706d; border-color: var(--line); }
 .comparison small { display: block; font-size: .75rem; font-weight: 450; }
 .comparison td { font-variant-numeric: tabular-nums; font-weight: 650; }
 .comparison .unmeasured { font-weight: 450; font-size: .85rem; color: var(--muted); }
+
+#scope-control { color: var(--muted); font-size: .9rem; }
+#comparison-scope { font: inherit; color: var(--ink); padding: .3rem; max-width: 100%; }
