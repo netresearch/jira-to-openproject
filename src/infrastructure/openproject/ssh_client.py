@@ -174,13 +174,23 @@ class SSHClient:
         opts = [
             "-o",
             f"ConnectTimeout={self.connect_timeout}",
-            "-o",
-            "ControlMaster=auto",
-            "-o",
-            f"ControlPath={self.SSH_CONTROL_PATH}",
-            "-o",
-            f"ControlPersist={self.SSH_CONTROL_PERSIST_SECONDS}",
         ]
+        try:
+            (Path.home() / ".ssh").mkdir(mode=0o700, exist_ok=True)
+        except OSError:
+            # Read-only homes still support key and agent authentication.
+            opts.extend(["-o", "ControlMaster=no", "-o", "ControlPath=none"])
+        else:
+            opts.extend(
+                [
+                    "-o",
+                    "ControlMaster=auto",
+                    "-o",
+                    f"ControlPath={self.SSH_CONTROL_PATH}",
+                    "-o",
+                    f"ControlPersist={self.SSH_CONTROL_PERSIST_SECONDS}",
+                ]
+            )
 
         if self.key_file:
             opts.extend(["-i", self.key_file])

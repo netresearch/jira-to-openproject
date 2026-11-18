@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Round-trip through Docker with the SSH host represented by the local test machine."""
+"""Round-trip through Docker using --live-docker and J2O_TEST_OPENPROJECT_CONTAINER."""
 
 import os
 import shlex
@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
 def test_private_transfer_roundtrip(tmp_path):
     container = os.environ.get("J2O_TEST_OPENPROJECT_CONTAINER")
     if not container:
-        pytest.skip("Set J2O_TEST_OPENPROJECT_CONTAINER to a disposable container")
+        pytest.skip("Set J2O_TEST_OPENPROJECT_CONTAINER to a disposable container and enable --live-docker")
     host = Mock()
 
     def execute(command, **kwargs):
@@ -40,16 +40,19 @@ def test_private_transfer_roundtrip(tmp_path):
     host.copy_file_from_remote.side_effect = copy
     host.check_remote_file_exists.side_effect = lambda path: Path(path).is_file()
     client = DockerClient(container_name=container, ssh_client=host)
-    directory, _, status = client.execute_command("mktemp -d")
-    assert status == 0
-    target = Path(directory.strip()) / "sample"
     original = tmp_path / "source"
     original.write_bytes(bytes(range(256)))
+    directory, _, status = client.execute_command("mktemp -d")
+    assert status == 0
+    target = Path(directory.strip()) / original.name
     try:
-        client.transfer_file_to_container(original, target)
+        client.transfer_file_to_container(original, target.parent)
         downloaded = client.copy_file_from_container(target, tmp_path / "download")
         assert downloaded.read_bytes() == original.read_bytes()
         assert len(set(stages)) == 2
         assert all(not stage.exists() for stage in stages)
     finally:
-        client.execute_command(f"rm -f -- {shlex.quote(str(target))} && rmdir -- {shlex.quote(str(target.parent))}")
+        _, error, status = client.execute_command(
+            f"rm -f -- {shlex.quote(str(target))} && rmdir -- {shlex.quote(str(target.parent))}"
+        )
+        assert status == 0, error

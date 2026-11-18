@@ -229,14 +229,16 @@ class DockerClient:
             raise ValueError(msg) from e
 
     @contextmanager
-    def _remote_transfer_file(self) -> Iterator[Path]:
+    def _remote_transfer_file(self, filename: str = "payload") -> Iterator[Path]:
         """Allocate a private host directory for one transfer in either direction."""
-        output, _, status = self.ssh_client.execute_command("mktemp -d -t j2o-transfer.XXXXXXXXXX", check=True)
+        output, _, status = self.ssh_client.execute_command(
+            "env -u TMPDIR mktemp -d -t j2o-transfer.XXXXXXXXXX", check=True
+        )
         directory = Path(output.strip())
         if status or not directory.is_absolute() or not directory.name.startswith("j2o-transfer."):
             msg = "SSH host did not allocate a private transfer directory"
             raise ValueError(msg)
-        path = directory / "payload"
+        path = directory / filename
         try:
             yield path
         finally:
@@ -522,7 +524,17 @@ class DockerClient:
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
         container_path = Path(container_path) if isinstance(container_path, str) else container_path
 
-        with self._remote_transfer_file() as remote_temp_path:
+        # docker cp accepts a directory destination and keeps the source basename.
+        # Resolve it once so chmod and verification refer to the copied file.
+        kind, error, status = self.execute_command(
+            f"if test -d {quote(str(container_path))}; then echo directory; else echo file; fi"
+        )
+        if status:
+            msg = f"Cannot inspect container destination {container_path}: {error}"
+            raise ValueError(msg)
+        if kind.strip() == "directory":
+            container_path = container_path / local_path.name
+        with self._remote_transfer_file(local_path.name) as remote_temp_path:
             # Step 1: Transfer from local to remote server via SSH
             logger.debug(
                 "Copying file from local to remote: %s -> %s",

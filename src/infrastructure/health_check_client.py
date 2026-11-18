@@ -447,7 +447,7 @@ class HealthCheckClient:
         try:
             # Create test file
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {shlex.quote(self.container_name)} mktemp -t j2o-health.XXXXXXXXXX",
+                f"docker exec {shlex.quote(self.container_name)} env -u TMPDIR mktemp -t j2o-health.XXXXXXXXXX",
                 check=False,
             )
             test_file = stdout.strip()
@@ -491,7 +491,11 @@ class HealthCheckClient:
                     threshold="success",
                     units="",
                     severity="ERROR",
-                    message="Test file still exists after deletion",
+                    message=(
+                        "Test file still exists after deletion"
+                        if rc == 1 and not stderr
+                        else f"Cannot verify cleanup (exit {rc}): {stderr}"
+                    ),
                 )
 
             return HealthStatus(

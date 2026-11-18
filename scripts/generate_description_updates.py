@@ -136,14 +136,18 @@ def main():
 
     # Publish one complete file in the configured migration data directory.
     output_file = data_dir / "nrs_description_updates.json"
-    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=data_dir, delete=False) as staged:
-        staged_path = Path(staged.name)
-        try:
-            json.dump(updates, staged, indent=2)
-            staged.close()
-            staged_path.replace(output_file)
-        finally:
-            staged_path.unlink(missing_ok=True)
+    try:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=data_dir, delete=False) as staged:
+            staged_path = Path(staged.name)
+            try:
+                json.dump(updates, staged, indent=2)
+                staged.close()
+                staged_path.replace(output_file)
+            finally:
+                staged_path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"Failed to publish description updates to {output_file}: {exc}", file=sys.stderr)
+        return 1
     print(f"Saved updates to {output_file}")
 
     return 0
