@@ -68,5 +68,5 @@ def test_previous_mappings_must_still_be_confirmed_in_project():
     jira.jira.search_issues.side_effect = [[issue(1), issue(2, security={"id": 9})], []]
     log = Mock()
     warn_if_restricted_mappings(jira, "APP", known, log)
-    assert " AND level IS EMPTY AND issue IN" in jira.jira.search_issues.call_args.args[0]
+    assert jira.jira.search_issues.call_args.args[0] == 'project = "APP" AND level IS EMPTY ORDER BY id'
     assert log.warning.call_args.args[1:] == (2, "APP")

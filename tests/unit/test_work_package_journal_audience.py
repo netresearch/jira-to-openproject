@@ -42,6 +42,9 @@ def test_legacy_migration_reports_blocked_journal_writes(monkeypatch, existing):
     migration.op_client = Mock()
     migration.project_mapping = {"HISTORY": {"jira_key": "HISTORY", "openproject_id": 8}}
     issue = SimpleNamespace(key="HISTORY-1", id="1000")
+    migration.work_package_mapping = {}
+    migration.jira_client = Mock()
+    migration.jira_client.jira.search_issues.return_value = [issue]
     migration._get_existing_work_packages = Mock(return_value={issue.key: {"id": 21}} if existing else {})
     migration._iter_all_project_issues = Mock(return_value=[issue])
     migration.prepare_work_package = Mock(return_value={"_rails_operations": [{"type": "journal"}]})
