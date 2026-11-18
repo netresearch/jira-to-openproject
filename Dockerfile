@@ -22,8 +22,8 @@ RUN apt-get update \
         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Upstream has no uv:0 image tag. Install the latest compatible 0.x wheel.
-RUN python -m pip install --no-cache-dir --only-binary=:all: 'uv>=0.13,<1'
+# Upstream publishes a rolling binary image and has no major-only uv:0 tag.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Resolve + install dependencies into /opt/venv. The venv lives outside /app
 # so compose's bind mount of the source tree over /app does not hide it.
@@ -58,11 +58,11 @@ RUN apt-get update \
         git \
         openssh-client \
         tmux \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 appuser
 # docker.io intentionally omitted - uses SSH-based remote Docker client
 # See src/infrastructure/openproject/docker_client.py for remote Docker operations via SSH
 
-RUN useradd -m -u 1000 appuser
 
 # Copy the venv and the sources from the build stage. The project is
 # installed editable, so the venv imports it from /app: the copied sources

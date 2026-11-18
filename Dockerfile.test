@@ -30,8 +30,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # docker.io intentionally omitted - uses SSH-based remote Docker client
 
-# Upstream has no uv:0 image tag. Install the latest compatible 0.x wheel.
-RUN python -m pip install --no-cache-dir --only-binary=:all: 'uv>=0.13,<1'
+# Upstream publishes a rolling binary image and has no major-only uv:0 tag.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
@@ -46,13 +46,10 @@ RUN UV_PROJECT_ENVIRONMENT=/usr/local \
 # Source layer
 COPY --chown=appuser:appuser . .
 
-# Runtime directories
-RUN mkdir -p /app/var/logs /app/var/data /app/var/run && \
-    chown -R appuser:appuser /app/var
-
-# Install the project itself; its dependencies come from the lockfile above
-RUN UV_PROJECT_ENVIRONMENT=/usr/local \
-    uv sync --frozen --inexact --no-dev --extra dev --extra test
+# Install the locked project and prepare writable runtime directories.
+RUN UV_PROJECT_ENVIRONMENT=/usr/local uv sync --frozen --inexact --no-dev --extra dev --extra test \
+    && mkdir -p /app/var/logs /app/var/data /app/var/run \
+    && chown -R appuser:appuser /app/var
 
 USER appuser
 
