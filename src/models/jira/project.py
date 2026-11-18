@@ -137,6 +137,24 @@ class JiraProjectCategoryRef(BaseModel):
     name: str | None = None
 
 
+def _project_category(raw_detail: dict[str, Any]) -> JiraProjectCategoryRef | None:
+    category_raw = raw_detail.get("projectCategory") or {}
+    if not isinstance(category_raw, dict):
+        category_raw = {}
+    category: JiraProjectCategoryRef | None
+    if category_raw.get("id") or category_raw.get("name"):
+        category = JiraProjectCategoryRef.model_validate(
+            {
+                "id": str(category_raw.get("id")) if category_raw.get("id") else None,
+                "name": str(category_raw.get("name")) if category_raw.get("name") else None,
+            },
+        )
+    else:
+        category = None
+
+    return category
+
+
 class JiraProject(BaseModel):
     """Canonical representation of a Jira project."""
 
@@ -197,19 +215,7 @@ class JiraProject(BaseModel):
         """
         raw_detail: dict[str, Any] = getattr(obj, "raw", {}) or {}
 
-        category_raw = raw_detail.get("projectCategory") or {}
-        if not isinstance(category_raw, dict):
-            category_raw = {}
-        category: JiraProjectCategoryRef | None
-        if category_raw.get("id") or category_raw.get("name"):
-            category = JiraProjectCategoryRef.model_validate(
-                {
-                    "id": str(category_raw.get("id")) if category_raw.get("id") else None,
-                    "name": str(category_raw.get("name")) if category_raw.get("name") else None,
-                },
-            )
-        else:
-            category = None
+        category = _project_category(raw_detail)
 
         lead_info = raw_detail.get("lead") or {}
         if not isinstance(lead_info, dict):
