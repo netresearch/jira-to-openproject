@@ -103,21 +103,31 @@ class SecurityValidator:
 
     # Dangerous characters and patterns for string sanitization
     CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-    # Improved SQL injection pattern - more comprehensive, fewer false positives
-    SQL_INJECTION_PATTERN = re.compile(
-        r"""
-        (--[^\r\n]*) |                      # SQL comment
-        (/\*.*?\*/) |                       # Multi-line comment
-        (\b(UNION|SELECT|INSERT|DELETE|DROP|EXEC|EXECUTE|ALTER|CREATE|TRUNCATE|UPDATE)\b.*
-         \b(SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|DROP|TABLE|DATABASE|SCHEMA)\b) |
-        (\b(XP_CMDSHELL|SP_EXECUTESQL|OPENQUERY|OPENROWSET)\b) |  # SQL Server procedures
-        ([\s;]\s*['"][^'"]*['"]\s*=\s*['"][^'"]*['"];?) |       # Suspicious assignments
-        ([\s;]\s*\d+\s*=\s*\d+) |                              # Tautology like 1=1
-        (\b(CAST|CONVERT|CHAR|NCHAR|ASCII|SUBSTRING)\b\s*\() | # Type conversion functions
-        (0x[0-9a-f]+)                                        # Hex encoding
-    """,
-        re.IGNORECASE | re.VERBOSE,
+    SQL_PATTERNS = (
+        re.compile(r"--|/\*[^\n]*?\*/"),
+        re.compile(r"\b(?:XP_CMDSHELL|SP_EXECUTESQL|OPENQUERY|OPENROWSET)\b", re.IGNORECASE),
+        re.compile(r"""[\s;]\s*['"][^'"]*['"]\s*=\s*['"][^'"]*['"]"""),
+        re.compile(r"[\s;]\s*\d+\s*=\s*\d+"),
+        re.compile(r"\b(?:CAST|CONVERT|CHAR|NCHAR|ASCII|SUBSTRING)\b\s*\(", re.IGNORECASE),
+        re.compile(r"0x[0-9a-f]+", re.IGNORECASE),
     )
+    SQL_COMMANDS = frozenset(["union", "select", "insert", "delete", "drop", "exec", "execute", "alter", "create", "truncate", "update"])
+    SQL_TARGETS = frozenset(["select", "from", "where", "insert", "update", "delete", "drop", "table", "database", "schema"])
+    SQL_WORD = re.compile(r"\w+")
+
+    @classmethod
+    def _contains_sql_syntax(cls, value: str) -> bool:
+        if any(pattern.search(value) for pattern in cls.SQL_PATTERNS):
+            return True
+        for line in value.split("\n"):
+            command_seen = False
+            for token in cls.SQL_WORD.finditer(line):
+                word = token.group().lower()
+                if command_seen and word in cls.SQL_TARGETS:
+                    return True
+                command_seen = command_seen or word in cls.SQL_COMMANDS
+        return False
+
     SCRIPT_INJECTION_PATTERN = re.compile(
         r"<script|javascript:|data:|vbscript:",
         re.IGNORECASE,
@@ -166,6 +176,28 @@ class SecurityValidator:
         min_val = bounds["min"]
         max_val = bounds["max"]
 
+        value = cls._coerce_numeric_value(name, value, expected_type)
+
+        # Bounds validation
+        if value < min_val:
+            raise ConfigurationValidationError(
+                name,
+                value,
+                f">= {min_val}",
+                "Value below security minimum",
+            )
+        if value > max_val:
+            raise ConfigurationValidationError(
+                name,
+                value,
+                f"<= {max_val}",
+                "Value exceeds security maximum to prevent resource exhaustion",
+            )
+
+        return value
+
+    @classmethod
+    def _coerce_numeric_value(cls, name: str, value: Any, expected_type: type) -> int | float:
         # Type validation and coercion
         if isinstance(value, str):
             # Security: Only allow numeric strings matching pattern
@@ -196,22 +228,6 @@ class SecurityValidator:
                     f"{expected_type.__name__} (got {type(value).__name__})",
                     f"Type conversion failed: {e}",
                 ) from e
-
-        # Bounds validation
-        if value < min_val:
-            raise ConfigurationValidationError(
-                name,
-                value,
-                f">= {min_val}",
-                "Value below security minimum",
-            )
-        if value > max_val:
-            raise ConfigurationValidationError(
-                name,
-                value,
-                f"<= {max_val}",
-                "Value exceeds security maximum to prevent resource exhaustion",
-            )
 
         return value
 
@@ -263,7 +279,7 @@ class SecurityValidator:
         sanitized = cls.CONTROL_CHARS_PATTERN.sub("", value)
 
         # Security checks for injection patterns
-        if cls.SQL_INJECTION_PATTERN.search(sanitized):
+        if cls._contains_sql_syntax(sanitized):
             raise ConfigurationValidationError(
                 name,
                 value,
