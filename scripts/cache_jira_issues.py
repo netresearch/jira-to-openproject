@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 # Add project root to path
@@ -15,6 +16,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
+
+
+def _raw_issues(result):
+    """Support keyed Jira results and older lists of keyed batches."""
+    batches = result if isinstance(result, list) else [result]
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        for key, issue in batch.items():
+            if hasattr(issue, "raw"):
+                yield key, issue.raw
+            elif isinstance(issue, dict):
+                yield key, issue
 
 
 def main() -> int:
@@ -31,7 +45,11 @@ def main() -> int:
     with open(wp_mapping_file) as f:
         wp_mapping = json.load(f)
 
-    jira_keys = list(wp_mapping.keys())
+    jira_keys = list(
+        dict.fromkeys(
+            entry.get("jira_key") or key if isinstance(entry, dict) else key for key, entry in wp_mapping.items()
+        )
+    )
     logger.info("Found %d Jira keys to cache", len(jira_keys))
 
     # Initialize Jira client
@@ -50,24 +68,7 @@ def main() -> int:
         )
 
         try:
-            batch_get = getattr(jira_client, "batch_get_issues", None)
-            if callable(batch_get):
-                result = batch_get(batch_keys)
-                if isinstance(result, list):
-                    for batch_dict in result:
-                        if isinstance(batch_dict, dict):
-                            # Convert JIRA objects to dicts for JSON serialization
-                            for key, issue in batch_dict.items():
-                                if hasattr(issue, "raw"):
-                                    all_issues[key] = issue.raw
-                                elif isinstance(issue, dict):
-                                    all_issues[key] = issue
-                elif isinstance(result, dict):
-                    for key, issue in result.items():
-                        if hasattr(issue, "raw"):
-                            all_issues[key] = issue.raw
-                        elif isinstance(issue, dict):
-                            all_issues[key] = issue
+            all_issues.update(_raw_issues(jira_client.batch_get_issues(batch_keys)))
         except Exception as e:
             logger.exception("Failed to fetch batch starting at %d: %s", i, e)
             continue
@@ -76,10 +77,21 @@ def main() -> int:
         if (i // batch_size) % 10 == 0:
             logger.info("Progress: %d/%d issues cached", len(all_issues), len(jira_keys))
 
+    missing = set(jira_keys).difference(all_issues)
+    if missing:
+        logger.error("Jira returned no data for %d requested issues; preserving the previous cache", len(missing))
+        return 1
+
     # Save cache
     logger.info("Saving %d issues to %s", len(all_issues), cache_file)
-    with open(cache_file, "w") as f:
-        json.dump(all_issues, f)
+    with tempfile.NamedTemporaryFile(mode="w", dir=data_dir, delete=False, encoding="utf-8") as output:
+        staged = Path(output.name)
+        try:
+            json.dump(all_issues, output)
+            output.close()
+            staged.replace(cache_file)
+        finally:
+            staged.unlink(missing_ok=True)
 
     logger.info("Done! Cached %d issues", len(all_issues))
     return 0

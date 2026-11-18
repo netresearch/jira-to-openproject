@@ -59,38 +59,31 @@ def extract_json(input_file: Path, output_file: Path) -> bool:
     array_start = json_text.find("[{")
     array_end = json_text.rfind("}]") + 2
 
-    if array_start >= 0 and array_end > array_start:
-        json_array = json_text[array_start:array_end]
-        print(f"Found JSON array (first 100 chars): '{json_array[:100]}...'")
-
-        try:
-            # Parse the JSON to verify it's valid
-            data = json.loads(json_array)
-            print(f"Successfully parsed JSON with {len(data)} records")
-
-            # Save to output file
-            with output_file.open("w") as f:
-                json.dump(data, f, indent=2)
-
-            print(f"Saved JSON data to {output_file}")
-
-            # Print a summary of the first few fields
-            print("\nCustom Fields:")
-            for field in data[:5]:  # Show first 5 fields
-                print(
-                    f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})",
-                )
-            if len(data) > 5:
-                print(f"... and {len(data) - 5} more fields")
-
-            return True
-        except json.JSONDecodeError as e:
-            print(f"Error parsing JSON: {e}")
-            print(f"JSON array content (first 200 chars): {json_array[:200]}")
-    else:
+    if array_start < 0 or array_end <= array_start:
         print("Could not find JSON array in the output")
+        return False
+    json_array = json_text[array_start:array_end]
+    try:
+        data = json.loads(json_array)
+    except json.JSONDecodeError as exc:
+        print(f"Error parsing JSON: {exc}")
+        return False
+    with output_file.open("w") as output:
+        json.dump(data, output, indent=2)
+    print(f"Saved {len(data)} records to {output_file}")
+    _print_fields(data)
+    return True
 
-    return False
+
+def _print_fields(data: list) -> None:
+    # Print a summary of the first few fields
+    print("\nCustom Fields:")
+    for field in data[:5]:  # Show first 5 fields
+        print(
+            f"- {field.get('name')} (ID: {field.get('id')}, Type: {field.get('field_format')})",
+        )
+    if len(data) > 5:
+        print(f"... and {len(data) - 5} more fields")
 
 
 def main() -> int:

@@ -56,22 +56,28 @@ def clean_var_directory(dir_name: DirType | None = None, confirm: bool = True) -
             console.print("Operation cancelled.")
             return False
 
-    # Clean each directory
     for name, path in dirs_to_clean.items():
-        if path.exists():
-            logger.info("Cleaning directory: %s", name)
-            for item in path.glob("*"):
-                if item.is_file():
-                    item.unlink()
-                    logger.info("Deleted file: %s", item)
-                elif item.is_dir():
-                    shutil.rmtree(item)
-                    logger.info("Deleted directory: %s", item)
-            logger.info("Directory %s cleaned successfully", name)
-        else:
-            logger.warning("Directory %s does not exist", name)
+        _clean_directory(name, path)
 
     return True
+
+
+def _clean_directory(name: str, path: Path) -> None:
+    if path.is_symlink():
+        msg = f"Refusing to clean the target of directory symlink {path}"
+        raise ValueError(msg)
+    if path.exists():
+        logger.info("Cleaning directory: %s", name)
+        for item in path.glob("*"):
+            if item.is_symlink() or item.is_file():
+                item.unlink()
+                logger.info("Deleted file: %s", item)
+            elif item.is_dir():
+                shutil.rmtree(item)
+                logger.info("Deleted directory: %s", item)
+        logger.info("Directory %s cleaned successfully", name)
+    else:
+        logger.warning("Directory %s does not exist", name)
 
 
 def main() -> bool:
