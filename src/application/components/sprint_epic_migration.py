@@ -41,6 +41,11 @@ def _sprint_references(value: Any) -> list[tuple[str, str]]:
     return references
 
 
+def _encode_sprint_history(sprints: list[tuple[str, str]]) -> str:
+    records = [{"id": sid or None, "name": name} for sid, name in sprints]
+    return json.dumps(records, ensure_ascii=False)
+
+
 @register_entity_types("sprint_epic")
 class SprintEpicMigration(BaseMigration):
     """Preserve epic hierarchy, sprint names and the sprint version fallback."""
@@ -108,14 +113,7 @@ class SprintEpicMigration(BaseMigration):
                 continue
             names = sorted({name for _, name in sprints})
             values.append({"work_package_id": wp_id, "value": ", ".join(names)})
-            history.append(
-                {
-                    "work_package_id": wp_id,
-                    "value": json.dumps(
-                        [{"id": sid or None, "name": name} for sid, name in sprints], ensure_ascii=False
-                    ),
-                }
-            )
+            history.append({"work_package_id": wp_id, "value": _encode_sprint_history(sprints)})
             if has_fix_version:
                 continue  # Jira releases own version_id even on metadata-only reruns.
             version_id = self._sprint_version_id(key, entry, sprints, projects, versions)

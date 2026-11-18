@@ -101,10 +101,7 @@ class AgileBoardMigration(BaseMigration):
                 },
             )
 
-            for sprint in board_sprints:
-                origin = sprint.get("originBoardId")
-                if origin is not None and str(origin) != str(board_id):
-                    continue  # Jira also lists sprints reached through the board filter.
+            for sprint in self._owned_sprints(board_sprints, board_id):
                 sprint_payloads.append(
                     {
                         "board_id": board_id,
@@ -126,6 +123,11 @@ class AgileBoardMigration(BaseMigration):
             "total_count": len(board_payloads),
         }
         return [self._with_targets(inventory)]
+
+    @staticmethod
+    def _owned_sprints(sprints: list[dict], board_id: int) -> list[dict]:
+        """Jira also lists sprints reached through the board filter."""
+        return [s for s in sprints if s.get("originBoardId") is None or str(s["originBoardId"]) == str(board_id)]
 
     def _with_targets(self, inventory: dict[str, Any]) -> dict[str, Any]:
         return {

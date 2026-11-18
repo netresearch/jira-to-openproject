@@ -185,7 +185,8 @@ def test_same_named_sprints_without_versions_keep_both_ids(migration):
     fields["fixVersions"] = [{"id": 75}]
     fields["customfield_123"] = [{"name": "Sprint, one", "id": 21}, {"name": "Sprint, one", "id": 22}]
     result = mig.run()
-    assert result.success and result.details["version_assignments"] == 0
+    assert result.success
+    assert result.details["version_assignments"] == 0
     assert result.details["sprint_history_updates"] == 1
     history = mig.op_client.bulk_set_wp_custom_field_values.call_args.args[0][0]["value"]
     assert json.loads(history) == [{"id": "21", "name": "Sprint, one"}, {"id": "22", "name": "Sprint, one"}]

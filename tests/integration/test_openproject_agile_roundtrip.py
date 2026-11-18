@@ -294,13 +294,13 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
         assert query(f"""
           wp = WorkPackage.find({child_id})
           cf = WorkPackageCustomField.find_by!(name: 'Sprint')
-          [wp.parent_id, wp.version_id, wp.available_custom_fields.exists?(cf.id),
+          [wp.parent_id, wp.version_id, wp.available_custom_fields.any? {{ |f| f.id == cf.id }},
            CustomValue.where(customized: wp, custom_field: cf).pluck(:value)]
         """) == [parent_id, version["openproject_id"], True, ["J2O test sprint"]]
         assert query(f"""
           wp = WorkPackage.find({child_id})
           history = WorkPackageCustomField.find_by!(name: "Jira sprint membership history")
-          [wp.available_custom_fields.exists?(history.id), JSON.parse(wp.custom_values.find_by!(custom_field: history).value)]
+          [wp.available_custom_fields.any? {{ |f| f.id == history.id }}, JSON.parse(wp.custom_values.find_by!(custom_field: history).value)]
         """) == [True, [{"id": "42", "name": "J2O test sprint"}]]
 
     type_id = provenance_ids["type"]
