@@ -28,7 +28,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
 
 
 @pytest.fixture
-def rails(tmp_path):
+def rails(tmp_path, request):
     container = os.getenv("J2O_TEST_OPENPROJECT_CONTAINER")
     if not container:
         pytest.skip("Set J2O_TEST_OPENPROJECT_CONTAINER to a seeded disposable target")
@@ -37,7 +37,7 @@ def rails(tmp_path):
     runner = """
       $stdout.sync = true
       User.current = User.admin.first!
-      ActiveRecord::Base.transaction do
+      session = lambda do
         STDIN.each_line do |line|
           begin
             result = eval(JSON.parse(line), binding)
@@ -46,11 +46,38 @@ def rails(tmp_path):
             puts "J2O_RESULT " + JSON.generate({error: e.full_message})
           end
         end
-        raise ActiveRecord::Rollback
+      end
+      if ENV["J2O_COMMITTED_FIXTURE"] == "1"
+        session.call
+      else
+        ActiveRecord::Base.transaction { session.call; raise ActiveRecord::Rollback }
       end
     """
+    command = ["timeout", "180", "bundle", "exec", "rails", "runner", runner]
+    if getattr(request, "param", None) == "committed_archive":
+        # File storage is finalized after COMMIT. Use a new database AND asset
+        # directory so real HTTP uploads can finish without changing the seed.
+        command = [
+            "bash",
+            "-c",
+            """
+            set -euo pipefail
+            scratch=$(mktemp -d)
+            db=j2o_test_$(ruby -rsecurerandom -e 'print SecureRandom.hex(10)')
+            source_url=$DATABASE_URL
+            createdb --maintenance-db="$source_url" "$db"
+            trap 'dropdb --if-exists --force --maintenance-db="$source_url" "$db"; rm -rf -- "$scratch"' EXIT
+            export DATABASE_URL=$(ruby -ruri -e 'u=URI(ENV.fetch("DATABASE_URL")); u.path="/"+ARGV.fetch(0); print u' "$db")
+            pg_dump -Fc --no-owner "$source_url" | pg_restore --no-owner --exit-on-error -d "$DATABASE_URL"
+            export OPENPROJECT_ATTACHMENTS__STORAGE__PATH=$scratch
+            export J2O_COMMITTED_FIXTURE=1
+            "$@"
+        """,
+            "j2o-test",
+            *command,
+        ]
     with subprocess.Popen(
-        ["docker", "exec", "-i", container, "timeout", "180", "bundle", "exec", "rails", "runner", runner],
+        ["docker", "exec", "-i", "-e", "J2O_COMMITTED_FIXTURE=0", container, *command],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,

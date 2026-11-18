@@ -118,7 +118,7 @@ uv run python -m src.main migrate --components work_packages --reset-wp-checkpoi
 
 ### Rehearsal Workflow
 
-Use a fresh, private OpenProject target and freeze Jira writes and permission changes for the final snapshot. The default keeps comment bodies in Jira. The **J2O Origin URL** on each new work package leads readers back to Jira, where their own permissions apply. Keep Jira available read-only for these comments. The content migration reports how many comments visible to the migration account were retained at source in `comments_held`. An incomplete source read is an error.
+Use a fresh, private OpenProject target and freeze Jira writes and permission changes for the final snapshot. The default keeps comment bodies in Jira. The **J2O Origin URL** on each new work package leads readers back to Jira, where their own permissions apply. For a Jira shutdown, run the [protected comment archive](docs/protected-comments.md) on the frozen project. It stores independently encrypted reader views on OpenProject work packages. Without the archive the source must remain available for these comments. The content migration reports how many comments visible to the migration account were retained at source in `comments_held`. An incomplete source read is an error.
 
 For an internet-public Jira, set `J2O_COPY_PUBLIC_COMMENTS=1` to copy comments that Jira also returns over HTTPS to a credential-free request identified as anonymous. Each copied ID and text must match both reads. Use the default if a VPN, network allowlist or authenticating proxy limits Jira access. Group, role, internal Service Management and unknown comment restrictions stay at source. Project membership alone does not establish equivalent access.
 

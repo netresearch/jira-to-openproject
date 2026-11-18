@@ -16,6 +16,9 @@ dependencies = [
     # Core HTTP library for API calls
     "requests>=2.34.2",
 
+    # Standard age encryption for protected comment attachments
+    "pyrage>=1.4,<2",
+
     # Jira API
     "jira>=3.10.5",
 
@@ -75,6 +78,7 @@ dev = [
 
 [project.scripts]
 j2o = "src.main:main"
+j2o-comments = "src.comment_archive.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]
