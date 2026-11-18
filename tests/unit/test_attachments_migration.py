@@ -58,7 +58,7 @@ class DummyOp:
         return self
 
     def execute_command(self, command: str):
-        return ("/tmp/j2o-stage.0123456789", "", 0) if command.startswith("mktemp ") else ("", "", 0)
+        return ("/tmp/j2o-stage.0123456789", "", 0) if "mktemp -d " in command else ("", "", 0)
 
     def transfer_file_to_container(self, local_path: Path, container_path: str):
         self.transfers.append((local_path, container_path))

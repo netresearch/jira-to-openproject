@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 @contextmanager
 def private_container_directory(docker_client: DockerClient) -> Iterator[Path]:
     """Allocate a 0700 directory as the same container user that runs Rails."""
-    output, _, status = docker_client.execute_command("mktemp -d -t j2o-stage.XXXXXXXXXX")
+    output, _, status = docker_client.execute_command("env -u TMPDIR mktemp -d -t j2o-stage.XXXXXXXXXX")
     name = output.strip()
     path = PurePosixPath(name)
     if (
