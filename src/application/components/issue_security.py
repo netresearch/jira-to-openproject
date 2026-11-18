@@ -38,18 +38,19 @@ def mapped_project_issues(project_key: str, mapping: Mapping, existing: Mapping 
     for source, value in mapping.items():
         row = value if isinstance(value, Mapping) else {}
         key = str(row.get("jira_key") or source)
-        if key.upper().startswith(prefix) or row.get("project_key") == project_key:
-            keys.add(key)
-            if str(source).isdecimal():
-                ids_by_key.setdefault(key, set()).add(str(source))
+        if not key.upper().startswith(prefix) and row.get("project_key") != project_key:
+            continue
+        keys.add(key)
+        if str(source).isdecimal():
+            ids_by_key.setdefault(key, set()).add(str(source))
 
     for key, target in (existing or {}).items():
         keys.add(key)
         source_id = target.get("jira_source_id") if isinstance(target, Mapping) else None
-        if source_id is not None and str(source_id).isdecimal():
+        if str(source_id).isdecimal():
             ids_by_key.setdefault(key, set()).add(str(source_id))
 
-    return {identity for key in keys for identity in ids_by_key.get(key, {key})}
+    return keys.difference(ids_by_key).union(*ids_by_key.values())
 
 
 def warn_if_restricted_mappings(jira_client: Any, project_key: str, known: Collection[str], logger: Any) -> None:
