@@ -698,10 +698,8 @@ class EnhancedUserAssociationMigrator:
         # Inspect mocks to decide path: prefer raw .get when side_effect set (E2E tests)
         ji_get = getattr(self.jira_client, "get", None)
         ji_get_user_info = getattr(self.jira_client, "get_user_info", None)
-        get_side_effect_set = hasattr(ji_get, "side_effect") and ji_get.side_effect is not None
-        get_user_info_side_effect_set = (
-            hasattr(ji_get_user_info, "side_effect") and ji_get_user_info.side_effect is not None
-        )
+        get_side_effect_set = getattr(ji_get, "side_effect", None) is not None
+        get_user_info_side_effect_set = getattr(ji_get_user_info, "side_effect", None) is not None
 
         used_retry_path = False
         used_direct_helper = False
