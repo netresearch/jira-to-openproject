@@ -396,6 +396,25 @@ The query preserves membership at import time. Refreshing the import updates its
 membership and name. Jira column status IDs, board type and available filter JQL
 are recorded in the source snapshot. The board home determines sprint ownership.
 
+#### Native basic-board snapshots
+
+After importing work packages, create a private, memberless root project in
+OpenProject to hold archived boards. Run the following command for each source
+project, specifying the OpenProject project containing its imported cards.
+
+```sh
+uv run python -m src.native_boards --jira-project APP --target-project app --archive-project board-archive
+```
+
+The command reads each project-scoped board twice, then verifies Jira origin
+IDs, keys, URLs, and systems on the target work packages. Each native basic
+board preserves the visible cards in Jira order, column names, and the source
+configuration. Shared boards contain only the selected project's cards. The
+column queries stay private and the archive project must remain private and
+memberless. An unchanged revision is checked in place. A changed source
+creates a separate revision. Moving a basic-board card in OpenProject changes
+its position without applying a Jira workflow transition.
+
 #### Why boards and sprints are not mapped 1:1
 
 **Sprint → Version** matched OpenProject's own data model when this mapping was
