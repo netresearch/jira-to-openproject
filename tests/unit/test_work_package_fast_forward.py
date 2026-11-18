@@ -110,6 +110,8 @@ def test_prepare_work_package_collects_watcher_counters(monkeypatch):
 
     class DummyTimestampMigrator:
         def migrate_timestamps(self, *args, **kwargs):
+            assert kwargs["use_rails_for_immutable"] is False
+            kwargs["work_package_data"]["created_at"] = "2024-01-18T13:00:00Z"
             return {"warnings": [], "errors": []}
 
         def _normalize_timestamp(self, value: str) -> str | None:

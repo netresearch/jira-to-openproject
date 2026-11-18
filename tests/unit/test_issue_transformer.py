@@ -34,13 +34,13 @@ class _RecordingLogger:
         self.warning_calls: list[str] = []
 
     def debug(self, msg: object, *args: object, **kwargs: object) -> None:
-        self.debug_calls.append(str(msg))
+        self.debug_calls.append(str(msg) % args if args else str(msg))
 
     def info(self, msg: object, *args: object, **kwargs: object) -> None:
-        self.info_calls.append(str(msg))
+        self.info_calls.append(str(msg) % args if args else str(msg))
 
     def warning(self, msg: object, *args: object, **kwargs: object) -> None:
-        self.warning_calls.append(str(msg))
+        self.warning_calls.append(str(msg) % args if args else str(msg))
 
 
 class _IdentityNormalizer:
