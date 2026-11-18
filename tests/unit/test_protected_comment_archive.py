@@ -28,7 +28,8 @@ def test_offline_reader_and_idempotent_sealing(tmp_path, capsys):
         db.execute("create table archives(wp integer primary key, digest text, blob blob)")
         blob = cached_blob(db, 22, views)
         assert cached_blob(db, 22, views) == blob
-        assert len(json.loads(blob)["envelopes"]) == 1 and b"private text" not in blob
+        assert len(json.loads(blob)["envelopes"]) == 1
+        assert b"private text" not in blob
         with pytest.raises(ArchiveError, match="audience or text changed"):
             cached_blob(db, 22, views[:1])
     path = tmp_path / "archived"

@@ -14,16 +14,22 @@ from pathlib import Path
 from typing import Any
 
 import pyrage
-import requests
 from pyrage import x25519
 
 from src.comment_archive.archive import enrollment, migrate, unpack
 from src.comment_archive.transport import ArchiveError, Endpoint, attachments, download, require
 
 
+def input_file(path: Path) -> Path:
+    """Resolve an explicitly selected local input and reject devices, pipes and directories."""
+    resolved = path.resolve(strict=True)
+    require(resolved.is_file(), "Expected a regular local file")
+    return resolved
+
+
 def load(path: Path) -> Any:
     """Read a local operator manifest."""
-    return json.loads(path.read_bytes())
+    return json.loads(input_file(path).read_bytes())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,11 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "keygen":
             identity = x25519.Identity.generate()
-            with os.fdopen(os.open(args.identity, os.O_EXCL | os.O_CREAT | os.O_WRONLY, 0o600), "w") as stream:
+            destination = args.identity.parent.resolve(strict=True) / args.identity.name
+            flags = os.O_EXCL | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+            with os.fdopen(os.open(destination, flags, 0o600), "w") as stream:
                 stream.write(str(identity) + "\n")
             result = {"recipient": str(identity.to_public())}
         elif args.command == "enroll":
-            identity = x25519.Identity.from_str(args.identity.read_text().strip())
+            identity = x25519.Identity.from_str(input_file(args.identity).read_text().strip())
             jt = os.environ["J2O_ARCHIVE_JIRA_TOKEN"]
             ot = os.environ["J2O_ARCHIVE_OP_TOKEN"]
             result = enrollment(
@@ -77,9 +85,9 @@ def main(argv: list[str] | None = None) -> int:
                 inventory_file=load(args.inventory),
             )
         else:
-            identity = x25519.Identity.from_str(args.identity.read_text().strip())
+            identity = x25519.Identity.from_str(input_file(args.identity).read_text().strip())
             if args.file:
-                blob = args.file.read_bytes()
+                blob = input_file(args.file).read_bytes()
             else:
                 op = Endpoint(args.openproject, os.environ["J2O_ARCHIVE_OP_TOKEN"], jira=False, ca=ca)
                 files = attachments(op, args.work_package)
@@ -98,7 +106,6 @@ def main(argv: list[str] | None = None) -> int:
         TypeError,
         OSError,
         sqlite3.Error,
-        requests.RequestException,
         pyrage.DecryptError,
         pyrage.RecipientError,
         pyrage.IdentityError,

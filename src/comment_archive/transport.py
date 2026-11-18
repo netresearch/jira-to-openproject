@@ -123,6 +123,30 @@ def request_comments(jira: Endpoint, issue: str, *, reader: bool) -> list[dict]:
             return rows
 
 
+def service_visibility_flags(row: dict, *, service: bool) -> list[bool]:
+    """Normalize all supported service-desk flags before comparing the two APIs."""
+    public_flags = []
+    for flag in ("jsdPublic", "public", "internal", "isInternal"):
+        if flag in row:
+            require(service and type(row[flag]) is bool, "Unexpected service-specific comment metadata")
+            public_flags.append(not row[flag] if flag in ("internal", "isInternal") else row[flag])
+    properties = row.get("properties", [])
+    require(isinstance(properties, list), "Malformed comment property list")
+    for prop in properties:
+        require(
+            service
+            and isinstance(prop, dict)
+            and prop.get("key") == "sd.public.comment"
+            and isinstance(prop.get("value"), dict)
+            and "internal" in prop["value"],
+            "Unverified Jira comment property; check the original audience",
+        )
+        internal = prop["value"]["internal"]
+        require(type(internal) is bool or internal in ("true", "false"), "Unverified internal comment flag")
+        public_flags.append(internal in (False, "false"))
+    return public_flags
+
+
 def check_core_metadata(rows: list[dict], *, service: bool, request_view: dict | None = None) -> set[str]:
     """Refuse unknown restrictions and service-specific comments outside the request API."""
     restricted = set()
@@ -136,25 +160,7 @@ def check_core_metadata(rows: list[dict], *, service: bool, request_view: dict |
                 "Unrecognized Jira comment visibility",
             )
             restricted.add(row["id"])
-        public_flags = []
-        for flag in ("jsdPublic", "public", "internal", "isInternal"):
-            if flag in row:
-                require(service and type(row[flag]) is bool, "Unexpected service-specific comment metadata")
-                public_flags.append(not row[flag] if flag in ("internal", "isInternal") else row[flag])
-        properties = row.get("properties", [])
-        require(isinstance(properties, list), "Malformed comment property list")
-        for prop in properties:
-            require(
-                service
-                and isinstance(prop, dict)
-                and prop.get("key") == "sd.public.comment"
-                and isinstance(prop.get("value"), dict)
-                and "internal" in prop["value"],
-                "Unverified Jira comment property; check the original audience",
-            )
-            internal = prop["value"]["internal"]
-            require(type(internal) is bool or internal in ("true", "false"), "Unverified internal comment flag")
-            public_flags.append(internal in (False, "false"))
+        public_flags = service_visibility_flags(row, service=service)
         if request_view is not None:
             cid = row["id"]
             require(

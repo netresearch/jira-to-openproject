@@ -172,6 +172,78 @@ def scoped_issues(jira: Endpoint, project: str, mapping: dict) -> list[tuple[str
     return sorted((key, i, wp) for i, (key, wp) in mapped.items())
 
 
+def verified_inventory(inventory: Endpoint, key: str, kind: str, expected: list) -> tuple[dict, set[str]]:
+    """Reconcile the independent frozen inventory and any service request restrictions."""
+    master = visible_comments(inventory, key, kind, reader=False)
+    require(
+        isinstance(expected, list) and len(expected) == len(master) and set(expected) == set(master),
+        f"Independent comment inventory differs for {key}",
+    )
+    scoped = set()
+    if kind == "service_desk":
+        # Portal customers use the service desk API. Also account for any Jira-only comments.
+        raw = core_comments(inventory, key, reader=False)
+        scoped = check_core_metadata(raw, service=True, request_view=master)
+        core = {r["id"]: r for r in raw}
+        require(
+            {k: v["body"] for k, v in core.items()} == {k: v["body"] for k, v in master.items()},
+            f"Service desk and Jira inventories disagree for {key}",
+        )
+    return master, scoped
+
+
+def verified_reader_comments(reader: Reader, key: str, kind: str, master: dict, scoped: set[str]) -> dict:
+    """Read the authenticated user view and corroborate service request restrictions."""
+    rows = visible_comments(reader.jira, key, kind, reader=True)
+    if kind == "service_desk":
+        raw_core = core_comments(reader.jira, key, reader=True)
+        reader_scoped = check_core_metadata(raw_core, service=True, request_view=rows)
+        core_view = {row["id"]: row["body"] for row in raw_core}
+        require(
+            all(cid in rows and rows[cid]["body"] == body for cid, body in core_view.items())
+            and scoped.union(reader_scoped).intersection(rows) <= core_view.keys(),
+            f"Jira and service desk reader access disagree on {key}",
+        )
+    require(
+        all(
+            cid in master and row["body"] == master[cid]["body"] and row.get("public") == master[cid].get("public")
+            for cid, row in rows.items()
+        ),
+        f"Reader and inventory revisions differ on {key}",
+    )
+    return rows
+
+
+def capture_views(
+    readers: list[Reader], key: str, wp: int, *, kind: str, master: dict, scoped: set[str]
+) -> tuple[list[dict], list[Reader]]:
+    """Build an envelope payload only for users with source and target access."""
+    seen: set[str] = set()
+    views = []
+    approved = []
+    for reader in readers:
+        rows = verified_reader_comments(reader, key, kind, master, scoped)
+        if rows:
+            require(
+                reader.op.get(f"/api/v3/work_packages/{wp}")["id"] == wp,
+                f"An eligible reader lacks target access on {key}",
+            )
+            seen.update(rows)
+            approved.append(reader)
+            views.append(
+                {
+                    "wp": wp,
+                    "issue": key,
+                    "source": reader.jira.url,
+                    "target": reader.op.url,
+                    "recipient": reader.recipient,
+                    "comments": [rows[cid] for cid in sorted(rows, key=int)],
+                }
+            )
+    require(seen == set(master), f"Missing verified recipient for one or more comments on {key}")
+    return views, approved
+
+
 def migrate(
     config: dict, mapping: dict, project: str, state: Path, ca: str | bool, *, directory: list, inventory_file: dict
 ) -> dict:
@@ -222,65 +294,9 @@ def migrate(
                 and target.get(f"customField{int(config['origin_url_field'])}") == f"{inventory.url}/browse/{key}",
                 f"Work package {wp} does not match the Jira origin",
             )
-            master = visible_comments(inventory, key, kind, reader=False)
-            require(
-                isinstance(expected_comments[issue_id], list)
-                and len(expected_comments[issue_id]) == len(master)
-                and set(expected_comments[issue_id]) == set(master),
-                f"Independent comment inventory differs for {key}",
-            )
-            scoped = set()
-            if kind == "service_desk":
-                # Portal customers use the service desk API. Also account for any Jira-only comments.
-                raw = core_comments(inventory, key, reader=False)
-                scoped = check_core_metadata(raw, service=True, request_view=master)
-                core = {r["id"]: r for r in raw}
-                require(
-                    {k: v["body"] for k, v in core.items()} == {k: v["body"] for k, v in master.items()},
-                    f"Service desk and Jira inventories disagree for {key}",
-                )
-            seen: set[str] = set()
-            views = []
-            approved[wp] = []
-            for reader in readers:
-                rows = visible_comments(reader.jira, key, kind, reader=True)
-                if kind == "service_desk":
-                    raw_core = core_comments(reader.jira, key, reader=True)
-                    reader_scoped = check_core_metadata(raw_core, service=True, request_view=rows)
-                    core_view = {row["id"]: row["body"] for row in raw_core}
-                    require(
-                        all(cid in rows and rows[cid]["body"] == body for cid, body in core_view.items())
-                        and scoped.union(reader_scoped).intersection(rows) <= core_view.keys(),
-                        f"Jira and service desk reader access disagree on {key}",
-                    )
-                require(
-                    all(
-                        cid in master
-                        and row["body"] == master[cid]["body"]
-                        and row.get("public") == master[cid].get("public")
-                        for cid, row in rows.items()
-                    ),
-                    f"Reader and inventory revisions differ on {key}",
-                )
-                if rows:
-                    require(
-                        reader.op.get(f"/api/v3/work_packages/{wp}")["id"] == wp,
-                        f"An eligible reader lacks target access on {key}",
-                    )
-                    seen.update(rows)
-                    approved[wp].append(reader)
-                    views.append(
-                        {
-                            "wp": wp,
-                            "issue": key,
-                            "source": inventory.url,
-                            "target": writer.url,
-                            "recipient": reader.recipient,
-                            "comments": [rows[cid] for cid in sorted(rows, key=int)],
-                        }
-                    )
-                    counts["reader_copies"] += len(rows)
-            require(seen == set(master), f"Missing verified recipient for one or more comments on {key}")
+            master, scoped = verified_inventory(inventory, key, kind, expected_comments[issue_id])
+            views, approved[wp] = capture_views(readers, key, wp, kind=kind, master=master, scoped=scoped)
+            counts["reader_copies"] += sum(len(view["comments"]) for view in views)
             counts["comments"] += len(master)
             blob = cached_blob(db, wp, views)
             require(blob is None or len(blob) <= size_limit, f"Encrypted archive exceeds the attachment limit on {wp}")

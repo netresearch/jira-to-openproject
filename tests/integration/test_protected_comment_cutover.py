@@ -149,7 +149,8 @@ def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, tmp_path, ca
             name,
             token,
         )
-        assert record["op_id"] == op_id and record["jira_key"] == name
+        assert record["op_id"] == op_id
+        assert record["jira_key"] == name
         monkeypatch.setenv("SOURCE_" + name, name)
         monkeypatch.setenv("TARGET_" + name, token)
         config["readers"].append(
