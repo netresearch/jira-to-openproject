@@ -12,6 +12,9 @@ import logging
 import re
 from typing import Any
 
+_UNMAPPED_ATTACHMENT_MESSAGE = "No attachment mapping for %s in %s, using filename"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -520,7 +523,7 @@ class MarkdownConverter:
 
             # Fallback: use filename only (OpenProject may not resolve this)
             logger.debug(
-                "No attachment mapping for %s in %s, using filename",
+                _UNMAPPED_ATTACHMENT_MESSAGE,
                 filename,
                 self._current_jira_key or "unknown",
             )
@@ -559,7 +562,7 @@ class MarkdownConverter:
 
             # Fallback: use filename only
             logger.debug(
-                "No attachment mapping for %s in %s, using filename",
+                _UNMAPPED_ATTACHMENT_MESSAGE,
                 filename,
                 self._current_jira_key or "unknown",
             )
@@ -582,7 +585,7 @@ class MarkdownConverter:
 
             # Fallback: use filename only
             logger.debug(
-                "No attachment mapping for %s in %s, using filename",
+                _UNMAPPED_ATTACHMENT_MESSAGE,
                 filename,
                 self._current_jira_key or "unknown",
             )

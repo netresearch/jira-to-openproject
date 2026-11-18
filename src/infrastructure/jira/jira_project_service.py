@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
     HTTP_OK,
@@ -51,7 +52,7 @@ class JiraProjectService:
         """Get all projects from Jira with enriched metadata."""
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         def _sanitize_str(value: Any) -> str:
@@ -150,7 +151,7 @@ class JiraProjectService:
         """
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -289,7 +290,7 @@ class JiraProjectService:
         """Return the permission scheme applied to a Jira project."""
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         path = f"{client.base_url}/rest/api/2/project/{project_key}/permissionscheme"

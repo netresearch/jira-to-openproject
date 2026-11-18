@@ -22,6 +22,7 @@ from urllib.parse import quote
 from requests import exceptions
 
 from src import config
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
     JiraApiError,
@@ -105,7 +106,7 @@ class JiraWorkflowService:
         """Return configured Jira workflow schemes with issue type mappings."""
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         url = f"{client.base_url}/rest/api/2/workflowscheme"
@@ -214,7 +215,7 @@ class JiraWorkflowService:
         """Return transitions for a given Jira workflow name."""
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         safe_name = quote(workflow_name, safe="")
@@ -273,7 +274,7 @@ class JiraWorkflowService:
         """Return statuses referenced by a workflow."""
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         safe_name = quote(workflow_name, safe="")
