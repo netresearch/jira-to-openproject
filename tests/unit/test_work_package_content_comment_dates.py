@@ -78,7 +78,7 @@ class TestCollectCapturesCommentDate:
         issue.key = "PROJ-1"
         issue.fields.description = None
         issue.raw = {"fields": {}}
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _comment_with_date("alice", "First", _JIRA_CREATED),
         ]
         mig.jira_client.get_issue_watchers.return_value = []
@@ -99,7 +99,7 @@ class TestCollectCapturesCommentDate:
         comment.author = SimpleNamespace(
             name="alice", displayName="Alice", emailAddress="a@e.com", accountId=None, key=None
         )
-        mig.jira_client.jira.comments.return_value = [comment]
+        mig.jira_client.select_comments_for_migration.return_value.comments = [comment]
         mig.jira_client.get_issue_watchers.return_value = []
 
         collected = mig._collect_content_for_issue(issue, wp_id=1)
@@ -117,7 +117,7 @@ class TestCollectCapturesCommentDate:
         issue.fields.description = None
         issue.raw = {"fields": {}}
         dt = datetime(2023, 10, 15, 10, 0, 0, tzinfo=UTC)
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _comment_with_date("alice", "First", dt),
         ]
         mig.jira_client.get_issue_watchers.return_value = []
@@ -220,7 +220,7 @@ class TestSingleCommentPathBackdates:
         mig = _build_mig(tmp_path)
         issue = MagicMock()
         issue.key = "PROJ-1"
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _comment_with_date("alice", "First", _JIRA_CREATED),
         ]
         # Avoid link-resolution surprises: return body unchanged.

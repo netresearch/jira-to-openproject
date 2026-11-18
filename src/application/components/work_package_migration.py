@@ -40,6 +40,7 @@ from src.application.transformers.issue_transformer import IssueTransformer
 from src.config import logger
 from src.display import ProgressTracker
 from src.domain.enums import JournalEntryType
+from src.infrastructure.jira.comment_audience import issue_without_comments
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -915,22 +916,10 @@ class WorkPackageMigration(BaseMigration):
             if cleanup_result and "CLEANUP" in str(cleanup_result):
                 self.logger.info(f"Cleaned up v2+ journals for WP#{wp_id} ({jira_key})")
 
-            # Extract BOTH comments AND changelog entries from Jira
-            comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(jira_issue)
             changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
 
             # Merge comments and changelog entries into unified journal entries
             all_journal_entries = []
-
-            # Add comments as journal entries
-            for comment in comments:
-                all_journal_entries.append(
-                    {
-                        "type": JournalEntryType.COMMENT,
-                        "timestamp": comment.get("created", ""),
-                        "data": comment,
-                    },
-                )
 
             # Add changelog entries as journal entries
             for entry in changelog_entries:
@@ -1264,20 +1253,10 @@ class WorkPackageMigration(BaseMigration):
         jira_key = getattr(jira_issue, "key", "unknown")
 
         try:
-            # Extract comments and changelog
-            comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(jira_issue)
             changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
 
             # Merge into unified entries
             all_entries: list[dict[str, Any]] = []
-            for comment in comments:
-                all_entries.append(
-                    {
-                        "type": JournalEntryType.COMMENT,
-                        "timestamp": comment.get("created", ""),
-                        "data": comment,
-                    },
-                )
             for entry in changelog_entries:
                 all_entries.append(
                     {
@@ -1980,7 +1959,7 @@ class WorkPackageMigration(BaseMigration):
 
             def _process_issue(issue: Issue) -> None:
                 nonlocal issue_count, all_issues
-                raw = getattr(issue, "raw", {}) if hasattr(issue, "raw") else {}
+                raw = issue_without_comments(getattr(issue, "raw", {}))
                 issue_dict = {
                     "key": getattr(issue, "key", raw.get("key")),
                     "id": getattr(issue, "id", raw.get("id")),
@@ -2303,22 +2282,10 @@ class WorkPackageMigration(BaseMigration):
 
         # Extract and migrate comments AND changelog (Fix Attempt #5 for NEW work packages)
         try:
-            # Extract BOTH comments AND changelog entries from Jira
-            comments = self.enhanced_audit_trail_migrator.extract_comments_from_issue(jira_issue)
             changelog_entries = self.enhanced_audit_trail_migrator.extract_changelog_from_issue(jira_issue)
 
             # Merge comments and changelog entries into unified journal entries
             all_journal_entries = []
-
-            # Add comments as journal entries
-            for comment in comments:
-                all_journal_entries.append(
-                    {
-                        "type": JournalEntryType.COMMENT,
-                        "timestamp": comment.get("created", ""),
-                        "data": comment,
-                    },
-                )
 
             # Add changelog entries as journal entries
             for entry in changelog_entries:
@@ -2332,7 +2299,7 @@ class WorkPackageMigration(BaseMigration):
 
             if all_journal_entries:
                 self.logger.debug(
-                    f"Found {len(comments)} comment(s) and {len(changelog_entries)} changelog entries for {jira_key}",
+                    f"Found {len(changelog_entries)} changelog entries for {jira_key}",
                 )
 
                 # Sort ALL entries chronologically by timestamp
@@ -3143,12 +3110,12 @@ class WorkPackageMigration(BaseMigration):
 
                     # Use the new generator method for memory-efficient processing
                     for issue in self.iter_project_issues(project_key):
-                        # Convert Issue object to dict format expected by the rest of the code
+                        raw = issue_without_comments(issue.raw)
                         issue_dict = {
                             "id": issue.id,
                             "key": issue.key,
-                            "fields": issue.fields.__dict__,
-                            "raw": issue.raw,
+                            "fields": raw.get("fields", {}),
+                            "raw": raw,
                             "project_key": project_key,
                         }
                         all_issues.append(issue_dict)

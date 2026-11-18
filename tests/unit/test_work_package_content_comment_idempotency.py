@@ -45,6 +45,8 @@ def _build_mig(tmp_path: Path):
     )
 
     jira = MagicMock()
+    jira.select_comments_for_migration.return_value.comments = []
+    jira.select_comments_for_migration.return_value.held = 0
     op = MagicMock()
     mig = WorkPackageContentMigration(jira_client=jira, op_client=op)
     mig.data_dir = tmp_path
@@ -285,7 +287,7 @@ class TestCollectContentCapturesCommentId:
         issue.key = "PROJ-1"
         issue.fields.description = None
         issue.raw = {"fields": {}}
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("alice", "First comment", comment_id="597766"),
             _make_comment("alice", "Second comment", comment_id="597767"),
         ]
@@ -321,7 +323,7 @@ class TestCollectContentCapturesCommentId:
             accountId=None,
             key=None,
         )
-        mig.jira_client.jira.comments.return_value = [comment]
+        mig.jira_client.select_comments_for_migration.return_value.comments = [comment]
         mig.jira_client.get_issue_watchers.return_value = []
 
         collected = mig._collect_content_for_issue(issue, wp_id=1)
@@ -423,7 +425,7 @@ class TestPopulateCommentsForwardsCommentId:
 
         issue = MagicMock()
         issue.key = "PROJ-1"
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("alice", "alice's note", comment_id="597766"),
         ]
 
@@ -445,7 +447,7 @@ class TestPopulateCommentsForwardsCommentId:
 
         issue = MagicMock()
         issue.key = "PROJ-1"
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("alice", "comment one", comment_id="100"),
             _make_comment("alice", "comment two", comment_id="101"),
             _make_comment("alice", "comment three", comment_id="102"),

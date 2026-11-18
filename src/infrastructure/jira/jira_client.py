@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from jira.exceptions import JIRAError as AtlassianJIRAError
 
     from jira import JIRA, Issue
+    from src.infrastructure.jira.comment_audience import CommentSelection
 else:
     # At runtime, avoid importing jira to prevent stub issues
     AtlassianJIRAError = Exception  # type: ignore[misc,assignment]
@@ -473,6 +474,11 @@ class JiraClient:
     def get_issue_count(self, project_key: str) -> int:
         """Thin delegator over ``self.search.get_issue_count``."""
         return self.search.get_issue_count(project_key)
+
+    def select_comments_for_migration(self, issue_key: str) -> CommentSelection:
+        from src.infrastructure.jira.comment_audience import select_comments
+
+        return select_comments(self, issue_key)
 
     def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
         """Thin delegator over ``self.issues.get_issue_watchers``."""

@@ -49,6 +49,8 @@ def _build_mig(tmp_path: Path):
     )
 
     jira = MagicMock()
+    jira.select_comments_for_migration.return_value.comments = []
+    jira.select_comments_for_migration.return_value.held = 0
     op = MagicMock()
     mig = WorkPackageContentMigration(jira_client=jira, op_client=op)
     # Redirect file paths to tmp_path; need to also re-load now-empty state.
@@ -191,7 +193,7 @@ def test_run_reports_unread_comments_and_individual_field_failures(tmp_path, _mo
         raw={"fields": {"customfield_1": 4, "customfield_2": {"value": "unknown"}}},
     )
     monkeypatch.setattr(mig, "iter_project_issues", lambda project: iter([issue]))
-    mig.jira_client.jira.comments.side_effect = OSError("read failed")
+    mig.jira_client.select_comments_for_migration.side_effect = OSError("read failed")
     mig.op_client.batch_update_work_packages.return_value = {
         "updated": 1,
         "failed": 1,

@@ -518,63 +518,33 @@ class WorkPackageContentMigration(BaseMigration):
             JournalEntryType.COMMENT,
         )
 
-    def _populate_comments(
-        self,
-        jira_issue: Issue,
-        wp_id: int,
-    ) -> int:
-        """Populate work package comments/journals with link resolution.
+    def _collect_approved_comments(self, issue_key: str) -> tuple[list[dict[str, Any]], int]:
+        selection = self.jira_client.select_comments_for_migration(issue_key)
+        entries = [
+            {
+                "comment": self._convert_jira_links(comment.body, jira_key=issue_key),
+                "user_id": self._resolve_comment_author_id(comment, issue_key),
+                "jira_comment_id": getattr(comment, "id", None),
+                "created_at": _coerce_comment_timestamp(getattr(comment, "created", None)),
+            }
+            for comment in selection.comments
+            if getattr(comment, "body", None)
+        ]
+        return entries, selection.held
 
-        Args:
-            jira_issue: The Jira issue
-            wp_id: OpenProject work package ID
-
-        Returns:
-            Number of comments migrated
-
-        """
+    def _populate_comments(self, jira_issue: Issue, wp_id: int) -> int:
+        """Read and verify existing journals before adding an approved comment."""
+        comments, held = self._collect_approved_comments(jira_issue.key)
+        self.op_client.wp_content.verify_imported_comments({wp_id: comments})
+        if held:
+            self.logger.info("%s: %d comments retained at source", jira_issue.key, held)
         migrated = 0
-
-        try:
-            # Get comments from Jira
-            comments = self.jira_client.jira.comments(jira_issue.key)
-        except Exception as e:
-            self.logger.debug("Failed to fetch comments for %s: %s", jira_issue.key, e)
-            return 0
-
-        for comment in comments:
-            body = getattr(comment, "body", None)
-            if not body:
-                continue
-
-            # Convert comment body with link resolution and attachment URLs
-            converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
-
-            author_id = self._resolve_comment_author_id(comment, jira_issue.key)
-            # Capture Jira comment id for provenance marker — enables idempotency
-            # on re-runs (the Ruby helper skips activities whose marker already exists).
-            jira_comment_id = getattr(comment, "id", None)
-
+        for row in comments:
             try:
-                # Create activity/journal in OpenProject with resolved author
-                self.op_client.create_work_package_activity(
-                    wp_id,
-                    {
-                        "comment": {"raw": converted_body},
-                        "user_id": author_id,
-                        "jira_comment_id": jira_comment_id,
-                        # Preserve the original Jira comment date (#260).
-                        "created_at": _coerce_comment_timestamp(getattr(comment, "created", None)),
-                    },
-                )
+                self.op_client.create_work_package_activity(wp_id, {**row, "comment": {"raw": row["comment"]}})
                 migrated += 1
-            except Exception as e:
-                self.logger.debug(
-                    "Failed to create comment for WP#%d: %s",
-                    wp_id,
-                    e,
-                )
-
+            except Exception as exc:
+                self.logger.warning("Failed to create comment for WP#%d (%s)", wp_id, type(exc).__name__)
         return migrated
 
     def _populate_watchers(
@@ -705,32 +675,11 @@ class WorkPackageContentMigration(BaseMigration):
                         mapping, value, jira_issue.key
                     )
 
-        # Collect comments — preserve author id and Jira comment id so
-        # _bulk_process_collected_content can include both in every activity
-        # dict sent to the Rails script.  user_id prevents fallback to
-        # Anonymous (regression confirmed on WP 5040); jira_comment_id enables
-        # provenance-based idempotency across re-runs.
         try:
-            comments = self.jira_client.jira.comments(jira_issue.key)
-            for comment in comments:
-                body = getattr(comment, "body", None)
-                if body:
-                    converted_body = self._convert_jira_links(body, jira_key=jira_issue.key)
-                    author_id = self._resolve_comment_author_id(comment, jira_issue.key)
-                    jira_comment_id = getattr(comment, "id", None)
-                    collected["comments"].append(
-                        {
-                            "comment": converted_body,
-                            "user_id": author_id,
-                            "jira_comment_id": jira_comment_id,
-                            # Preserve the original Jira comment date (#260) so the
-                            # journal is back-dated instead of stamped with NOW.
-                            "created_at": _coerce_comment_timestamp(getattr(comment, "created", None)),
-                        }
-                    )
+            collected["comments"], collected["comments_held"] = self._collect_approved_comments(jira_issue.key)
         except Exception as exc:
             collected["comment_read_failed"] = True
-            self.logger.warning("Incomplete Jira comment read for %s: %s", jira_issue.key, exc)
+            self.logger.warning("Incomplete Jira comment read for %s (%s)", jira_issue.key, type(exc).__name__)
 
         # Collect watchers
         try:
@@ -764,9 +713,14 @@ class WorkPackageContentMigration(BaseMigration):
             "custom_fields_failed": 0,
             "comments_migrated": 0,
             "comments_failed": 0,
+            "comments_held": sum(item.get("comments_held", 0) for item in collected_items),
             "comment_reads_failed": sum(bool(item.get("comment_read_failed")) for item in collected_items),
             "watchers_added": 0,
         }
+
+        self.op_client.wp_content.verify_imported_comments(
+            {item["wp_id"]: item["comments"] for item in collected_items}
+        )
 
         descriptions = [
             {"id": item["wp_id"], "description": item["description_update"]}
@@ -925,6 +879,7 @@ class WorkPackageContentMigration(BaseMigration):
             "descriptions_failed": 0,
             "custom_fields_failed": 0,
             "comment_reads_failed": 0,
+            "comments_held": 0,
             "custom_fields_updated": 0,
             "comments_migrated": 0,
             "comments_failed": 0,
@@ -1024,6 +979,10 @@ class WorkPackageContentMigration(BaseMigration):
             results["comments_migrated"],
             results["watchers_added"],
         )
+        if results["comments_held"]:
+            self.logger.warning(
+                "%d Jira comments retained at source to preserve their audience", results["comments_held"]
+            )
         if results["comments_failed"]:
             self.logger.warning(
                 "Content migration dropped %d comment(s) across all projects — these were NOT "
@@ -1081,6 +1040,7 @@ class WorkPackageContentMigration(BaseMigration):
                     "total_failed": migration_results["total_failed"],
                     "descriptions_updated": migration_results["descriptions_updated"],
                     "comments_migrated": migration_results["comments_migrated"],
+                    "comments_held": migration_results.get("comments_held", 0),
                     "comments_failed": migration_results.get("comments_failed", 0),
                     "comment_reads_failed": migration_results.get("comment_reads_failed", 0),
                     "descriptions_failed": migration_results.get("descriptions_failed", 0),

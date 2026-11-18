@@ -64,6 +64,8 @@ def _build_mig(tmp_path: Path):
     )
 
     jira = MagicMock()
+    jira.select_comments_for_migration.return_value.comments = []
+    jira.select_comments_for_migration.return_value.held = 0
     op = MagicMock()
     mig = WorkPackageContentMigration(jira_client=jira, op_client=op)
     mig.data_dir = tmp_path
@@ -106,7 +108,7 @@ class TestBulkPathAuthorResolution:
         issue.key = "PROJ-1"
         issue.fields.description = None
         issue.raw = {"fields": {}}
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("alice", "First comment"),
             _make_comment("bob", "Second comment"),
             _make_comment("carol", "Third comment"),
@@ -135,7 +137,7 @@ class TestBulkPathAuthorResolution:
         issue.key = "PROJ-1"
         issue.fields.description = None
         issue.raw = {"fields": {}}
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("alice", "alice's comment"),
             _make_comment("bob", "bob's comment"),
             _make_comment("carol", "carol's comment"),
@@ -208,7 +210,7 @@ class TestSingleIssuePathAuthorResolution:
 
         issue = MagicMock()
         issue.key = "PROJ-1"
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("alice", "alice's note"),
             _make_comment("bob", "bob's note"),
         ]
@@ -259,7 +261,7 @@ class TestUnmappableAuthorFallback:
         issue.fields.description = None
         issue.raw = {"fields": {}}
         # "unknown_user" has no entry in user_mapping
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("unknown_user", "some comment body"),
         ]
         mig.jira_client.get_issue_watchers.return_value = []
@@ -297,7 +299,7 @@ class TestUnmappableAuthorFallback:
 
         issue = MagicMock()
         issue.key = "PROJ-Y"
-        mig.jira_client.jira.comments.return_value = [
+        mig.jira_client.select_comments_for_migration.return_value.comments = [
             _make_comment("ghost_user", "ghostly comment"),
         ]
 

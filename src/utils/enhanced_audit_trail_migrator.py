@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from src.display import configure_logging
+from src.infrastructure.jira.comment_audience import is_comment_change
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.markdown_converter import MarkdownConverter
@@ -199,9 +200,11 @@ class EnhancedAuditTrailMigrator:
                         "to": getattr(item, "to", None),
                         "toString": getattr(item, "toString", None),
                     }
-                    entry["items"].append(change_item)
+                    if not is_comment_change(change_item):
+                        entry["items"].append(change_item)
 
-                changelog_entries.append(entry)
+                if entry["items"]:
+                    changelog_entries.append(entry)
 
         except Exception as e:
             self.logger.exception(
@@ -212,86 +215,6 @@ class EnhancedAuditTrailMigrator:
             )
 
         return changelog_entries
-
-    def extract_comments_from_issue(self, jira_issue: Any) -> list[dict[str, Any]]:
-        """Extract issue comments from Jira issue if present.
-
-        Returns list of dicts: {id, created, author:{name,displayName,emailAddress}, body}
-        """
-        comments: list[dict[str, Any]] = []
-        try:
-            if not hasattr(jira_issue, "fields"):
-                return comments
-            fields = jira_issue.fields
-            if not hasattr(fields, "comment") or not fields.comment:
-                return comments
-            comment_container = fields.comment
-            raw_comments = getattr(comment_container, "comments", []) or []
-            for c in raw_comments:
-                try:
-                    entry = {
-                        "id": getattr(c, "id", None),
-                        "created": getattr(c, "created", None),
-                        "author": {
-                            "name": getattr(getattr(c, "author", None), "name", None)
-                            if getattr(c, "author", None)
-                            else None,
-                            "displayName": getattr(getattr(c, "author", None), "displayName", None)
-                            if getattr(c, "author", None)
-                            else None,
-                            "emailAddress": getattr(getattr(c, "author", None), "emailAddress", None)
-                            if getattr(c, "author", None)
-                            else None,
-                        },
-                        "body": getattr(c, "body", ""),
-                    }
-                    comments.append(entry)
-                except Exception:
-                    continue
-        except Exception:
-            return comments
-        return comments
-
-    def transform_comments_to_audit_events(
-        self,
-        comments: list[dict[str, Any]],
-        jira_issue_key: str,
-        openproject_work_package_id: int,
-    ) -> list[AuditEventData]:
-        """Transform Jira comments into audit events (Journal entries with notes)."""
-        events: list[AuditEventData] = []
-        for c in comments or []:
-            try:
-                author_name = (c.get("author") or {}).get("name")
-                user_id = self.user_mapping.get(author_name) if author_name else None
-                if not user_id:
-                    self.migration_results["user_attribution_failures"] += 1
-                    user_id = 1
-                # Convert user mentions in comment body using current mapping
-                raw_comment = c.get("body", "")
-                try:
-                    converted_comment = self.converter.convert(raw_comment) if raw_comment else ""
-                except Exception:
-                    converted_comment = raw_comment
-                events.append(
-                    {
-                        "jira_issue_key": jira_issue_key,
-                        "jira_changelog_id": str(c.get("id")),
-                        "openproject_work_package_id": openproject_work_package_id,
-                        "user_id": user_id,
-                        "user_name": author_name,
-                        "created_at": c.get("created", "1970-01-01T00:00:00Z"),
-                        "action": "comment",
-                        "auditable_type": "WorkPackage",
-                        "auditable_id": openproject_work_package_id,
-                        "version": 1,
-                        "comment": converted_comment,
-                        "changes": [],
-                    },
-                )
-            except Exception:
-                continue
-        return events
 
     def transform_changelog_to_audit_events(
         self,
@@ -338,6 +261,8 @@ class EnhancedAuditTrailMigrator:
 
                 # Process each change item in the entry
                 for item in entry.get("items", []) or []:
+                    if is_comment_change(item):
+                        continue
                     # Map field changes to OpenProject audit format
                     changes = self._map_field_changes(item)
 
@@ -640,11 +565,9 @@ class EnhancedAuditTrailMigrator:
                 if isinstance(changelog_info, list):
                     entries = changelog_info
                     issue_key = jira_id
-                    comments: list[dict[str, Any]] = []
                 else:
                     entries = changelog_info.get("changelog_entries", [])
                     issue_key = changelog_info.get("jira_issue_key", jira_id)
-                    comments = changelog_info.get("comments", []) or []
 
                 audit_events = self.transform_changelog_to_audit_events(
                     entries,
@@ -670,18 +593,6 @@ class EnhancedAuditTrailMigrator:
                     )
 
                 self.migration_results["processed_entries"] += len(entries)
-
-                if comments:
-                    comment_events = self.transform_comments_to_audit_events(
-                        comments,
-                        issue_key,
-                        openproject_work_package_id,
-                    )
-                    for comment_event in comment_events:
-                        self.rails_operations.append(
-                            {"operation": "create_comment_event", "data": comment_event},
-                        )
-                    self.migration_results["comments_processed"] += len(comment_events)
 
             except Exception as e:
                 error_msg = f"Failed to process changelog data for Jira ID {jira_id}: {e}"

@@ -118,7 +118,13 @@ uv run python -m src.main migrate --components work_packages --reset-wp-checkpoi
 
 ### Rehearsal Workflow
 
-Use a private target for the pilot. Jira can restrict a comment to a project role or a group. The work-package content importer writes a regular OpenProject journal entry and does not reproduce that restriction. Before granting project access, verify comment visibility with representative accounts. Compare source and target counts for issues, comments, attachment files and logged hours, then repeat the import and check for duplicates. Inspect any reported field-value or option-mapping failures.
+Use a fresh, private OpenProject target and freeze Jira writes and permission changes for the final snapshot. The default keeps comment bodies in Jira. The **J2O Origin URL** on each new work package leads readers back to Jira, where their own permissions apply. Keep Jira available read-only for these comments. The content migration reports how many comments visible to the migration account were retained at source in `comments_held`. An incomplete source read is an error.
+
+For an internet-public Jira, set `J2O_COPY_PUBLIC_COMMENTS=1` to copy comments that Jira also returns over HTTPS to a credential-free request identified as anonymous. Each copied ID and text must match both reads. Use the default if a VPN, network allowlist or authenticating proxy limits Jira access. Group, role, internal Service Management and unknown comment restrictions stay at source. Project membership alone does not establish equivalent access.
+
+Before opening the target, run the content step against the frozen source. It stops if previously marked target comments differ from the currently approved texts. Earlier imports could write unmarked journals. Restore a clean pre-import snapshot before using this version on such a target. A completed copy is a snapshot of Jira permissions at cutover. Later permission changes in Jira do not revoke an OpenProject journal.
+
+Compare counts for issues, copied and retained comments, attachments and logged hours. Repeat the import on the private target and check for duplicates and reported field mapping failures.
 
 1. **Seed rehearsal data**: snapshot Jira/OpenProject using your existing backup process.
 2. **Configure credentials**: point `.env` at rehearsal endpoints/API tokens.
