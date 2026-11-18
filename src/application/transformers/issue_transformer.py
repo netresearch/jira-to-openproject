@@ -59,6 +59,7 @@ class IssueTransformer:
     # Default fallback user id used when a journal author cannot be resolved
     # from the user mapping. See ``resolve_journal_author_id`` (BUG #32).
     _BUG32_FALLBACK_USER_ID = 148941
+    _FIX_VERSION_FIELD = "Fix Version"
 
     # Probe order for resolving Jira changelog/comment authors against the
     # owner's ``user_mapping``.  Canonical Cloud-first order mirrors
@@ -404,7 +405,7 @@ class IssueTransformer:
             "issuetype": "type_id",
             # "resolution": "resolution",  # NOT a valid Journal::WorkPackageJournal attribute  # noqa: ERA001
             # "labels": "tags",  # NOT a valid Journal::WorkPackageJournal attribute  # noqa: ERA001
-            "Fix Version": "version_id",  # On-the-fly version creation enabled
+            self._FIX_VERSION_FIELD: "version_id",  # On-the-fly version creation enabled
             # "component": "category_id",  # Requires category_mapping - falls through to Bug #16 notes for now
             "reporter": "author_id",
             # BUG #17 FIX: Time estimate fields (Jira stores in seconds, OpenProject in hours)
@@ -420,7 +421,7 @@ class IssueTransformer:
 
         old = self._journal_value(field, item.get("from"), item.get("fromString"))
         new = self._journal_value(field, item.get("to"), item.get("toString"))
-        if field in ("issuetype", "status", "Fix Version", "timeestimate", "timeoriginalestimate"):
+        if field in ("issuetype", "status", self._FIX_VERSION_FIELD, "timeestimate", "timeoriginalestimate"):
             self.logger.info("Mapped Jira %s change to %s: %r -> %r", field, op_field, old, new)
         if old == new:
             return None
@@ -435,7 +436,7 @@ class IssueTransformer:
             return owner.issue_type_id_mapping.get(str(raw)) if raw and owner.issue_type_id_mapping else None
         if field == "status":
             return self._journal_status_id(raw)
-        if field == "Fix Version":
+        if field == self._FIX_VERSION_FIELD:
             if display and owner._current_project_id:
                 return owner._get_or_create_version(display, owner._current_project_id)
             return None
