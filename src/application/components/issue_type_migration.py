@@ -8,28 +8,9 @@ Handles mapping and creation of issue types from Jira to work package types in O
 Phase 7h notes
 --------------
 This migration is **orthogonal to the Phase 7 typed wp_map pipeline**.
-It owns two private mapping namespaces -- ``issue_type`` (Jira type
-name -> ``{openproject_id, openproject_name, color, ...}``) and
-``issue_type_id`` (Jira type id -> OpenProject type id) -- and does
-not consume the ``work_package`` mapping. There are no ``wp_map``
-ladders, no :class:`WorkPackageMappingEntry` normalisation sites, and
-no Jira issue / user payloads to parse through :class:`JiraIssueFields`
-/ :class:`JiraUser` here. The remaining ``isinstance(...)`` branches
-guard the two Ruby boundary helpers this migration uses:
-
-* :meth:`OpenProjectClient.execute_query` is typed as returning ``str``
-  (raw Rails console output), but in practice the runner's wrapper
-  returns ``{"status": "success"|"error", "output": <text>}`` envelopes
-  -- the dict-shape ``isinstance`` checks are defensive guards that
-  also surface a typed error result when the wrapper unexpectedly
-  yields a raw string.
-* :meth:`OpenProjectClient.bulk_create_records` returns a mapping with
-  ``created`` / ``existing`` / ``errors`` lists; the branches drive
-  the per-type creation counters from those lists.
-
-Both are SDK boundary shapes, not mapping rows, so the Phase 7
-typed-pipeline helpers do not apply. Documented as out-of-scope and
-otherwise untouched.
+It stores type mappings by Jira name and by Jira ID. Target IDs are
+confirmed by the OpenProject type catalog or by the structured Rails
+batch response before the mapping is persisted.
 """
 
 from __future__ import annotations
@@ -50,18 +31,45 @@ _USER_STORY_TYPE = "User Story"
 _JIRA_ISSUE_TYPES_FILE = "jira_issue_types.json"
 
 
-_FIND_OR_CREATE_TYPE = """
-name = input_data.fetch('name')
-type = Type.where('lower(name) = ?', name.downcase).first
-unless type
-  color = Color.find_by(hexcode: input_data['color'].to_s.delete_prefix('#')) || Color.first
-  type = Type.create!(name: name, color_id: color&.id, is_milestone: input_data['milestone'],
-                      position: (Type.maximum(:position) || 0) + 1)
+_TYPE_LOOKUP = """
+def j2o_work_package_type(row)
+  name = row.fetch('name')
+  existing = Type.find_by('lower(name) = ?', name.downcase)
+  return existing if existing
+
+  color = Color.find_by(hexcode: row['color']) || Color.first
+  Type.create!(name: name, color: color, is_milestone: row.fetch('is_milestone', false))
 end
+"""
+
+_FIND_OR_CREATE_TYPE = (
+    _TYPE_LOOKUP
+    + """
+type = j2o_work_package_type(input_data)
 puts $j2o_start_marker
 puts JSON.generate({id: type.id, name: type.name})
 puts $j2o_end_marker
 """
+)
+
+_CREATE_TYPES = (
+    _TYPE_LOOKUP
+    + """
+created = []
+errors = []
+input_data.each_with_index do |row, index|
+  begin
+    type = j2o_work_package_type(row)
+    created << {index: index, id: type.id}
+  rescue ActiveRecord::RecordInvalid => e
+    errors << {index: index, errors: e.record.errors.full_messages}
+  end
+end
+puts $j2o_start_marker
+puts JSON.generate({created: created, errors: errors})
+puts $j2o_end_marker
+"""
+)
 
 
 @register_entity_types("issue_types", "work_package_types")
@@ -523,7 +531,7 @@ class IssueTypeMigration(BaseMigration):
             {
                 "name": name,
                 "color": type_data.get("color", "#1A67A3"),
-                "milestone": bool(type_data.get("is_milestone")),
+                "is_milestone": bool(type_data.get("is_milestone")),
             },
         )
         row = result.get("data") if isinstance(result, dict) else None
@@ -603,31 +611,17 @@ class IssueTypeMigration(BaseMigration):
         records = self._prepare_type_records(self.check_existing_work_package_types())
         if not records:
             self._persist_type_ids()
+            self._record_type_provenance()
             return
 
         try:
-            result = self.op_client.bulk_create_records(
-                model="Type",
-                records=records,
-                timeout=120,
-                result_basename="j2o_type_bulk_result.json",
-            )
-
-            if not isinstance(result, dict) or result.get("status") != "success":
-                msg = (
-                    result.get("message", "Bulk type creation failed")
-                    if isinstance(result, dict)
-                    else "Invalid bulk type result"
-                )
+            result = self.op_client.execute_script_with_data(_CREATE_TYPES, records, timeout=120)
+            body = result.get("data") if isinstance(result, dict) else None
+            if not isinstance(body, dict):
+                msg = "OpenProject did not return the type batch result"
                 raise MigrationError(msg)
-
-            created = result.get("created", []) or []
-            errors = result.get("errors", []) or []
-
-            for item in created:
-                idx = item.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(records) and item.get("id"):
-                    self._assign_new_type_id(records[idx]["name"], item["id"], "created")
+            errors = body["errors"]
+            self._apply_type_results(records, body["created"], errors)
 
             # Recover from "Name has already been taken." validation errors by
             # looking up the existing OP type id. Done before persistence so
@@ -648,6 +642,18 @@ class IssueTypeMigration(BaseMigration):
             msg = f"Error during Type bulk creation: {e}"
             self.logger.exception(msg)
             raise MigrationError(msg) from e
+
+    def _apply_type_results(self, records, created, errors):
+        expected = set(range(len(records)))
+        received = [item["index"] for item in [*created, *errors]]
+        if len(received) != len(expected) or set(received) != expected:
+            msg = "OpenProject returned incomplete or duplicate type results"
+            raise MigrationError(msg)
+        for item in created:
+            if not item.get("id"):
+                msg = "OpenProject returned a type without an ID"
+                raise MigrationError(msg)
+            self._assign_new_type_id(records[item["index"]]["name"], item["id"], "created")
 
     def _assign_new_type_id(self, name, target_id, matched_by):
         for mapping in self.issue_type_mapping.values():
@@ -679,7 +685,7 @@ class IssueTypeMigration(BaseMigration):
                 {
                     "name": name,
                     "is_milestone": bool(mapping.get("is_milestone")),
-                    "is_default": bool(mapping.get("is_default")),
+                    "color": mapping.get("color"),
                 },
             )
         return list(records.values())

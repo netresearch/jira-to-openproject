@@ -196,7 +196,7 @@ class TestIssueTypeMigration(unittest.TestCase):
         mock_migration_config: MagicMock,
         mock_get_path: MagicMock,
     ) -> None:
-        """Test migrating issue types via Rails console using bulk_create_records."""
+        """Test migrating issue types via the structured Rails batch."""
         mock_jira_instance = MagicMock()
         mock_op_instance = MagicMock()
 
@@ -206,17 +206,18 @@ class TestIssueTypeMigration(unittest.TestCase):
         # No existing work package types
         mock_op_instance.check_existing_work_package_types = MagicMock()
 
-        # Return success from bulk_create_records; index maps to meta entry order.
-        mock_op_instance.bulk_create_records.return_value = {
-            "status": "success",
-            "created": [
-                {
-                    "index": 0,
-                    "id": 3,
-                    "name": "Epic",
-                },
-            ],
-            "errors": [],
+        # Return a confirmed type from the structured batch; index maps to meta entry order.
+        mock_op_instance.execute_script_with_data.return_value = {
+            "data": {
+                "created": [
+                    {
+                        "index": 0,
+                        "id": 3,
+                        "name": "Epic",
+                    },
+                ],
+                "errors": [],
+            }
         }
 
         migration = IssueTypeMigration(mock_jira_instance, mock_op_instance)
@@ -238,10 +239,12 @@ class TestIssueTypeMigration(unittest.TestCase):
 
         migration.migrate_issue_types_via_rails()
 
-        # Verify the mapping was updated with the new ID from bulk_create_records
+        # Verify the mapping was updated with the new ID from the structured batch
         assert migration.issue_type_mapping["Epic"]["openproject_id"] == 3
         assert migration.issue_type_mapping["Epic"]["matched_by"] == "created"
-        mock_op_instance.bulk_create_records.assert_called_once()
+        mock_op_instance.execute_script_with_data.assert_called_once()
+        rows = mock_op_instance.execute_script_with_data.call_args.args[1]
+        assert rows == [{"name": "Epic", "is_milestone": False, "color": "#9B59B6"}]
 
     @patch("src.application.components.issue_type_migration.config.get_path")
     @patch("src.application.components.issue_type_migration.config.migration_config")
