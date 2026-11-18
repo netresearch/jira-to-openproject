@@ -50,6 +50,37 @@ _JIRA_STATUSES_FILE = "jira_statuses.json"
 _OP_STATUSES_FILE = "op_statuses.json"
 
 
+_CATEGORY_COLORS = {
+    "blue-gray": "#4A6785",
+    "yellow": "#F6C342",
+    "green": "#14892C",
+    "red": "#D04437",
+    "medium-gray": "#8993A4",
+}
+
+_IMPORT_STATUSES = """
+results = {}
+input_data.each do |row|
+  key = row.fetch('jira_id').to_s
+  name = row.fetch('name')
+  begin
+    status = Status.find_by('lower(name) = ?', name.downcase)
+    reused = !status.nil?
+    unless reused
+      status = Status.create!(name: name, is_closed: row['is_closed'], is_default: !!row['is_default'],
+                              color: Color.find_by(hexcode: row['color']))
+    end
+    results[key] = {id: status.id, name: status.name, already_existed: reused}
+  rescue ActiveRecord::RecordInvalid => e
+    results[key] = {error: e.record.errors.full_messages.join(', ')}
+  end
+end
+puts $j2o_start_marker
+puts JSON.generate(results)
+puts $j2o_end_marker
+"""
+
+
 @register_entity_types("statuses", "status_types")
 class StatusMigration(BaseMigration):
     """Handles the migration of statuses from Jira to OpenProject.
@@ -255,56 +286,12 @@ class StatusMigration(BaseMigration):
         try:
             if self.op_client is None:
                 msg = "OpenProject client is not initialized"
-                logger.error(msg)
                 raise MigrationError(msg)
-
-            # Check if get_statuses method exists on the client
-            if hasattr(self.op_client, "get_statuses"):
-                statuses = self.op_client.get_statuses()
-            else:
-                # Use a direct query to get statuses if method is not available
-                result = self.op_client.execute_query("Status.all.as_json")
-                if result["status"] != "success":
-                    msg = "Failed to get statuses from OpenProject"
-                    logger.error(msg)
-                    raise MigrationError(msg)
-                statuses = result["output"]
-
-                # Convert output to proper format if needed
-                if isinstance(statuses, str):
-                    try:
-                        # Handle Ruby output format
-                        statuses = json.loads(
-                            statuses.replace("=>", ":").replace("nil", "null"),
-                        )
-                    except json.JSONDecodeError as e:
-                        msg = "Failed to parse statuses from OpenProject"
-                        logger.exception(msg)
-                        raise MigrationError(msg) from e
-
-            # Ensure statuses is a list of dictionaries
+            statuses = self.op_client.get_statuses()
             if not isinstance(statuses, list):
-                statuses = [statuses]
-
-            # Check if we have any statuses
-            if not statuses:
-                logger.warning("No statuses found in OpenProject")
-                return []
-
-            logger.info("Found %s statuses in OpenProject", len(statuses))
-
-            # Explicitly convert to the expected return type
-            result_statuses: list[dict[str, Any]] = []
-            for status in statuses:
-                if isinstance(status, dict):
-                    result_statuses.append(status)
-                else:
-                    # Try to convert to a dictionary if possible
-                    try:
-                        result_statuses.append(dict(status))
-                    except TypeError, ValueError:
-                        logger.warning("Skipping invalid status format: %s", status)
-
+                msg = "OpenProject did not return a status catalog"
+                raise MigrationError(msg)
+            result_statuses = [dict(row) for row in statuses]
             self.op_statuses = result_statuses
             self._save_to_json(result_statuses, _OP_STATUSES_FILE)
 
@@ -333,74 +320,13 @@ class StatusMigration(BaseMigration):
 
         """
         if not statuses_to_create:
-            logger.warning("No statuses provided for bulk creation")
             return {}
-
-        logger.info(
-            "Creating %s statuses in bulk via Rails...",
-            len(statuses_to_create),
-        )
-
-        # Minimal Ruby policy: Ruby creation now handled by bulk_create_records
-
-        try:
-            # Use generic bulk create helper with minimal Ruby
-            logger.debug("Executing bulk status creation via generic bulk_create_records")
-            records: list[dict[str, Any]] = []
-            meta: list[dict[str, Any]] = []
-            for st in statuses_to_create:
-                # Preserve Jira linkage
-                meta.append({"jira_id": str(st.get("jira_id")), "name": st.get("name")})
-                # Sanitize attrs for Status model
-                attrs = {
-                    "name": st.get("name"),
-                    "is_closed": bool(st.get("is_closed", False)),
-                    "is_default": bool(st.get("is_default", False)),
-                }
-                records.append(attrs)
-
-            result = self.op_client.bulk_create_records(
-                model="Status",
-                records=records,
-                timeout=90,
-                result_basename="j2o_status_bulk_result.json",
-            )
-
-            if not isinstance(result, dict) or result.get("status") != "success":
-                raise MigrationError(result.get("message", "Bulk creation failed"))
-
-            created = result.get("created", []) or []
-            errors = result.get("errors", []) or []
-
-            # Build mapping back by index
-            typed_statuses: dict[str, dict[str, Any]] = {}
-            for item in created:
-                idx = item.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(meta):
-                    m = meta[idx]
-                    jira_id = str(m.get("jira_id"))
-                    typed_statuses[jira_id] = {
-                        "id": item.get("id"),
-                        "name": m.get("name"),
-                        "already_existed": False,
-                    }
-            for err in errors:
-                idx = err.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(meta):
-                    m = meta[idx]
-                    jira_id = str(m.get("jira_id"))
-                    typed_statuses[jira_id] = {
-                        "error": "; ".join(err.get("errors", [])),
-                        "already_existed": False,
-                    }
-
-            logger.info("Successfully processed %s statuses via bulk_create_records", len(typed_statuses))
-            return typed_statuses
-
-        except Exception as e:
-            msg = f"Exception during bulk status creation: {e}"
-            logger.exception(msg)
-            raise MigrationError(msg) from e
+        envelope = self.op_client.execute_script_with_data(_IMPORT_STATUSES, statuses_to_create, timeout=90)
+        results = envelope.get("data") if isinstance(envelope, dict) else None
+        if not isinstance(results, dict):
+            msg = "OpenProject did not confirm the status batch"
+            raise MigrationError(msg)
+        return results
 
     def create_status_mapping(self) -> dict[str, Any]:
         """Create a mapping between Jira statuses and OpenProject statuses.
@@ -475,230 +401,85 @@ class StatusMigration(BaseMigration):
             Dictionary with migration summary and status mapping
 
         """
-        logger.info("Starting status migration...")
-
-        # Extract Jira statuses if not already done
         if not self.jira_statuses:
             self.jira_statuses = self.extract_jira_statuses()
-
         if not self.jira_statuses:
             msg = "No Jira statuses to migrate"
-            logger.error(msg)
             raise MigrationError(msg)
-
-        # Get existing OpenProject statuses if not already done
         if not self.op_statuses:
             self.op_statuses = self.get_openproject_statuses()
-
-        # Create a name-based lookup for OpenProject statuses
-        op_statuses_by_name = {s.get("name", "").lower(): s for s in self.op_statuses}
-
-        # Create status mapping if not already done
-        if not self.status_mapping:
-            self.status_mapping = self.create_status_mapping()
-
-        # Initialize counters
-        created_count = 0
-        already_exists_count = 0
-        error_count = 0
-
-        # Initialize status mapping
-        status_mapping = {}
-
-        # If in dry run mode, simulate success for all statuses
-        if config.migration_config.get("dry_run", False):
-            logger.info("[DRY RUN] Simulating status migration success")
-
-            for jira_status in self.jira_statuses:
-                jira_id = jira_status.get("id")
-                name = jira_status.get("name", "")
-
-                # Check if it already exists in OpenProject
-                for op_name, op_status in op_statuses_by_name.items():
-                    if op_name.lower() == name.lower():
-                        status_mapping[jira_id] = {
-                            "openproject_id": op_status.get("id"),
-                            "openproject_name": op_status.get("name"),
-                        }
-                        already_exists_count += 1
-                        break
-                else:
-                    # Not found, simulate creation
-                    status_mapping[jira_id] = {
-                        "openproject_id": f"dry_run_{jira_id}",
-                        "openproject_name": name,
-                    }
-                    created_count += 1
-
-            # Ensure jira_id is a string to avoid type errors
-            for jira_id in list(status_mapping.keys()):
-                if not isinstance(jira_id, str):
-                    status_mapping[str(jira_id)] = status_mapping.pop(jira_id)
-
-            # Save status mapping via controller only
-            config.mappings.set_mapping("status", status_mapping)
-            logger.info(
-                f"[DRY RUN] Found {already_exists_count} existing statuses, would create {created_count} new statuses",
-            )
-
-            # Update the mappings instance
-            if self.mappings is not None:
-                # Convert the mapping to the expected type
-                migration_status_mapping: dict[str, Any] = {}
-                for k, v in status_mapping.items():
-                    migration_status_mapping[str(k)] = v
-                self.mappings.status_mapping = migration_status_mapping
-
-            return {
-                "status": "success",
-                "total_processed": len(self.jira_statuses),
-                "already_exists_count": already_exists_count,
-                "created_count": created_count,
-                "error_count": 0,
-                "mapping": status_mapping,
-            }
-
-        # Prepare statuses to create in bulk
-        statuses_to_create = []
-        for jira_status in self.jira_statuses:
-            jira_id = jira_status.get("id")
-            name = jira_status.get("name")
-
-            if not jira_id or not name:
-                logger.warning(
-                    "Skipping status with missing ID or name: %s",
-                    jira_status,
-                )
-                continue
-
-            # Check if a similar status already exists in OpenProject
-            exists = False
-            for op_name, op_status in op_statuses_by_name.items():
-                if op_name.lower() == name.lower():
-                    # Use existing status
-                    op_status_id = op_status.get("id")
-                    logger.debug(
-                        f"Using existing OpenProject status '{op_status.get('name')}' "
-                        f"(ID: {op_status_id}) for Jira status '{name}'",
-                    )
-                    status_mapping[jira_id] = {
-                        "openproject_id": op_status_id,
-                        "openproject_name": op_status.get("name"),
-                    }
-                    already_exists_count += 1
-                    exists = True
-                    break
-
-            if not exists:
-                # Determine if status should be considered 'closed'
-                is_closed = False
-                if "statusCategory" in jira_status:
-                    category_key = jira_status.get("statusCategory", {}).get("key", "")
-                    is_closed = category_key.upper() == "DONE"
-
-                # Determine a suitable color (optional)
-                color = None
-                if "statusCategory" in jira_status:
-                    category_color = jira_status.get("statusCategory", {}).get(
-                        "colorName",
-                        "",
-                    )
-                    if category_color:
-                        # Map Jira category colors to hex codes
-                        color_mapping = {
-                            "blue-gray": "#4a6785",
-                            "yellow": "#f6c342",
-                            "green": "#14892c",
-                            "red": "#d04437",
-                            "medium-gray": "#8993a4",
-                        }
-                        color = color_mapping.get(category_color.lower())
-
-                # Add to list for bulk creation
-                statuses_to_create.append(
-                    {
-                        "jira_id": jira_id,
-                        "name": name,
-                        "is_closed": is_closed,
-                        "is_default": False,  # Default to False for imported statuses
-                        "color": color,
-                    },
-                )
-
-        # Create statuses in bulk if there are any to create
-        if statuses_to_create:
-            logger.info("Creating %s statuses in bulk", len(statuses_to_create))
-
-            creation_results = self.create_statuses_bulk_via_rails(statuses_to_create)
-
-            # Process results
-            for jira_id, result in creation_results.items():
-                if "id" in result:
-                    status_mapping[jira_id] = {
-                        "openproject_id": result["id"],
-                        "openproject_name": result["name"],
-                    }
-
-                    if result.get("already_existed", False):
-                        # Count as already existing if not counted above
-                        # (shouldn't happen in normal flow but included for safety)
-                        pass
-                    else:
-                        created_count += 1
-                else:
-                    logger.error(
-                        f"Failed to create status for Jira ID {jira_id}: {result.get('error', 'Unknown error')}",
-                    )
-                    error_count += 1
-
-        # Save status mapping
-        if status_mapping:
-            config.mappings.set_mapping("status", status_mapping)
-
-            # Update the mappings instance
-            if self.mappings is not None:
-                # Convert the mapping to the expected type
-                migration_status_mapping: dict[str, Any] = {}
-                for k, v in status_mapping.items():
-                    migration_status_mapping[str(k)] = v
-                self.mappings.status_mapping = migration_status_mapping
-
-            # Record provenance for successfully migrated statuses
-            # This enables restoration of mappings from OP alone without local files
-            provenance_mappings = [
-                {
-                    "jira_key": str(m.get("jira_id", k)),  # Use Jira status ID as key
-                    "jira_name": m.get("jira_name"),
-                    "op_entity_id": m["openproject_id"],
-                }
-                for k, m in status_mapping.items()
-                if m.get("openproject_id")
-            ]
-            if provenance_mappings:
-                try:
-                    result = self.op_client.bulk_record_entity_provenance("status", provenance_mappings)
-                    logger.info(
-                        "Recorded status provenance: %d success, %d failed",
-                        result.get("success", 0),
-                        result.get("failed", 0),
-                    )
-                except Exception as prov_err:
-                    logger.warning("Failed to record status provenance: %s", prov_err)
-
-        logger.info("Status migration completed")
-        logger.info("Total Jira statuses processed: %s", len(self.jira_statuses))
-        logger.info(
-            f"OpenProject statuses: {already_exists_count} existing, {created_count} created, {error_count} errors",
-        )
-
+        existing = {row["name"].casefold(): row for row in self.op_statuses}
+        by_id = {str(row["id"]): row for row in self.op_statuses}
+        mapping, pending, invalid = self._plan_statuses(existing, by_id)
+        reused = len(mapping)
+        dry_run = config.migration_config.get("dry_run", False)
+        results = self._status_results(pending, dry_run)
+        for row in pending:
+            key = row["jira_id"]
+            result = results.get(key) or {}
+            if result.get("id"):
+                mapping[key] = {"openproject_id": result["id"], "openproject_name": result["name"]}
+                reused += int(bool(result.get("already_existed")))
+            else:
+                invalid += 1
+                logger.error("No OpenProject status confirmed for Jira ID %s", key)
+        if not dry_run:
+            self._save_status_ids(mapping)
         return {
-            "status": "success",
+            "status": "failed" if invalid else "success",
             "total_processed": len(self.jira_statuses),
-            "already_exists_count": already_exists_count,
-            "created_count": created_count,
-            "error_count": error_count,
-            "mapping": status_mapping,
+            "already_exists_count": reused,
+            "created_count": len(mapping) - reused,
+            "error_count": invalid,
+            "mapping": mapping,
         }
+
+    def _plan_statuses(self, existing, by_id):
+        mapping = {}
+        pending = []
+        invalid = 0
+        for source in self.jira_statuses:
+            key, name = source.get("id"), source.get("name")
+            if not key or not name:
+                invalid += 1
+                continue
+            key = str(key)
+            prior = self.status_mapping.get(key) or {}
+            prior_id = prior.get("openproject_id") if isinstance(prior, dict) else prior
+            target = by_id.get(str(prior_id)) or existing.get(name.casefold())
+            if target:
+                mapping[key] = {"openproject_id": target["id"], "openproject_name": target["name"]}
+            else:
+                category = source.get("statusCategory") or {}
+                pending.append(
+                    {
+                        "jira_id": key,
+                        "name": name,
+                        "is_closed": (category.get("key") or "").lower() == "done",
+                        "color": _CATEGORY_COLORS.get((category.get("colorName") or "").lower()),
+                    }
+                )
+        return mapping, pending, invalid
+
+    def _status_results(self, pending, dry_run):
+        if dry_run:
+            return {s["jira_id"]: {"id": f"dry_run_{s['jira_id']}", "name": s["name"]} for s in pending}
+        return self.create_statuses_bulk_via_rails(pending) if pending else {}
+
+    def _save_status_ids(self, mapping):
+        self.status_mapping.update(mapping)
+        config.mappings.set_mapping("status", self.status_mapping)
+        if self.mappings is not None:
+            self.mappings.status_mapping = self.status_mapping
+        provenance = [
+            {"jira_key": key, "jira_name": row["openproject_name"], "op_entity_id": row["openproject_id"]}
+            for key, row in mapping.items()
+        ]
+        if provenance:
+            try:
+                self.op_client.bulk_record_entity_provenance("status", provenance)
+            except Exception:
+                logger.exception("Could not record status provenance in OpenProject")
 
     def analyze_status_mapping(self) -> dict[str, Any]:
         """Analyze the status mapping to identify potential issues.
@@ -813,61 +594,6 @@ class StatusMigration(BaseMigration):
             # Step 3: Get OpenProject statuses
             self.op_statuses = self.get_openproject_statuses()
 
-            # Step 4: Create status mapping if needed
-            if not self.status_mapping:
-                self.status_mapping = self.create_status_mapping()
-
-            # Step 5: Migrate statuses - if in dry_run mode, simulate success for all
-            if config.migration_config.get("dry_run", False):
-                logger.info("[DRY RUN] Simulating status migration success")
-
-                # Create simulated mapping for all statuses
-                op_statuses_by_name = {s.get("name", "").lower(): s for s in self.op_statuses}
-                for jira_status in self.jira_statuses:
-                    jira_id: str = jira_status.get("id", "")
-                    name: str = jira_status.get("name", "")
-
-                    # Check if it already exists in OpenProject
-                    existing = False
-                    for op_name, op_status in op_statuses_by_name.items():
-                        if op_name.lower() == name.lower():
-                            existing = True
-                            # Use the actual existing status ID
-                            self.status_mapping[jira_id] = {
-                                "openproject_id": op_status.get("id"),
-                                "openproject_name": op_status.get("name"),
-                            }
-                            break
-
-                    # If not existing, create a simulated ID
-                    if not existing:
-                        self.status_mapping[jira_id] = {
-                            "openproject_id": f"dry_run_{jira_id}",
-                            "openproject_name": name,
-                        }
-
-                # Save the mapping via controller
-                config.mappings.set_mapping("status", self.status_mapping)
-
-                # If we have a mappings object, update it
-                if self.mappings:
-                    self.mappings.status_mapping = self.status_mapping
-
-                return ComponentResult(
-                    success=True,
-                    message="[DRY RUN] Simulated status migration",
-                    success_count=len(self.jira_statuses),
-                    failed_count=0,
-                    total_count=len(self.jira_statuses),
-                    details={
-                        "status": "success",
-                        "total_processed": len(self.jira_statuses),
-                        "already_exists_count": 0,
-                        "created_count": len(self.jira_statuses),
-                        "error_count": 0,
-                    },
-                )
-            # Real migration
             migration_result = self.migrate_statuses()
 
             return ComponentResult(

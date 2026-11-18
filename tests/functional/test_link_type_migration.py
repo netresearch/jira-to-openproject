@@ -675,3 +675,20 @@ def link_type_migration_test_steps() -> Any:
        - Check that the migration continues with other types
     """
     return "Link type migration test steps defined"
+
+
+def test_blank_relation_descriptions_remain_unmapped_and_template_can_be_used(tmp_path):
+    from src.application.components.link_type_migration import DEFAULT_RELATION_TYPES
+
+    migration = LinkTypeMigration.__new__(LinkTypeMigration)
+    migration.op_link_types = DEFAULT_RELATION_TYPES
+    migration.jira_link_types = [{"id": 91, "name": "External reference", "outward": "", "inward": ""}]
+    template = tmp_path / "operator-mapping.json"
+    migration.generate_user_mapping_template(str(template))
+    override = json.loads(template.read_text(encoding="utf-8"))["91"]
+    assert override["openproject_id"] is None
+    assert override["create_custom_field"] is True
+    override["openproject_id"] = "blocks"
+    target = migration._map_link_type(migration.jira_link_types[0], override)
+    assert target["openproject_id"] == "blocks"
+    assert target["matched_by"] == "user_defined"

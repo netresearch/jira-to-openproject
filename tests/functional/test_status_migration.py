@@ -260,3 +260,21 @@ class TestStatusMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_unconfirmed_status_is_reported_and_successful_ids_are_retained(monkeypatch):
+    from src import config
+
+    migration = StatusMigration.__new__(StatusMigration)
+    migration.jira_statuses = [{"id": 1, "name": "Complete"}, {"id": 2, "name": "Missing"}]
+    migration.op_statuses = [{"id": 80, "name": "Done"}]
+    migration.status_mapping = {"1": 80}
+    migration.mappings = MagicMock()
+    migration.op_client = MagicMock()
+    migration.op_client.execute_script_with_data.return_value = {"data": {}}
+    monkeypatch.setattr(config, "mappings", migration.mappings)
+    monkeypatch.setitem(config.migration_config, "dry_run", False)
+    result = migration.migrate_statuses()
+    assert result["status"] == "failed"
+    assert result["error_count"] == 1
+    assert result["mapping"] == {"1": {"openproject_id": 80, "openproject_name": "Done"}}
