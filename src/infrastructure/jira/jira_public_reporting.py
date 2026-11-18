@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Netresearch DTT GmbH
+# SPDX-License-Identifier: MIT
+
+"""Read the public representation of a Jira report before publishing its contents."""
+
+from urllib.parse import urlsplit
+
+import requests
+
+
+def public_report(base_url, kind, report_id):
+    """Return an anonymously readable record, or None when access cannot be confirmed."""
+    base = urlsplit(base_url)
+    identifier = str(report_id)
+    if base.scheme != "https" or not base.hostname or base.username is not None or base.query or base.fragment:
+        return None
+    if kind not in {"filter", "dashboard"} or not identifier.isascii() or not identifier.isdecimal():
+        return None
+    url = f"{base_url.rstrip('/')}/rest/api/2/{kind}/{identifier}"
+    with requests.Session() as session:
+        # A dedicated session also excludes cookies, proxy credentials and .netrc.
+        session.trust_env = False
+        response = session.get(url, timeout=20, allow_redirects=False)
+        if response.status_code in {401, 403, 404} or response.is_redirect:
+            return None
+        response.raise_for_status()
+        if response.headers.get("X-AUSERNAME", "").casefold() != "anonymous":
+            return None
+        if "json" not in response.headers.get("Content-Type", "").lower():
+            return None
+        data = response.json()
+        return data if isinstance(data, dict) and str(data.get("id")) == identifier else None

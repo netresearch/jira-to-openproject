@@ -24,6 +24,7 @@ class DummyJira:
         dashboards: list[dict] | None = None,
         boom_filters: bool = False,
     ) -> None:
+        self.base_url = self
         self._filters = filters or []
         self._dashboards = dashboards or []
         self._boom_filters = boom_filters
@@ -75,6 +76,12 @@ class DummyOp:
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
     import src.config as cfg
 
+    def anonymous(source, kind, identifier):
+        rows = source._filters if kind == "filter" else source._dashboards
+        return next((row for row in rows if row["id"] == identifier and not row.get("private")), None)
+
+    monkeypatch.setattr("src.application.components.reporting_migration.public_report", anonymous)
+
     class DummyMappings:
         def __init__(self) -> None:
             self._m = {"project": {"PROJ": {"openproject_id": 11}}}
@@ -116,7 +123,9 @@ def test_reporting_migration_end_to_end_creates_query_and_wiki(_mock_mappings: N
     assert mapped.details["dashboards"] == 1
     assert result.success is True
     # One filter-query + one dashboard-wiki = 2 successful artefacts.
-    assert result.success_count == 2
+    assert result.success_count == 3
+    assert op.queries[0]["project_id"] == 11
+    assert "project = PROJ" in op.wikis[1]["content"]
     # Wiki page got the matched project_id from sharePermissions (11), not the
     # reporting fallback (555).
     assert op.wikis[0]["project_id"] == 11
@@ -186,3 +195,56 @@ def test_reporting_migration_load_counts_op_failures(_mock_mappings: None) -> No
     assert result.failed_count >= 1
     # Wiki page still got created in this scenario.
     assert result.success_count >= 1
+
+
+def test_restricted_catalog_metadata_never_reaches_openproject(_mock_mappings):
+    op = DummyOp()
+    jira = DummyJira(
+        filters=[{"id": 21, "name": "Restricted filter", "private": True}],
+        dashboards=[{"id": 42, "name": "Restricted dashboard", "private": True}],
+    )
+    result = ReportingMigration(jira_client=jira, op_client=op).run()
+    assert result.details["skipped_filters"] == [21]
+    assert result.details["held_dashboard_ids"] == [42]
+    assert op.queries == []
+    assert op.wikis == []
+    assert op.reporting_calls == []
+
+
+def test_complex_public_jql_is_preserved_without_creating_an_unfiltered_query(_mock_mappings):
+    op = DummyOp()
+    source = DummyJira(filters=[{"id": 28, "jql": "project = PROJ AND status = Done"}])
+    result = ReportingMigration(jira_client=source, op_client=op).run()
+    assert result.success
+    assert op.queries == []
+    assert "project = PROJ AND status = Done" in op.wikis[0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("status", "actor", "response_id", "expected"),
+    [
+        (200, "anonymous", "28", True),
+        (403, "anonymous", "28", False),
+        (200, "agent", "28", False),
+        (200, "anonymous", "81", False),
+    ],
+)
+def test_public_read_requires_anonymous_identity_and_matching_id(monkeypatch, status, actor, response_id, expected):
+    from unittest.mock import MagicMock
+
+    from src.infrastructure.jira.jira_public_reporting import public_report
+
+    session = MagicMock()
+    session.__enter__.return_value = session
+    response = session.get.return_value
+    response.status_code = status
+    response.is_redirect = False
+    response.headers = {"Content-Type": "application/json", "X-AUSERNAME": actor}
+    response.json.return_value = {"id": response_id, "jql": "project = TEST"}
+    monkeypatch.setattr("src.infrastructure.jira.jira_public_reporting.requests.Session", lambda: session)
+    record = public_report("https://jira.example.invalid/base", "filter", "28")
+    assert session.trust_env is False
+    session.get.assert_called_once_with(
+        "https://jira.example.invalid/base/rest/api/2/filter/28", timeout=20, allow_redirects=False
+    )
+    assert (record is not None) is expected
