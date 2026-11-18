@@ -77,7 +77,7 @@ def rails(tmp_path, request):
             *command,
         ]
     with subprocess.Popen(
-        ["docker", "exec", "-i", container, *command],
+        ["docker", "exec", "-i", "-e", "J2O_COMMITTED_FIXTURE=0", container, *command],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,

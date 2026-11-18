@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
             config = load(args.config)
             result = migrate(
                 config,
-                load(args.mapping),
+                load(args.mapping) if args.mapping.exists() else None,
                 args.project,
                 args.state,
                 ca,
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             result = unpack(blob, identity, args.work_package)
             if args.openproject:
                 require(result["target"] == op.url, "Archive belongs to another OpenProject installation")
-        sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        sys.stdout.write(json.dumps(result, ensure_ascii=True, indent=2) + "\n")
     except ArchiveError as exc:
         sys.stderr.write(str(exc) + "\n")
         return 1

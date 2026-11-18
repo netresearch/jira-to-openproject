@@ -13,6 +13,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import pyrage
 from pyrage import x25519
@@ -244,8 +245,64 @@ def capture_views(
     return views, approved
 
 
+def recover_mapping(writer: Endpoint, config: dict, project: str) -> dict:
+    """Recover destinations from unique origin IDs and URLs when the local map is missing."""
+    prefix = f"{config['jira'].rstrip('/')}/browse/{quote(project, safe='')}-"
+    origin_url = f"customField{int(config['origin_url_field'])}"
+    origin_id = f"customField{int(config['origin_id_field'])}"
+    result: dict[str, dict] = {}
+    seen: set[int] = set()
+    total = None
+    offset = 1
+    while True:
+        page = writer.get(
+            "/api/v3/work_packages",
+            params={"offset": offset, "pageSize": 100, "sortBy": '[["id","asc"]]', "filters": "[]"},
+        )
+        rows = page["_embedded"]["elements"]
+        require(
+            isinstance(rows, list)
+            and page["offset"] == offset
+            and type(page["total"]) is int
+            and (total is None or total == page["total"])
+            and (rows or not page["total"]),
+            "Incomplete OpenProject provenance inventory",
+        )
+        total = page["total"]
+        for row in rows:
+            wp = row["id"]
+            require(type(wp) is int and wp not in seen, "Duplicate or invalid target work package")
+            seen.add(wp)
+            # The collection can return a compact representation without custom fields.
+            row = writer.get(f"/api/v3/work_packages/{wp}")
+            url = row.get(origin_url)
+            if isinstance(url, str) and url.startswith(prefix):
+                issue_id = str(row.get(origin_id))
+                number = url.removeprefix(prefix)
+                require(
+                    issue_id.isascii()
+                    and issue_id.isdecimal()
+                    and number.isascii()
+                    and number.isdecimal()
+                    and issue_id not in result,
+                    "Missing or ambiguous target provenance",
+                )
+                result[issue_id] = {"jira_key": f"{project}-{number}", "openproject_id": wp}
+        require(len(seen) <= total, "OpenProject provenance inventory changed")
+        if len(seen) == total:
+            return result
+        offset += 1
+
+
 def migrate(
-    config: dict, mapping: dict, project: str, state: Path, ca: str | bool, *, directory: list, inventory_file: dict
+    config: dict,
+    mapping: dict | None,
+    project: str,
+    state: Path,
+    ca: str | bool,
+    *,
+    directory: list,
+    inventory_file: dict,
 ) -> dict:
     """Stage every reader view, publish ciphertext, verify downloads as the intended users."""
     inventory = Endpoint(config["jira"], os.environ["J2O_ARCHIVE_INVENTORY_TOKEN"], jira=True, ca=ca)
@@ -263,6 +320,8 @@ def migrate(
     )
     expected_comments = inventory_file["issues"]
     kind = project_kind(inventory, project)
+    if mapping is None:
+        mapping = recover_mapping(writer, config, project)
     issues = scoped_issues(inventory, project, mapping)
     require(set(expected_comments) == {i for _, i, _ in issues}, "Independent issue inventory differs")
     scope = encoded([inventory.url, writer.url, project, issues, [(r.key, r.op_id, r.recipient) for r in readers]])

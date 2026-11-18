@@ -11,6 +11,14 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 import requests
+from tenacity import (
+    RetryError,
+    Retrying,
+    retry_if_exception_type,
+    retry_if_result,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.infrastructure.jira.comment_audience import _pages
 
@@ -62,8 +70,25 @@ class Endpoint:
 
     def request(self, method: str, path: str, *, denial: bool = False, **kwargs: Any) -> requests.Response:
         require(path.startswith("/") and not path.startswith("//"), "Invalid API path")
-        self.session.cookies.clear()
-        response = self.session.request(method, self.url + path, timeout=(10, 90), allow_redirects=False, **kwargs)
+
+        def send() -> requests.Response:
+            self.session.cookies.clear()
+            return self.session.request(method, self.url + path, timeout=(10, 90), allow_redirects=False, **kwargs)
+
+        if method == "GET":
+            retry_reads = Retrying(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(min=1, max=4),
+                retry=retry_if_exception_type((requests.Timeout, requests.ConnectionError))
+                | retry_if_result(lambda reply: reply.status_code in (429, 502, 503, 504)),
+                reraise=True,
+            )
+            try:
+                response = retry_reads(send)
+            except RetryError as exhausted:
+                response = exhausted.last_attempt.result()
+        else:
+            response = send()
         if denial and response.status_code in (403, 404):
             return response
         require(response.status_code in (200, 201), f"{method} {path} returned HTTP {response.status_code}")

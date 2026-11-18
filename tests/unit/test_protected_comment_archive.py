@@ -2,22 +2,38 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import os
 import sqlite3
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
 import pytest
 from pyrage import x25519
 
-from src.comment_archive.archive import cached_blob, enrollment, readers_for, unpack
+from src.comment_archive.archive import cached_blob, enrollment, readers_for, recover_mapping, unpack
 from src.comment_archive.cli import main
-from src.comment_archive.transport import ArchiveError, check_core_metadata, publish, request_comments, verified_denial
+from src.comment_archive.transport import (
+    ArchiveError,
+    Endpoint,
+    check_core_metadata,
+    publish,
+    request_comments,
+    verified_denial,
+)
 
 
-def test_offline_reader_and_idempotent_sealing(tmp_path, capsys):
+def test_offline_reader_and_idempotent_sealing(capsys):
+    with TemporaryDirectory() as private:
+        verify_offline_key_lifecycle(Path(private), capsys)
+
+
+def verify_offline_key_lifecycle(tmp_path, capsys):
     keys = [tmp_path / str(i) for i in range(3)]
     for key in keys:
         assert main(["keygen", "--identity", str(key)]) == 0
-        assert key.stat().st_mode & 0o077 == 0
+        if os.name == "posix":
+            assert key.stat().st_mode & 0o077 == 0
     contents = keys[0].read_bytes()
     assert main(["keygen", "--identity", str(keys[0])]) == 1
     assert keys[0].read_bytes() == contents
@@ -98,6 +114,33 @@ def test_foreign_or_duplicate_attachment_prevents_upload():
 @pytest.mark.parametrize("internal", [1, True, "true"])
 def test_service_flags_must_be_well_formed_and_match_request(internal):
     prop = {"key": "sd.public.comment", "value": {"internal": internal}}
-    with pytest.raises(ArchiveError):
+    error = "Unverified internal comment flag" if type(internal) is int else "reader access disagree"
+    with pytest.raises(ArchiveError, match=error):
         check_core_metadata([{"id": "5", "properties": [prop]}], service=True, request_view={"5": {"public": True}})
+    if type(internal) is not int:
+        assert check_core_metadata(
+            [{"id": "5", "properties": [prop]}], service=True, request_view={"5": {"public": False}}
+        ) == {"5"}
     assert check_core_metadata([], service=True, request_view={"5": {"public": False}}) == {"5"}
+
+
+def test_archive_retries_only_reads(monkeypatch):
+    op = Endpoint("https://op.invalid", "fixture", jira=False)
+    send = Mock(side_effect=[Mock(status_code=503), Mock(status_code=200)])
+    monkeypatch.setattr(op.session, "request", send)
+    assert op.request("GET", "/read").status_code == 200
+    assert send.call_count == 2
+    send.reset_mock(side_effect=True)
+    send.return_value = Mock(status_code=503)
+    with pytest.raises(ArchiveError, match="HTTP 503"):
+        op.request("POST", "/upload")
+    send.assert_called_once()
+
+
+def test_recovery_refuses_duplicate_provenance():
+    op = Mock()
+    rows = [{"id": 1}, {"id": 2}]
+    duplicate = {"customField1": "100", "customField2": "https://jira.invalid/browse/DEMO-1"}
+    op.get.side_effect = [{"_embedded": {"elements": rows}, "offset": 1, "total": 2}, duplicate, duplicate]
+    with pytest.raises(ArchiveError, match="ambiguous"):
+        recover_mapping(op, {"jira": "https://jira.invalid", "origin_id_field": 1, "origin_url_field": 2}, "DEMO")

@@ -5,6 +5,8 @@
 
 import base64
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -21,8 +23,12 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
 
 @pytest.mark.parametrize("rails", ["committed_archive"], indirect=True)
 @pytest.mark.parametrize("kind", ["software", "service_desk"])
-def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, tmp_path, capsys, kind):  # noqa: F811
-    _, query = rails
+def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, capsys, kind):  # noqa: F811
+    with TemporaryDirectory() as private:
+        verify_cutover(rails[1], monkeypatch, Path(private), capsys, kind)
+
+
+def verify_cutover(query, monkeypatch, tmp_path, capsys, kind):
     seed = query("""
       template = WorkPackage.first!
       project = template.project
@@ -169,8 +175,8 @@ def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, tmp_path, ca
     with pytest.raises(ArchiveError, match="Independent comment inventory differs"):
         migrate(config, mapping, "DEMO", state, True, **{**audit, "inventory_file": incomplete})
     assert not attachments(Endpoint(config["openproject"], seed["users"][-1][1], jira=False), wp)
-    for _ in range(2):
-        assert migrate(config, mapping, "DEMO", state, True, **audit) == {
+    for supplied_mapping in (mapping, None):
+        assert migrate(config, supplied_mapping, "DEMO", state, True, **audit) == {
             "issues": 1,
             "comments": 3,
             "reader_copies": 4,
