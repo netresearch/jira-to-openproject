@@ -50,7 +50,8 @@ def test_only_identical_public_body_from_explicitly_anonymous_pages(monkeypatch)
         session = factory.return_value.__enter__.return_value
         session.get.side_effect = [page(anonymous[:2], total=7), page(anonymous[2:], offset=2, total=7)]
         selection = select_comments(client, "DEMO-1")
-        assert session.trust_env is False and session.cookies.clear.call_count == 2
+        assert session.trust_env is False
+        assert session.cookies.clear.call_count == 2
         for call in session.get.call_args_list:
             assert call.args == ("https://jira.example/jira/rest/api/2/issue/DEMO-1/comment",)
             assert call.kwargs["allow_redirects"] is False
@@ -71,7 +72,8 @@ def test_unproven_identity_or_access_holds_everything(monkeypatch, proof):
     with patch("src.infrastructure.jira.comment_audience.requests.Session") as factory:
         factory.return_value.__enter__.return_value.get.return_value = proof
         selection = select_comments(client, "PRIVATE-1")
-    assert selection.held == 8 and not selection.comments
+    assert selection.held == 8
+    assert not selection.comments
 
 
 def test_default_keeps_comments_at_source(monkeypatch):
@@ -81,7 +83,8 @@ def test_default_keeps_comments_at_source(monkeypatch):
     with patch("src.infrastructure.jira.comment_audience.requests.Session") as factory:
         selection = select_comments(client, "DEMO-1")
         factory.assert_not_called()
-    assert selection.held == 8 and not selection.comments
+    assert selection.held == 8
+    assert not selection.comments
 
 
 def test_incomplete_inventory_is_an_error():
@@ -109,7 +112,8 @@ def test_issue_cache_omits_embedded_rendered_and_historical_comments():
         },
     }
     cleaned = issue_without_comments(raw)
-    assert "private" not in str(cleaned) and "private" in str(raw)
+    assert "private" not in str(cleaned)
+    assert "private" in str(raw)
     assert cleaned["changelog"]["histories"] == [{"items": [{"field": "status", "toString": "Done"}]}]
 
 

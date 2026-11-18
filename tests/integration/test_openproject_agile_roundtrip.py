@@ -185,7 +185,8 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
     migration = SprintEpicMigration(jira_client=jira, op_client=client)
     for _ in range(2):
         result = migration.run()
-        assert result.success and result.updated == 4, result
+        assert result.success, result
+        assert result.updated == 4, result
         assert query(f"WorkPackage.find({subtask_id}).parent_id") == child_id
         assert query(f"""
           wp = WorkPackage.find({child_id})
@@ -259,7 +260,8 @@ def test_work_package_content_roundtrip(rails):
     ]
     for _ in range(2):
         result = service.batch_update_work_packages(updates)
-        assert result["updated"] == 1 and result["failed"] == 0, result
+        assert result["updated"] == 1, result
+        assert result["failed"] == 0, result
         assert values(text_id) == ["übernommen"]
         assert values(user_id) == [str(seed["author_id"])]
         assert query(f"WorkPackage.find({wp_id}).description") == "Beschreibung ä"
@@ -338,7 +340,8 @@ def test_comment_readers_on_private_work_package(rails, monkeypatch):
         for attempt in range(2):
             collected = migration._collect_content_for_issue(issue, wp_id)
             result = migration._bulk_process_collected_content([collected])
-            assert result["comments_held"] == 7 and result["comments_migrated"] == int(attempt == 0), result
+            assert result["comments_held"] == 7, result
+            assert result["comments_migrated"] == int(attempt == 0), result
 
     observations = query(f"""
       ($audience_tokens + [[nil, nil]]).map do |id, token|
@@ -356,9 +359,11 @@ def test_comment_readers_on_private_work_package(rails, monkeypatch):
         if i < 4:
             assert identity_matches, (i, status)
         if i < 3:
-            assert status == 200 and source[0]["body"] in body, (i, status)
+            assert status == 200, (i, status)
+            assert source[0]["body"] in body, (i, status)
         else:
-            assert status in (401, 403, 404) and source[0]["body"] not in body, (i, status)
+            assert status in (401, 403, 404), (i, status)
+            assert source[0]["body"] not in body, (i, status)
         assert all(row["body"] not in body for row in source[1:])
     # A higher-level view or a later permission grant cannot reveal an absent body.
     persisted = query(f"Journal.where(journable: WorkPackage.find({wp_id})).pluck(:notes)")
