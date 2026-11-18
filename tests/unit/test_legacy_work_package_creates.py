@@ -59,6 +59,16 @@ def test_ambiguous_write_stops_after_one_attempt(migration):
     result = migration.run()
     assert not result.success
     assert "reconcile" in result.error
+    pending = migration.data_dir / "legacy-work-package-create.pending.json"
+    assert json.loads(pending.read_text()) == {
+        "project_key": "ORIGIN",
+        "openproject_project_id": 7,
+        "issues": [{"jira_id": "1", "jira_key": "ORIGIN-1"}, {"jira_id": "2", "jira_key": "ORIGIN-2"}],
+    }
+    migration.work_package_mapping = {}
+    retry = migration.run()
+    assert not retry.success
+    assert "reconcile" in retry.error
     bulk.assert_called_once()
 
 
