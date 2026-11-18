@@ -20,6 +20,8 @@ def migration(tmp_path, monkeypatch):
     app = legacy.WorkPackageMigration.__new__(legacy.WorkPackageMigration)
     app.data_dir = tmp_path
     app.logger = Mock()
+    app.jira_client = Mock()
+    app.jira_client.jira.search_issues.return_value = []
     app.op_client = Mock()
     app.op_client.get_project_wp_cf_snapshot.return_value = []
     app.project_mapping = {"P": {"jira_key": "ORIGIN", "openproject_id": 7}}

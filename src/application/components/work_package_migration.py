@@ -23,6 +23,12 @@ from pydantic import ValidationError
 from jira import Issue
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.issue_security import (
+    mapped_project_issues,
+    permits_unrestricted_result,
+    unrestricted_project_jql,
+    warn_if_restricted_mappings,
+)
 from src.application.components.work_package_files import sync_directory, write_issue_snapshot
 from src.application.components.work_package_history import has_no_source_journals
 from src.application.components.wp_defaults import fill_missing_fields, work_package_defaults
@@ -805,14 +811,14 @@ class WorkPackageMigration(BaseMigration):
         self,
         project_key: str,
     ) -> Iterator[Issue]:
-        """Fetch ALL Jira issues for a project without any filtering.
+        """Fetch project issues eligible for ordinary OpenProject visibility.
 
-        Used for incremental migrations to process all issues.
+        Used for incremental migrations without a timestamp cutoff.
         Includes renderedFields expansion for comment data extraction.
         """
         batch_size = config.migration_config.get("batch_size", 100)
-        jql = f'project = "{project_key}" ORDER BY created ASC, key ASC'
-        fields = None  # Get all fields
+        jql = f"{unrestricted_project_jql(project_key)} ORDER BY created ASC, key ASC"
+        fields = "*all"  # Include the issue security level when Jira exposes it.
         expand = "changelog,renderedFields"  # Include changelog and comments
 
         # Check for issue limit or specific test issues (for testing purposes)
@@ -824,8 +830,8 @@ class WorkPackageMigration(BaseMigration):
             test_issues = [k.strip() for k in os.getenv("J2O_TEST_ISSUES").split(",")]
             self.logger.info(f"Testing specific issues: {test_issues}")
             # Format issue keys for Jira JQL IN clause
-            issue_keys_str = ",".join(f'"{k}"' for k in test_issues)
-            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC, key ASC'
+            issue_keys_str = ",".join(json.dumps(k) for k in test_issues)
+            jql = f"{unrestricted_project_jql(project_key)} AND key IN ({issue_keys_str}) ORDER BY created ASC, key ASC"
         elif os.getenv("J2O_MAX_ISSUES"):
             # Limit issue count
             try:
@@ -855,7 +861,9 @@ class WorkPackageMigration(BaseMigration):
                 project_key=project_key,
             )
 
-        yield from iter_issue_pages(project_key, fetch_page, batch_size, max_issues)
+        yield from filter(
+            permits_unrestricted_result, iter_issue_pages(project_key, fetch_page, batch_size, max_issues)
+        )
 
     def iter_project_issues(self, project_key: str) -> Iterator[Issue]:
         """Generate issues for a project with memory-efficient pagination.
@@ -890,7 +898,7 @@ class WorkPackageMigration(BaseMigration):
                 self.logger.warning("Invalid J2O_MAX_ISSUES value, ignoring")
 
         jql = self._project_issue_query(project_key)
-        fields = None  # Get all fields
+        fields = "*all"  # Include the issue security level when Jira exposes it.
         expand = "changelog,renderedFields"  # Include changelog and comments
 
         logger.notice("Starting paginated fetch for project '%s'...", project_key)
@@ -920,14 +928,16 @@ class WorkPackageMigration(BaseMigration):
                 project_key=project_key,
             )
 
-        yield from iter_issue_pages(project_key, fetch_page, batch_size, max_issues)
+        yield from filter(
+            permits_unrestricted_result, iter_issue_pages(project_key, fetch_page, batch_size, max_issues)
+        )
 
     def _project_issue_query(self, project_key: str) -> str:
-        project = f'project = "{project_key}"'
+        project = unrestricted_project_jql(project_key)
         order = "ORDER BY created ASC, key ASC"
         test_issues = os.getenv("J2O_TEST_ISSUES")
         if test_issues:
-            issue_keys = ",".join(f'"{key.strip()}"' for key in test_issues.split(","))
+            issue_keys = ",".join(json.dumps(key.strip()) for key in test_issues.split(","))
             return f"{project} AND key IN ({issue_keys}) {order}"
         if os.environ.get("J2O_FAST_FORWARD", "1").lower() not in {"1", "true", "yes", "on"}:
             return f"{project} {order}"
@@ -1056,7 +1066,7 @@ class WorkPackageMigration(BaseMigration):
 
         """
         try:
-            jql = f'project = "{project_key}"'
+            jql = unrestricted_project_jql(project_key)
             # Request minimal payload but ensure we get metadata
             resp: Any = self.jira_client.jira.search_issues(
                 jql,
@@ -1765,6 +1775,8 @@ class WorkPackageMigration(BaseMigration):
 
     def _migrate_project_issues(self, project_key: str, project_id: int, batch_size: int) -> tuple[int, int]:
         existing = self._get_existing_work_packages(project_id)
+        known = mapped_project_issues(project_key, self.work_package_mapping) | existing.keys()
+        warn_if_restricted_mappings(self.jira_client, project_key, known, self.logger)
         created = issues = 0
         records: list[dict[str, Any]] = []
         metadata: list[dict[str, Any]] = []
