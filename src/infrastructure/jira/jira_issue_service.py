@@ -26,12 +26,13 @@ import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraConnectionError,
     JiraResourceNotFoundError,
 )
-from src.utils.performance_optimizer import StreamingPaginator, rate_limited
+from src.utils.performance_optimizer import rate_limited
 
 if TYPE_CHECKING:
     from jira import Issue
@@ -78,11 +79,9 @@ class JiraIssueService:
         expand_changelog: bool = True,
     ) -> list[Issue]:
         """Get all issues for a specific project, handling pagination."""
-        all_issues: list[Issue] = []
-        start_at = 0
         max_results = 100  # Fetch in batches of 100
         # Surround project key with quotes to handle reserved words
-        jql = f'project = "{project_key}" ORDER BY created ASC'
+        jql = f'project = "{project_key}" ORDER BY created ASC, key ASC'
         fields = None  # Get all fields
         # Include renderedFields to fetch comments, along with optional changelog
         expand_parts = []
@@ -105,52 +104,17 @@ class JiraIssueService:
             msg = f"Project '{project_key}' not found: {e!s}"
             raise JiraResourceNotFoundError(msg) from e
 
-        # Fetch all pages
-        while True:
-            try:
-                self._logger.debug(
-                    "Fetching issues for %s: startAt=%s, maxResults=%s",
-                    project_key,
-                    start_at,
-                    max_results,
-                )
+        def fetch_page(offset: int, size: int) -> list[Issue]:
+            return self._client.jira.search_issues(
+                jql,
+                startAt=offset,
+                maxResults=size,
+                fields=fields,
+                expand=expand,
+                json_result=False,
+            )
 
-                issues_page = self._client.jira.search_issues(
-                    jql,
-                    startAt=start_at,
-                    maxResults=max_results,
-                    fields=fields,
-                    expand=expand,
-                    json_result=False,  # Get jira.Issue objects
-                )
-
-                if not issues_page:
-                    self._logger.debug(
-                        "No more issues found for %s at startAt=%s",
-                        project_key,
-                        start_at,
-                    )
-                    break  # Exit loop if no more issues are returned
-
-                all_issues.extend(issues_page)
-                self._logger.debug(
-                    "Fetched %s issues (total: %s) for %s",
-                    len(issues_page),
-                    len(all_issues),
-                    project_key,
-                )
-
-                # Check if this was the last page
-                if len(issues_page) < max_results:
-                    break
-
-                start_at += len(issues_page)
-
-            except Exception as e:
-                error_msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {e!s}"
-                self._logger.exception(error_msg)
-                raise JiraApiError(error_msg) from e
-
+        all_issues = list(iter_issue_pages(project_key, fetch_page, max_results))
         self._logger.info(
             "Finished fetching %s issues for project '%s'.",
             len(all_issues),
@@ -501,18 +465,7 @@ class JiraIssueService:
         fields: str | None = None,
         batch_size: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Stream all issues for a project with memory-efficient pagination.
-
-        The pre-extraction code referenced ``StreamingPaginator`` with
-        kwargs and a method that don't exist on the actual
-        ``src.utils.performance_optimizer.StreamingPaginator``
-        (``__init__`` takes ``fetch_func, page_size, max_pages``;
-        the streaming entry point is ``iter_items``, not
-        ``paginate_jql_search``). This method was therefore broken
-        in production. Rewritten to use the real API: build a
-        ``fetch_func`` closure over the SDK's ``search_issues``
-        and yield through ``iter_items``.
-        """
+        """Stream project issues, respecting the page size negotiated by Jira."""
         if not self._client.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
@@ -524,23 +477,12 @@ class JiraIssueService:
         # Quote ``project_key`` in JQL so reserved words / special
         # characters in project keys don't break the query — same
         # treatment ``get_all_issues_for_project`` uses.
-        jql = f'project = "{project_key}"'
+        jql = f'project = "{project_key}" ORDER BY created ASC, key ASC'
 
-        def _fetch_page(start_at: int, max_results: int, **_kw: object) -> list[Issue]:
-            return list(
-                self._client.jira.search_issues(
-                    jql,
-                    startAt=start_at,
-                    maxResults=max_results,
-                    fields=fields,
-                ),
-            )
+        def fetch_page(offset: int, size: int) -> list[Issue]:
+            return self._client.jira.search_issues(jql, startAt=offset, maxResults=size, fields=fields)
 
-        paginator = StreamingPaginator(
-            fetch_func=_fetch_page,
-            page_size=effective_batch_size,
-        )
-        yield from paginator.iter_items()
+        yield from iter_issue_pages(project_key, fetch_page, effective_batch_size)
 
     # ── watchers ─────────────────────────────────────────────────────────
 

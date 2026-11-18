@@ -38,9 +38,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from jira import Issue
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -162,20 +164,20 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         if not jira_keys:
             return {}
 
-        issues: dict[str, Any] = {}
-        try:
-            # Use direct JQL search to avoid ThreadPoolExecutor deadlock issues
-            jql = f"key in ({','.join(jira_keys)})"
-            jira_issues = self.jira_client.jira.search_issues(
-                jql,
-                maxResults=len(jira_keys),
-                fields="attachment",
-            )
-            for issue in jira_issues:
-                issues[issue.key] = issue
-        except Exception:
-            logger.exception("Failed to fetch Jira issues for attachments extraction")
-            return {}
+        jql = f"key in ({','.join(jira_keys)}) ORDER BY key ASC"
+
+        def fetch_page(offset: int, size: int) -> list[Issue]:
+            return self.jira_client.jira.search_issues(jql, startAt=offset, maxResults=size, fields="attachment")
+
+        project_key = self._issue_project_key(jira_keys[0])
+        requested = set(jira_keys)
+        issues = {
+            issue.key: issue for issue in iter_issue_pages(project_key, fetch_page, len(requested), len(requested))
+        }
+        missing = requested.difference(issues)
+        if missing:
+            self._loss_counters["extract_unread_issues"] += len(missing)
+            logger.error("Jira omitted issues during attachment extraction: %s", ", ".join(sorted(missing)))
 
         by_key: dict[str, list[dict[str, Any]]] = {}
         for key, issue in issues.items():
@@ -1130,7 +1132,8 @@ puts end_marker
         # Save final attachment mapping
         self._save_attachment_mapping(all_mappings)
 
-        success = total_failed == 0 or (total_updated > 0 and total_failed < total_updated)
+        total_failed += self._loss_counters["extract_unread_issues"]
+        success = total_failed == 0
         # Surface the per-stage drop breakdown so an operator can
         # tell where files are getting lost (e.g. download failures
         # vs Rails errors vs filename normalisation). The buckets

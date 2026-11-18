@@ -60,6 +60,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, JiraUser
@@ -346,74 +347,22 @@ class WorkPackageSkeletonMigration(BaseMigration):
             Individual Jira Issue objects
 
         """
-        start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
-
-        # Check for test issue limiting
-        max_issues = None
-        if os.getenv("J2O_MAX_ISSUES"):
-            try:
-                max_issues = int(os.getenv("J2O_MAX_ISSUES"))
-                self.logger.info(f"Limiting to {max_issues} issues (J2O_MAX_ISSUES)")
-            except ValueError:
-                pass
-
-        jql = f'project = "{project_key}" ORDER BY created ASC'
-        total_yielded = 0
-
-        while True:
-            # Check limit
-            if max_issues is not None and total_yielded >= max_issues:
-                self.logger.info(f"Reached max issues limit ({max_issues})")
-                break
-
-            # Fetch batch - minimal fields for skeleton
-            issues = self._fetch_issues_batch(jql, start_at, batch_size)
-
-            if not issues:
-                break
-
-            for issue in issues:
-                if max_issues is not None and total_yielded >= max_issues:
-                    break
-                yield issue
-                total_yielded += 1
-
-            # Check if we got a full batch
-            if len(issues) < batch_size:
-                break
-
-            start_at += batch_size
-
-    def _fetch_issues_batch(
-        self,
-        jql: str,
-        start_at: int,
-        batch_size: int,
-    ) -> list[Issue]:
-        """Fetch a batch of issues from Jira.
-
-        Args:
-            jql: The JQL query
-            start_at: Starting index
-            batch_size: Number of issues to fetch
-
-        Returns:
-            List of Jira Issue objects
-
-        """
         try:
-            # Include metadata fields for proper attribute migration
-            fields = "summary,issuetype,status,project,priority,assignee,reporter,created,updated"
+            limit = int(os.environ["J2O_MAX_ISSUES"])
+        except KeyError, ValueError:
+            limit = None
+        jql = f'project = "{project_key}" ORDER BY created ASC, key ASC'
+
+        def fetch_page(offset: int, size: int) -> list[Issue]:
             return self.jira_client.jira.search_issues(
                 jql,
-                startAt=start_at,
-                maxResults=batch_size,
-                fields=fields,
+                startAt=offset,
+                maxResults=size,
+                fields="summary,issuetype,status,project,priority,assignee,reporter,created,updated",
             )
-        except Exception as e:
-            self.logger.error("Failed to fetch issues: %s", e)
-            return []
+
+        yield from iter_issue_pages(project_key, fetch_page, batch_size, limit)
 
     def _get_openproject_type_id(self, jira_issue: Issue) -> int | None:
         """Get OpenProject type ID for a Jira issue type.

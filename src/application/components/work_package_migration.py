@@ -40,6 +40,7 @@ from src.application.transformers.issue_transformer import IssueTransformer
 from src.config import logger
 from src.display import ProgressTracker
 from src.domain.enums import JournalEntryType
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -1623,9 +1624,8 @@ class WorkPackageMigration(BaseMigration):
         Used for incremental migrations to process all issues.
         Includes renderedFields expansion for comment data extraction.
         """
-        start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
-        jql = f'project = "{project_key}" ORDER BY created ASC'
+        jql = f'project = "{project_key}" ORDER BY created ASC, key ASC'
         fields = None  # Get all fields
         expand = "changelog,renderedFields"  # Include changelog and comments
 
@@ -1639,7 +1639,7 @@ class WorkPackageMigration(BaseMigration):
             self.logger.info(f"Testing specific issues: {test_issues}")
             # Format issue keys for Jira JQL IN clause
             issue_keys_str = ",".join(f'"{k}"' for k in test_issues)
-            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC'
+            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC, key ASC'
         elif os.getenv("J2O_MAX_ISSUES"):
             # Limit issue count
             try:
@@ -1659,36 +1659,17 @@ class WorkPackageMigration(BaseMigration):
             msg = f"Project '{project_key}' not found: {e!s}"
             raise JiraResourceNotFoundError(msg) from e
 
-        total_yielded = 0
-        while True:
-            issues_batch = self._fetch_issues_with_retry(
+        def fetch_page(offset: int, size: int) -> list[Issue]:
+            return self._fetch_issues_with_retry(
                 jql=jql,
-                start_at=start_at,
-                max_results=batch_size,
+                start_at=offset,
+                max_results=size,
                 fields=fields,
                 expand=expand,
                 project_key=project_key,
             )
 
-            if not issues_batch:
-                break
-
-            for issue in issues_batch:
-                yield issue
-                total_yielded += 1
-                # Check if we've reached the limit
-                if max_issues and total_yielded >= max_issues:
-                    self.logger.info(f"Reached issue limit ({max_issues}), stopping")
-                    return
-
-            self.logger.debug(f"Yielded {len(issues_batch)} issues (total: {total_yielded}) for {project_key}")
-
-            if len(issues_batch) < batch_size:
-                break
-
-            start_at += len(issues_batch)
-
-        self.logger.info(f"Finished yielding {total_yielded} issues for project '{project_key}'")
+        yield from iter_issue_pages(project_key, fetch_page, batch_size, max_issues)
 
     def iter_project_issues(self, project_key: str) -> Iterator[Issue]:
         """Generate issues for a project with memory-efficient pagination.
@@ -1708,7 +1689,6 @@ class WorkPackageMigration(BaseMigration):
             JiraResourceNotFoundError: If the project is not found
 
         """
-        start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
 
         # Reset per-project tracking for latest issue timestamps
@@ -1728,7 +1708,7 @@ class WorkPackageMigration(BaseMigration):
             test_issues = [k.strip() for k in os.getenv("J2O_TEST_ISSUES").split(",")]
             self.logger.info(f"Testing specific issues: {test_issues}")
             issue_keys_str = ",".join(f'"{k}"' for k in test_issues)
-            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC'
+            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC, key ASC'
             fast_forward = False  # Disable fast-forward for testing
             backoff_seconds = 0
         else:
@@ -1737,7 +1717,7 @@ class WorkPackageMigration(BaseMigration):
             fast_forward = fast_forward_flag in {"1", "true", "yes", "on"}
             backoff_seconds = int(os.environ.get("J2O_FF_BACKOFF_SECONDS", "7200"))  # default 2h
             base_condition = f'project = "{project_key}"'
-            ordering = "ORDER BY created ASC"
+            ordering = "ORDER BY created ASC, key ASC"
             jql = f"{base_condition} {ordering}"
         existing_keys: set[str] = set()
 
@@ -1778,7 +1758,7 @@ class WorkPackageMigration(BaseMigration):
                 target_ts = checkpoint_ts
                 effective_cutoff = target_ts - timedelta(seconds=backoff_seconds)
                 cutoff_str = effective_cutoff.strftime("%Y-%m-%d %H:%M")
-                ordering = "ORDER BY updated ASC"
+                ordering = "ORDER BY updated ASC, key ASC"
                 jql = f'{base_condition} AND updated >= "{cutoff_str}" {ordering}'
                 self.logger.info(
                     "Fast-forward enabled for %s using checkpoint %s (effective cutoff %s, backoff %ss)",
@@ -1816,53 +1796,17 @@ class WorkPackageMigration(BaseMigration):
                 project_key,
             )
 
-        total_yielded = 0
-        while True:
-            # Fetch batch with retry logic
-            issues_batch = self._fetch_issues_with_retry(
+        def fetch_page(offset: int, size: int) -> list[Issue]:
+            return self._fetch_issues_with_retry(
                 jql=jql,
-                start_at=start_at,
-                max_results=batch_size,
+                start_at=offset,
+                max_results=size,
                 fields=fields,
                 expand=expand,
                 project_key=project_key,
             )
 
-            if not issues_batch:
-                logger.debug(
-                    "No more issues found for %s at startAt=%s",
-                    project_key,
-                    start_at,
-                )
-                break
-
-            # Yield individual issues
-            for issue in issues_batch:
-                yield issue
-                total_yielded += 1
-                # Check if we've reached the limit
-                if max_issues and total_yielded >= max_issues:
-                    self.logger.info(f"Reached issue limit ({max_issues}), stopping")
-                    return
-
-            logger.info(
-                "Fetched batch: %s issues (total: %s) for project '%s'",
-                len(issues_batch),
-                total_yielded,
-                project_key,
-            )
-
-            # Check if this was the last page
-            if len(issues_batch) < batch_size:
-                break
-
-            start_at += len(issues_batch)
-
-        logger.info(
-            "Finished yielding %s issues for project '%s'",
-            total_yielded,
-            project_key,
-        )
+        yield from iter_issue_pages(project_key, fetch_page, batch_size, max_issues)
 
     def _fetch_issues_with_retry(
         self,
@@ -2015,39 +1959,7 @@ class WorkPackageMigration(BaseMigration):
             all_issues = []
             issue_count = 0
 
-            # Match pagination parameters used by iter_project_issues
-            start_at = 0
-            batch_size = config.migration_config.get("batch_size", 100)
-            jql = f'project = "{project_key}" ORDER BY created ASC'
-            fields = None
-            expand = "changelog,renderedFields"
-
-            # Prefer generator when available (tests patch this)
-            first_batch = None
-            if hasattr(self, "iter_project_issues"):
-                gen_list = list(self.iter_project_issues(project_key))
-                first_batch = gen_list
-            else:
-                # Fallback: fetch first page to read `total` metadata
-                first_batch = self._fetch_issues_with_retry(
-                    jql=jql,
-                    start_at=start_at,
-                    max_results=batch_size,
-                    fields=fields,
-                    expand=expand,
-                    project_key=project_key,
-                )
-
-            total_estimate: int | None = None
-            if first_batch is not None and hasattr(first_batch, "total"):
-                try:
-                    total_estimate = int(first_batch.total)
-                except Exception:
-                    total_estimate = None
-            if total_estimate is None:
-                # Fallback to separate metadata query only if `.total` missing
-                total_estimate = self._get_project_total_issues(project_key)
-
+            total_estimate = self._get_project_total_issues(project_key)
             if total_estimate:
                 self.logger.info(
                     "Jira reports %s total issues for project %s",
@@ -2099,59 +2011,15 @@ class WorkPackageMigration(BaseMigration):
                             f"Processed {issue_count} issues",
                         )
 
-            # Process all pages, with an issue-level progress bar when total is known
-            if total_estimate and total_estimate > 0 and not isinstance(first_batch, list):
-                with ProgressTracker(
-                    f"Issues for {project_key}",
-                    total_estimate,
-                    "Recent Issues",
-                ) as issue_tracker:
-                    current_batch = first_batch or []
-                    while current_batch:
-                        for issue in current_batch:
-                            _process_issue(issue)
-                            issue_tracker.increment()
-                            if issue_count % 500 == 0:
-                                issue_tracker.add_log_item(
-                                    f"Processed {issue_count} issues",
-                                )
-                            if len(current_batch) < batch_size:
-                                break
-                            start_at += len(current_batch)
-                            current_batch = (
-                                self._fetch_issues_with_retry(
-                                    jql=jql,
-                                    start_at=start_at,
-                                    max_results=batch_size,
-                                    fields=fields,
-                                    expand=expand,
-                                    project_key=project_key,
-                                )
-                                or []
-                            )
-            # No total available: process without an inner issue progress bar
-            elif isinstance(first_batch, list):
-                for issue in first_batch:
-                    _process_issue(issue)
-            else:
-                current_batch = first_batch or []
-                while current_batch:
-                    for issue in current_batch:
+            issues = self.iter_project_issues(project_key)
+            if total_estimate and total_estimate > 0:
+                with ProgressTracker(f"Issues for {project_key}", total_estimate, "Recent Issues") as issue_tracker:
+                    for issue in issues:
                         _process_issue(issue)
-                    if len(current_batch) < batch_size:
-                        break
-                    start_at += len(current_batch)
-                    current_batch = (
-                        self._fetch_issues_with_retry(
-                            jql=jql,
-                            start_at=start_at,
-                            max_results=batch_size,
-                            fields=fields,
-                            expand=expand,
-                            project_key=project_key,
-                        )
-                        or []
-                    )
+                        issue_tracker.increment()
+            else:
+                for issue in issues:
+                    _process_issue(issue)
 
             # Final logging
             self.logger.info(
