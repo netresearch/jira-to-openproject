@@ -1,24 +1,76 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
+import logging
 from typing import Any
+
+logger = logging.getLogger("migration.wp_defaults")
 
 # Timeout in seconds for Rails console queries fetching default IDs
 _DEFAULT_TIMEOUT = 180
 
 
-def choose_default_type_id(op_client: Any) -> int:
-    """Pick a default Type ID, preferring the first by position, else 1."""
+def _query_ids(op_client: Any, query: str) -> list[Any]:
     try:
-        type_ids = op_client.execute_large_query_to_json_file(
-            "Type.order(:position).pluck(:id)",
-            timeout=_DEFAULT_TIMEOUT,
-        )
-        if isinstance(type_ids, list) and type_ids:
-            return int(type_ids[0])
-    except Exception:
-        pass
-    return 1
+        result = op_client.execute_large_query_to_json_file(query, timeout=_DEFAULT_TIMEOUT)
+    except Exception as exc:
+        logger.warning("OpenProject default lookup %s failed (%s); using fallback", query, type(exc).__name__)
+        return []
+    if isinstance(result, list):
+        return result
+    logger.warning(
+        "OpenProject default lookup %s returned %s instead of a list; using fallback", query, type(result).__name__
+    )
+    return []
+
+
+def _first_id(ids: list[Any], fallback: int | None = None) -> int | None:
+    try:
+        return int(ids[0])
+    except IndexError, TypeError, ValueError:
+        return fallback
+
+
+def choose_default_type_id(op_client: Any) -> int:
+    """Pick the first available type by position."""
+    type_id = _first_id(_query_ids(op_client, "Type.order(:position).pluck(:id)"))
+    return 1 if type_id is None else type_id
+
+
+def _default_author_id(op_client: Any, configured: int | str | None) -> int | str | None:
+    if configured:
+        try:
+            author_id = int(configured)
+        except TypeError, ValueError:
+            return configured
+        if author_id:
+            return author_id
+    return _first_id(_query_ids(op_client, "User.where(admin: true).limit(1).pluck(:id)"))
+
+
+def work_package_defaults(
+    op_client: Any,
+    project_id: int | None,
+    fallback_admin_user_id: int | str | None,
+) -> tuple[dict[str, Any], list[Any]]:
+    """Retrieve defaults once per batch, including the status list for legacy status validation."""
+    type_id = choose_default_type_id(op_client)
+    statuses = _query_ids(op_client, "Status.order(:position).pluck(:id)")
+    priority_id = _first_id(_query_ids(op_client, "IssuePriority.order(:position).pluck(:id)"))
+    return {
+        "type_id": type_id,
+        "status_id": _first_id(statuses, 1),
+        "priority_id": priority_id,
+        "author_id": _default_author_id(op_client, fallback_admin_user_id),
+        "project_id": project_id,
+    }, statuses
+
+
+def fill_missing_fields(record: dict[str, Any], defaults: dict[str, Any]) -> None:
+    """Fill unset fields with available target defaults."""
+    for key, value in defaults.items():
+        if value and not record.get(key):
+            record[key] = value
 
 
 def apply_required_defaults(
@@ -28,59 +80,7 @@ def apply_required_defaults(
     op_client: Any,
     fallback_admin_user_id: int | str | None,
 ) -> None:
-    """Fill in missing required fields on WorkPackage records.
-
-    Sets type_id, status_id, priority_id, author_id if missing.
-    """
-    default_type_id = choose_default_type_id(op_client)
-
-    default_status_id = 1
-    try:
-        status_ids = op_client.execute_large_query_to_json_file(
-            "Status.order(:position).pluck(:id)",
-            timeout=_DEFAULT_TIMEOUT,
-        )
-        if isinstance(status_ids, list) and status_ids:
-            default_status_id = int(status_ids[0])
-    except Exception:
-        pass
-
-    default_priority_id = None
-    try:
-        pr_ids = op_client.execute_large_query_to_json_file(
-            "IssuePriority.order(:position).pluck(:id)",
-            timeout=_DEFAULT_TIMEOUT,
-        )
-        if isinstance(pr_ids, list) and pr_ids:
-            default_priority_id = int(pr_ids[0])
-    except Exception:
-        default_priority_id = None
-
-    # Author can be provided as int or str (environment/CLI); normalize but preserve type-safety
-    default_author_id: int | str | None = None
-    if fallback_admin_user_id:
-        try:
-            default_author_id = int(fallback_admin_user_id)
-        except Exception:
-            # If int conversion fails (e.g., it's a username string), use as-is
-            default_author_id = fallback_admin_user_id
-    if not default_author_id:
-        try:
-            admin_ids = op_client.execute_large_query_to_json_file(
-                "User.where(admin: true).limit(1).pluck(:id)",
-                timeout=_DEFAULT_TIMEOUT,
-            )
-            if isinstance(admin_ids, list) and admin_ids:
-                default_author_id = int(admin_ids[0])
-        except Exception:
-            default_author_id = None
-
-    for wp in records:
-        if not wp.get("type_id"):
-            wp["type_id"] = default_type_id
-        if not wp.get("status_id") and default_status_id:
-            wp["status_id"] = default_status_id
-        if not wp.get("author_id") and default_author_id:
-            wp["author_id"] = default_author_id
-        if not wp.get("priority_id") and default_priority_id:
-            wp["priority_id"] = default_priority_id
+    """Fill missing project, type, status, priority, and author IDs."""
+    defaults, _ = work_package_defaults(op_client, project_id, fallback_admin_user_id)
+    for record in records:
+        fill_missing_fields(record, defaults)

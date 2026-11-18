@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from src.domain import provenance_fields
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
@@ -420,27 +421,36 @@ J2O_DATA
             raise QueryExecutionError(msg) from e
 
         ruby = f"""
-          cf_key = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Origin Key')
-          cf_mig = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Last Update Date')
-
-          # Pre-load custom values for all WPs in this project for efficiency
-          wp_ids = WorkPackage.where(project_id: {pid}).pluck(:id)
-
-          key_values = {{}}
-          mig_values = {{}}
-
-          if cf_key
-            CustomValue.where(custom_field_id: cf_key.id, customized_type: 'WorkPackage', customized_id: wp_ids)
-              .each {{ |cv| key_values[cv.customized_id] = cv.value }}
-          end
-
-          if cf_mig
-            CustomValue.where(custom_field_id: cf_mig.id, customized_type: 'WorkPackage', customized_id: wp_ids)
-              .each {{ |cv| mig_values[cv.customized_id] = cv.value }}
-          end
-
-          WorkPackage.where(project_id: {pid}).select(:id, :updated_at).map do |wp|
-            {{ id: wp.id, updated_at: (wp.updated_at&.utc&.iso8601), jira_issue_key: key_values[wp.id], jira_migration_date: mig_values[wp.id] }}
+          jira_sources = {json.dumps(provenance_fields.JIRA_SOURCE_LABELS)}
+          packages = WorkPackage.where(project_id: {pid}).select(:id, :updated_at)
+          names = ["J2O Origin Key", "Jira Issue Key", "J2O Origin System", "J2O Origin ID",
+                   "J2O External ID", "J2O Last Update Date"]
+          values = Hash.new {{ |all, id| all[id] = {{}} }}
+          CustomValue.joins(:custom_field)
+            .where(customized_type: "WorkPackage", customized_id: packages.reselect(:id),
+                   custom_fields: {{type: "WorkPackageCustomField", name: names}})
+            .pluck(:customized_id, "custom_fields.name", :value).each do |id, name, value|
+              next if value.blank?
+              old = values[id][name]
+              raise "Conflicting work package provenance" if old && old != value
+              values[id][name] = value
+            end
+          packages.map do |wp|
+            metadata = values[wp.id]
+            system = metadata["J2O Origin System"].to_s.strip.downcase
+            key, legacy_key = metadata.values_at("J2O Origin Key", "Jira Issue Key")
+            ids = []
+            if jira_sources.include?(system)
+              raise "Conflicting Jira issue keys" if key && legacy_key && key != legacy_key
+              key ||= legacy_key
+              ids = metadata.values_at("J2O Origin ID", "J2O External ID").compact.uniq
+              raise "Conflicting Jira issue IDs" if ids.length > 1
+            elsif system.present?
+              key = nil
+            end
+            {{id: wp.id, updated_at: wp.updated_at&.utc&.iso8601,
+              jira_issue_key: key, jira_source_id: ids.first,
+              jira_migration_date: metadata["J2O Last Update Date"]}}
           end
         """
         data = self._client.execute_large_query_to_json_file(ruby, timeout=120)

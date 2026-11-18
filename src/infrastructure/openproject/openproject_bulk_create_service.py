@@ -52,12 +52,53 @@ from pathlib import Path
 from typing import Any
 
 from src import config
+from src.domain import provenance_fields
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.rails_execution import once_per_staging_directory
 
 _JSON_SUFFIX = ".json"
+
+
+# User IDs supplied by Jira are distinct from Watcher primary keys. Keep source
+# identity and memberships in the same transaction as the row they describe.
+_PERSIST_WORK_PACKAGE = """
+persist_work_package = lambda do |wp, custom_fields, issue_key, issue_id, watcher_user_ids|
+  WorkPackage.transaction(requires_new: true) do
+    wp.save!
+    field_values = (custom_fields || []).to_h { |field| [Integer(field.fetch('id')), field.fetch('value')] }
+    unless field_values.empty?
+      wp.custom_field_values = field_values
+      wp.save!(touch: false)
+    end
+    markers = { 'Jira Issue Key' => issue_key, 'J2O Origin Key' => issue_key, 'J2O Origin ID' => issue_id }
+    markers['J2O Origin System'] = 'jira' if issue_key.present? || issue_id.present?
+    markers.each do |name, value|
+      next if value.blank?
+      field = WorkPackageCustomField.find_or_create_by!(name: name) do |cf|
+        cf.field_format = 'string'
+        cf.is_for_all = true
+      end
+      marker = wp.custom_values.find_or_initialize_by(custom_field_id: field.id)
+      if name == 'J2O Origin System' && marker.value.present?
+        raise 'Conflicting Jira source system' unless jira_source_labels.include?(marker.value.to_s.strip.downcase)
+        next
+      end
+      next if marker.value == value.to_s
+      raise 'Conflicting Jira source identity' if marker.value.present?
+      marker.update!(value: value.to_s)
+    end
+    raise ArgumentError, 'Invalid watcher user list' unless watcher_user_ids.is_a?(Array)
+    watcher_user_ids.uniq.each do |id|
+      raise ArgumentError, 'Invalid watcher user ID' unless id.is_a?(Integer) && id.positive?
+      # Watcher's native validations also require a user who can see this work package.
+      Watcher.find_or_create_by!(watchable: wp, user: User.active.find(id))
+    end
+  end
+  true
+end
+"""
 
 
 # Default script-load mode for bulk-create scripts. ``console`` ships the
@@ -217,6 +258,8 @@ class OpenProjectBulkCreateService:
             "require 'logger'\n"
             "begin; require 'fileutils'; rescue; end\n"
             f"model_name = '{model}'\n"
+            f"jira_source_labels = {json.dumps(provenance_fields.JIRA_SOURCE_LABELS)}\n"
+            f"{_PERSIST_WORK_PACKAGE}\n"
             f"data_path = '{container_json.as_posix()}'\n"
             f"result_path = '{container_result.as_posix()}'\n"
             # Ensure progress ENV defaults are present in both console and runner modes
@@ -296,6 +339,7 @@ class OpenProjectBulkCreateService:
             "      jira_issue_key = attrs.delete('jira_issue_key') if attrs.key?('jira_issue_key')\n"
             "    rescue\n"
             "    end\n"
+            "    watcher_user_ids = attrs.delete('watcher_ids') || [] if model_name == 'WorkPackage'\n"
             "    rec.assign_attributes(attrs)\n"
             "    # Ensure defaults are applied AFTER assign_attributes to avoid blank overrides\n"
             "    if model_name == 'WorkPackage'\n"
@@ -318,46 +362,12 @@ class OpenProjectBulkCreateService:
             "      end\n"
             "    rescue\n"
             "    end\n"
-            "    if rec.save\n"
-            "      # Apply ALL custom fields AFTER work package is saved (Jira key + J2O Origin fields)\n"
-            "      if model_name == 'WorkPackage'\n"
-            "        begin\n"
-            "          cf_map = {}\n"
-            "          # Add Jira Issue Key custom field if present (use extracted vars, not attrs)\n"
-            "          key = jira_issue_key || jira_key\n"
-            "          if key\n"
-            "            begin\n"
-            "              cf_jira = CustomField.find_by(type: 'WorkPackageCustomField', name: 'Jira Issue Key')\n"
-            "              if !cf_jira\n"
-            "                cf_jira = CustomField.new(name: 'Jira Issue Key', field_format: 'string',\n"
-            "                  is_required: false, is_for_all: true, type: 'WorkPackageCustomField')\n"
-            "                cf_jira.save\n"
-            "              end\n"
-            "              cf_map[cf_jira.id] = key if cf_jira && cf_jira.id\n"
-            "            rescue\n"
-            "            end\n"
-            "          end\n"
-            "          # Add J2O Origin custom fields\n"
-            "          if cf_data && cf_data.respond_to?(:each)\n"
-            "            cf_data.each do |cfh|\n"
-            "              begin\n"
-            "                cid = (cfh['id'] || cfh[:id]).to_i\n"
-            "                val = cfh['value'] || cfh[:value]\n"
-            "                next if cid <= 0 || val.nil?\n"
-            "                cf_map[cid] = val\n"
-            "              rescue; end\n"
-            "            end\n"
-            "          end\n"
-            "          # Set all custom fields at once\n"
-            "          if cf_map.any?\n"
-            "            rec.custom_field_values = cf_map\n"
-            "            rec.save\n"
-            '            puts "J2O bulk item #{idx}: Set #{cf_map.size} custom fields" if verbose\n'
-            "          end\n"
-            "        rescue => e\n"
-            '          puts "J2O bulk item #{idx}: CF assignment error: #{e.class}: #{e.message}" if verbose\n'
-            "        end\n"
-            "      end\n"
+            "    saved = if model_name == 'WorkPackage'\n"
+            "      persist_work_package.call(rec, cf_data, jira_issue_key || jira_key, jira_id, watcher_user_ids)\n"
+            "    else\n"
+            "      rec.save\n"
+            "    end\n"
+            "    if saved\n"
             "      created << {'index' => idx, 'id' => rec.id}\n"
             '      puts "J2O bulk item #{idx}: saved id=#{rec.id}" if verbose\n'
             "    else\n"

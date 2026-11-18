@@ -12,8 +12,8 @@ import json
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterable, Iterator
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,9 @@ from pydantic import ValidationError
 from jira import Issue
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.work_package_files import sync_directory, write_issue_snapshot
 from src.application.components.work_package_history import has_no_source_journals
+from src.application.components.wp_defaults import fill_missing_fields, work_package_defaults
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.config import logger
 from src.display import ProgressTracker
@@ -31,7 +33,8 @@ from src.domain import provenance_fields
 from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.comment_audience import issue_without_comments
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
-from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.jira.jira_client import JiraApiError, JiraClient
+from src.infrastructure.jira.jira_issue_service import JiraIssueService
 from src.infrastructure.openproject.openproject_bulk_create_service import (
     LegacyJournalReplayError,
     reject_legacy_journal_operations,
@@ -39,7 +42,6 @@ from src.infrastructure.openproject.openproject_bulk_create_service import (
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 from src.infrastructure.persistence.mapping_repo import JsonFileMappingRepository
 from src.models import ComponentResult, WorkPackageMappingEntry
-from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
 from src.utils.enhanced_user_association_migrator import EnhancedUserAssociationMigrator
 from src.utils.markdown_converter import MarkdownConverter
@@ -65,44 +67,7 @@ class WorkPackageMigration(BaseMigration):
 
     # Define mapping file pattern constant
     WORK_PACKAGE_MAPPING_FILE_PATTERN = "work_package_mapping_{}.json"
-    ATTACHMENT_MAPPING_FILE = "attachment_mapping.json"
-
-    # Fields that should NOT create journal notes (internal Jira fields handled elsewhere)
-    # BUG #60: These fields create noise in journals but have no meaningful migration value
-    IGNORED_CHANGELOG_FIELDS = frozenset(
-        {
-            # Work log related (worklogs migrated separately)
-            "WorklogId",
-            "timespent",
-            "timeoriginalestimate",  # Also in field_mappings, but sometimes shows as unmapped
-            # Issue links and relations (migrated separately)
-            "RemoteIssueLink",
-            "Link",
-            "IssueParentAssociation",
-            "Parent",
-            "Epic Link",
-            "Epic Child",
-            # Attachments (migrated separately)
-            "Attachment",
-            "attachment",
-            # Sprint/agile (migrated separately)
-            "Sprint",
-            "Story Points",
-            "Rank",
-            "Global Rank",
-            # Internal Jira fields with no migration value
-            "RemoteIssueLinkGlobalId",
-            "duedate",  # Due date handled in main WP fields
-            "security",  # Jira security level - no OP equivalent
-            "environment",  # Rarely used, clutters journals
-            "watches",  # Watchers not migrated
-            "votes",  # Votes not migrated
-            "Flagged",  # Jira flag indicator
-        },
-    )
-
-    # Default OpenProject role ID for mentioned users (Member role)
-    _DEFAULT_MENTION_ROLE_ID = 4
+    ATTACHMENT_MAPPING_FILENAME = "attachment_mapping.json"
 
     def __init__(
         self,
@@ -122,7 +87,7 @@ class WorkPackageMigration(BaseMigration):
         self.jira_issues_file = self.data_dir / "jira_issues.json"
         self.op_work_packages_file = self.data_dir / "op_work_packages.json"
         self.work_package_mapping_file = self.data_dir / "work_package_mapping.json"
-        self.attachment_mapping_file = self.data_dir / self.ATTACHMENT_MAPPING_FILE
+        self.attachment_mapping_file = self.data_dir / self.ATTACHMENT_MAPPING_FILENAME
 
         # Data storage
         self.jira_issues: dict[str, Any] = {}
@@ -142,9 +107,6 @@ class WorkPackageMigration(BaseMigration):
         # Track mentioned users per project for membership assignment
         # Key: OpenProject project ID, Value: set of OpenProject user IDs
         self._mentioned_users_by_project: dict[int, set[int]] = {}
-
-        # Default role ID for mentioned users (Member role)
-        self._mention_role_id: int = self._DEFAULT_MENTION_ROLE_ID
 
         # Initialize markdown converter (will be updated with mappings when available)
         self.markdown_converter = MarkdownConverter()
@@ -166,14 +128,6 @@ class WorkPackageMigration(BaseMigration):
             self.status_category_by_id,
             self.status_category_by_name,
         ) = self._build_status_category_lookup()
-
-        # Initialize enhanced audit trail migrator
-        self.enhanced_audit_trail_migrator = EnhancedAuditTrailMigrator(
-            jira_client=jira_client,
-            op_client=op_client,
-        )
-
-        # Time entry migration is now a separate component. Do not initialize here.
 
         # Load existing mappings
         self._load_mappings()
@@ -310,25 +264,10 @@ class WorkPackageMigration(BaseMigration):
             if not isinstance(user_dict, dict):
                 continue
 
-            # Add index by jira_name (e.g., 'caroline.kuhn')
-            jira_name = user_dict.get("jira_name")
-            if jira_name and jira_name not in self.user_mapping:
-                secondary_entries[jira_name] = user_dict
-
-            # Add index by jira_display_name (e.g., 'Caroline Kindervater')
-            display_name = user_dict.get("jira_display_name")
-            if display_name and display_name not in self.user_mapping:
-                secondary_entries[display_name] = user_dict
-
-            # Add index by jira_email (e.g., 'caroline.kindervater@netresearch.de')
-            email = user_dict.get("jira_email")
-            if email and email not in self.user_mapping:
-                secondary_entries[email] = user_dict
-
-            # Add index by openproject_login (usually same as jira_name)
-            op_login = user_dict.get("openproject_login")
-            if op_login and op_login not in self.user_mapping:
-                secondary_entries[op_login] = user_dict
+            for field in ("jira_name", "jira_display_name", "jira_email", "openproject_login"):
+                alias = user_dict.get(field)
+                if alias and alias not in self.user_mapping:
+                    secondary_entries[alias] = user_dict
 
         # Merge secondary indices into user_mapping
         if secondary_entries:
@@ -361,30 +300,7 @@ class WorkPackageMigration(BaseMigration):
                 if jira_account_id:
                     account_id_mapping[jira_account_id] = user_info
 
-        # For work package mapping, we need to load the existing mapping if available.
-        # The on-disk wp_map is keyed by ``str(jira_id)`` outer with the human-readable
-        # ``jira_key`` stored inside; older fixtures sometimes key directly by
-        # ``jira_key``. Normalise via :class:`WorkPackageMappingEntry.from_legacy` so
-        # we tolerate both shapes and skip bare-int rows (which carry no recoverable
-        # ``jira_key``) — the markdown converter only needs ``jira_key → op_id``.
-        work_package_mapping: dict[str, int] = {}
-        if hasattr(self, "work_package_mapping") and self.work_package_mapping:
-            for outer_key, raw_entry in self.work_package_mapping.items():
-                if not isinstance(raw_entry, dict):
-                    # Bare-int legacy rows have no recoverable jira_key.
-                    continue
-                inner_jira_key = raw_entry.get("jira_key")
-                jira_key = str(inner_jira_key or outer_key)
-                try:
-                    typed_entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-                except (
-                    ValidationError,
-                    ValueError,
-                    TypeError,
-                    AttributeError,
-                ):
-                    continue
-                work_package_mapping[jira_key] = int(typed_entry.openproject_id)
+        work_package_mapping = self._markdown_work_package_ids()
 
         # Update the markdown converter with new mappings (including attachment mapping)
         self.markdown_converter = MarkdownConverter(
@@ -393,6 +309,33 @@ class WorkPackageMigration(BaseMigration):
             account_id_mapping=account_id_mapping,
             attachment_mapping=self.attachment_mapping,
         )
+
+    def _markdown_work_package_ids(self) -> dict[str, int]:
+        # For work package mapping, we need to load the existing mapping if available.
+        # The on-disk wp_map is keyed by ``str(jira_id)`` outer with the human-readable
+        # ``jira_key`` stored inside; older fixtures sometimes key directly by
+        # ``jira_key``. Normalise via :class:`WorkPackageMappingEntry.from_legacy` so
+        # we tolerate both shapes and skip bare-int rows (which carry no recoverable
+        # ``jira_key``) — the markdown converter only needs ``jira_key → op_id``.
+        work_package_mapping: dict[str, int] = {}
+        for outer_key, raw_entry in getattr(self, "work_package_mapping", {}).items():
+            if not isinstance(raw_entry, dict):
+                # Bare-int legacy rows have no recoverable jira_key.
+                continue
+            inner_jira_key = raw_entry.get("jira_key")
+            jira_key = str(inner_jira_key or outer_key)
+            try:
+                typed_entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
+            except (
+                ValidationError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ):
+                continue
+            work_package_mapping[jira_key] = int(typed_entry.openproject_id)
+
+        return work_package_mapping
 
     # Default fallback user id used when a journal author cannot be resolved
     # from the user mapping. See ``_resolve_journal_author_id`` (BUG #32).
@@ -450,61 +393,6 @@ class WorkPackageMigration(BaseMigration):
         """Delegate to :meth:`IssueTransformer.track_mentioned_users`."""
         return self._transformer.track_mentioned_users(text, project_id)
 
-    def _assign_memberships_for_mentioned_users(self, project_id: int) -> dict[str, Any]:
-        """Assign project membership to users who were mentioned in the project.
-
-        This ensures that @mentions render as clickable links in OpenProject.
-        Users must be project members for mentions to work properly.
-
-        Args:
-            project_id: OpenProject project ID
-
-        Returns:
-            Summary dict with counts of memberships assigned
-
-        """
-        result = {"project_id": project_id, "users_added": 0, "users_skipped": 0, "errors": []}
-
-        mentioned_user_ids = self._mentioned_users_by_project.get(project_id, set())
-        if not mentioned_user_ids:
-            return result
-
-        self.logger.info(
-            f"Assigning memberships for {len(mentioned_user_ids)} mentioned users in project {project_id}",
-        )
-
-        for user_id in mentioned_user_ids:
-            try:
-                assign_result = self.op_client.assign_user_roles(
-                    project_id=project_id,
-                    user_id=user_id,
-                    role_ids=[self._mention_role_id],
-                )
-                if assign_result.get("success"):
-                    if assign_result.get("changed"):
-                        result["users_added"] += 1
-                        self.logger.debug(f"Added user {user_id} to project {project_id}")
-                    else:
-                        result["users_skipped"] += 1
-                        self.logger.debug(f"User {user_id} already member of project {project_id}")
-                else:
-                    error_msg = assign_result.get("error", "Unknown error")
-                    result["errors"].append(f"User {user_id}: {error_msg}")
-                    self.logger.warning(
-                        f"Failed to add user {user_id} to project {project_id}: {error_msg}",
-                    )
-            except Exception as e:
-                result["errors"].append(f"User {user_id}: {e}")
-                self.logger.warning(f"Exception adding user {user_id} to project {project_id}: {e}")
-
-        if result["users_added"] > 0:
-            self.logger.info(
-                f"Added {result['users_added']} mentioned users to project {project_id} "
-                f"(skipped {result['users_skipped']} existing members)",
-            )
-
-        return result
-
     def _get_or_create_version(self, version_name: str, project_id: int) -> int | None:
         """Get or create an OpenProject version on-the-fly.
 
@@ -523,10 +411,11 @@ class WorkPackageMigration(BaseMigration):
         if not version_name or not project_id:
             return None
 
-        # Normalize version name
         version_name = str(version_name).strip()
         if not version_name:
             return None
+        quoted_name = "'" + escape_ruby_single_quoted(version_name) + "'"
+        project_id = int(project_id)
 
         # Check cache first
         cache_key = (project_id, version_name)
@@ -536,19 +425,14 @@ class WorkPackageMigration(BaseMigration):
         # Check if version exists in OpenProject
         try:
             query = f"""
-                v = Version.find_by(project_id: {project_id}, name: {version_name!r})
+                v = Version.find_by(project_id: {project_id}, name: {quoted_name})
                 v ? {{ id: v.id, name: v.name }}.to_json : 'null'
             """
             result = self.op_client.execute_json_query(query)
             # Parse JSON if result is a string
             if isinstance(result, str):
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     result = json.loads(result)
-                except (
-                    json.JSONDecodeError,
-                    TypeError,
-                ):
-                    pass
             if isinstance(result, dict) and result.get("id"):
                 version_id = int(result["id"])
                 self._version_cache[cache_key] = version_id
@@ -557,14 +441,15 @@ class WorkPackageMigration(BaseMigration):
                 )
                 return version_id
         except Exception as e:
-            self.logger.debug(f"[VERSION] Error checking version existence: {e}")
+            self.logger.warning("Could not verify existing version in project %s: %s", project_id, e)
+            return None
 
         # Create version on-the-fly
         try:
             create_query = f"""
                 v = Version.new(
                     project_id: {project_id},
-                    name: {version_name!r},
+                    name: {quoted_name},
                     status: 'open'
                 )
                 if v.save
@@ -823,6 +708,18 @@ class WorkPackageMigration(BaseMigration):
         if not isinstance(statuses, list):
             statuses = []
 
+        if fetched and statuses:
+            try:
+                self._save_to_json(statuses, "jira_statuses.json")
+            except Exception:
+                pass
+
+        return self._index_status_categories(statuses)
+
+    @staticmethod
+    def _index_status_categories(
+        statuses: list[dict[str, Any]],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
         id_lookup: dict[str, dict[str, Any]] = {}
         name_lookup: dict[str, dict[str, Any]] = {}
         for status in statuses:
@@ -836,12 +733,6 @@ class WorkPackageMigration(BaseMigration):
             if status_name:
                 name_lookup[status_name.lower()] = category
 
-        if fetched and statuses:
-            try:
-                self._save_to_json(statuses, "jira_statuses.json")
-            except Exception:
-                pass
-
         return id_lookup, name_lookup
 
     def _get_existing_work_packages(self, op_project_id: int) -> dict[str, dict[str, Any]]:
@@ -850,16 +741,31 @@ class WorkPackageMigration(BaseMigration):
         Returns a dict mapping Jira keys to OpenProject work package info.
         """
         snapshot = self.op_client.get_project_wp_cf_snapshot(op_project_id)
+        self._load_confirmed_work_packages()
         existing = {}
         for row in snapshot:
-            key = str(row.get("jira_issue_key") or "").strip()
+            key = str(row.get("jira_issue_key") or self._verified_mapping_key(row, op_project_id) or "").strip()
             if not key:
                 continue
             if key in existing:
                 msg = f"More than one target work package has origin key {key} in project {op_project_id}"
                 raise ValueError(msg)
-            existing[key] = {"id": row.get("id"), "jira_key": key}
+            existing[key] = {"id": row.get("id"), "jira_key": key, "jira_source_id": row.get("jira_source_id")}
         return existing
+
+    def _verified_mapping_key(self, target: dict[str, Any], project_id: int) -> str | None:
+        """Recover a missing key only when the stored target carries this Jira source ID in this project."""
+        source_id = target.get("jira_source_id")
+        if not source_id:
+            return None
+        mapping = self.work_package_mapping.get(str(source_id))
+        if (
+            isinstance(mapping, dict)
+            and mapping.get("openproject_id") == target.get("id")
+            and mapping.get("openproject_project_id") == project_id
+        ):
+            return mapping.get("jira_key")
+        return None
 
     @staticmethod
     def _reject_source_history(issue: Any) -> None:
@@ -874,6 +780,10 @@ class WorkPackageMigration(BaseMigration):
         op_project_id: int,
     ) -> None:
         """The legacy updater cannot distinguish imported journals from native history."""
+        stored_id = existing_wp.get("jira_source_id")
+        if stored_id and str(stored_id) != str(jira_issue.id):
+            msg = f"Target origin ID for {jira_issue.key} disagrees with Jira; reconcile before retrying"
+            raise RuntimeError(msg)
         if has_no_source_journals(jira_issue, require_complete=True):
             return
         self.logger.error(
@@ -979,79 +889,7 @@ class WorkPackageMigration(BaseMigration):
             except ValueError:
                 self.logger.warning("Invalid J2O_MAX_ISSUES value, ignoring")
 
-        # Check for specific test issues first
-        if os.getenv("J2O_TEST_ISSUES"):
-            test_issues = [k.strip() for k in os.getenv("J2O_TEST_ISSUES").split(",")]
-            self.logger.info(f"Testing specific issues: {test_issues}")
-            issue_keys_str = ",".join(f'"{k}"' for k in test_issues)
-            jql = f'project = "{project_key}" AND key IN ({issue_keys_str}) ORDER BY created ASC, key ASC'
-            fast_forward = False  # Disable fast-forward for testing
-            backoff_seconds = 0
-        else:
-            # Build delta JQL if fast-forward is enabled
-            fast_forward_flag = str(os.environ.get("J2O_FAST_FORWARD", "1")).lower()
-            fast_forward = fast_forward_flag in {"1", "true", "yes", "on"}
-            backoff_seconds = int(os.environ.get("J2O_FF_BACKOFF_SECONDS", "7200"))  # default 2h
-            base_condition = f'project = "{project_key}"'
-            ordering = "ORDER BY created ASC, key ASC"
-            jql = f"{base_condition} {ordering}"
-        existing_keys: set[str] = set()
-
-        if fast_forward:
-            checkpoint_ts = self._get_checkpoint_timestamp(project_key)
-            snapshot: list[dict[str, Any]] = []
-            op_project_id = None
-            try:
-                project_entry = self.project_mapping.get(project_key, {}) or {}
-                op_project_id = project_entry.get("openproject_id")
-            except Exception:
-                op_project_id = None
-
-            if op_project_id:
-                try:
-                    _ = self.op_client.ensure_work_package_custom_field("Jira Issue Key", "string")
-                    _ = self.op_client.ensure_work_package_custom_field("Jira Migration Date", "date")
-                    snapshot = self.op_client.get_project_wp_cf_snapshot(int(op_project_id))
-                    existing_keys = {
-                        str(row.get("jira_issue_key")).strip()
-                        for row in snapshot
-                        if isinstance(row, dict)
-                        and isinstance(row.get("jira_issue_key"), str)
-                        and row.get("jira_issue_key").strip()
-                    }
-                    if not checkpoint_ts:
-                        checkpoint_ts = self._derive_snapshot_timestamp(snapshot)
-                except Exception as op_err:  # pragma: no cover - observational logging
-                    self.logger.debug(
-                        "Failed to inspect existing work packages for %s: %s",
-                        project_key,
-                        op_err,
-                    )
-
-            exclusion_clause = self._build_key_exclusion_clause(existing_keys)
-
-            if checkpoint_ts:
-                target_ts = checkpoint_ts
-                effective_cutoff = target_ts - timedelta(seconds=backoff_seconds)
-                cutoff_str = effective_cutoff.strftime("%Y-%m-%d %H:%M")
-                ordering = "ORDER BY updated ASC, key ASC"
-                jql = f'{base_condition} AND updated >= "{cutoff_str}" {ordering}'
-                self.logger.info(
-                    "Fast-forward enabled for %s using checkpoint %s (effective cutoff %s, backoff %ss)",
-                    project_key,
-                    target_ts.isoformat(),
-                    effective_cutoff.isoformat(),
-                    backoff_seconds,
-                )
-            else:
-                if exclusion_clause:
-                    jql = f"{base_condition} AND {exclusion_clause} {ordering}"
-                else:
-                    jql = f"{base_condition} {ordering}"
-                self.logger.info(
-                    "Fast-forward requested for %s but no checkpoint available; using fallback JQL",
-                    project_key,
-                )
+        jql = self._project_issue_query(project_key)
         fields = None  # Get all fields
         expand = "changelog,renderedFields"  # Include changelog and comments
 
@@ -1084,6 +922,59 @@ class WorkPackageMigration(BaseMigration):
 
         yield from iter_issue_pages(project_key, fetch_page, batch_size, max_issues)
 
+    def _project_issue_query(self, project_key: str) -> str:
+        project = f'project = "{project_key}"'
+        order = "ORDER BY created ASC, key ASC"
+        test_issues = os.getenv("J2O_TEST_ISSUES")
+        if test_issues:
+            issue_keys = ",".join(f'"{key.strip()}"' for key in test_issues.split(","))
+            return f"{project} AND key IN ({issue_keys}) {order}"
+        if os.environ.get("J2O_FAST_FORWARD", "1").lower() not in {"1", "true", "yes", "on"}:
+            return f"{project} {order}"
+        backoff = int(os.environ.get("J2O_FF_BACKOFF_SECONDS", "7200"))
+        timestamp, existing = self._incremental_issue_state(project_key)
+        if timestamp:
+            cutoff = (timestamp - timedelta(seconds=backoff)).strftime("%Y-%m-%d %H:%M")
+            self.logger.info("Using Jira checkpoint %s for %s (backoff %ss)", timestamp, project_key, backoff)
+            return f'{project} AND updated >= "{cutoff}" ORDER BY updated ASC, key ASC'
+        exclusion = self._build_key_exclusion_clause(existing)
+        return f"{project} AND {exclusion} {order}" if exclusion else f"{project} {order}"
+
+    def _incremental_issue_state(self, project_key: str) -> tuple[datetime | None, set[str]]:
+        timestamp = self._get_checkpoint_timestamp(project_key)
+        existing: set[str] = set()
+        try:
+            target = (self.project_mapping.get(project_key) or {}).get("openproject_id")
+            if target:
+                self.op_client.ensure_work_package_custom_field("Jira Issue Key", "string")
+                self.op_client.ensure_work_package_custom_field("Jira Migration Date", "date")
+                rows = self.op_client.get_project_wp_cf_snapshot(int(target))
+                existing = {
+                    row["jira_issue_key"].strip()
+                    for row in rows
+                    if isinstance(row, dict)
+                    and isinstance(row.get("jira_issue_key"), str)
+                    and row["jira_issue_key"].strip()
+                }
+                timestamp = timestamp or self._derive_snapshot_timestamp(rows)
+        except Exception as exc:
+            self.logger.debug("Failed to inspect existing work packages for %s: %s", project_key, exc)
+        return timestamp, existing
+
+    @staticmethod
+    def _page_retry_reason(exc: Exception) -> str | None:
+        """Classify the original Jira SDK or requests failure preserved by the client."""
+        cause = (exc.__cause__ or exc) if isinstance(exc, JiraApiError) else exc
+        if isinstance(cause, (requests.RequestException, JiraApiError)) or isinstance(
+            getattr(cause, "status_code", None), int
+        ):
+            status = JiraIssueService._extract_http_status(cause)
+            if status is not None:
+                return "HTTP 429" if status == 429 else None
+            if isinstance(cause, (requests.Timeout, requests.ConnectionError)):
+                return "transport failure"
+        return None
+
     def _fetch_issues_with_retry(
         self,
         *,
@@ -1112,63 +1003,44 @@ class WorkPackageMigration(BaseMigration):
 
         """
         max_retries = 5
-        base_delay = 1.0
-
-        for attempt in range(max_retries + 1):
+        attempt = 0
+        while True:
+            logger.debug(
+                "Fetching issues for %s: startAt=%s, maxResults=%s (attempt %s)",
+                project_key,
+                start_at,
+                max_results,
+                attempt + 1,
+            )
             try:
-                logger.debug(
-                    "Fetching issues for %s: startAt=%s, maxResults=%s (attempt %s)",
-                    project_key,
-                    start_at,
-                    max_results,
-                    attempt + 1,
-                )
-
                 return self.jira_client.jira.search_issues(
                     jql,
                     startAt=start_at,
                     maxResults=max_results,
                     fields=fields,
                     expand=expand,
-                    json_result=False,  # Get jira.Issue objects
+                    json_result=False,
                 )
-
-            except requests.exceptions.HTTPError as e:
-                if e.response and e.response.status_code == 429 and attempt < max_retries:
-                    delay = base_delay * (2**attempt)
-                    logger.warning(
-                        "Rate limited for %s. Retrying in %ss (attempt %s/%s)",
-                        project_key,
-                        delay,
-                        attempt + 1,
-                        max_retries + 1,
-                    )
-                    time.sleep(delay)
-                    continue
-                raise
-
-            except requests.exceptions.RequestException as e:
-                if attempt < max_retries:
-                    delay = base_delay * (2**attempt)
-                    logger.warning(
-                        "Request failed for %s. Retrying in %ss (attempt %s/%s): %s",
-                        project_key,
-                        delay,
-                        attempt + 1,
-                        max_retries + 1,
-                        e,
-                    )
-                    time.sleep(delay)
-                    continue
-                raise
-
-            except Exception as e:
-                error_msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {e!s}"
-                logger.exception(error_msg)
-                from src.infrastructure.jira.jira_client import JiraApiError
-
-                raise JiraApiError(error_msg) from e
-        return None
+            except Exception as exc:
+                reason = self._page_retry_reason(exc)
+                if reason is None or attempt >= max_retries:
+                    if isinstance(exc, (requests.RequestException, JiraApiError)):
+                        raise
+                    msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {exc!s}"
+                    logger.exception(msg)
+                    raise JiraApiError(msg) from exc
+                delay = 2**attempt
+                attempt += 1
+                logger.warning(
+                    "Retrying Jira page for %s at startAt=%s after %ss (retry %s/%s, %s)",
+                    project_key,
+                    start_at,
+                    delay,
+                    attempt,
+                    max_retries,
+                    reason,
+                )
+                time.sleep(delay)
 
     def _get_project_total_issues(self, project_key: str) -> int | None:
         """Return total number of issues in a Jira project using search metadata.
@@ -1209,301 +1081,94 @@ class WorkPackageMigration(BaseMigration):
             logger.debug("Unable to get total issues for %s: %s", project_key, e)
         return None
 
-    def _extract_jira_issues(
-        self,
-        project_key: str,
-        project_tracker: Any = None,
-    ) -> list[dict]:
-        """Extract all issues from a specific Jira project using pagination.
+    def _snapshot_issue(self, issue: Issue, project_key: str) -> dict[str, Any]:
+        raw = issue_without_comments(getattr(issue, "raw", {}))
+        fields = raw.get("fields") or {}
+        with contextlib.suppress(AttributeError, ValueError, TypeError):
+            updated = self._parse_datetime(fields.get("updated"))
+            current = self._project_latest_issue_ts.get(project_key)
+            if updated and (current is None or updated > current):
+                self._project_latest_issue_ts[project_key] = updated
+        snapshot = {
+            "key": getattr(issue, "key", raw.get("key")),
+            "id": getattr(issue, "id", raw.get("id")),
+            "self": getattr(issue, "self", raw.get("self")),
+            "fields": fields,
+        }
+        if "changelog" in raw:
+            snapshot["changelog"] = raw["changelog"]
+        return snapshot
 
-        This method uses the new iter_project_issues generator to avoid loading
-        all issues into memory at once, while preserving the existing interface
-        for JSON file saving and project tracking.
-        Includes renderedFields expansion for comment data extraction.
-
-        Args:
-            project_key: The Jira project key to extract issues from
-            project_tracker: Optional project tracker for logging
-
-        Returns:
-            List of all issues from the project with comment data (as dictionaries)
-
-        """
-        self.logger.info(f"Extracting issues from Jira project: {project_key}")
-
+    def _save_project_issues(self, rows: list[dict[str, Any]], project_key: str) -> None:
         try:
-            all_issues = []
-            issue_count = 0
-
-            total_estimate = self._get_project_total_issues(project_key)
-            if total_estimate:
-                self.logger.info(
-                    "Jira reports %s total issues for project %s",
-                    total_estimate,
-                    project_key,
-                )
-                if project_tracker:
-                    project_tracker.update_description(
-                        f"Processing project {project_key} ({total_estimate} issues)",
-                    )
-                    project_tracker.add_log_item(
-                        f"Total issues: {total_estimate}",
-                    )
-            elif project_tracker:
-                project_tracker.update_description(
-                    f"Processing project {project_key} (estimating issues)",
-                )
-
-            def _process_issue(issue: Issue) -> None:
-                nonlocal issue_count, all_issues
-                raw = issue_without_comments(getattr(issue, "raw", {}))
-                issue_dict = {
-                    "key": getattr(issue, "key", raw.get("key")),
-                    "id": getattr(issue, "id", raw.get("id")),
-                    "self": getattr(issue, "self", raw.get("self")),
-                    "fields": raw.get("fields", {}),
-                    "changelog": raw.get("changelog"),
-                }
-                all_issues.append(issue_dict)
-
-                try:
-                    fields = issue_dict.get("fields", {}) or {}
-                    updated_dt = self._parse_datetime(fields.get("updated"))
-                    if updated_dt:
-                        current = self._project_latest_issue_ts.get(project_key)
-                        if current is None or updated_dt > current:
-                            self._project_latest_issue_ts[project_key] = updated_dt
-                except Exception:
-                    # Timestamp tracking is best-effort; ignore parsing failures
-                    pass
-
-                issue_count += 1
-                if issue_count % 500 == 0:
-                    self.logger.info(
-                        f"Processed {issue_count} issues from {project_key}",
-                    )
-                    if project_tracker:
-                        project_tracker.add_log_item(
-                            f"Processed {issue_count} issues",
-                        )
-
-            issues = self.iter_project_issues(project_key)
-            if total_estimate and total_estimate > 0:
-                with ProgressTracker(f"Issues for {project_key}", total_estimate, "Recent Issues") as issue_tracker:
-                    for issue in issues:
-                        _process_issue(issue)
-                        issue_tracker.increment()
-            else:
-                for issue in issues:
-                    _process_issue(issue)
-
-            # Final logging
-            self.logger.info(
-                f"Extracted {len(all_issues)} issues from project {project_key}",
+            write_issue_snapshot(rows, self.data_dir / f"jira_issues_{project_key}.json")
+        except Exception as exc:
+            self.logger.exception("Failed to write the issue snapshot for %s", project_key)
+            backup_path = (
+                self.data_dir / f"jira_issues_{project_key}_backup_{datetime.now(tz=UTC):%Y%m%d_%H%M%S_%f}.json"
             )
-            if project_tracker:
-                project_tracker.add_log_item(
-                    f"Retrieved {len(all_issues)} issues from {project_key}",
-                )
-
-            # Save issues to file for later reference, using safe save
             try:
-                self._save_to_json(all_issues, f"jira_issues_{project_key}.json")
-                self.logger.info(
-                    f"Extracted and saved {len(all_issues)} issues from project {project_key}",
-                )
-            except Exception as e:
-                self.logger.exception("Failed to save issues to file: %s", e)
-                # Try to save to alternate location as backup with a serializable fallback
-                backup_path = self.data_dir / (
-                    f"jira_issues_{project_key}_backup_{datetime.now(tz=UTC).strftime('%Y%m%d_%H%M%S')}.json"
-                )
-                try:
-                    serializable: list[dict[str, Any]] = []
-                    for it in all_issues:
-                        if hasattr(it, "raw") and isinstance(it.raw, dict):
-                            serializable.append(it.raw)
-                        elif isinstance(it, dict):
-                            serializable.append(it)
-                        else:
-                            serializable.append(
-                                {
-                                    "id": getattr(it, "id", None),
-                                    "key": getattr(it, "key", None),
-                                    "fields": getattr(getattr(it, "raw", {}), "get", lambda *_: {})("fields", {}),
-                                },
-                            )
-                    with backup_path.open("w") as f:
-                        json.dump(serializable, f, indent=2)
-                    self.logger.info(
-                        f"Saved backup (fallback-serialized) of issues to {backup_path}",
-                    )
-                except Exception as backup_err:
-                    self.logger.warning(
-                        f"Failed to create backup of state file: {backup_err}",
-                    )
-                # Honor stop-on-error: abort on serialization failure
-                if config.migration_config.get("stop_on_error", False):
-                    try:
-                        from src.models.migration_error import MigrationError
-                    except Exception:  # pragma: no cover
+                write_issue_snapshot(rows, backup_path)
+            except (OSError, ValueError, TypeError) as backup_error:
+                self.logger.warning("Failed to create backup of state file: %s", backup_error)
+            if config.migration_config.get("stop_on_error", False):
+                from src.models.migration_error import MigrationError
 
-                        class MigrationError(Exception):
-                            pass
+                msg = f"Stopping due to JSON serialization failure for project {project_key}: {exc}"
+                raise MigrationError(msg) from exc
 
-                    msg = f"Stopping due to JSON serialization failure for project {project_key}: {e}"
-                    raise MigrationError(
-                        msg,
-                    ) from e
+    def _log_project_progress(self, count: int, key: str, tracker: Any) -> None:
+        if count % 500 == 0:
+            self.logger.info("Processed %s issues from %s", count, key)
+            if tracker:
+                tracker.add_log_item(f"Processed {count} issues")
 
-            return all_issues
-
-        except Exception as e:
-            error_msg = f"Failed to extract issues from project {project_key}: {e}"
-            self.logger.exception(error_msg)
+    def _extract_jira_issues(self, project_key: str, project_tracker: Any = None) -> list[dict]:
+        """Extract and persist the comment-filtered Jira issue snapshot."""
+        try:
+            estimate = self._get_project_total_issues(project_key)
             if project_tracker:
-                project_tracker.add_log_item(error_msg)
-            # Reraise with more context
-            msg = f"Jira issue extraction failed for project {project_key}: {e}"
-            raise RuntimeError(msg) from e
+                label = f"{estimate} issues" if estimate else "estimating issues"
+                project_tracker.update_description(f"Processing project {project_key} ({label})")
+                if estimate:
+                    project_tracker.add_log_item(f"Total issues: {estimate}")
+            tracker = (
+                ProgressTracker(f"Issues for {project_key}", estimate, "Recent Issues")
+                if estimate and estimate > 0
+                else contextlib.nullcontext()
+            )
+            rows = []
+            with tracker as progress:
+                for issue in self.iter_project_issues(project_key):
+                    rows.append(self._snapshot_issue(issue, project_key))
+                    if progress is not None:
+                        progress.increment()
+                    self._log_project_progress(len(rows), project_key, project_tracker)
+            if project_tracker:
+                project_tracker.add_log_item(f"Retrieved {len(rows)} issues from {project_key}")
+            self._save_project_issues(rows, project_key)
+            return rows
+        except Exception as exc:
+            msg = f"Jira issue extraction failed for project {project_key}: {exc}"
+            self.logger.exception(msg)
+            if project_tracker:
+                project_tracker.add_log_item(msg)
+            raise RuntimeError(msg) from exc
 
-    def _prepare_work_package(
-        self,
-        jira_issue: dict[str, Any],
-        project_id: int,
-    ) -> dict[str, Any]:
-        """Internal method to prepare a work package object from a Jira issue (without creating it).
+    def _source_type_id(self, source: Any) -> int:
+        """Resolve a Jira SDK type through explicit numeric IDs and legacy mappings."""
+        key = str(source.id)
+        if key in self.issue_type_id_mapping:
+            target = self.issue_type_id_mapping[key]
+        elif key in self.issue_type_mapping:
+            target = self.issue_type_mapping[key].get("openproject_id")
+        else:
+            target = getattr(config.mappings, "issue_type_id_mapping", {}).get(key)
+        if not target:
+            self.logger.warning("No mapping for Jira issue type %s (%s); using Task", source.name, key)
+        return target or 1
 
-        Args:
-            jira_issue: The Jira issue dictionary or jira.Issue object
-            project_id: The ID of the OpenProject project
-
-        Returns:
-            Dictionary with work package data
-
-        """
-        self._reject_source_history(jira_issue)
-        # Set current project context for changelog processing (used by _process_changelog_item)
-        self._current_project_id = project_id
-
-        # BUG #21 FIX: Early load J2O CF IDs for Workflow/Resolution tracking in changelog processing
-        # This must happen BEFORE changelog processing so cf_field_changes can be populated
-        self._ensure_provenance_field_ids()
-
-        # Extract the necessary fields from the Jira Issue object
-        issue_type_id = jira_issue.fields.issuetype.id
-        issue_type_name = jira_issue.fields.issuetype.name
-
-        status_id = None
-        if hasattr(jira_issue.fields, "status"):
-            status_id = getattr(jira_issue.fields.status, "id", None)
-
-        if hasattr(jira_issue.fields, "assignee") and jira_issue.fields.assignee:
-            getattr(jira_issue.fields.assignee, "name", None)
-
-        # Extract creator and reporter
-        if hasattr(jira_issue.fields, "creator") and jira_issue.fields.creator:
-            getattr(jira_issue.fields.creator, "name", None)
-
-        if hasattr(jira_issue.fields, "reporter") and jira_issue.fields.reporter:
-            getattr(jira_issue.fields.reporter, "name", None)
-
-        # Enhanced timestamp migration will be handled after user associations
-
-        # Extract watchers
-        if hasattr(jira_issue.fields, "watches") and jira_issue.fields.watches:
-            watcher_count = getattr(jira_issue.fields.watches, "watchCount", 0)
-            if watcher_count > 0:
-                try:
-                    # Fetch watchers if there are any
-                    watchers_data = self.jira_client.get_issue_watchers(jira_issue.key)
-                    if watchers_data:
-                        [watcher.get("name") for watcher in watchers_data]
-                except Exception as e:
-                    self.logger.exception(
-                        "Failed to fetch watchers for issue %s: %s",
-                        jira_issue.key,
-                        e,
-                    )
-
-        # Extract custom fields
-        custom_fields = {
-            field_name: field_value
-            for field_name, field_value in jira_issue.raw.get("fields", {}).items()
-            if field_name.startswith("customfield_") and field_value is not None
-        }
-
-        subject = jira_issue.fields.summary
-        description = getattr(jira_issue.fields, "description", "") or ""
-
-        # Convert Jira wiki markup to OpenProject markdown
-        if description:
-            description = self.markdown_converter.convert(description)
-
-        jira_id = jira_issue.id
-        jira_key = jira_issue.key
-
-        # Ensure subject is non-empty; fall back to Jira key if missing
-        if not subject or not str(subject).strip():
-            subject = jira_key or f"Untitled-{jira_id}"
-
-        # Map the issue type
-        type_id = None
-
-        # First try to look up directly in issue_type_id_mapping, which is keyed by ID
-        # and has a direct OpenProject ID as value
-        if self.issue_type_id_mapping and str(issue_type_id) in self.issue_type_id_mapping:
-            type_id = self.issue_type_id_mapping[str(issue_type_id)]
-        # Then try to look up by ID in the issue_type_mapping
-        elif str(issue_type_id) in self.issue_type_mapping:
-            type_id = self.issue_type_mapping[str(issue_type_id)].get("openproject_id")
-        # Finally, check in mappings object if available
-        elif config.mappings and hasattr(config.mappings, "issue_type_id_mapping"):
-            # Try to get the ID from the mappings object
-            type_id = config.mappings.issue_type_id_mapping.get(str(issue_type_id))
-
-        # Debug mapping information
-        self.logger.debug(
-            f"Mapping issue type: {issue_type_name} (ID: {issue_type_id}) -> OpenProject type ID: {type_id}",
-        )
-
-        # If no type mapping exists, default to Task
-        if not type_id:
-            type_display = issue_type_name or "Unknown"
-            warning_msg = f"No mapping found for issue type {type_display} (ID: {issue_type_id}), defaulting to Task"
-            self.logger.warning(warning_msg)
-            type_id = 1
-
-        # Map the status (extract integer openproject_id from mapping)
-        status_op_id = None
-        if status_id:
-            try:
-                mapping_entry = self.status_mapping.get(str(status_id))
-                if isinstance(mapping_entry, dict):
-                    val = mapping_entry.get("openproject_id") or mapping_entry.get("id")
-                    if isinstance(val, str) and val.isdigit():
-                        status_op_id = int(val)
-                    elif isinstance(val, int):
-                        status_op_id = val
-                elif isinstance(mapping_entry, str) and mapping_entry.isdigit():
-                    status_op_id = int(mapping_entry)
-                elif isinstance(mapping_entry, int):
-                    status_op_id = mapping_entry
-            except Exception:
-                status_op_id = None
-
-        # Enhanced user association migration with comprehensive edge case handling
-        work_package = {
-            "project_id": project_id,
-            "type_id": type_id,
-            "subject": subject,
-            "jira_id": jira_id,
-            "jira_key": jira_key,
-            # Provide explicit provenance key for CF assignment in Rails bulk
-            "jira_issue_key": jira_key,
-        }
-
-        # Use enhanced user association migrator for robust user mapping
+    def _apply_source_users(self, jira_issue: Any, work_package: dict[str, Any]) -> None:
         association_result = self.enhanced_user_migrator.migrate_user_associations(
             jira_issue=jira_issue,
             work_package_data=work_package,
@@ -1511,158 +1176,105 @@ class WorkPackageMigration(BaseMigration):
         )
 
         # Log any warnings from user association migration
-        if association_result["warnings"]:
-            for warning in association_result["warnings"]:
-                # Collapse frequent watcher unmapped logs
-                if isinstance(warning, str) and warning.startswith("Watcher") and "unmapped" in warning:
-                    # Defer aggregated reporting to caller; embed a counter on work_package_data
-                    counters = work_package.setdefault("_log_counters", {})
-                    counters["watcher_unmapped"] = counters.get("watcher_unmapped", 0) + 1
-                else:
-                    self.logger.warning("User association: %s", warning)
+        for warning in association_result["warnings"]:
+            # Collapse frequent watcher unmapped logs
+            if isinstance(warning, str) and warning.startswith("Watcher") and "unmapped" in warning:
+                # Defer aggregated reporting to caller; embed a counter on work_package_data
+                counters = work_package.setdefault("_log_counters", {})
+                counters["watcher_unmapped"] = counters.get("watcher_unmapped", 0) + 1
+            else:
+                self.logger.warning("User association: %s", warning)
 
-        # Extract user association results
-        assigned_to_id = work_package.get("assigned_to_id")
-        author_id = work_package.get("author_id")
-        watcher_ids = work_package.get("watcher_ids", [])
-
-        # Enhanced timestamp migration with comprehensive datetime preservation
-        timestamp_result = self.enhanced_timestamp_migrator.migrate_timestamps(
+    def _apply_source_timestamps(self, jira_issue: Any, work_package: dict[str, Any]) -> None:
+        result = self.enhanced_timestamp_migrator.migrate_timestamps(
             jira_issue=jira_issue,
             work_package_data=work_package,
             use_rails_for_immutable=False,
-            author_id=author_id,
+            author_id=work_package.get("author_id"),
         )
+        for warning in result["warnings"]:
+            self.logger.warning("Timestamp migration: %s", warning)
+        for error in result["errors"]:
+            self.logger.error("Timestamp migration error: %s", error)
+        operations = result.get("rails_operations")
+        if operations:
+            work_package["_rails_operations"] = operations
 
-        # Log any warnings from timestamp migration
-        if timestamp_result["warnings"]:
-            for warning in timestamp_result["warnings"]:
-                self.logger.warning("Timestamp migration: %s", warning)
+    def _source_custom_values(self, fields: dict[str, Any]) -> list[dict[str, Any]]:
+        source = {k: v for k, v in fields.items() if k.startswith("customfield_") and v is not None}
+        if not source:
+            return []
+        try:
+            mapping = self._load_custom_field_mapping()
+        except (FileNotFoundError, RuntimeError) as exc:
+            self.logger.warning("Custom field mapping unavailable: %s", exc)
+            return []
+        values = {}
+        for key, value in source.items():
+            field_id = mapping.get(key, {}).get("openproject_id")
+            if field_id:
+                values[field_id] = value
+        return [{"id": key, "value": value} for key, value in values.items()]
 
-        # Log any errors from timestamp migration
-        if timestamp_result["errors"]:
-            for error in timestamp_result["errors"]:
-                self.logger.error("Timestamp migration error: %s", error)
+    @staticmethod
+    def _provenance_values(field_ids: dict[str, Any], values: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"id": field_ids[key], "value": value} for key, value in values.items() if field_ids.get(key) and value]
 
-        # Store Rails operations for immutable timestamp setting (executed after save)
-        # Bug #23 debug: Track timestamp operations
-        ts_ops = timestamp_result.get("rails_operations", [])
-        self.logger.debug(f"[BUG23] {jira_key}: timestamp_result has {len(ts_ops)} rails_operations")
-        if ts_ops:
-            work_package["_rails_operations"] = ts_ops
-            self.logger.debug(f"[BUG23] {jira_key}: Set _rails_operations from timestamp_result")
+    def _source_provenance(self, issue: Any) -> list[dict[str, Any]]:
+        field_ids = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
+        today = date.today().isoformat()
+        jira_config = config.jira_config or {}
+        base_url = jira_config.get("J2O_JIRA_URL") or jira_config.get("url")
+        values = {
+            provenance_fields.ORIGIN_SYSTEM: provenance_fields.JIRA_SERVER_SOURCE_LABEL,
+            provenance_fields.ORIGIN_ID: str(issue.id) if issue.id else None,
+            provenance_fields.ORIGIN_KEY: issue.key,
+            provenance_fields.ORIGIN_URL: f"{str(base_url).rstrip('/')}/browse/{issue.key}"
+            if base_url and issue.key
+            else None,
+            provenance_fields.FIRST_MIGRATION_DATE: today,
+            provenance_fields.LAST_UPDATE_DATE: today,
+        }
+        resolution = getattr(issue.fields, "resolution", None)
+        if resolution:
+            values[provenance_fields.JIRA_RESOLUTION] = getattr(resolution, "name", None) or str(resolution)
+        versions = getattr(issue.fields, "versions", None)
+        if isinstance(versions, list):
+            values[provenance_fields.AFFECTS_VERSION] = ", ".join(str(getattr(v, "name", v)) for v in versions if v)
+        return self._provenance_values(field_ids, values)
 
-        # Update work package data with description (work_package_data was created earlier)
-        work_package["description"] = description
-
-        # Add optional fields if available
+    def _prepare_work_package(self, jira_issue: Issue, project_id: int) -> dict[str, Any]:
+        """Prepare a history-free SDK issue for the legacy bulk service."""
+        self._reject_source_history(jira_issue)
+        self._current_project_id = project_id
+        self._ensure_provenance_field_ids()
+        fields = jira_issue.fields
+        subject = fields.summary
+        if not subject or not str(subject).strip():
+            subject = jira_issue.key or f"Untitled-{jira_issue.id}"
+        description = getattr(fields, "description", "") or ""
+        work_package = {
+            "project_id": project_id,
+            "type_id": self._source_type_id(fields.issuetype),
+            "subject": subject,
+            "jira_id": jira_issue.id,
+            "jira_key": jira_issue.key,
+            "jira_issue_id": jira_issue.id,
+            "jira_issue_key": jira_issue.key,
+        }
+        self._apply_source_users(jira_issue, work_package)
+        self._apply_source_timestamps(jira_issue, work_package)
+        work_package["description"] = self.markdown_converter.convert(description) if description else description
         start_date = self._resolve_start_date(jira_issue)
         if start_date:
             work_package["start_date"] = start_date
-        if status_op_id:
-            work_package["status_id"] = status_op_id
-        if assigned_to_id:
-            work_package["assigned_to_id"] = assigned_to_id
-        if author_id:
-            work_package["author_id"] = author_id
-        if watcher_ids:
-            work_package["watcher_ids"] = watcher_ids
-
-        # Timestamps are now handled by enhanced timestamp migrator
-
-        # Process custom fields
+        status = self._transformer.mapped_status_id(self._get_attr(getattr(fields, "status", None), "id"))
+        if status:
+            work_package["status_id"] = status
+        custom_fields = self._source_custom_values(jira_issue.raw.get("fields", {}))
+        custom_fields.extend(self._source_provenance(jira_issue))
         if custom_fields:
-            # Load custom field mappings
-            try:
-                custom_field_mapping = self._load_custom_field_mapping()
-                custom_field_values = {}
-
-                for jira_field_id, field_value in custom_fields.items():
-                    if jira_field_id in custom_field_mapping:
-                        op_field = custom_field_mapping[jira_field_id]
-                        op_field_id = op_field.get("openproject_id")
-
-                        if op_field_id:
-                            # Use raw field value for now (TODO: implement proper processing)
-                            processed_value = field_value
-                            if processed_value is not None:
-                                custom_field_values[op_field_id] = processed_value
-
-                if custom_field_values:
-                    work_package["custom_fields"] = [
-                        {"id": field_id, "value": field_value} for field_id, field_value in custom_field_values.items()
-                    ]
-            except (FileNotFoundError, RuntimeError) as e:
-                self.logger.warning(f"Custom field mapping not available: {e}")
-                # Continue without custom field mapping
-
-        # Add raw jira id and key for debugging
-        work_package["jira_issue_id"] = jira_id
-        work_package["jira_issue_key"] = jira_key
-
-        # Attach standardized J2O Origin CFs
-        try:
-            self._ensure_provenance_field_ids()
-
-            cf_vals: list[dict[str, object]] = []
-            cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
-            if cf_map.get(provenance_fields.ORIGIN_SYSTEM):
-                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_SYSTEM], "value": "Jira Server on-prem 9.11"})
-            if cf_map.get(provenance_fields.ORIGIN_ID) and jira_id:
-                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_ID], "value": str(jira_id)})
-            if cf_map.get(provenance_fields.ORIGIN_KEY) and jira_key:
-                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_KEY], "value": jira_key})
-            base_url = (config.jira_config or {}).get("J2O_JIRA_URL") or (config.jira_config or {}).get("url")
-            if cf_map.get(provenance_fields.ORIGIN_URL) and jira_key and base_url:
-                try:
-                    url_val = "/".join([str(base_url).rstrip("/"), "browse", str(jira_key)])
-                except Exception:
-                    url_val = f"{base_url}/browse/{jira_key}"
-                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_URL], "value": url_val})
-            from datetime import date as _date
-
-            today_str = _date.today().isoformat()
-            if cf_map.get(provenance_fields.FIRST_MIGRATION_DATE):
-                cf_vals.append({"id": cf_map[provenance_fields.FIRST_MIGRATION_DATE], "value": today_str})
-            if cf_map.get(provenance_fields.LAST_UPDATE_DATE):
-                cf_vals.append({"id": cf_map[provenance_fields.LAST_UPDATE_DATE], "value": today_str})
-            # Extract final workflow scheme from changelog (last "Workflow" field change)
-            if cf_map.get(provenance_fields.JIRA_WORKFLOW):
-                final_workflow = self._extract_final_workflow(jira_issue)
-                if final_workflow:
-                    cf_vals.append({"id": cf_map[provenance_fields.JIRA_WORKFLOW], "value": final_workflow})
-            # Extract resolution from Jira issue (direct field, not changelog)
-            if cf_map.get(provenance_fields.JIRA_RESOLUTION):
-                try:
-                    resolution = getattr(jira_issue.fields, "resolution", None)
-                    if resolution:
-                        resolution_name = getattr(resolution, "name", None) or str(resolution)
-                        if resolution_name:
-                            cf_vals.append({"id": cf_map[provenance_fields.JIRA_RESOLUTION], "value": resolution_name})
-                except Exception:
-                    pass
-            # Extract Affects Version from Jira issue (versions field = where bug occurs)
-            if cf_map.get(provenance_fields.AFFECTS_VERSION):
-                try:
-                    versions = getattr(jira_issue.fields, "versions", None)
-                    if versions and isinstance(versions, list) and len(versions) > 0:
-                        # Join multiple versions with comma if present
-                        version_names = [getattr(v, "name", str(v)) for v in versions if v]
-                        if version_names:
-                            cf_vals.append(
-                                {"id": cf_map[provenance_fields.AFFECTS_VERSION], "value": ", ".join(version_names)}
-                            )
-                except Exception:
-                    pass
-            if cf_vals:
-                existing = work_package.get("custom_fields")
-                if isinstance(existing, list):
-                    work_package["custom_fields"] = existing + cf_vals
-                else:
-                    work_package["custom_fields"] = cf_vals
-        except Exception:
-            pass
-
+            work_package["custom_fields"] = custom_fields
         return work_package
 
     def _resolve_start_date(self, issue: Any) -> str | None:
@@ -1695,126 +1307,79 @@ class WorkPackageMigration(BaseMigration):
         """Delegate to :meth:`IssueTransformer.extract_issue_meta`."""
         return self._transformer.extract_issue_meta(issue)
 
-    def prepare_work_package(
+    def _dict_provenance(self, issue: dict[str, Any]) -> list[dict[str, Any]]:
+        values = {
+            provenance_fields.ORIGIN_SYSTEM: "jira",
+            provenance_fields.EXTERNAL_ID: str(issue["id"]) if issue.get("id") else None,
+            provenance_fields.EXTERNAL_KEY: issue.get("key"),
+        }
+        self._j2o_wp_cf_ids = self._custom_field_ids(
+            getattr(self, "_j2o_wp_cf_ids", None),
+            ((name, "string", False) for name in values),
+        )
+        return self._provenance_values(self._j2o_wp_cf_ids, values)
+
+    def _custom_field_ids(
         self,
-        jira_issue: dict[str, Any],
-        project_id: int,
-    ) -> dict[str, Any]:
-        """Prepare a work package object from a Jira issue (without creating it).
-
-        Public method that calls the internal _prepare_work_package method.
-
-        Args:
-            jira_issue: The Jira issue dictionary or jira.Issue object
-            project_id: The ID of the OpenProject project
-
-        Returns:
-            Dictionary with work package data
-
-        """
-        # In tests, we receive a dictionary directly
-        if isinstance(jira_issue, dict):
-            self._reject_source_history(jira_issue)
-            reject_legacy_journal_operations([jira_issue])
-            # Get the key and description
-            jira_key = jira_issue.get("key", "")
-            description = jira_issue.get("description", "")
-
-            # Track mentioned users before conversion (must use original Jira markup)
-            if description:
-                self._track_mentioned_users(description, project_id)
-
-            # Convert Jira wiki markup to OpenProject markdown
-            if description:
-                description = self.markdown_converter.convert(description)
-
-            # Format the description to include the Jira key
-            formatted_description = f"Jira Issue: {jira_key}\n\n{description}"
-
-            # Subject with fallback to Jira key
-            subject_val = (jira_issue.get("summary", "") or "").strip()
-            if not subject_val:
-                subject_val = jira_key or f"Untitled-{jira_issue.get('id', '')}"
-
-            # Convert the dictionary format used in tests to work package format
-            work_package = {
-                "project_id": project_id,
-                "subject": subject_val,
-                "description": formatted_description,
-                "jira_key": jira_key,
-                "jira_id": jira_issue.get("id", ""),
-                "_links": {},
-            }
-
-            start_date = self._resolve_start_date(jira_issue)
-            if start_date:
-                work_package["start_date"] = start_date
-
-            # Attach origin mapping custom fields for provenance
+        cached: dict[str, int] | None,
+        specs: Iterable[tuple[str, str, bool]],
+    ) -> dict[str, int]:
+        """Reuse confirmed IDs and retry unresolved OpenProject fields on the next row."""
+        field_ids = cached if isinstance(cached, dict) else {}
+        for name, field_format, searchable in specs:
+            if name in field_ids:
+                continue
             try:
-                if not hasattr(self, "_j2o_wp_cf_ids") or not isinstance(self._j2o_wp_cf_ids, dict):
-                    # Ensure minimal set of provenance CFs (WP scope)
-                    cf_names = (
-                        (provenance_fields.ORIGIN_SYSTEM, "string"),
-                        (provenance_fields.EXTERNAL_ID, "string"),
-                        (provenance_fields.EXTERNAL_KEY, "string"),
-                    )
-                    cf_ids: dict[str, int] = {}
-                    for n, fmt in cf_names:
-                        try:
-                            cf = self.op_client.ensure_custom_field(
-                                n,
-                                field_format=fmt,
-                                cf_type="WorkPackageCustomField",
-                            )
-                            if isinstance(cf, dict) and cf.get("id"):
-                                cf_ids[n] = int(cf["id"])  # type: ignore[arg-type]
-                        except Exception:
-                            continue
-                    self._j2o_wp_cf_ids = cf_ids
+                field = self.op_client.ensure_custom_field(
+                    name, field_format=field_format, cf_type="WorkPackageCustomField", searchable=searchable
+                )
+                field_id = int(str(field["id"]))
+                if field_id <= 0:
+                    msg = "expected a positive custom field ID"
+                    raise ValueError(msg)
+            except Exception as exc:
+                self.logger.warning("Could not resolve work package provenance field %s: %s", name, exc)
+            else:
+                field_ids[name] = field_id
+        return field_ids
 
-                cf_vals: list[dict[str, object]] = []
-                cf_map = getattr(self, "_j2o_wp_cf_ids", {}) or {}
-                # Populate values
-                if cf_map.get(provenance_fields.ORIGIN_SYSTEM):
-                    cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_SYSTEM], "value": "jira"})
-                ext_id = jira_issue.get("id")
-                if cf_map.get(provenance_fields.EXTERNAL_ID) and ext_id:
-                    cf_vals.append({"id": cf_map[provenance_fields.EXTERNAL_ID], "value": str(ext_id)})
-                if cf_map.get(provenance_fields.EXTERNAL_KEY) and jira_key:
-                    cf_vals.append({"id": cf_map[provenance_fields.EXTERNAL_KEY], "value": jira_key})
-                if cf_vals:
-                    work_package["custom_fields"] = cf_vals
-            except Exception:
-                # Non-fatal: continue without provenance CFs
-                pass
-
-            # Add type if available (explicit type_id and _links for compatibility)
-            issue_type = jira_issue.get("issue_type", {})
-            if issue_type:
-                type_id_value = issue_type.get("id")
-                type_name_value = issue_type.get("name")
-                if type_id_value or type_name_value:
-                    mapped_type_id = self._map_issue_type(type_id_value, type_name_value)
-                    work_package["type_id"] = mapped_type_id
-                    work_package["_links"]["type"] = {"href": f"/api/v3/types/{mapped_type_id}"}
-
-            # Add status if available (explicit status_id and _links)
-            status = jira_issue.get("status", {})
-            if status:
-                status_id_value = status.get("id")
-                status_name_value = status.get("name")
-                if status_id_value or status_name_value:
-                    mapped_status_id = self._map_status(status_id_value, status_name_value)
-                    work_package["status_id"] = mapped_status_id
-                    work_package["_links"]["status"] = {"href": f"/api/v3/statuses/{mapped_status_id}"}
-
-            # Sanitize for AR compatibility (extract ids, drop _links)
-            self._sanitize_wp_dict(work_package)
-
-            return work_package
-        # It's a Jira issue object, use the internal method
-        return self._prepare_work_package(jira_issue, project_id)
+    def prepare_work_package(self, jira_issue: dict[str, Any] | Issue, project_id: int) -> dict[str, Any]:
+        """Prepare either a cached issue mapping or a live Jira issue."""
+        if not isinstance(jira_issue, dict):
+            return self._prepare_work_package(jira_issue, project_id)
+        self._reject_source_history(jira_issue)
+        reject_legacy_journal_operations([jira_issue])
+        key = jira_issue.get("key", "")
+        fields = jira_issue.get("fields")
+        description = jira_issue.get("description", self._get_attr(fields, "description")) or ""
+        if description:
+            description = self.markdown_converter.convert(description)
+        summary = jira_issue.get("summary", self._get_attr(fields, "summary"))
+        subject = (summary or "").strip() or key or f"Untitled-{jira_issue.get('id', '')}"
+        result: dict[str, Any] = {
+            "project_id": project_id,
+            "subject": subject,
+            "description": f"Jira Issue: {key}\n\n{description}",
+            "jira_key": key,
+            "jira_id": jira_issue.get("id", ""),
+            "_links": {},
+        }
+        start_date = self._resolve_start_date(jira_issue)
+        if start_date:
+            result["start_date"] = start_date
+        custom_fields = self._dict_provenance(jira_issue)
+        if custom_fields:
+            result["custom_fields"] = custom_fields
+        type_info = jira_issue.get("issue_type") or self._get_attr(fields, "issuetype") or {}
+        if type_info.get("id") or type_info.get("name"):
+            result["type_id"] = self._map_issue_type(type_info.get("id"), type_info.get("name"))
+            result["_links"]["type"] = {"href": f"/api/v3/types/{result['type_id']}"}
+        status = jira_issue.get("status") or self._get_attr(fields, "status") or {}
+        if status.get("id") or status.get("name"):
+            result["status_id"] = self._map_status(status.get("id"), status.get("name"))
+            result["_links"]["status"] = {"href": f"/api/v3/statuses/{result['status_id']}"}
+        self._sanitize_wp_dict(result)
+        return result
 
     def _map_issue_type(
         self,
@@ -1836,130 +1401,44 @@ class WorkPackageMigration(BaseMigration):
         """Delegate to :meth:`IssueTransformer.sanitize_wp_dict`."""
         return IssueTransformer.sanitize_wp_dict(wp)
 
+    def _change_detection_projects(self) -> list[str]:
+        selected = os.getenv("J2O_TEST_ISSUES")
+        if selected:
+            return sorted({key.strip().split("-", 1)[0] for key in selected.split(",") if "-" in key})
+        projects = self.jira_client.get_projects()
+        configured = config.jira_config.get("projects") or []
+        return [
+            project["key"]
+            for project in projects
+            if project.get("key") and (not configured or project["key"] in configured)
+        ]
+
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities of the specified type from Jira.
-
-        This method now uses memory-efficient pagination instead of loading
-        all issues into memory at once.
-
-        Args:
-            entity_type: Type of entities to retrieve
-
-        Returns:
-            List of current entities from Jira
-
-        Raises:
-            ValueError: If entity_type is not supported by this migration
-
-        """
-        if entity_type in {"work_packages", "issues"}:
-            # Process issues from configured projects using generator
-            all_issues = []
-
-            # Check if J2O_TEST_ISSUES is set - if so, bypass normal project fetching
-            test_issues_env = os.getenv("J2O_TEST_ISSUES")
-            if test_issues_env:
-                # Extract unique project keys from test issue keys (e.g., "NRS-182" → "NRS")
-                test_issue_keys = [k.strip() for k in test_issues_env.split(",")]
-                project_keys_from_issues = set()
-                for issue_key in test_issue_keys:
-                    if "-" in issue_key:
-                        project_key = issue_key.split("-")[0]
-                        project_keys_from_issues.add(project_key)
-
-                # Create minimal project structure for each extracted project key
-                projects_to_migrate = [{"key": pk, "name": pk} for pk in sorted(project_keys_from_issues)]
-                logger.info(
-                    f"J2O_TEST_ISSUES set - bypassing Jira project fetch, "
-                    f"using extracted project keys: {sorted(project_keys_from_issues)}",
+        """Fetch comment-filtered work packages for change detection."""
+        if entity_type not in {"work_packages", "issues"}:
+            msg = f"WorkPackageMigration does not support entity type: {entity_type}. Supported types: ['work_packages', 'issues']"
+            raise ValueError(msg)
+        issues = []
+        for project_key in self._change_detection_projects():
+            for issue in self.iter_project_issues(project_key):
+                raw = issue_without_comments(issue.raw)
+                issues.append(
+                    {
+                        "id": issue.id,
+                        "key": issue.key,
+                        "fields": raw.get("fields", {}),
+                        "raw": raw,
+                        "project_key": project_key,
+                    }
                 )
-            else:
-                # Normal flow: Get ALL Jira projects first
-                all_projects = self.jira_client.get_projects()
-                logger.info(f"Retrieved {len(all_projects)} total Jira projects from API")
-
-                # Filter to only configured projects from config.jira.projects
-                try:
-                    configured_projects = config.jira_config.get("projects") or []
-                except Exception:
-                    configured_projects = []
-
-                if configured_projects:
-                    # Filter projects to only those in configuration
-                    projects_to_migrate = [p for p in all_projects if p.get("key") in configured_projects]
-                    logger.info(
-                        f"Filtered to {len(projects_to_migrate)} configured projects: {configured_projects}",
-                    )
-                else:
-                    # No filter - migrate all projects
-                    projects_to_migrate = all_projects
-                    logger.warning(
-                        "No projects configured in config.jira.projects - will process ALL projects",
-                    )
-
-                if not projects_to_migrate:
-                    logger.warning(
-                        f"No projects to migrate after filtering. Configured: {configured_projects}, "
-                        f"Available: {[p.get('key') for p in all_projects[:10]]}",
-                    )
-                    return []
-
-            # Process each configured project
-            for project in projects_to_migrate:
-                project_key = project.get("key")
-                if project_key:
-                    logger.info(
-                        f"Starting issue fetch for project {project_key} (change detection)",
-                    )
-                    project_issue_count = 0
-
-                    # Use the new generator method for memory-efficient processing
-                    for issue in self.iter_project_issues(project_key):
-                        raw = issue_without_comments(issue.raw)
-                        issue_dict = {
-                            "id": issue.id,
-                            "key": issue.key,
-                            "fields": raw.get("fields", {}),
-                            "raw": raw,
-                            "project_key": project_key,
-                        }
-                        all_issues.append(issue_dict)
-                        project_issue_count += 1
-
-                        # Log progress periodically
-                        if len(all_issues) % config.migration_config.get("batch_size", 100) == 0:
-                            logger.info(f"Processed {len(all_issues)} issues so far...")
-
-                    logger.info(
-                        f"Completed {project_key}: fetched {project_issue_count} issues for change detection",
-                    )
-
-            logger.info(
-                f"Finished processing {len(all_issues)} total issues from {len(projects_to_migrate)} configured projects for change detection",
-            )
-            return all_issues
-        msg = (
-            f"WorkPackageMigration does not support entity type: {entity_type}. "
-            f"Supported types: ['work_packages', 'issues']"
-        )
-        raise ValueError(msg)
+        return issues
 
     def _ensure_provenance_field_ids(self) -> None:
         """Cache the field IDs used when mapping work packages and their change history."""
-        if isinstance(getattr(self, "_j2o_wp_cf_ids_full", None), dict):
-            return
-        field_ids: dict[str, int] = {}
-        for name, field_format, searchable in provenance_fields.WORK_PACKAGE_FIELD_SPECS:
-            try:
-                field = self.op_client.ensure_custom_field(
-                    name, field_format=field_format, cf_type="WorkPackageCustomField", searchable=searchable
-                )
-                if isinstance(field, dict) and field.get("id"):
-                    field_ids[name] = int(field["id"])
-            except Exception:
-                continue
-        self._j2o_wp_cf_ids_full = field_ids
-        self.logger.debug("Loaded work package provenance fields: %s", field_ids)
+        self._j2o_wp_cf_ids_full = self._custom_field_ids(
+            getattr(self, "_j2o_wp_cf_ids_full", None),
+            provenance_fields.WORK_PACKAGE_FIELD_SPECS,
+        )
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
         """Load or rebuild custom field mapping from cache or OpenProject metadata.
@@ -2161,14 +1640,6 @@ class WorkPackageMigration(BaseMigration):
     ) -> int:
         """Submit once and persist the source IDs of confirmed creates, including partial batches."""
         reject_legacy_journal_operations(records)
-        self._load_confirmed_work_packages()
-        incoming_ids: set[str] = set()
-        for meta in metadata:
-            jira_id = str(meta["jira_id"])
-            if jira_id in incoming_ids or jira_id in self.work_package_mapping:
-                msg = f"Existing mapping for {meta['jira_key']} disagrees with the target inventory; reconcile before retrying"
-                raise RuntimeError(msg)
-            incoming_ids.add(jira_id)
         fallback_admin = None
         with contextlib.suppress(Exception):
             fallback_admin = self.op_client.execute_large_query_to_json_file(
@@ -2188,6 +1659,7 @@ class WorkPackageMigration(BaseMigration):
             # The Rails bulk endpoint accepts numeric foreign keys and jira_id for provenance.
             record.pop("_links", None)
             record.pop("jira_issue_id", None)
+        intent = self._claim_new_work_packages(metadata, project_key, project_id)
         try:
             result = self.op_client.bulk_create_records(
                 "WorkPackage",
@@ -2200,7 +1672,50 @@ class WorkPackageMigration(BaseMigration):
         except Exception as exc:
             msg = f"Unconfirmed bulk write in {project_key}; reconcile the target by Jira origin ID before retrying"
             raise RuntimeError(msg) from exc
-        return self._confirm_created_work_packages(result, metadata, project_id, project_key)
+        created = self._confirm_created_work_packages(result, metadata, project_id, project_key)
+        sync_directory(intent.parent)
+        intent.unlink()
+        sync_directory(intent.parent)
+        return created
+
+    def _claim_new_work_packages(self, metadata: list[dict[str, Any]], project_key: str, project_id: int) -> Path:
+        """Reserve the sole legacy writer and leave the source IDs recoverable if the call is interrupted."""
+        directory = Path(self.data_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        pending = directory / "legacy-work-package-create.pending.json"
+        try:
+            fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as exc:
+            msg = f"Legacy bulk create already in progress or interrupted; reconcile the target IDs in {pending} before removing it"
+            raise RuntimeError(msg) from exc
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as intent:
+                self._validate_new_source_ids(metadata)
+                json.dump(
+                    {
+                        "project_key": project_key,
+                        "openproject_project_id": project_id,
+                        "issues": [{"jira_id": row["jira_id"], "jira_key": row["jira_key"]} for row in metadata],
+                    },
+                    intent,
+                )
+                intent.flush()
+                os.fsync(intent.fileno())
+            sync_directory(directory)
+        except Exception:
+            pending.unlink()
+            raise
+        return pending
+
+    def _validate_new_source_ids(self, metadata: list[dict[str, Any]]) -> None:
+        self._load_confirmed_work_packages()
+        incoming_ids: set[str] = set()
+        for meta in metadata:
+            jira_id = str(meta["jira_id"])
+            if jira_id in incoming_ids or jira_id in self.work_package_mapping:
+                msg = f"Existing mapping for {meta['jira_key']} disagrees with the target inventory; reconcile before retrying"
+                raise RuntimeError(msg)
+            incoming_ids.add(jira_id)
 
     def _confirm_created_work_packages(
         self,
@@ -2330,21 +1845,28 @@ class WorkPackageMigration(BaseMigration):
             )
 
 
-def _choose_default_type_id(op_client: Any) -> int:
-    """Pick a default Type ID, preferring the first by position, else 1.
-
-    This helper is isolated for testability.
-    """
+def _normalized_status(record: dict[str, Any], default: int, available: set[int]) -> Any:
+    status = record.get("status_id")
+    if not status:
+        return default
     try:
-        type_ids = op_client.execute_large_query_to_json_file(
-            "Type.order(:position).pluck(:id)",
-            timeout=180,
-        )
-        if isinstance(type_ids, list) and type_ids:
-            return int(type_ids[0])
-    except Exception:
-        pass
-    return 1
+        status_id = int(status)
+    except TypeError, ValueError:
+        return default
+    return default if available and status_id not in available else status
+
+
+def _check_due_date(record: dict[str, Any]) -> None:
+    start, due = record.get("start_date"), record.get("due_date")
+    if not (start and due):
+        return
+    try:
+        start = datetime.strptime(start, "%Y-%m-%d").date() if isinstance(start, str) else start
+        due = datetime.strptime(due, "%Y-%m-%d").date() if isinstance(due, str) else due
+        if isinstance(start, date) and isinstance(due, date) and due < start:
+            record["due_date"] = None
+    except ValueError, TypeError:
+        record["due_date"] = None
 
 
 def _apply_required_defaults(
@@ -2354,104 +1876,12 @@ def _apply_required_defaults(
     op_client: Any,
     fallback_admin_user_id: int | str | None,
 ) -> None:
-    """Fill in missing required fields on WorkPackage records.
-
-    Sets type_id, status_id, priority_id, author_id if missing.
-    """
-    # Defaults via file-based queries
-    default_type_id = _choose_default_type_id(op_client)
-
-    default_status_id = 1
-    try:
-        status_ids = op_client.execute_large_query_to_json_file(
-            "Status.order(:position).pluck(:id)",
-            timeout=180,
-        )
-        if isinstance(status_ids, list) and status_ids:
-            default_status_id = int(status_ids[0])
-    except Exception:
-        pass
-
-    default_priority_id = None
-    try:
-        pr_ids = op_client.execute_large_query_to_json_file(
-            "IssuePriority.order(:position).pluck(:id)",
-            timeout=180,
-        )
-        if isinstance(pr_ids, list) and pr_ids:
-            default_priority_id = int(pr_ids[0])
-    except Exception:
-        default_priority_id = None
-
-    default_author_id = None
-    if fallback_admin_user_id:
-        try:
-            default_author_id = int(fallback_admin_user_id)
-        except Exception:
-            default_author_id = fallback_admin_user_id
-    if not default_author_id:
-        try:
-            admin_ids = op_client.execute_large_query_to_json_file(
-                "User.where(admin: true).limit(1).pluck(:id)",
-                timeout=180,
-            )
-            if isinstance(admin_ids, list) and admin_ids:
-                default_author_id = int(admin_ids[0])
-        except Exception:
-            default_author_id = None
-
-    for wp in records:
-        if not wp.get("type_id"):
-            wp["type_id"] = default_type_id
-            # Also set _links.type for OpenProject API compatibility
-            if "_links" not in wp:
-                wp["_links"] = {}
-            wp["_links"]["type"] = {"href": f"/api/v3/types/{default_type_id}"}
-        # Normalize status_id: set default if missing or invalid
-        if not wp.get("status_id") and default_status_id:
-            wp["status_id"] = default_status_id
-        else:
-            try:
-                sid = int(wp.get("status_id")) if wp.get("status_id") is not None else None
-                if sid is not None and isinstance(status_ids, list):
-                    valid_ids = {int(x) for x in status_ids if isinstance(x, (int, str)) and str(x).isdigit()}
-                    if valid_ids and sid not in valid_ids and default_status_id:
-                        wp["status_id"] = default_status_id
-            except Exception:
-                if default_status_id:
-                    wp["status_id"] = default_status_id
-        if not wp.get("author_id") and default_author_id:
-            wp["author_id"] = default_author_id
-        if not wp.get("priority_id") and default_priority_id:
-            wp["priority_id"] = default_priority_id
-
-        # Bug #10 fix: Validate date constraints - due_date must be >= start_date
-        # PostgreSQL CHECK constraint: work_packages_due_larger_start_date
-        start_date = wp.get("start_date")
-        due_date = wp.get("due_date")
-        if start_date and due_date:
-            # Both dates exist, compare them
-            try:
-                # Handle both string and date object formats
-                from datetime import date, datetime
-
-                if isinstance(start_date, str):
-                    start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-                elif isinstance(start_date, date):
-                    start_dt = start_date
-                else:
-                    start_dt = None
-
-                if isinstance(due_date, str):
-                    due_dt = datetime.strptime(due_date, "%Y-%m-%d").date()
-                elif isinstance(due_date, date):
-                    due_dt = due_date
-                else:
-                    due_dt = None
-
-                # If due_date is before start_date, set due_date to None to avoid constraint violation
-                if start_dt and due_dt and due_dt < start_dt:
-                    wp["due_date"] = None
-            except Exception:
-                # If date parsing fails, set due_date to None to be safe
-                wp["due_date"] = None
+    """Normalize the legacy bulk payload, including the type link and target date constraint."""
+    defaults, statuses = work_package_defaults(op_client, project_id, fallback_admin_user_id)
+    valid_statuses = {int(value) for value in statuses if str(value).isdigit()}
+    for record in records:
+        if not record.get("type_id"):
+            record.setdefault("_links", {})["type"] = {"href": f"/api/v3/types/{defaults['type_id']}"}
+        record["status_id"] = _normalized_status(record, defaults["status_id"], valid_statuses)
+        fill_missing_fields(record, defaults)
+        _check_due_date(record)

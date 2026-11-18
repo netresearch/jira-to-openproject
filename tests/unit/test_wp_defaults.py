@@ -1,7 +1,7 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-import types
+from src.application.components import wp_defaults
 
 
 class _StubOPClient:
@@ -28,31 +28,12 @@ class _StubOPClient:
         return []
 
 
-def test_choose_default_type_id_uses_first_available(monkeypatch):
-    import sys
-
-    # Bypass heavy base_migration import by injecting minimal module for the test
-    sys.modules.setdefault("src.application.components.base_migration", types.ModuleType("base_migration"))
-    bm = sys.modules["src.application.components.base_migration"]
-    bm.BaseMigration = object
-    bm.register_entity_types = lambda *a, **k: lambda cls: cls
-
-    from src.application.components import wp_defaults as wpm
-
+def test_choose_default_type_id_uses_first_available():
     op = _StubOPClient(types=[5, 7, 9])
-    assert wpm.choose_default_type_id(op) == 5
+    assert wp_defaults.choose_default_type_id(op) == 5
 
 
-def test_apply_required_defaults_sets_missing_fields(monkeypatch):
-    import sys
-
-    sys.modules.setdefault("src.application.components.base_migration", types.ModuleType("base_migration"))
-    bm = sys.modules["src.application.components.base_migration"]
-    bm.BaseMigration = object
-    bm.register_entity_types = lambda *a, **k: lambda cls: cls
-
-    from src.application.components import wp_defaults as wpm
-
+def test_apply_required_defaults_sets_missing_fields():
     op = _StubOPClient(types=[11, 22], statuses=[101, 202], priorities=[301, 302], admins=[401])
 
     records = [
@@ -61,7 +42,7 @@ def test_apply_required_defaults_sets_missing_fields(monkeypatch):
     ]
 
     # Apply with no configured fallback admin
-    wpm.apply_required_defaults(records, project_id=123, op_client=op, fallback_admin_user_id=None)
+    wp_defaults.apply_required_defaults(records, project_id=123, op_client=op, fallback_admin_user_id=None)
 
     # First record should have all defaulted
     r0 = records[0]
@@ -76,3 +57,22 @@ def test_apply_required_defaults_sets_missing_fields(monkeypatch):
     assert r1["status_id"] == 202
     assert r1["priority_id"] == 302
     assert r1["author_id"] == 401
+
+
+def test_status_lookup_failure_is_distinct_from_empty_results(caplog):
+    class UnavailableStatusClient(_StubOPClient):
+        def execute_large_query_to_json_file(self, query, **kwargs):
+            if query.startswith("Status."):
+                raise TimeoutError
+            return super().execute_large_query_to_json_file(query, **kwargs)
+
+    defaults, statuses = wp_defaults.work_package_defaults(_StubOPClient(), 7, 3)
+    assert (defaults["status_id"], statuses) == (1, [])
+    assert not [record for record in caplog.records if record.name == wp_defaults.logger.name]
+
+    defaults, statuses = wp_defaults.work_package_defaults(UnavailableStatusClient(), 7, 3)
+    assert (defaults["status_id"], statuses) == (1, [])
+    messages = [record.getMessage() for record in caplog.records if record.name == wp_defaults.logger.name]
+    assert len(messages) == 1
+    assert "Status.order" in messages[0]
+    assert "TimeoutError" in messages[0]
