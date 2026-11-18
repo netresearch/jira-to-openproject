@@ -33,6 +33,10 @@ class DummyOp:
     def get_custom_field_by_name(self, name: str):
         raise Exception("not found")
 
+    def execute_script_with_data(self, script, data):
+        self.values = [*getattr(self, "values", []), data]
+        return {"data": True}
+
     def execute_query(self, script: str):
         self.queries.append(script)
         if "cf.id" in script:
@@ -148,11 +152,7 @@ def test_load_writes_actual_cf_value_not_placeholder(monkeypatch: pytest.MonkeyP
     mig = CustomFieldsGenericMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
     ld = mig._load(mig._map(mig._extract()))
     assert ld.updated >= 1
-    set_scripts = [q for q in op.queries if "custom_field_values" in q or "custom_value_for" in q]
-    assert set_scripts, "expected a CF value-setting script to be issued"
-    joined = "\n".join(set_scripts)
-    assert "Free text" in joined, "actual Jira CF value must be written, not discarded"
-    assert "=> 'set'" not in joined, "placeholder 'set' must not replace the real value"
+    assert {"wp_id": 20001, "field_id": 801, "value": "Free text"} in op.values
 
 
 def test_generic_pass_leaves_native_mapped_values_to_content_migration():

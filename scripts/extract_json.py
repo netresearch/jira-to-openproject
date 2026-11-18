@@ -13,9 +13,9 @@ import sys
 from pathlib import Path
 
 if __package__:
-    from .export_json_file import write_json_export
+    from .operator_files import read_operator_text, write_operator_json
 else:
-    from export_json_file import write_json_export
+    from operator_files import read_operator_text, write_operator_json
 
 
 def extract_json(input_file: Path, output_file: Path) -> bool:
@@ -30,8 +30,7 @@ def extract_json(input_file: Path, output_file: Path) -> bool:
 
     """
     # Read the raw output file
-    with input_file.open() as f:
-        content = f.read()
+    content = read_operator_text(input_file)
 
     # First find the line numbers where json_output is printed
     lines = content.split("\n")
@@ -73,7 +72,7 @@ def extract_json(input_file: Path, output_file: Path) -> bool:
     except json.JSONDecodeError as exc:
         print(f"Error parsing JSON: {exc}")
         return False
-    write_json_export(output_file, data)
+    write_operator_json(output_file, data)
     print(f"Saved {len(data)} records to {output_file}")
     _print_fields(data)
     return True

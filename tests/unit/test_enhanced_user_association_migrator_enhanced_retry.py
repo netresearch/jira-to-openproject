@@ -884,6 +884,12 @@ class TestEnhancedUserAssociationMigratorEnhancedRetry:
         assert result == expected
         assert len(result) == 100
 
+    def test_token_redaction_keeps_adjacent_short_segments(self, migrator_instance) -> None:
+        segment = "long_segm_ent-with-20"
+        token = ".".join([segment] * 3)
+        assert migrator_instance._sanitize_error_message(f"id.{token}.end") == "id.[REDACTED].end"
+        assert migrator_instance._sanitize_error_message("part.one.two") == "part.one.two"
+
     def test_sanitize_error_message_jwt_token_redaction(
         self,
         migrator_instance,

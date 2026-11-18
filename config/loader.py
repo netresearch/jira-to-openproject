@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from scripts.operator_files import open_operator_text
+
 from .schemas.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -95,7 +97,7 @@ class ConfigLoader:
 
         """
         try:
-            with config_file_path.open("r") as config_file:
+            with open_operator_text(config_file_path) as config_file:
                 config: dict[str, Any] = yaml.safe_load(config_file)
                 return config or {}
         except FileNotFoundError:
@@ -149,7 +151,7 @@ class ConfigLoader:
                     logger.debug(
                         "Successfully loaded PostgreSQL password from Docker secret",
                     )
-                except (OSError, PermissionError) as e:
+                except OSError as e:
                     logger.warning(
                         "Failed to read Docker secret: %s",
                         e.__class__.__name__,

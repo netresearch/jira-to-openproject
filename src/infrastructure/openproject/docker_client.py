@@ -399,34 +399,16 @@ class DockerClient:
         # Build docker run command
         docker_cmd = ["docker", "run"]
 
-        # Add user if specified
-        if user:
-            docker_cmd.extend(["--user", quote(user)])
+        for flag, value in (("--user", user), ("--cpus", cpu_limit), ("--memory", memory_limit), ("--name", name)):
+            if value:
+                docker_cmd.extend([flag, quote(value)])
 
-        # Add resource limits
-        if cpu_limit:
-            docker_cmd.extend(["--cpus", quote(cpu_limit)])
-        if memory_limit:
-            docker_cmd.extend(["--memory", quote(memory_limit)])
-
-        # Add container name
-        if name:
-            docker_cmd.extend(["--name", quote(name)])
-
-        # Add environment variables
-        if environment:
-            for key, value in environment.items():
-                docker_cmd.extend(["-e", f"{quote(key)}={quote(value)}"])
-
-        # Add volume mappings
-        if volumes:
-            for host_path, container_path in volumes.items():
-                docker_cmd.extend(["-v", f"{quote(host_path)}:{quote(container_path)}"])
-
-        # Add port mappings
-        if ports:
-            for host_port, container_port in ports.items():
-                docker_cmd.extend(["-p", f"{quote(host_port)}:{quote(container_port)}"])
+        for key, value in (environment or {}).items():
+            docker_cmd.extend(["-e", f"{quote(key)}={quote(value)}"])
+        for host_path, container_path in (volumes or {}).items():
+            docker_cmd.extend(["-v", f"{quote(host_path)}:{quote(container_path)}"])
+        for host_port, container_port in (ports or {}).items():
+            docker_cmd.extend(["-p", f"{quote(host_port)}:{quote(container_port)}"])
 
         # Add network
         if network:

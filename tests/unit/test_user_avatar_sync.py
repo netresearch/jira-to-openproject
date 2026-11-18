@@ -41,7 +41,7 @@ def migration(tmp_path):
     instance.op_client.transfer_file_to_container = MagicMock()
     instance.op_client.set_user_avatar.return_value = {"success": True}
     instance.op_client.docker_client = MagicMock()
-    instance.op_client.docker_client.execute_command = MagicMock()
+    instance.op_client.docker_client.execute_command.return_value = ("/tmp/j2o-stage.0123456789", "", 0)
 
     instance.jira_client = MagicMock()
     instance.jira_client.download_user_avatar.return_value = (b"avatar-bytes", "image/png")
@@ -66,7 +66,7 @@ def test_sync_user_avatars_uploads_and_caches(migration: UserMigration):
     assert migration.op_client.ensure_local_avatars_enabled.called
     migration.op_client.transfer_file_to_container.assert_called_once()
     migration.op_client.set_user_avatar.assert_called_once()
-    migration.op_client.docker_client.execute_command.assert_called_once()
+    assert migration.op_client.docker_client.execute_command.call_count == 2
 
     # Cache file persisted
     cache_path = Path(migration.avatar_cache_file)
@@ -164,3 +164,19 @@ def test_sync_user_avatars_skip_reasons_sum_to_aggregate(migration: UserMigratio
     assert breakdown["download_failed"] == 1
     assert breakdown["set_avatar_api_raised"] == 1
     assert breakdown["set_avatar_api_returned_false"] == 1
+
+
+def test_avatar_transfer_cleanup_after_failure(migration):
+    def fail_transfer(local, remote):
+        assert local.read_bytes() == b"avatar-bytes"
+        assert local.name == "avatar.png"
+        assert remote.name == "avatar.png"
+        assert remote.parent.name.startswith("j2o-stage.")
+        raise OSError("transfer interrupted")
+
+    migration.op_client.transfer_file_to_container.side_effect = fail_transfer
+    result = migration._sync_user_avatars([_job("USER1")])
+    assert result["skip_reasons"] == {"container_transfer_failed": 1}
+    assert not list((migration.data_dir / "avatars").iterdir())
+    cleanup = migration.op_client.docker_client.execute_command.call_args.args[0]
+    assert cleanup.endswith("j2o-stage.0123456789")

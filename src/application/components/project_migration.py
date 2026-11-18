@@ -772,70 +772,33 @@ class ProjectMigration(BaseMigration):
         return company
 
     def _get_existing_project_details(self, identifier: str) -> dict[str, Any] | None:
-        """Robustly check if a project exists and return its details using a single optimized query.
+        """Return a verified target identity, or None after an explicit negative lookup."""
+        if not isinstance(identifier, str):
+            msg = f"Identifier must be a string, got {type(identifier)}"
+            raise ValueError(msg)
 
-        This method uses a single Rails console query that returns consistent results,
-        avoiding the performance penalty of multiple round-trips.
-
-        Args:
-            identifier: The project identifier to check
-
-        Returns:
-            Dictionary with project details if it exists, otherwise None
-
-        Raises:
-            Exception: If Rails console query fails or times out
-
-        """
+        query = (
+            "identifier = JSON.parse(<<'J2O_IDENTIFIER')\n"
+            f"{json.dumps(identifier)}\nJ2O_IDENTIFIER\n"
+            "project = Project.find_by(identifier: identifier)\n"
+            "project ? [true, project.id, project.name, project.identifier] : [false, nil, nil, nil]"
+        )
         try:
-            # Validate identifier is a string to prevent injection attacks
-            if not isinstance(identifier, str):
-                msg = f"Identifier must be a string, got {type(identifier)}"
-                raise ValueError(msg)
+            result = self.op_client.execute_query_to_json_file(query)
+        except Exception as exc:
+            msg = "Rails query failed while checking the project identifier"
+            raise QueryExecutionError(msg) from exc
 
-            # Sanitize identifier using Ruby %q{} literal syntax to prevent injection
-            # This ensures the identifier is treated as a literal string with no code interpolation
-            sanitized_identifier = identifier.replace(
-                "}",
-                "\\}",
-            )  # Escape only the closing brace
-
-            # Single optimized query using safe Ruby string literal syntax
-            # Using %q{} prevents any Ruby code injection while preserving the identifier exactly
-            check_query = (
-                f"p = Project.find_by(identifier: %q{{{sanitized_identifier}}}); "
-                "if p; [true, p.id, p.name, p.identifier]; "
-                "else; [false, nil, nil, nil]; end"
-            )
-
-            # Execute with basic timeout protection
-            result = self.op_client.execute_query_to_json_file(check_query)
-
-            # Parse the consistent array response
-            if isinstance(result, list) and len(result) == 4:
-                project_exists = result[0]
-                if project_exists is True:
-                    return {
-                        "id": result[1],
-                        "name": result[2],
-                        "identifier": result[3],
-                    }
-
-            # Project doesn't exist or query returned unexpected format
-            return None
-
-        except ValueError:
-            # Re-raise validation errors as-is (user input errors)
-            raise
-        except Exception as e:
-            logger.exception(
-                "Project existence check failed for '%s': %s",
-                identifier,
-                e,
-            )
-            # Re-raise to let caller handle the error appropriately
-            msg = "Rails query failed"
-            raise Exception(msg) from e
+        match result:
+            case [False, None, None, None]:
+                return None
+            case [True, int(target_id), str(name), str(found)] if (
+                type(target_id) is int and target_id > 0 and found == identifier
+            ):
+                return {"id": target_id, "name": name, "identifier": found}
+            case _:
+                msg = "OpenProject returned an unconfirmed project identity"
+                raise QueryExecutionError(msg)
 
     def bulk_migrate_projects(self) -> ComponentResult:
         """Migrate projects from Jira to OpenProject in bulk using Rails console.

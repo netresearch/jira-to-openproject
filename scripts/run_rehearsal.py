@@ -33,10 +33,11 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import re
+import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,9 +48,9 @@ LOG_DIR = VAR_DIR / "logs"
 DEFAULT_COMPONENTS = ["users", "groups", "projects", "work_packages"]
 
 
-def run(cmd: Iterable[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run a shell command, streaming output to the console."""
-    print(f"$ {' '.join(cmd)}")
+    print(f"$ {shlex.join(cmd)}")
     return subprocess.run(cmd, check=check, text=True)
 
 
@@ -62,43 +63,17 @@ def stop_mocks() -> None:
 
 
 def run_component(component: str, *, reset_checkpoints: bool, container: bool) -> None:
-    if container:
-        cmd = [
-            "docker",
-            "compose",
-            "--profile",
-            "test",
-            "run",
-            "--rm",
-            "test",
-            "python",
-            "-m",
-            "src.main",
-            "migrate",
-            "--components",
-            component,
-            "--no-confirm",
-        ]
-        if component == "work_packages" and reset_checkpoints:
-            cmd.append("--reset-wp-checkpoints")
-        run(cmd)
-    else:
-        cmd = [
-            "uv",
-            "run",
-            "--active",
-            "--no-cache",
-            "python",
-            "-m",
-            "src.main",
-            "migrate",
-            "--components",
-            component,
-            "--no-confirm",
-        ]
-        if component == "work_packages" and reset_checkpoints:
-            cmd.append("--reset-wp-checkpoints")
-        run(cmd)
+    if re.fullmatch(r"[a-z][a-z0-9_]*", component, re.ASCII) is None:
+        raise ValueError("Expected a migration component name")
+    prefix = (
+        ["docker", "compose", "--profile", "test", "run", "--rm", "test"]
+        if container
+        else ["uv", "run", "--active", "--frozen", "--no-build", "--no-install-project"]
+    )
+    cmd = [*prefix, "python", "-m", "src.main", "migrate", f"--components={component}", "--no-confirm"]
+    if component == "work_packages" and reset_checkpoints:
+        cmd.append("--reset-wp-checkpoints")
+    run(cmd)
 
 
 def collect_artefacts(destination: Path) -> None:

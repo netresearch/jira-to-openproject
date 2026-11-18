@@ -10,11 +10,14 @@ the Jira to OpenProject migration configuration.
 import argparse
 import json
 import logging
+import shlex
 import sys
 from pathlib import Path
 
 import requests
 import yaml
+
+from scripts.operator_files import write_operator_text
 
 from .loader import load_settings
 from .schemas.settings import Settings
@@ -239,7 +242,7 @@ def export_config(
         raise ValueError(f"Unsupported format: {format}")
 
     if output_file:
-        output_file.write_text(output)
+        write_operator_text(output_file, output)
         logger.info(f"Configuration exported to {output_file}")
     else:
         print(output)
@@ -264,38 +267,38 @@ def create_envrc_template(
 export J2O_ENVIRONMENT="development"
 
 # Jira Configuration
-export J2O_JIRA_URL="{settings.jira_url}"
-export J2O_JIRA_USERNAME="{settings.jira_username}"
+export J2O_JIRA_URL={shlex.quote(str(settings.jira_url))}
+export J2O_JIRA_USERNAME={shlex.quote(str(settings.jira_username))}
 export J2O_JIRA_API_TOKEN="your_jira_api_token_here"
 
 # OpenProject Configuration
-export J2O_OPENPROJECT_URL="{settings.openproject_url}"
+export J2O_OPENPROJECT_URL={shlex.quote(str(settings.openproject_url))}
 export J2O_OPENPROJECT_API_TOKEN="your_openproject_api_token_here"
 export J2O_OPENPROJECT_API_KEY="your_openproject_api_key_here"
 
 # SSH/Docker Configuration
-export J2O_OPENPROJECT_SERVER="{settings.openproject_server}"
-export J2O_OPENPROJECT_USER="{settings.openproject_user}"
-export J2O_OPENPROJECT_CONTAINER="{settings.openproject_container}"
-export J2O_OPENPROJECT_TMUX_SESSION_NAME="{settings.openproject_tmux_session_name}"
+export J2O_OPENPROJECT_SERVER={shlex.quote(str(settings.openproject_server))}
+export J2O_OPENPROJECT_USER={shlex.quote(str(settings.openproject_user))}
+export J2O_OPENPROJECT_CONTAINER={shlex.quote(str(settings.openproject_container))}
+export J2O_OPENPROJECT_TMUX_SESSION_NAME={shlex.quote(str(settings.openproject_tmux_session_name))}
 
 # Migration Settings
-export J2O_BATCH_SIZE="{settings.batch_size}"
-export J2O_SSL_VERIFY="{str(settings.ssl_verify).lower()}"
-export J2O_LOG_LEVEL="{settings.log_level}"
+export J2O_BATCH_SIZE={shlex.quote(str(settings.batch_size))}
+export J2O_SSL_VERIFY={shlex.quote(str(str(settings.ssl_verify).lower()))}
+export J2O_LOG_LEVEL={shlex.quote(str(settings.log_level))}
 
 # Testing Configuration
-export J2O_TEST_MODE="{str(settings.test_mode).lower()}"
-export J2O_TEST_MOCK_MODE="{str(settings.test_mock_mode).lower()}"
-export J2O_USE_MOCK_APIS="{str(settings.use_mock_apis).lower()}"
+export J2O_TEST_MODE={shlex.quote(str(str(settings.test_mode).lower()))}
+export J2O_TEST_MOCK_MODE={shlex.quote(str(str(settings.test_mock_mode).lower()))}
+export J2O_USE_MOCK_APIS={shlex.quote(str(str(settings.use_mock_apis).lower()))}
 
 # Database Configuration
 export POSTGRES_PASSWORD="your_postgres_password_here"
-export POSTGRES_DB="{settings.postgres_db}"
-export POSTGRES_USER="{settings.postgres_user}"
+export POSTGRES_DB={shlex.quote(str(settings.postgres_db))}
+export POSTGRES_USER={shlex.quote(str(settings.postgres_user))}
 """
 
-    output_file.write_text(template)
+    write_operator_text(output_file, template)
     logger.info(f"direnv template created at {output_file}")
     logger.info("Run 'direnv allow' to enable this configuration")
 
