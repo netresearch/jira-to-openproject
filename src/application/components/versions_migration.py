@@ -6,7 +6,7 @@
 Strategy:
 - Extract: collect fixVersion names per Jira project from issues in work_package mapping.
 - Map: ensure Versions exist per OP project (create missing via bulk_create_records('Version')).
-- Load: set work package `version_id` from first fixVersion, idempotently, in batch.
+- Load: assign the complete Jira fixVersions set, with read-back and legacy compatibility.
 """
 
 from __future__ import annotations
@@ -92,15 +92,16 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         return map_project_records(self, extracted, "Version")
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        version_map: dict[str, dict[str, int]] = (mapped.data or {}).get("version_map", {}) if mapped.data else {}
-        if not version_map:
+        data = mapped.data or {}
+        version_map: dict[str, dict[str, int]] = data.get("version_map", {})
+        issues: dict[str, Any] = data.get("issues", {})
+        if not version_map and not issues:
             return ComponentResult(success=True, updated=0)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
         proj_map = self.mappings.get_mapping("project") or {}
 
         # Use cached issues from extract phase to avoid second Jira API call
-        issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
             jira_keys = self._jira_keys_from_wp_map(wp_map)
@@ -114,6 +115,9 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 if assignment:
                     updates.append(assignment)
             except Exception:
+                logger.exception(
+                    "Could not resolve all fix versions for Jira issue %s", self._inner_jira_key(key, wp_entry) or key
+                )
                 failed += 1
 
         return apply_work_package_updates(self, updates, failed)
@@ -129,14 +133,14 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         if not issue:
             return None
         fields = JiraIssueFields.from_issue_any(issue)
-        if not fields.fix_versions or not fields.fix_versions[0].name:
+        if not fields.fix_versions:
             return None
         proj_entry = projects.get(self._issue_project_key(jira_key))
-        op_pid = proj_entry.get("openproject_id") if isinstance(proj_entry, dict) else project_id(proj_entry)
-        if not op_pid:
-            return None
-        vid = versions.get(str(int(op_pid)), {}).get(str(fields.fix_versions[0].name))
-        return {"id": int(wp_id), "version_id": int(vid)} if vid else None
+        op_pid = project_id(proj_entry)
+        records = versions.get(str(op_pid), {})
+        # All references must resolve before writing anything for this work package.
+        target_ids = list(dict.fromkeys(int(records[(ref.name or "").strip()]) for ref in fields.fix_versions))
+        return {"id": int(wp_id), "target_version_ids": target_ids}
 
     def run(self) -> ComponentResult:
         """Execute versions migration pipeline."""

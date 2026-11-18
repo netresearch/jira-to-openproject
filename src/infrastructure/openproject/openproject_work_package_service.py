@@ -149,6 +149,17 @@ J2O_UPDATES
             wp.with_lock(requires_new: true) do
               attributes = update.except('id', '_rails_operations')
               fields = attributes.extract!(*attributes.keys.grep(/\\AcustomField[0-9]+\\z/))
+              target_ids = attributes.delete('target_version_ids')
+              if target_ids
+                raise "Missing or foreign project version" unless wp.project.versions.where(id: target_ids).count == target_ids.size
+                if wp.respond_to?(:target_version_ids_replacements=)
+                  raise "Multiple target versions are disabled" if target_ids.many? && !Setting.work_package_multiple_versions?
+                  wp.target_version_ids_replacements = target_ids unless wp.target_version_ids.sort == target_ids.sort
+                else
+                  raise "Target accepts only one version" if target_ids.many?
+                  wp.version_id = target_ids.first
+                end
+              end
               wp.assign_attributes(attributes)
               expected = {{}}
               values = fields.to_h do |key, raw|
@@ -175,6 +186,10 @@ J2O_UPDATES
               end
               wp.custom_field_values = values unless values.empty?
               wp.save!
+              if target_ids
+                stored_ids = wp.reload.respond_to?(:target_version_ids) ? wp.target_version_ids : [wp.version_id].compact
+                raise "Target versions were not persisted" unless stored_ids.sort == target_ids.sort
+              end
               unless expected.empty?
                 stored = CustomValue.where(customized: wp, custom_field_id: expected.keys)
                                     .pluck(:custom_field_id, :value).group_by(&:first)

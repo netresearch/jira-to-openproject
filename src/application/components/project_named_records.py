@@ -95,6 +95,8 @@ def apply_work_package_updates(migration: BaseMigration, updates: list[dict[str,
         try:
             response = migration.op_client.batch_update_work_packages(updates)
             updated = int(response.get("updated", 0)) if isinstance(response, dict) else len(updates)
+            if isinstance(response, dict):
+                failed += int(response.get("failed", 0))
         except Exception:
             logger.exception("Failed to update work package assignments")
             failed += len(updates)
