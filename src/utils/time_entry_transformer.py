@@ -4,7 +4,7 @@
 """Time entry transformation utilities for Jira to OpenProject migration."""
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -248,7 +248,11 @@ class TimeEntryTransformer:
                 msg = "Work log audience cannot be represented on a native time entry."
                 raise ValueError(msg)
             final_hours = _worklog_hours(tempo_log)
-            spent_on = date.fromisoformat(tempo_log.get("dateStarted", tempo_log.get("date_started", ""))).isoformat()
+            spent_on = (
+                datetime.fromisoformat(tempo_log.get("dateStarted", tempo_log.get("date_started", "")))
+                .date()
+                .isoformat()
+            )
             description = _worklog_comment(tempo_log.get("description", tempo_log.get("comment")) or "")
 
             # Build OpenProject time entry
@@ -524,10 +528,10 @@ class TimeEntryTransformer:
 
         """
         # Check Tempo work attributes first
-        work_attributes = tempo_log.get("workAttributes", [])
+        work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))
         for attr in work_attributes:
             attr_key = attr.get("key", "").lower()
-            attr_value = attr.get("value", "").lower()
+            attr_value = str(attr.get("value", "")).lower()
 
             # Look for activity-related attributes
             if "activity" in attr_key or "type" in attr_key:
@@ -561,13 +565,16 @@ class TimeEntryTransformer:
             time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 2)
 
         # Handle work attributes
-        work_attributes = tempo_log.get("workAttributes", [])
+        work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))
         if work_attributes:
             attributes = {}
             for attr in work_attributes:
                 key = attr.get("key", "")
                 value = attr.get("value", "")
-                if key and value:
+                if key and key in attributes:
+                    msg = "Tempo contains duplicate work attribute keys."
+                    raise ValueError(msg)
+                if key and value is not None:
                     attributes[key] = value
             if attributes:
                 time_entry["_meta"]["tempo_attributes"] = attributes

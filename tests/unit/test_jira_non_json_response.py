@@ -37,6 +37,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.infrastructure.jira.jira_client import (
+    JiraApiError,
     JiraClient,
     JiraServiceUnavailableError,
     _assert_json_response,
@@ -259,17 +260,11 @@ class TestTempoServiceSkipsOnHtmlAdditionalEndpoints:
             result = client.tempo.get_tempo_work_attributes()
         assert result == []
 
-    def test_get_tempo_all_work_logs_for_project_returns_partial_on_html(
-        self,
-        tempo_client: tuple[object, MagicMock],
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """When the second page returns HTML, return whatever was collected."""
+    def test_project_worklogs_report_non_json_response(self, tempo_client: tuple[object, MagicMock]) -> None:
         client, resp = tempo_client
         _set_html_response(resp)
-        with caplog.at_level(logging.WARNING):
-            result = client.tempo.get_tempo_all_work_logs_for_project("TK")
-        assert result == []
+        with pytest.raises(JiraApiError, match="Failed to retrieve all Tempo work logs"):
+            client.tempo.get_tempo_all_work_logs_for_project("TK")
 
     def test_get_tempo_work_log_by_id_raises_on_html(
         self,
