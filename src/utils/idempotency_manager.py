@@ -400,7 +400,7 @@ class IdempotencyKeyManager:
     def atomic_get_or_set(
         self,
         idempotency_key: str,
-        result_or_func: object,
+        result_or_func: Any,
         ttl: int | None = None,
     ) -> IdempotencyResult:
         """Atomically get existing result or set new one."""
