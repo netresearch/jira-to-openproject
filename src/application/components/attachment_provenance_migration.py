@@ -219,26 +219,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         # is normalised through :class:`WorkPackageMappingEntry.from_legacy`
         # — the inner ``jira_key`` is the source of truth (the outer
         # wp_map key is ``str(jira_id)`` in production).
-        by_project: dict[str, list[str]] = {}
-        for outer_key, raw_entry in wp_map.items():
-            if not isinstance(raw_entry, dict):
-                # Legacy bare-int rows have no recoverable Jira key.
-                continue
-            inner_key = raw_entry.get("jira_key")
-            # Match :meth:`AttachmentsMigration._wp_lookup_by_jira_key`:
-            # prefer the inner ``jira_key``, fall back to the outer key.
-            # Legacy/test fixtures sometimes key the outer dict directly
-            # by ``jira_key`` and omit the inner duplicate.
-            jira_key_for_legacy = str(inner_key or outer_key)
-            try:
-                entry = WorkPackageMappingEntry.from_legacy(jira_key_for_legacy, raw_entry)
-            except ValueError:
-                continue
-            jira_key = str(entry.jira_key)
-            project_key = self._issue_project_key(jira_key)
-            if project_key not in by_project:
-                by_project[project_key] = []
-            by_project[project_key].append(jira_key)
+        by_project = self._group_work_packages_by_project(wp_map)
 
         total_issues = sum(len(keys) for keys in by_project.values())
 
@@ -279,34 +260,11 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             self.logger.info("Processing project %s (%d issues)", project_key, len(jira_keys))
 
             # Process in small batches
-            for i in range(0, len(jira_keys), batch_size):
-                batch_keys = jira_keys[i : i + batch_size]
-                try:
-                    # Extract provenance for this batch
-                    items = self._extract_batch(batch_keys)
-                    if not items:
-                        continue
+            total_failed, total_updated = self._update_project_batches(
+                jira_keys, batch_size, total_failed, total_updated, project_key
+            )
 
-                    # Map to OP format
-                    extracted = ComponentResult(success=True, data={"items": items})
-                    mapped = self._map(extracted)
-                    if not mapped.success:
-                        total_failed += len(batch_keys)
-                        continue
-
-                    # Load to OP
-                    loaded = self._load(mapped)
-                    total_updated += loaded.updated or 0
-                    total_failed += loaded.failed or 0
-                except Exception:
-                    self.logger.exception(
-                        "Batch processing failed for project %s batch %d",
-                        project_key,
-                        i // batch_size,
-                    )
-                    total_failed += len(batch_keys)
-
-        success = total_failed == 0 or (total_updated > 0 and total_failed < total_updated)
+        success = total_failed == 0
         self.logger.info(
             "Attachment provenance migration completed: %d updated, %d failed",
             total_updated,
@@ -318,3 +276,55 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             failed=total_failed,
             message=f"Processed {total_updated} provenances, {total_failed} failures",
         )
+
+    def _group_work_packages_by_project(self, wp_map):
+        by_project: dict[str, list[str]] = {}
+        for outer_key, raw_entry in wp_map.items():
+            if not isinstance(raw_entry, dict):
+                # Legacy bare-int rows have no recoverable Jira key.
+                continue
+            inner_key = raw_entry.get("jira_key")
+            # Match :meth:`AttachmentsMigration._wp_lookup_by_jira_key`:
+            # prefer the inner ``jira_key``, fall back to the outer key.
+            # Legacy/test fixtures sometimes key the outer dict directly
+            # by ``jira_key`` and omit the inner duplicate.
+            jira_key_for_legacy = str(inner_key or outer_key)
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(jira_key_for_legacy, raw_entry)
+            except ValueError:
+                continue
+            jira_key = str(entry.jira_key)
+            project_key = self._issue_project_key(jira_key)
+            if project_key not in by_project:
+                by_project[project_key] = []
+            by_project[project_key].append(jira_key)
+        return by_project
+
+    def _update_project_batches(self, jira_keys, batch_size, total_failed, total_updated, project_key):
+        for i in range(0, len(jira_keys), batch_size):
+            batch_keys = jira_keys[i : i + batch_size]
+            try:
+                # Extract provenance for this batch
+                items = self._extract_batch(batch_keys)
+                if not items:
+                    continue
+
+                # Map to OP format
+                extracted = ComponentResult(success=True, data={"items": items})
+                mapped = self._map(extracted)
+                if not mapped.success:
+                    total_failed += len(batch_keys)
+                    continue
+
+                # Load to OP
+                loaded = self._load(mapped)
+                total_updated += loaded.updated or 0
+                total_failed += loaded.failed or 0
+            except Exception:
+                self.logger.exception(
+                    "Batch processing failed for project %s batch %d",
+                    project_key,
+                    i // batch_size,
+                )
+                total_failed += len(batch_keys)
+        return total_failed, total_updated

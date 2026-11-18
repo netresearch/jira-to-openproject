@@ -20,7 +20,12 @@ def _check_page_keys(page: list[Issue], previous_keys: set[str], offset: int, co
     if getattr(page, "startAt", offset) != offset:
         msg = f"{context}: Jira returned a page from the wrong offset"
         raise JiraApiError(msg)
-    keys = {issue.key for issue in page}
+    keys = set()
+    for row in page:
+        key = row.get("key") if isinstance(row, dict) else getattr(row, "key", None)
+        if not isinstance(key, str) or not key.strip():
+            raise JiraApiError(f"{context}: Jira returned an issue without a key")
+        keys.add(key)
     if len(keys) != len(page) or not keys.isdisjoint(previous_keys):
         msg = f"{context}: duplicate issue keys across Jira search results"
         raise JiraApiError(msg)
@@ -63,7 +68,7 @@ def iter_issue_pages(
             _check_reported_total("empty", known_total, offset, context)
             return
 
-        previous_keys = _check_page_keys(page, previous_keys, offset, context)
+        previous_keys.update(_check_page_keys(page, previous_keys, offset, context))
         count = len(page) if limit is None else min(len(page), limit - offset)
         yield from islice(page, count)
         offset += count
