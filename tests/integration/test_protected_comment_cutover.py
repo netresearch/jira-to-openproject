@@ -12,6 +12,7 @@ import requests
 from pyrage import x25519
 
 from src.comment_archive.archive import enrollment, migrate, unpack
+from src.comment_archive.cli import main
 from src.comment_archive.transport import ArchiveError, Endpoint, attachments, download
 from tests.integration.test_openproject_agile_roundtrip import rails  # noqa: F401
 
@@ -20,7 +21,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
 
 @pytest.mark.parametrize("rails", ["committed_archive"], indirect=True)
 @pytest.mark.parametrize("kind", ["software", "service_desk"])
-def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, tmp_path, kind):  # noqa: F811
+def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, tmp_path, capsys, kind):  # noqa: F811
     _, query = rails
     seed = query("""
       template = WorkPackage.first!
@@ -177,6 +178,26 @@ def test_encrypted_comments_after_jira_shutdown(rails, monkeypatch, tmp_path, ki
 
     jira_online = False
     for name, (_, token) in zip(people, seed["users"], strict=True):
+        identity_path = tmp_path / f"{name}.agekey"
+        identity_path.write_text(str(identities[name]))
+        monkeypatch.setenv("J2O_ARCHIVE_OP_TOKEN", token)
+        status = main(
+            [
+                "read",
+                "--identity",
+                str(identity_path),
+                "--openproject",
+                config["openproject"],
+                "--work-package",
+                str(wp),
+            ]
+        )
+        captured = capsys.readouterr()
+        assert status == int(not roles[name])
+        if roles[name]:
+            assert {r["id"] for r in json.loads(captured.out)["comments"]} == set(roles[name])
+        else:
+            assert not captured.out
         op = Endpoint(config["openproject"], token, jira=False)
         if name == "outsider":
             with pytest.raises(ArchiveError, match="HTTP (403|404)"):

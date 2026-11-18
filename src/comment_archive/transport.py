@@ -189,9 +189,10 @@ def visible_comments(jira: Endpoint, issue: str, kind: str, *, reader: bool) -> 
         if isinstance(created, dict):
             created = created.get("iso8601")
         author = row.get("author") or {}
-        out[str(key)] = {"id": key, "body": row["body"], "created": created, "author": author.get("displayName")}
+        comment = {"id": key, "body": row["body"], "created": created, "author": author.get("displayName")}
         if kind == "service_desk":
-            out[key]["public"] = row["public"]
+            comment["public"] = row["public"]
+        out[str(key)] = comment
     return out
 
 

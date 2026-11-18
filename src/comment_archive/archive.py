@@ -194,11 +194,14 @@ def migrate(
     issues = scoped_issues(inventory, project, mapping)
     require(set(expected_comments) == {i for _, i, _ in issues}, "Independent issue inventory differs")
     scope = encoded([inventory.url, writer.url, project, issues, [(r.key, r.op_id, r.recipient) for r in readers]])
+    # Give SQLite a literal absolute filesystem name (including for names such as ":memory:").
+    state = state.absolute()
     state.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    require(not state.is_symlink(), "Use a private regular file for archive state")
     # The database contains ciphertext and verification hashes; restrict newly created files.
-    fd = os.open(state, os.O_CREAT | os.O_RDWR, 0o600)
+    fd = os.open(state, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     os.close(fd)
-    db = sqlite3.connect(state, timeout=120)
+    db = sqlite3.connect(state, timeout=120, uri=False)
     try:
         db.execute("CREATE TABLE IF NOT EXISTS scope(id INTEGER PRIMARY KEY CHECK(id=1), config BLOB)")
         db.execute("CREATE TABLE IF NOT EXISTS archives(wp INTEGER PRIMARY KEY, digest TEXT NOT NULL, blob BLOB)")

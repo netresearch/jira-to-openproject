@@ -67,3 +67,5 @@ uv run j2o-comments read --identity reader.agekey --work-package 245 \
 ```
 
 The online form uses `J2O_ARCHIVE_OP_TOKEN` for the current OpenProject reader. A user can also download the attachment in the work-package UI and run `uv run j2o-comments read --identity reader.agekey --work-package 245 --file jira-protected-comments.j2o`. Each form prints only that recipient's original comment text and metadata as JSON. The reader needs no Jira service, credential, or network connection to Jira. An archive is a cutover snapshot. Later target role grants cannot add recipients to existing ciphertext.
+
+To repeat the disposable OpenProject 17.9.7 acceptance test locally, run `bash tests/integration/run_comment_cutover.sh` from the checkout with Docker and uv available. It creates and removes its own database and application containers. The test uses synthetic Jira and Service Management responses and authenticates each target account against OpenProject itself.
