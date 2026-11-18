@@ -48,7 +48,8 @@ def test_legacy_migration_reports_blocked_journal_writes(monkeypatch, existing):
     migration._iter_all_project_issues = Mock(return_value=[issue])
     migration.prepare_work_package = Mock(return_value={"_rails_operations": [{"type": "journal"}]})
     result = migration.run()
-    assert not result.success and result.failed_count == 1
+    assert not result.success
+    assert result.failed_count == 1
     assert "work_packages_content" in result.error
     assert not migration.op_client.mock_calls
 
@@ -57,6 +58,7 @@ def test_legacy_batch_refuses_to_replace_native_journals():
     migration = WorkPackageMigration.__new__(WorkPackageMigration)
     migration.op_client = Mock()
     assert migration._update_existing_work_packages_batch([]) == (0, 0)
+    batch = [(SimpleNamespace(key="A-1"), {"id": 21}, 8)]
     with pytest.raises(LegacyJournalReplayError):
-        migration._update_existing_work_packages_batch([(SimpleNamespace(key="A-1"), {"id": 21}, 8)])
+        migration._update_existing_work_packages_batch(batch)
     assert not migration.op_client.mock_calls
