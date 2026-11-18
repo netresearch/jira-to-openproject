@@ -22,6 +22,25 @@ from websockets.sync.client import connect
 DASHBOARD = Path(__file__).resolve().parents[1] / "src/dashboard"
 
 
+def _published_debug_port(path: Path) -> int | None:
+    """Chrome creates DevToolsActivePort before writing its port and browser path."""
+    try:
+        port, newline, _ = path.read_text(encoding="utf-8").partition("\n")
+    except FileNotFoundError:
+        return None
+    return int(port) if newline and port.isdecimal() else None
+
+
+def test_chromium_devtools_port_is_ready_after_the_first_complete_line(tmp_path: Path) -> None:
+    path = tmp_path / "DevToolsActivePort"
+    assert _published_debug_port(path) is None
+    for partial in ("", "43"):
+        path.write_text(partial, encoding="utf-8")
+        assert _published_debug_port(path) is None
+    path.write_text("43021\n/devtools/browser/example", encoding="utf-8")
+    assert _published_debug_port(path) == 43021
+
+
 def dump_page(profile: Path, url: str, ready: str) -> str:
     """Read the rendered document when the page reports its result, independently of Chrome shutdown."""
     chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
@@ -45,11 +64,10 @@ def dump_page(profile: Path, url: str, ready: str) -> str:
     with subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as proc:
         try:
             deadline = monotonic() + 45
-            while not port_file.is_file():
+            while (port := _published_debug_port(port_file)) is None:
                 if proc.poll() is not None or monotonic() >= deadline:
                     pytest.fail("Chromium did not open its local debugging port")
                 sleep(0.05)
-            port = int(port_file.read_text().splitlines()[0])
             pages = requests.get(f"http://127.0.0.1:{port}/json/list", timeout=5, allow_redirects=False)
             pages.raise_for_status()
             tab = next(p for p in pages.json() if p["type"] == "page")
