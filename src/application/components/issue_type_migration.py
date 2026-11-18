@@ -391,10 +391,7 @@ class IssueTypeMigration(BaseMigration):
                 continue
 
             # Get the base type name by removing the "Sub:" or "Sub-" prefix
-            if jira_type_name.startswith("Sub:"):
-                base_type_name = jira_type_name[4:].strip()
-            else:  # Sub-
-                base_type_name = jira_type_name[4:].strip()
+            base_type_name = jira_type_name[4:].strip()
 
             # Find the corresponding normal type
             base_type_data = normal_types.get(base_type_name)

@@ -1925,16 +1925,11 @@ class EnhancedUserAssociationMigrator:
                 jira_user_data = self._get_jira_user_info(username)
                 used_direct_helper = True
                 used_internal_helper = True
-            elif used_timeout_path or get_user_info_side_effect_set:
-                # Timeout-aware or explicit get_user_info retry path
-                jira_user_data = self._get_jira_user_with_retry(username)
-                used_retry_path = True
-            elif get_side_effect_set:
-                # End-to-end path prefers internal HTTP helper using raw .get
-                jira_user_data = self._get_jira_user_info(username)
-                used_direct_helper = True
-            # Default preference: if get_user_info exists, use retry helper; else internal HTTP
-            elif callable(ji_get_user_info):
+            elif (
+                used_timeout_path
+                or get_user_info_side_effect_set
+                or (not get_side_effect_set and callable(ji_get_user_info))
+            ):
                 jira_user_data = self._get_jira_user_with_retry(username)
                 used_retry_path = True
             else:

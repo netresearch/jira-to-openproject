@@ -200,6 +200,20 @@ class TestEnhancedAuditTrailMigrator:
         # Should handle exception gracefully
         mock_load_dict.assert_called_once()
 
+    def test_project_mapping_uses_the_configured_data_directory(self, migrator_with_mocks, tmp_path, monkeypatch):
+        mapping = {"SOURCE": {"openproject_identifier": "destination"}}
+        (tmp_path / "project_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
+        monkeypatch.setattr("src.config.get_path", lambda name: tmp_path)
+        migrator_with_mocks._load_project_mapping()
+        assert migrator_with_mocks.project_mapping == mapping
+
+    def test_audit_extraction_failure_can_be_retried(self, migrator_with_mocks, monkeypatch):
+        migrator = migrator_with_mocks
+        monkeypatch.setattr(migrator, "extract_changelog_from_issue", Mock(side_effect=ValueError("test failure")))
+        assert migrator.migrate_audit_trail_for_issue(SimpleNamespace(key="TEST-1"), 123) is False
+        assert "TEST-1" not in migrator.changelog_data
+        assert migrator.migration_results["failed_migrations"] == 1
+
     def test_extract_changelog_from_issue(
         self,
         migrator_with_mocks,

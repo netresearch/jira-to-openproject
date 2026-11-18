@@ -1131,12 +1131,6 @@ class WorkPackageMigration(BaseMigration):
                                     validity_end_iso = next_created
                     # else: Leave validity_end_iso as None for open-ended range (last comment)
 
-                    # Only set validity_period string if validity_end_iso is not None
-                    if validity_end_iso is not None:
-                        pass
-                    else:
-                        pass
-
                 # Bug #14/#15 fix - Build Ruby validity_period code as single-line expressions
                 if validity_end_iso is None:
                     # Open-ended range for most recent journal version
@@ -1413,21 +1407,8 @@ class WorkPackageMigration(BaseMigration):
                                     if mapped_to:
                                         field_changes[op_field] = [mapped_from, mapped_to]
                                         field_mapped = True
-                                elif op_field == "assigned_to_id":
+                                elif op_field in {"assigned_to_id", "author_id"}:
                                     # Map user names to IDs
-                                    mapped_to = (
-                                        self.user_mapping.get(to_str, {}).get("openproject_id")
-                                        if self.user_mapping and to_str
-                                        else None
-                                    )
-                                    mapped_from = (
-                                        self.user_mapping.get(from_str, {}).get("openproject_id")
-                                        if self.user_mapping and from_str
-                                        else None
-                                    )
-                                    field_changes[op_field] = [mapped_from, mapped_to]
-                                    field_mapped = True
-                                elif op_field == "author_id":
                                     mapped_to = (
                                         self.user_mapping.get(to_str, {}).get("openproject_id")
                                         if self.user_mapping and to_str
