@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+
+readonly section_separator="========================================================================"
 #
 # Test migration for 10 SPECIFIC NRS issues including known Bug #10 failures
 # Uses J2O_TEST_ISSUES environment variable for precise issue targeting
@@ -6,10 +8,10 @@
 
 set -e
 
-echo "========================================================================"
+echo "$section_separator"
 echo "NRS MIGRATION TEST - 10 Specific Issues"
 echo "Start: $(date --iso-8601=seconds)"
-echo "========================================================================"
+echo "$section_separator"
 echo ""
 echo "Test Issues (including known Bug #10 failures):"
 echo "  1. NRS-171 (from successful tests)"
@@ -25,9 +27,9 @@ echo " 10. NRS-4003 (Bug #10: due_date 2 YEARS before start_date)"
 echo ""
 
 # STEP 1: Delete existing test work packages for clean test
-echo "========================================================================"
+echo "$section_separator"
 echo "STEP 1: Cleaning up existing test work packages..."
-echo "========================================================================"
+echo "$section_separator"
 
 cat <<'RUBY' | ssh sobol.nr 'docker exec -i openproject-web-1 bundle exec rails runner -'
 cf = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Origin Key')
@@ -53,9 +55,9 @@ RUBY
 echo ""
 
 # STEP 2: Run migration with J2O_TEST_ISSUES environment variable
-echo "========================================================================"
+echo "$section_separator"
 echo "STEP 2: RUNNING MIGRATION ON 10 ISSUES"
-echo "========================================================================"
+echo "$section_separator"
 echo "Using J2O_TEST_ISSUES environment variable for precise targeting"
 echo "Extended timeout: 600 seconds"
 echo ""
@@ -74,15 +76,15 @@ python -m src.main migrate \
 MIGRATION_RESULT=$?
 
 echo ""
-echo "========================================================================"
+echo "$section_separator"
 echo "Migration completed with exit code: $MIGRATION_RESULT"
-echo "========================================================================"
+echo "$section_separator"
 
 # STEP 3: Verify results
 echo ""
-echo "========================================================================"
+echo "$section_separator"
 echo "STEP 3: VERIFICATION"
-echo "========================================================================"
+echo "$section_separator"
 
 cat <<'RUBY' | ssh sobol.nr 'docker exec -i openproject-web-1 bundle exec rails runner -'
 cf = CustomField.find_by(type: 'WorkPackageCustomField', name: 'J2O Origin Key')
@@ -127,18 +129,18 @@ RUBY
 
 # STEP 4: Check for errors in logs
 echo ""
-echo "========================================================================"
+echo "$section_separator"
 echo "Recent log errors (if any):"
-echo "========================================================================"
+echo "$section_separator"
 tail -100 var/logs/migration_$(date +%Y-%m-%d)*.log 2>/dev/null | grep -E "ERROR|Exception|PG::" | tail -20 || echo "No errors found"
 
 echo ""
-echo "========================================================================"
+echo "$section_separator"
 echo "Test complete!"
 echo "End: $(date --iso-8601=seconds)"
-echo "========================================================================"
+echo "$section_separator"
 
-if [ $MIGRATION_RESULT -eq 0 ]; then
+if [[ $MIGRATION_RESULT -eq 0 ]]; then
     echo "✅ Migration process succeeded"
 else
     echo "❌ Migration process failed with exit code $MIGRATION_RESULT"

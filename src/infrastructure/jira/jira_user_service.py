@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraClient,
@@ -50,7 +51,7 @@ class JiraUserService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -123,7 +124,7 @@ class JiraUserService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -171,7 +172,7 @@ class JiraUserService:
         # service. Pre-extraction code conflated the two via
         # ``getattr(None, '_session', None)``.
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         session = getattr(self._client.jira, "_session", None)

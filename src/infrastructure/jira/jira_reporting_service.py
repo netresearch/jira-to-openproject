@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from requests import exceptions
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraConnectionError,
@@ -52,7 +53,7 @@ class JiraReportingService:
     def get_filters(self) -> list[dict[str, Any]]:
         """Return Jira filters visible to the authenticated user."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         self._logger.info("Fetching Jira filters")
@@ -147,7 +148,7 @@ class JiraReportingService:
     def get_dashboards(self) -> list[dict[str, Any]]:
         """Return Jira dashboards visible to the authenticated user."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         url = f"{self._client.base_url}/rest/api/2/dashboard"
@@ -169,7 +170,7 @@ class JiraReportingService:
     def get_dashboard_details(self, dashboard_id: int) -> dict[str, Any]:
         """Return details for a specific Jira dashboard."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         url = f"{self._client.base_url}/rest/api/2/dashboard/{dashboard_id}"

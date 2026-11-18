@@ -26,6 +26,7 @@ import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import (
     JiraApiError,
@@ -93,7 +94,7 @@ class JiraIssueService:
         self._logger.notice("Fetching all issues for project '%s'...", project_key)
 
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         # Verify project exists
@@ -137,7 +138,7 @@ class JiraIssueService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -219,7 +220,7 @@ class JiraIssueService:
         if not issue_keys:
             return {}
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         # ``BatchProcessor.process_batches`` returns a ``list`` of
@@ -467,7 +468,7 @@ class JiraIssueService:
     ) -> Iterator[dict[str, Any]]:
         """Stream project issues, respecting the page size negotiated by Jira."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         # Use ``is not None`` so a caller-supplied ``batch_size=0`` is
@@ -501,7 +502,7 @@ class JiraIssueService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:

@@ -114,7 +114,7 @@ class SecurityValidator:
         ([\s;]\s*['"][^'"]*['"]\s*=\s*['"][^'"]*['"];?) |       # Suspicious assignments
         ([\s;]\s*\d+\s*=\s*\d+) |                              # Tautology like 1=1
         (\b(CAST|CONVERT|CHAR|NCHAR|ASCII|SUBSTRING)\b\s*\() | # Type conversion functions
-        (0x[0-9a-fA-F]+)                                        # Hex encoding
+        (0x[0-9a-f]+)                                        # Hex encoding
     """,
         re.IGNORECASE | re.VERBOSE,
     )
@@ -127,7 +127,7 @@ class SecurityValidator:
     # Whitelist patterns for different string types
     SAFE_FILENAME_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")
     SAFE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
-    NUMERIC_STRING_PATTERN = re.compile(r"^[-+]?[0-9]*\.?[0-9]+$")
+    NUMERIC_STRING_PATTERN = re.compile(r"^[+-]?(?:\d++(?:\.\d+)?|\.\d+)$", re.ASCII)
 
     @classmethod
     def validate_numeric_parameter(

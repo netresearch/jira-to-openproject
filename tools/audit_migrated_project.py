@@ -26,19 +26,20 @@ import sys
 import traceback
 from typing import Any
 
+from src.domain import provenance_fields
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 # --- spec checks ----------------------------------------------------------
 
 _REQUIRED_WP_PROVENANCE_CFS: tuple[str, ...] = (
-    "J2O Origin Key",
+    provenance_fields.ORIGIN_KEY,
     "J2O Origin ID",
-    "J2O Origin System",
+    provenance_fields.ORIGIN_SYSTEM,
     "J2O Origin URL",
     "J2O Project Key",
     "J2O Project ID",
-    "J2O First Migration Date",
-    "J2O Last Update Date",
+    provenance_fields.FIRST_MIGRATION_DATE,
+    provenance_fields.LAST_UPDATE_DATE,
 )
 
 # Ruby regex literals for each WP provenance CF — the migrator
@@ -48,20 +49,20 @@ _REQUIRED_WP_PROVENANCE_CFS: tuple[str, ...] = (
 # legitimate edge case cannot silently fail; if a CF name is absent
 # from this map, the audit only checks population, not format.
 _WP_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
-    ("J2O Origin Key", r"\A[A-Z][A-Z0-9_]+-\d+\z"),
+    (provenance_fields.ORIGIN_KEY, r"\A[A-Z][A-Z0-9_]+-\d+\z"),
     ("J2O Origin ID", r"\A\d+\z"),
-    ("J2O Origin System", r"\AJira\z"),
+    (provenance_fields.ORIGIN_SYSTEM, r"\AJira\z"),
     # Forward slashes escaped so the Ruby ``/.../`` regex literal
     # doesn't terminate at the protocol's ``://``.
     ("J2O Origin URL", r"\Ahttps?:\/\/[^\s]+\/browse\/[A-Z][A-Z0-9_]+-\d+\z"),
     ("J2O Project Key", r"\A[A-Z][A-Z0-9_]*\z"),
     ("J2O Project ID", r"\A\d+\z"),
-    ("J2O First Migration Date", r"\A\d{4}-\d{2}-\d{2}\z"),
-    ("J2O Last Update Date", r"\A\d{4}-\d{2}-\d{2}\z"),
+    (provenance_fields.FIRST_MIGRATION_DATE, r"\A\d{4}-\d{2}-\d{2}\z"),
+    (provenance_fields.LAST_UPDATE_DATE, r"\A\d{4}-\d{2}-\d{2}\z"),
 )
 
 _REQUIRED_USER_PROVENANCE_CFS: tuple[str, ...] = (
-    "J2O Origin System",
+    provenance_fields.ORIGIN_SYSTEM,
     "J2O User ID",
     "J2O User Key",
     "J2O External URL",
@@ -99,7 +100,7 @@ _USER_CF_FORMAT_REGEXES: tuple[tuple[str, str], ...] = (
     # Ruby script ends up with a syntax error at load time. Python's
     # ``re`` engine accepts the unescaped form (no ``/.../`` literal
     # syntax), so the regression is invisible to the unit-test loop.
-    ("J2O Origin System", r"\AJira(?:\s[\w\s.()\-\/]*)?\z"),
+    (provenance_fields.ORIGIN_SYSTEM, r"\AJira(?:\s[\w\s.()\-\/]*)?\z"),
     # ``ViewProfile.jspa?<param>=<value>`` — forward slashes escaped so
     # the Ruby ``/.../`` regex literal doesn't terminate at ``://``.
     ("J2O External URL", r"\Ahttps?:\/\/[^\s]+\/secure\/ViewProfile\.jspa\?[^\s]*\z"),
@@ -114,9 +115,9 @@ _REQUIRED_TE_PROVENANCE_CFS: tuple[str, ...] = (
     "J2O Origin Worklog Key",
     "J2O Origin Issue ID",
     "J2O Origin Issue Key",
-    "J2O Origin System",
-    "J2O First Migration Date",
-    "J2O Last Update Date",
+    provenance_fields.ORIGIN_SYSTEM,
+    provenance_fields.FIRST_MIGRATION_DATE,
+    provenance_fields.LAST_UPDATE_DATE,
 )
 
 # Regex specs for TimeEntry provenance CF *values*. Per the migrator
@@ -490,7 +491,7 @@ def _audit_provenance_fields(metrics: dict[str, Any], wp_total: int, failures: l
         populated = _metric_int(info, "populated")
         if populated >= wp_total:
             continue
-        if cf_name == "J2O Origin Key":
+        if cf_name == provenance_fields.ORIGIN_KEY:
             failures.append(
                 f"WP CF '{cf_name}' under-populated: {populated}/{wp_total}"
                 " — hard-required per spec (dedup + provenance broken)",

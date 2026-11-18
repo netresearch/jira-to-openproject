@@ -60,6 +60,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.domain import provenance_fields
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -160,7 +161,7 @@ def _build_provenance_custom_field_entries(
         if cf_id and value not in (None, ""):
             entries.append({"id": int(cf_id), "value": str(value)})
 
-    _add("J2O Origin Key", getattr(jira_issue, "key", None))
+    _add(provenance_fields.ORIGIN_KEY, getattr(jira_issue, "key", None))
     _add("J2O Origin ID", getattr(jira_issue, "id", None))
     _add("J2O Origin System", "Jira")
     from urllib.parse import urlsplit
@@ -608,7 +609,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
         # correct format per CF so a missing-CF fallback creation
         # produces the right shape.
         string_cfs: tuple[str, ...] = (
-            "J2O Origin Key",
+            provenance_fields.ORIGIN_KEY,
             "J2O Origin ID",
             "J2O Origin System",
             "J2O Origin URL",
@@ -643,7 +644,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
             return self._j2o_origin_key_cf_id
 
         try:
-            cf_name = "J2O Origin Key"
+            cf_name = provenance_fields.ORIGIN_KEY
             cf = self.op_client.ensure_custom_field(
                 name=cf_name,
                 field_format="string",

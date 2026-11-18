@@ -51,11 +51,7 @@ def fix_logger_imports():
                 )
 
                 # Handle cases where config is imported at module level
-                new_content = re.sub(
-                    r"logger = config\.logger",
-                    r'logger = configure_logging("INFO", None)',
-                    new_content,
-                )
+                new_content = new_content.replace("logger = config.logger", 'logger = configure_logging("INFO", None)')
 
                 # Add the import if it's not already there
                 if "from src.display import configure_logging" not in new_content:

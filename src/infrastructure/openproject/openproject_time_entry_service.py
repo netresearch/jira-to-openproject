@@ -38,6 +38,84 @@ from typing import Any
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
+# Bulk entries use the same Jira worklog key field as individual writes and lookups.
+_BULK_TIME_ENTRY_BODY = """\
+begin; Rails.logger.level = Logger::WARN; rescue; end
+begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end
+begin; GoodJob.logger = Logger.new(nil); rescue; end
+entries = JSON.parse(File.read(data_path), symbolize_names: true)
+results = []
+created_count = 0
+failed_count = 0
+entries.each do |entry|
+  begin
+    te = TimeEntry.new(
+      activity_id: entry[:activity_id],
+      hours: entry[:hours],
+      spent_on: Date.parse(entry[:spent_on]),
+      comments: entry[:comments],
+      entity_id: entry[:work_package_id],
+      entity_type: 'WorkPackage'
+    )
+    begin
+      wp = WorkPackage.find_by(id: entry[:work_package_id])
+      if wp.nil?
+        failed_count += 1
+        results << { index: entry[:index], success: false, error: 'WorkPackage not found: ' + entry[:work_package_id].to_s }
+        next
+      end
+      te.entity = wp
+      te.project = wp.project
+    rescue => e
+      failed_count += 1
+      results << { index: entry[:index], success: false, error: 'WorkPackage lookup failed: ' + e.message }
+      next
+    end
+    begin
+      user = User.find_by(id: entry[:user_id])
+      if user.nil?
+        failed_count += 1
+        results << { index: entry[:index], success: false, error: 'User not found: ' + entry[:user_id].to_s }
+        next
+      end
+      te.user = user
+      te.user_id = entry[:user_id]
+      te.logged_by_id = entry[:user_id]
+    rescue => e
+      failed_count += 1
+      results << { index: entry[:index], success: false, error: 'User lookup failed: ' + e.message }
+      next
+    end
+    begin
+      key = entry[:jira_worklog_key]
+      if !key.nil? && !key.to_s.empty?
+        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
+        if !cf
+          cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
+          cf.save
+        end
+        begin
+          te.custom_field_values = { cf.id => key }
+        rescue => e
+        end
+      end
+    rescue => e
+    end
+    if te.save
+      created_count += 1
+      results << { index: entry[:index], success: true, id: te.id }
+    else
+      failed_count += 1
+      results << { index: entry[:index], success: false, errors: te.errors.full_messages }
+    end
+  rescue => e
+    failed_count += 1
+    results << { index: entry[:index], success: false, error: e.message }
+  end
+end
+File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))
+"""
+
 
 class OpenProjectTimeEntryService:
     """Time-entry Rails-console helpers for ``OpenProjectClient``."""
@@ -412,92 +490,7 @@ class OpenProjectTimeEntryService:
             f"data_path = '{container_json.as_posix()}'",
             f"result_path = '{container_result.as_posix()}'",
         ]
-        ruby_lines = [
-            "begin; Rails.logger.level = Logger::WARN; rescue; end",
-            "begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end",
-            "begin; GoodJob.logger = Logger.new(nil); rescue; end",
-            "entries = JSON.parse(File.read(data_path), symbolize_names: true)",
-            "results = []",
-            "created_count = 0",
-            "failed_count = 0",
-            "entries.each do |entry|",
-            "  begin",
-            "    te = TimeEntry.new(",
-            "      activity_id: entry[:activity_id],",
-            "      hours: entry[:hours],",
-            "      spent_on: Date.parse(entry[:spent_on]),",
-            "      comments: entry[:comments],",
-            "      entity_id: entry[:work_package_id],",
-            "      entity_type: 'WorkPackage'",
-            "    )",
-            "    begin",
-            "      wp = WorkPackage.find_by(id: entry[:work_package_id])",
-            "      if wp.nil?",
-            "        failed_count += 1",
-            "        results << { index: entry[:index], success: false, error: 'WorkPackage not found: ' + entry[:work_package_id].to_s }",
-            "        next",
-            "      end",
-            "      te.entity = wp",
-            "      te.project = wp.project",
-            "    rescue => e",
-            "      failed_count += 1",
-            "      results << { index: entry[:index], success: false, error: 'WorkPackage lookup failed: ' + e.message }",
-            "      next",
-            "    end",
-            "    begin",
-            "      user = User.find_by(id: entry[:user_id])",
-            "      if user.nil?",
-            "        failed_count += 1",
-            "        results << { index: entry[:index], success: false, error: 'User not found: ' + entry[:user_id].to_s }",
-            "        next",
-            "      end",
-            "      te.user = user",
-            "      te.user_id = entry[:user_id]",
-            "      te.logged_by_id = entry[:user_id]",
-            "    rescue => e",
-            "      failed_count += 1",
-            "      results << { index: entry[:index], success: false, error: 'User lookup failed: ' + e.message }",
-            "      next",
-            "    end",
-            "    begin",
-            "      key = entry[:jira_worklog_key]",
-            # Use the canonical 'J2O Origin Worklog Key' name so this
-            # batch path writes provenance to the SAME custom field as
-            # ``create_time_entry`` and ``ensure_origin_custom_fields`` —
-            # the previous 'Jira Worklog Key' would split provenance
-            # across two CFs and break idempotency lookups.
-            #
-            # Empty strings are truthy in Ruby, so the existence check
-            # has to be explicit (``!key.nil? && !key.to_s.empty?``)
-            # instead of the bare ``if key`` that the pre-extraction
-            # client code used.
-            "      if !key.nil? && !key.to_s.empty?",
-            "        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')",
-            "        if !cf",
-            "          cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')",
-            "          cf.save",
-            "        end",
-            "        begin",
-            "          te.custom_field_values = { cf.id => key }",
-            "        rescue => e",
-            "        end",
-            "      end",
-            "    rescue => e",
-            "    end",
-            "    if te.save",
-            "      created_count += 1",
-            "      results << { index: entry[:index], success: true, id: te.id }",
-            "    else",
-            "      failed_count += 1",
-            "      results << { index: entry[:index], success: false, errors: te.errors.full_messages }",
-            "    end",
-            "  rescue => e",
-            "    failed_count += 1",
-            "    results << { index: entry[:index], success: false, error: e.message }",
-            "  end",
-            "end",
-            "File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))",
-        ]
+        ruby_lines = _BULK_TIME_ENTRY_BODY.splitlines()
         # Wrap the body in an outer ``begin/rescue/ensure`` so any
         # top-level Ruby error (e.g. JSON parse failure on the input
         # file, exception before the per-entry loop) writes an

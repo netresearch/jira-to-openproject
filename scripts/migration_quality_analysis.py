@@ -335,23 +335,27 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
 
 def generate_report(analysis: dict) -> str:
     """Generate a human-readable report."""
-    report = []
-    report.append("=" * 80)
-    report.append("MIGRATION QUALITY ANALYSIS REPORT")
-    report.append("=" * 80)
-    report.append(f"\nGenerated: {datetime.now().isoformat()}")
-    report.append(f"\nSample Size: {analysis['total_sampled']}")
-    report.append(f"Matched in OP: {analysis['matched_in_op']}")
-    report.append(f"Missing in OP: {analysis['missing_in_op']}")
-
-    report.append("\n" + "-" * 80)
-    report.append("FIELD-BY-FIELD ANALYSIS")
-    report.append("-" * 80)
+    report = [
+        "=" * 80,
+        "MIGRATION QUALITY ANALYSIS REPORT",
+        "=" * 80,
+        f"\nGenerated: {datetime.now().isoformat()}",
+        f"\nSample Size: {analysis['total_sampled']}",
+        f"Matched in OP: {analysis['matched_in_op']}",
+        f"Missing in OP: {analysis['missing_in_op']}",
+        "\n" + "-" * 80,
+        "FIELD-BY-FIELD ANALYSIS",
+        "-" * 80,
+    ]
 
     for field, stats in analysis["field_analysis"].items():
-        report.append(f"\n{field.upper()}:")
-        report.append(f"  Matches: {stats['matches']}")
-        report.append(f"  Mismatches: {stats['mismatches']}")
+        report.extend(
+            [
+                f"\n{field.upper()}:",
+                f"  Matches: {stats['matches']}",
+                f"  Mismatches: {stats['mismatches']}",
+            ]
+        )
         if "missing" in stats:
             report.append(f"  Missing in OP: {stats['missing']}")
         if stats["examples"]:
@@ -359,9 +363,13 @@ def generate_report(analysis: dict) -> str:
             for ex in stats["examples"][:3]:
                 report.append(f"    - {ex}")
 
-    report.append("\n" + "-" * 80)
-    report.append("ROOT CAUSES IDENTIFIED")
-    report.append("-" * 80)
+    report.extend(
+        [
+            "\n" + "-" * 80,
+            "ROOT CAUSES IDENTIFIED",
+            "-" * 80,
+        ]
+    )
 
     report.append("""
 1. SKELETON MIGRATION USES DEFAULT VALUES

@@ -16,6 +16,10 @@ from pydantic import BaseModel
 from src import config
 from src.models.migration_error import MigrationError
 
+_INVALID_JSON_MESSAGE = "Error parsing JSON from %s"
+_MISSING_DATA_FILE_MESSAGE = "File does not exist: %s"
+
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -206,14 +210,14 @@ def load_dict(
         config.logger.info("Loaded dictionary data from %s", file_path)
         return data
     except FileNotFoundError:
-        config.logger.debug("File does not exist: %s", file_path)
+        config.logger.debug(_MISSING_DATA_FILE_MESSAGE, file_path)
         return default
     except json.JSONDecodeError:
         # Only check file size after JSON parsing fails
         if file_path.stat().st_size == 0:
             config.logger.debug("File is empty: %s", file_path)
         else:
-            config.logger.exception("Error parsing JSON from %s", file_path)
+            config.logger.exception(_INVALID_JSON_MESSAGE, file_path)
         return default
     except Exception:
         config.logger.exception("Error reading JSON file %s", file_path)
@@ -261,14 +265,14 @@ def load_list(
         config.logger.info("Loaded list data from %s", file_path)
         return data
     except FileNotFoundError:
-        config.logger.debug("File does not exist: %s", file_path)
+        config.logger.debug(_MISSING_DATA_FILE_MESSAGE, file_path)
         return default
     except json.JSONDecodeError:
         # Only check file size after JSON parsing fails
         if file_path.stat().st_size == 0:
             config.logger.debug("File is empty: %s", file_path)
         else:
-            config.logger.exception("Error parsing JSON from %s", file_path)
+            config.logger.exception(_INVALID_JSON_MESSAGE, file_path)
         return default
     except Exception:
         config.logger.exception("Error reading JSON file %s", file_path)
@@ -371,7 +375,7 @@ def load_model[T](
 
     try:
         if not file_path.exists():
-            config.logger.debug("File does not exist: %s", file_path)
+            config.logger.debug(_MISSING_DATA_FILE_MESSAGE, file_path)
             return None
 
         with file_path.open("r", encoding="utf-8") as f:
@@ -381,7 +385,7 @@ def load_model[T](
         model_cls = cast("type[BaseModel]", model_class)
         return cast("T", model_cls.model_validate(data))
     except json.JSONDecodeError:
-        config.logger.exception("Error parsing JSON from %s", file_path)
+        config.logger.exception(_INVALID_JSON_MESSAGE, file_path)
         return None
     except Exception:
         config.logger.exception("Error loading model from %s", file_path)

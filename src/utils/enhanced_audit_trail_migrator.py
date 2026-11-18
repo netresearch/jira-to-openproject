@@ -140,15 +140,8 @@ class EnhancedAuditTrailMigrator:
         try:
             from src.utils import data_handler
 
-            project_mapping_file = Path("data") / "project_mapping.json"
-            if project_mapping_file.exists():
-                self.project_mapping = data_handler.load(
-                    filename="project_mapping.json",
-                    directory=Path("data"),
-                )
-                self.logger.info(f"Loaded {len(self.project_mapping)} project mappings")
-            else:
-                self.logger.debug("Project mapping file not found")
+            self.project_mapping = data_handler.load_dict(Path("project_mapping.json"))
+            self.logger.debug("Loaded %d project mappings", len(self.project_mapping))
 
         except Exception as e:
             self.logger.warning(f"Failed to load project mapping: {e}")
@@ -458,7 +451,7 @@ class EnhancedAuditTrailMigrator:
         self,
         jira_issue: Any,
         openproject_work_package_id: int,
-    ) -> bool | dict[str, Any]:
+    ) -> bool:
         """Migrate complete audit trail for a single issue.
 
         Args:
@@ -466,29 +459,18 @@ class EnhancedAuditTrailMigrator:
             openproject_work_package_id: OpenProject work package ID
 
         Returns:
-            Migration result for this issue
+            True when processing succeeded, including issues with no history.
 
         """
         issue_key = jira_issue.key
         self.logger.debug(f"Migrating audit trail for issue {issue_key}")
 
-        result = {
-            "jira_issue_key": issue_key,
-            "openproject_work_package_id": openproject_work_package_id,
-            "changelog_entries_found": 0,
-            "audit_events_created": 0,
-            "errors": [],
-            "warnings": [],
-        }
-
         try:
             # Extract changelog
             changelog_entries = self.extract_changelog_from_issue(jira_issue)
-            result["changelog_entries_found"] = len(changelog_entries)
             self.migration_results["total_changelog_entries"] += len(changelog_entries)
 
             if not changelog_entries:
-                result["warnings"].append("No changelog entries found")
                 self.migration_results["skipped_entries"] += 1
                 # Ensure cache is populated for legacy tests
                 self.changelog_data[issue_key] = []
@@ -502,15 +484,14 @@ class EnhancedAuditTrailMigrator:
                 issue_key,
                 openproject_work_package_id,
             )
-            result["audit_events_created"] = len(changelog_entries)
             self.migration_results["processed_entries"] += len(changelog_entries)
 
         except Exception as e:
             error_msg = f"Failed to migrate audit trail for {issue_key}: {e}"
             self.logger.exception(error_msg)
-            result["errors"].append(error_msg)
             self.migration_results["errors"].append(error_msg)
             self.migration_results["failed_migrations"] += 1
+            return False
 
         # For legacy tests, also store into changelog_data cache
         self.changelog_data[issue_key] = changelog_entries
@@ -538,6 +519,7 @@ class EnhancedAuditTrailMigrator:
             f"Processing {len(self.changelog_data)} stored changelog entries",
         )
 
+        success = True
         for jira_id, changelog_info in self.changelog_data.items():
             try:
                 # Find the corresponding work package ID
@@ -599,8 +581,9 @@ class EnhancedAuditTrailMigrator:
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)
                 self.migration_results["failed_migrations"] += 1
+                success = False
 
-        return True
+        return success
 
     def execute_rails_audit_operations(
         self,

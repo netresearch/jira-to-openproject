@@ -65,9 +65,13 @@ from pydantic import ValidationError
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.display import ProgressTracker
+from src.domain import provenance_fields
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, JiraUser, MigrationError
+
+_JIRA_USERS_FILE = "jira_users.json"
+_OP_USERS_FILE = "op_users.json"
 
 
 def _backfill_unmapped_users_from_op(
@@ -193,16 +197,16 @@ class UserMigration(BaseMigration):
         self.user_mapping: dict[str, Any] = {}
 
         # Setup file paths
-        self.jira_users_file = self.data_dir / "jira_users.json"
-        self.op_users_file = self.data_dir / "op_users.json"
+        self.jira_users_file = self.data_dir / _JIRA_USERS_FILE
+        self.op_users_file = self.data_dir / _OP_USERS_FILE
         self.user_mapping_file = self.data_dir / "user_mapping.json"
 
         # Logging
         self.logger.debug("UserMigration initialized with data dir: %s", self.data_dir)
 
         # Load existing data if available
-        self.jira_users = self._load_from_json(Path("jira_users.json")) or []
-        self.op_users = self._load_from_json(Path("op_users.json")) or []
+        self.jira_users = self._load_from_json(Path(_JIRA_USERS_FILE)) or []
+        self.op_users = self._load_from_json(Path(_OP_USERS_FILE)) or []
 
         self.user_mapping = config.mappings.get_mapping("user") or {}
 
@@ -284,7 +288,7 @@ class UserMigration(BaseMigration):
                     len(self.jira_users),
                 )
 
-        self._save_to_json(self.jira_users, Path("jira_users.json"))
+        self._save_to_json(self.jira_users, Path(_JIRA_USERS_FILE))
 
         return self.jira_users
 
@@ -433,7 +437,7 @@ class UserMigration(BaseMigration):
             len(self.op_users),
         )
 
-        self._save_to_json(self.op_users, Path("op_users.json"))
+        self._save_to_json(self.op_users, Path(_OP_USERS_FILE))
 
         return self.op_users
 
@@ -599,7 +603,7 @@ class UserMigration(BaseMigration):
         for user in self.op_users:
             if isinstance(user, dict):
                 user.pop("jira_user_key", None)
-        self._save_to_json(self.op_users, Path("op_users.json"))
+        self._save_to_json(self.op_users, Path(_OP_USERS_FILE))
 
         return mapping
 
@@ -715,7 +719,7 @@ class UserMigration(BaseMigration):
         if mapping:
             config.mappings.set_mapping("user", mapping)
             self.user_mapping = mapping
-            self._save_to_json(self.op_users, Path("op_users.json"))
+            self._save_to_json(self.op_users, Path(_OP_USERS_FILE))
 
         return mapping
 
@@ -786,10 +790,10 @@ class UserMigration(BaseMigration):
                 )
 
         cf_names = (
-            ("J2O Origin System", "string"),
-            ("J2O User ID", "string"),
-            ("J2O User Key", "string"),
-            ("J2O External URL", "string"),
+            (provenance_fields.ORIGIN_SYSTEM, "string"),
+            (provenance_fields.USER_ID, "string"),
+            (provenance_fields.USER_KEY, "string"),
+            (provenance_fields.EXTERNAL_URL, "string"),
         )
         ids: dict[str, int] = {}
         for name, field_format in cf_names:
@@ -1373,31 +1377,31 @@ class UserMigration(BaseMigration):
                         origin_meta = self._build_user_origin_metadata(jira_payload)
 
                         cf_payload: list[dict[str, Any]] = []
-                        if origin_meta.get("origin_system") and cf_ids.get("J2O Origin System"):
+                        if origin_meta.get("origin_system") and cf_ids.get(provenance_fields.ORIGIN_SYSTEM):
                             cf_payload.append(
                                 {
-                                    "id": cf_ids["J2O Origin System"],
+                                    "id": cf_ids[provenance_fields.ORIGIN_SYSTEM],
                                     "value": origin_meta["origin_system"],
                                 },
                             )
-                        if origin_meta.get("user_id") and cf_ids.get("J2O User ID"):
+                        if origin_meta.get("user_id") and cf_ids.get(provenance_fields.USER_ID):
                             cf_payload.append(
                                 {
-                                    "id": cf_ids["J2O User ID"],
+                                    "id": cf_ids[provenance_fields.USER_ID],
                                     "value": origin_meta["user_id"],
                                 },
                             )
-                        if origin_meta.get("user_key") and cf_ids.get("J2O User Key"):
+                        if origin_meta.get("user_key") and cf_ids.get(provenance_fields.USER_KEY):
                             cf_payload.append(
                                 {
-                                    "id": cf_ids["J2O User Key"],
+                                    "id": cf_ids[provenance_fields.USER_KEY],
                                     "value": origin_meta["user_key"],
                                 },
                             )
-                        if origin_meta.get("external_url") and cf_ids.get("J2O External URL"):
+                        if origin_meta.get("external_url") and cf_ids.get(provenance_fields.EXTERNAL_URL):
                             cf_payload.append(
                                 {
-                                    "id": cf_ids["J2O External URL"],
+                                    "id": cf_ids[provenance_fields.EXTERNAL_URL],
                                     "value": origin_meta["external_url"],
                                 },
                             )
@@ -1677,21 +1681,25 @@ class UserMigration(BaseMigration):
             if (
                 meta["origin_system"]
                 and meta["origin_system"] != existing_origin_system
-                and cf_ids.get("J2O Origin System")
+                and cf_ids.get(provenance_fields.ORIGIN_SYSTEM)
             ):
-                custom_fields.append({"id": cf_ids["J2O Origin System"], "value": meta["origin_system"]})
+                custom_fields.append({"id": cf_ids[provenance_fields.ORIGIN_SYSTEM], "value": meta["origin_system"]})
 
             existing_user_id = (op_user or {}).get("j2o_user_id") if op_user else None
-            if meta["user_id"] and meta["user_id"] != existing_user_id and cf_ids.get("J2O User ID"):
-                custom_fields.append({"id": cf_ids["J2O User ID"], "value": meta["user_id"]})
+            if meta["user_id"] and meta["user_id"] != existing_user_id and cf_ids.get(provenance_fields.USER_ID):
+                custom_fields.append({"id": cf_ids[provenance_fields.USER_ID], "value": meta["user_id"]})
 
             existing_user_key = (op_user or {}).get("j2o_user_key") if op_user else None
-            if meta["user_key"] and meta["user_key"] != existing_user_key and cf_ids.get("J2O User Key"):
-                custom_fields.append({"id": cf_ids["J2O User Key"], "value": meta["user_key"]})
+            if meta["user_key"] and meta["user_key"] != existing_user_key and cf_ids.get(provenance_fields.USER_KEY):
+                custom_fields.append({"id": cf_ids[provenance_fields.USER_KEY], "value": meta["user_key"]})
 
             existing_url = (op_user or {}).get("j2o_external_url") if op_user else None
-            if meta["external_url"] and meta["external_url"] != existing_url and cf_ids.get("J2O External URL"):
-                custom_fields.append({"id": cf_ids["J2O External URL"], "value": meta["external_url"]})
+            if (
+                meta["external_url"]
+                and meta["external_url"] != existing_url
+                and cf_ids.get(provenance_fields.EXTERNAL_URL)
+            ):
+                custom_fields.append({"id": cf_ids[provenance_fields.EXTERNAL_URL], "value": meta["external_url"]})
 
             pref_payload = {}
             existing_tz = (op_user or {}).get("time_zone") if op_user else None
