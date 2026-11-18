@@ -269,6 +269,7 @@ logging:
 ### Core Documentation
 
 - **[Entity Mapping Reference](docs/ENTITY_MAPPING.md)** - Comprehensive Jira→OpenProject field mappings
+- [Native completed sprints](docs/native-completed-sprints.md) on OpenProject 17.9, with every historic membership retained
 - **[Migration Components Catalog](docs/MIGRATION_COMPONENTS.md)** - Module listing with development state
 - **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Development standards, testing, and compliance
 - **[System Architecture](docs/ARCHITECTURE.md)** - Client architecture and component design

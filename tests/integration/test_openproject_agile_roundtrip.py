@@ -6,6 +6,7 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -557,3 +558,116 @@ def test_all_fix_versions_survive_native_readback_and_retry(rails):
         f"w=WorkPackage.find({wid});w.respond_to?(:target_version_ids) ? w.target_version_ids.sort : [w.version_id]"
     )
     assert actual == ([first, second] if multiple else [first])
+
+
+def test_native_completed_sprints_preserve_versions_history_and_project_scope(rails):
+    _, query = rails
+    source = Path(__file__).resolve().parents[2] / "src/ruby/import_completed_sprints.rb"
+    query(source.read_text() + "\ntrue")
+    query("""
+      section = ProjectCustomFieldSection.find_or_create_by!(name: "J2O Origin")
+      jf = ["Jira Project Key", "Jira Project ID", "Jira Base URL"].map do |n|
+        ProjectCustomField.find_or_create_by!(name: n) { |f| f.assign_attributes(field_format: "string", custom_field_section_id: section.id) }
+      end
+      fields = ["J2O Origin ID", "J2O Origin URL", JiraCompletedSprints::HISTORY].map do |n|
+        WorkPackageCustomField.find_or_create_by!(name: n) { |f| f.field_format = n == JiraCompletedSprints::HISTORY ? "text" : "string" }
+      end
+      seed = WorkPackage.first!
+      $sprint_fixture = %w[EX FX].map.with_index do |key, i|
+        p = Project.create!(name: key, identifier: "j2o-native-sprint-" + key.downcase, workspace_type: "project", public: false)
+        p.enabled_modules.find_or_create_by!(name: "work_package_tracking")
+        p.project_types = TypeVariant.default_variant.map { |v| ProjectType.new(type_id: v.type_id, variant: v) }
+        jf.zip([key, (80+i).to_s, "https://jira.example.org"]).each do |field,value|
+          p.custom_values.create!(custom_field: field, value: value)
+        end
+        v = p.versions.create!(name: "Release")
+        wp = WorkPackage.create!(project: p, type: seed.type, status: seed.status, priority: seed.priority,
+                                 author: User.admin.first!, subject: "Sprint fixture", version_id: v.id)
+        fields.zip([(90+i).to_s, "https://jira.example.org/browse/#{key}-1", '[{"id":"2","name":"Same"},{"id":"1","name":"Same"}]']).each do |f,value|
+          wp.custom_values.create!(custom_field: f, value: value)
+        end
+        [p.id, wp.id, v.id]
+      end
+      true
+    """)
+    fixture = query("$sprint_fixture")
+    stamp = "2026-01-02T00:15:00+02:00"
+    sprints = [
+        {
+            "id": sid,
+            "originBoardId": 3,
+            "name": "Same",
+            "state": "closed",
+            "goal": "",
+            "startDate": stamp,
+            "endDate": stamp,
+            "activatedDate": stamp,
+            "completeDate": stamp,
+        }
+        for sid in (1, 2)
+    ]
+
+    def run(manifest):
+        data = json.dumps(json.dumps(manifest))
+        return query(f"begin; JiraCompletedSprints.new(JSON.parse({data})).apply; rescue => e; e.message; end")
+
+    native_ids = []
+    for i, (key, (pid, wid, vid)) in enumerate(zip(("EX", "FX"), fixture, strict=True)):
+        manifest = {
+            "targetProjectId": pid,
+            "jira": "https://jira.example.org",
+            "project": {"key": key, "id": str(80 + i)},
+            "issues": [{"id": str(90 + i), "key": f"{key}-1", "sprintIds": [2, 1]}],
+            "boardProjectKeys": {"3": ["EX", "FX"]},
+            "sprints": sprints,
+        }
+        assert run({**manifest, "issues": []}) == "Incomplete work-package membership export"
+        assert run({**manifest, "boardProjectKeys": {"3": ["OTHER"]}}) == "Unknown or mixed board scope"
+        assert run({**manifest, "sprints": [*sprints, {**sprints[0], "id": 3}]}) == "Unknown or mixed board scope"
+        assert query(f"Sprint.where(project_id: {pid}).count") == 0
+        conflict = query(f"""
+          observed = nil
+          Project.transaction(requires_new: true) do
+            p = Project.find({pid}); wp = WorkPackage.find({wid})
+            current = Sprint.create!(name: "Unrelated sprint", project: p)
+            wp.update_columns(sprint_id: current.id)
+            begin
+              JiraCompletedSprints.new(JSON.parse({json.dumps(json.dumps(manifest))})).apply
+            rescue RuntimeError => e
+              observed = [e.message, Sprint.where(project_id: p.id).count, wp.reload.sprint_id == current.id]
+            end
+            raise ActiveRecord::Rollback
+          end
+          observed
+        """)
+        assert conflict == ["Existing native sprint assignment conflicts", 1, True]
+        assert run(manifest) == {"sprints": 2, "work_packages": 1, "memberships": 2, "changes": 3}
+        assert run(manifest)["changes"] == 0
+        assert (
+            run({**manifest, "sprints": [{**sprints[0], "goal": "a goal"}, sprints[1]]})
+            == "Duplicate or unsupported sprint"
+        )
+        result = query(f"""
+          p=Project.find({pid}); w=WorkPackage.find({wid})
+          stored=JSON.parse(p.custom_values.joins(:custom_field).where(custom_fields: {{name: JiraCompletedSprints::REGISTER}}).sole.value)
+          history=JSON.parse(w.custom_values.joins(:custom_field).where(custom_fields: {{name: JiraCompletedSprints::HISTORY}}).sole.value)
+          [w.sprint_id, stored.fetch("targets").fetch("2"), w.version_id, w.sprint.project_id, w.sprint.start_date.iso8601, history.pluck("id")]
+        """)
+        current, registered = result[:2]
+        assert current == registered
+        assert result[2:] == [vid, pid, "2026-01-02", ["2", "1"]]
+        api = query(f"""
+          http = Rack::MockRequest.new(Rails.application)
+          token = Token::API.create!(user: User.admin.first!)
+          headers = {{"HTTP_HOST" => "localhost", "HTTP_ACCEPT" => "application/hal+json",
+                     "HTTP_AUTHORIZATION" => ActionController::HttpAuthentication::Basic.encode_credentials("apikey", token.plain_value)}}
+          path = "http://localhost/api/v3/sprints/{current}"
+          sprint = JSON.parse(http.get(path, headers).body)
+          wp = JSON.parse(http.get("http://localhost/api/v3/work_packages/{wid}", headers).body)
+          [sprint.fetch("name"), sprint.fetch("_links").fetch("definingWorkspace").fetch("href"),
+           wp.fetch("_links").fetch("sprint").fetch("href"), http.get(path, headers.except("HTTP_AUTHORIZATION")).status]
+        """)
+        assert api[:3] == ["Same", f"/api/v3/projects/{pid}", f"/api/v3/sprints/{current}"]
+        assert api[3] in {401, 403, 404}
+        native_ids.append(current)
+    assert len(set(native_ids)) == 2
