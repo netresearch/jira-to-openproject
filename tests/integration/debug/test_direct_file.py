@@ -119,7 +119,7 @@ def main() -> None:
         # Clean up
         try:
             if container_path:
-                docker_client.execute_command(f"rm -f {container_path}")
+                op_client._cleanup_script_files(local_path, container_path)
             if temp_dir.exists():
                 for f in temp_dir.glob("*"):
                     f.unlink()

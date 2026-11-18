@@ -48,28 +48,28 @@ def _make_service() -> tuple[OpenProjectFileTransferService, MagicMock]:
     return OpenProjectFileTransferService(fake_client), fake_ssh
 
 
-def test_mode1_list_cleanup_uses_docker_exec_u_root() -> None:
-    """List-mode rm must run as root inside the container."""
+def test_legacy_list_cleanup_releases_only_owned_staging(tmp_path: Path) -> None:
     service, fake_ssh = _make_service()
+    docker = service._client.docker_client
+    directories = ["/private/j2o-stage.aaaaaaaaaa", "/private/j2o-stage.bbbbbbbbbb"]
 
-    service.cleanup_script_files(["openproject_script_abc.rb"])
+    def execute(command: str) -> tuple[str, str, int]:
+        if "mktemp -d" in command:
+            return directories.pop(0), "", 0
+        return "", "", 0
 
-    assert fake_ssh.execute_command.call_count == 1
-    cmd = fake_ssh.execute_command.call_args.args[0]
-    assert "docker exec" in cmd
-    assert "-u root" in cmd
-    assert "rm -f" in cmd
-    assert _ctmp("openproject_script_abc.rb") in cmd
-
-
-def test_mode1_handles_multiple_files() -> None:
-    service, fake_ssh = _make_service()
-    service.cleanup_script_files(
-        ["openproject_script_a.rb", "openproject_input_b.json"],
-    )
-    assert fake_ssh.execute_command.call_count == 2
-    for call in fake_ssh.execute_command.call_args_list:
-        assert "-u root" in call.args[0]
+    docker.execute_command.side_effect = execute
+    source = tmp_path / "script.rb"
+    source.write_text("puts 1")
+    first = service.transfer_rails_script(source)
+    second = service.transfer_rails_script(source)
+    assert first != second
+    service.cleanup_script_files(["unknown.rb"])
+    assert len(docker.execute_command.call_args_list) == 2
+    service.cleanup_script_files([source.name])
+    cleanup = [call.args[0] for call in docker.execute_command.call_args_list[2:]]
+    assert cleanup == [f"rm -rf -- {first.parent}", f"rm -rf -- {second.parent}"]
+    fake_ssh.execute_command.assert_not_called()
 
 
 def test_mode2_explicit_paths_cleanup_uses_docker_exec_u_root() -> None:

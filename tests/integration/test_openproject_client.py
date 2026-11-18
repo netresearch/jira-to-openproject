@@ -15,6 +15,7 @@ delegation to underlying clients, file transfers, error handling, and command ex
 """
 
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -165,35 +166,20 @@ class TestOpenProjectClient(unittest.TestCase):
         assert "SSH host is required" in str(context.value)
 
     def test_create_script_file(self) -> None:
-        """Test script file creation."""
-        test_script = "puts 'Hello, World!'"
+        """Each call writes a separate private script that the client can clean up."""
+        content = "puts 'Hello, World!'"
+        first = self.op_client._create_script_file(content)
+        second = self.op_client._create_script_file(content)
+        assert first != second
 
-        # Mock the data_dir path and os.urandom for the random filename.
-        # ``_create_script_file`` is a delegator on OpenProjectClient over
-        # ``OpenProjectFileTransferService.create_script_file`` (Phase 2d of
-        # ADR-002 moved the implementation there), so the os.urandom call now
-        # resolves through the service module's ``os`` import.
-        with patch("src.infrastructure.openproject.openproject_file_transfer_service.os.urandom", return_value=b"abcd"):
-            # Mock Path.open to return a mock file
-            mock_file = MagicMock()
-            mock_file.__enter__.return_value = mock_file
-
-            with patch("pathlib.Path.mkdir") as mock_mkdir:
-                with patch("pathlib.Path.open", return_value=mock_file) as mock_open:
-                    # Call the method being tested
-                    result = self.op_client._create_script_file(test_script)
-
-                    # Verify the result is a Path with the expected name
-                    assert str(result).endswith("openproject_script_61626364.rb")
-
-                    # Verify directory creation
-                    mock_mkdir.assert_called_with(parents=True, exist_ok=True)
-
-                    # Verify file was opened
-                    mock_open.assert_called_once()
-
-                    # Verify content was written
-                    mock_file.write.assert_called_once_with(test_script)
+        for path in (first, second):
+            assert path.parent == self.temp_dir / "temp_scripts"
+            assert path.suffix == ".rb"
+            assert path.read_text(encoding="utf-8") == content
+            if os.name == "posix":
+                assert stat.S_IMODE(path.stat().st_mode) == 0o600
+            self.op_client._cleanup_script_files(path, None)
+            assert not path.exists()
 
     def test_transfer_and_execute_script_success(self) -> None:
         """Test successful script transfer and execution."""
