@@ -47,7 +47,9 @@ RUN UV_PROJECT_ENVIRONMENT=/usr/local \
 COPY --chown=appuser:appuser . .
 
 # Install the locked project and prepare writable runtime directories.
-RUN UV_PROJECT_ENVIRONMENT=/usr/local uv sync --frozen --inexact --no-dev --extra dev --extra test \
+RUN uv build --wheel --out-dir /tmp/j2o-dist . \
+    && uv pip install --system --no-build --no-deps /tmp/j2o-dist/*.whl \
+    && rm -rf /tmp/j2o-dist \
     && mkdir -p /app/var/logs /app/var/data /app/var/run \
     && chown -R appuser:appuser /app/var
 
