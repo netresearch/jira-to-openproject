@@ -33,9 +33,11 @@ import os
 import re
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from src.infrastructure.exceptions import QueryExecutionError
+from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 # Bulk entries use the same Jira worklog key field as individual writes and lookups.
@@ -115,6 +117,28 @@ entries.each do |entry|
 end
 File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))
 """
+
+
+def _linked_id(embedded: dict, name: str, resource: str) -> int | None:
+    href = embedded.get(name, {}).get("href") or ""
+    match = re.search(rf"/{resource}/(\d+)", href)
+    return int(match.group(1)) if match else None
+
+
+def _time_entry_ids(entry: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    embedded = entry.get("_embedded", {})
+    return (
+        _linked_id(embedded, "workPackage", "work_packages"),
+        _linked_id(embedded, "user", "users"),
+        _linked_id(embedded, "activity", "activities"),
+    )
+
+
+def _comment_text(entry: dict[str, Any]) -> str:
+    comment = entry.get("comment", "")
+    if isinstance(comment, dict):
+        return comment.get("raw") or comment.get("text") or str(comment)
+    return str(comment)
 
 
 class OpenProjectTimeEntryService:
@@ -239,35 +263,7 @@ class OpenProjectTimeEntryService:
         # of module-load time.
         from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
 
-        # Extract embedded references and convert to IDs
-        embedded = time_entry_data.get("_embedded", {})
-
-        # Get work package ID from href
-        work_package_href = embedded.get("workPackage", {}).get("href", "")
-        work_package_id = None
-        if work_package_href:
-            # Extract ID from href like "/api/v3/work_packages/123"
-            match = re.search(r"/work_packages/(\d+)", work_package_href)
-            if match:
-                work_package_id = int(match.group(1))
-
-        # Get user ID from href
-        user_href = embedded.get("user", {}).get("href", "")
-        user_id = None
-        if user_href:
-            # Extract ID from href like "/api/v3/users/456"
-            match = re.search(r"/users/(\d+)", user_href)
-            if match:
-                user_id = int(match.group(1))
-
-        # Get activity ID from href
-        activity_href = embedded.get("activity", {}).get("href", "")
-        activity_id = None
-        if activity_href:
-            # Extract ID from href like "/api/v3/time_entries/activities/789"
-            match = re.search(r"/activities/(\d+)", activity_href)
-            if match:
-                activity_id = int(match.group(1))
+        work_package_id, user_id, activity_id = _time_entry_ids(time_entry_data)
 
         if not all([work_package_id, user_id, activity_id]):
             msg = (
@@ -277,12 +273,7 @@ class OpenProjectTimeEntryService:
                 msg,
             )
 
-        # Normalize comment value (can be string or {raw,text})
-        comment_obj = time_entry_data.get("comment", "")
-        if isinstance(comment_obj, dict):
-            comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
-        else:
-            comment_str = str(comment_obj)
+        comment_str = _comment_text(time_entry_data)
 
         # Prepare the script with proper Ruby syntax
         script = f"""
@@ -418,15 +409,7 @@ class OpenProjectTimeEntryService:
         entries_data: list[dict[str, Any]] = []
         skipped_results: list[dict[str, Any]] = []
         for i, entry_data in enumerate(time_entries):
-            embedded = entry_data.get("_embedded", {})
-
-            def extract_id(pattern: str, href: str) -> int | None:
-                m = re.search(pattern, href or "")
-                return int(m.group(1)) if m else None
-
-            work_package_id = extract_id(r"/work_packages/(\d+)", embedded.get("workPackage", {}).get("href", ""))
-            user_id = extract_id(r"/users/(\d+)", embedded.get("user", {}).get("href", ""))
-            activity_id = extract_id(r"/activities/(\d+)", embedded.get("activity", {}).get("href", ""))
+            work_package_id, user_id, activity_id = _time_entry_ids(entry_data)
 
             if not all([work_package_id, user_id, activity_id]):
                 # Record a structured failure for the caller — preserves
@@ -443,12 +426,7 @@ class OpenProjectTimeEntryService:
                 )
                 continue
 
-            # Normalize comment to string
-            comment_obj = entry_data.get("comment", "")
-            if isinstance(comment_obj, dict):
-                comment_str = comment_obj.get("raw") or comment_obj.get("text") or str(comment_obj)
-            else:
-                comment_str = str(comment_obj)
+            comment_str = _comment_text(entry_data)
 
             entries_data.append(
                 {
@@ -470,20 +448,26 @@ class OpenProjectTimeEntryService:
                 "results": skipped_results,
             }
 
-        # Prepare local JSON payload
-        temp_dir = Path(client.file_manager.data_dir) / "bulk_create"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        local_json = temp_dir / f"time_entries_bulk_{os.urandom(4).hex()}.json"
+        temp_root = Path(client.file_manager.data_dir) / "bulk_create"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(dir=temp_root) as local, private_container_directory(client.docker_client) as directory:
+            return self._write_time_entries(entries_data, skipped_results, Path(local), directory)
+
+    def _write_time_entries(
+        self,
+        entries_data: list[dict[str, Any]],
+        skipped_results: list[dict[str, Any]],
+        temp_dir: Path,
+        directory: Path,
+    ) -> dict[str, Any]:
+        client = self._client
+        local_json = temp_dir / "time_entries.json"
         with local_json.open("w", encoding="utf-8") as f:
             json.dump(entries_data, f)
-
-        # Transfer JSON to container and define result path
-        container_json = Path("/tmp") / local_json.name
+        container_json = directory / local_json.name
         client.transfer_file_to_container(local_json, container_json)
-
-        result_name = f"bulk_result_time_entries_{os.urandom(3).hex()}.json"
-        container_result = Path("/tmp") / result_name
-        local_result = temp_dir / result_name
+        container_result = directory / "result.json"
+        local_result = temp_dir / container_result.name
 
         # Build Ruby runner that writes results JSON to file via helper assembly
         header_lines = [
@@ -528,62 +512,34 @@ class OpenProjectTimeEntryService:
         )
 
         try:
+            _ = client.rails_client.execute(ruby, timeout=120, suppress_output=True)
+        except Exception as e:
+            msg = f"Rails execution failed for batch_create_time_entries: {e}"
+            raise QueryExecutionError(msg) from e
+
+        # Retrieve result file
+        max_wait_seconds = 30
+        poll_interval = 1.0
+        waited = 0.0
+        while waited < max_wait_seconds:
             try:
-                _ = client.rails_client.execute(ruby, timeout=120, suppress_output=True)
-            except Exception as e:
-                msg = f"Rails execution failed for batch_create_time_entries: {e}"
-                raise QueryExecutionError(msg) from e
+                client.transfer_file_from_container(container_result, local_result)
+                break
+            except Exception:
+                time.sleep(poll_interval)
+                waited += poll_interval
 
-            # Retrieve result file
-            max_wait_seconds = 30
-            poll_interval = 1.0
-            waited = 0.0
-            while waited < max_wait_seconds:
-                try:
-                    client.transfer_file_from_container(container_result, local_result)
-                    break
-                except Exception:
-                    time.sleep(poll_interval)
-                    waited += poll_interval
+        if not local_result.exists():
+            msg = "Result file not found after batch_create_time_entries execution"
+            raise QueryExecutionError(msg)
 
-            if not local_result.exists():
-                msg = "Result file not found after batch_create_time_entries execution"
-                raise QueryExecutionError(msg)
+        with local_result.open("r", encoding="utf-8") as f:
+            ruby_result: dict[str, Any] = json.load(f)
 
-            with local_result.open("r", encoding="utf-8") as f:
-                ruby_result: dict[str, Any] = json.load(f)
-
-            # Merge the malformed-input failures captured during the
-            # Python pre-pass with the Ruby-side per-entry results so
-            # the returned dict reflects every input index 1:1.
-            if skipped_results:
-                ruby_result.setdefault("results", []).extend(skipped_results)
-                ruby_result["failed"] = int(ruby_result.get("failed", 0)) + len(skipped_results)
-            return ruby_result
-        finally:
-            # Best-effort cleanup of local + container temp files.
-            # Non-critical: we already have the parsed result in memory
-            # by this point, and any cleanup failure is logged at debug
-            # so it doesn't mask the real result.
-            for path in (local_json, local_result):
-                try:
-                    if path.exists():
-                        path.unlink()
-                except Exception as cleanup_err:
-                    self._logger.debug(
-                        "Non-critical: failed to remove local temp %s: %s",
-                        path,
-                        cleanup_err,
-                    )
-            for cpath in (container_json, container_result):
-                try:
-                    import shlex
-
-                    rm_cmd = f"docker exec {shlex.quote(client.container_name)} rm -f {shlex.quote(cpath.as_posix())}"
-                    client.ssh_client.execute_command(rm_cmd, check=False)
-                except Exception as cleanup_err:
-                    self._logger.debug(
-                        "Non-critical: failed to remove container temp %s: %s",
-                        cpath,
-                        cleanup_err,
-                    )
+        # Merge the malformed-input failures captured during the
+        # Python pre-pass with the Ruby-side per-entry results so
+        # the returned dict reflects every input index 1:1.
+        if skipped_results:
+            ruby_result.setdefault("results", []).extend(skipped_results)
+            ruby_result["failed"] = int(ruby_result.get("failed", 0)) + len(skipped_results)
+        return ruby_result

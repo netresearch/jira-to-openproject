@@ -37,15 +37,13 @@ on ``OpenProjectClient`` because the membership service also uses it
 from __future__ import annotations
 
 import json
-import os
 import re
-import secrets
-import time
-from contextlib import suppress
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from src.infrastructure.exceptions import QueryExecutionError
+from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
@@ -158,15 +156,6 @@ class OpenProjectProjectSetupService:
         client = self._client
         temp_dir = Path(client.file_manager.data_dir) / "workflow_sync"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        # ``token_hex(4)`` adds 8 random hex chars so two calls within
-        # the same process during the same wall-clock second can't
-        # collide on the payload, the ``.result`` file, or the
-        # container ``/tmp`` paths derived from the filename. Same
-        # pattern the membership service uses for identical reasons.
-        unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
-        payload_path = temp_dir / f"workflow_transitions_{unique_suffix}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
-
         payload = {
             "transitions": [
                 {
@@ -179,12 +168,14 @@ class OpenProjectProjectSetupService:
             "role_ids": [int(r) for r in role_ids if int(r) > 0],
         }
 
-        try:
+        with TemporaryDirectory(dir=temp_dir) as local, private_container_directory(client.docker_client) as directory:
+            payload_path = Path(local) / "transitions.json"
+            result_path = Path(local) / "result.json"
             with payload_path.open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
 
-            container_payload = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
+            container_payload = directory / payload_path.name
+            container_output = directory / result_path.name
             client.transfer_file_to_container(payload_path, container_payload)
 
             ruby = (
@@ -238,11 +229,6 @@ class OpenProjectProjectSetupService:
                 "existing": int(summary.get("existing", 0)),
                 "errors": int(summary.get("errors", 0)),
             }
-        finally:
-            with suppress(OSError):
-                payload_path.unlink()
-            with suppress(OSError):
-                result_path.unlink()
 
     # ── versions ───────────────────────────────────────────────────────
 
@@ -453,13 +439,7 @@ JSON_DATA
             data.append(row)
 
         if not data:
-            if skipped_failures:
-                return {
-                    "success": False,
-                    "processed": 0,
-                    "failed": skipped_failures,
-                }
-            return {"success": True, "processed": 0, "failed": 0}
+            return {"success": skipped_failures == 0, "processed": 0, "failed": skipped_failures}
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes.
         # Use Ruby heredoc with literal syntax (``<<-'X'``) to prevent both Ruby

@@ -215,7 +215,7 @@ class TestRubyBatchTemplateStatusFallback:
         )
 
         fake_docker = MagicMock()
-        fake_docker.execute_command.return_value = ("", "", 0)
+        fake_docker.execute_command.return_value = (str(tmp_path / "j2o-stage.abcdefghij"), "", 0)
         fake_client = MagicMock()
         fake_client.docker_client = fake_docker
         fake_client.logger = MagicMock()
