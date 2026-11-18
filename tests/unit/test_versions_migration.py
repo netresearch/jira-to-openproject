@@ -179,3 +179,17 @@ def test_fix_versions_require_every_reference_to_resolve():
     del versions["11"]["v2"]
     with pytest.raises(KeyError):
         migration._version_assignment("PRJ-1", 123, issues, projects, versions)
+
+
+def test_version_catalogue_failure_is_reported_per_affected_issue(monkeypatch, caplog):
+    jira = DummyJira()
+    jira.issues["ABC-3"] = DummyIssue("ABC-3", [])
+    op = DummyOp()
+    monkeypatch.setattr(op, "bulk_create_records", lambda *_args: {"created_count": 0})
+    migration = VersionsMigration(jira_client=jira, op_client=op)
+    result = migration.run()
+    assert not result.success
+    assert result.updated == 0
+    assert result.failed == 2
+    assert "PRJ-1" in caplog.text
+    assert "v1" in caplog.text

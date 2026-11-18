@@ -93,7 +93,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         version_map: dict[str, dict[str, int]] = (mapped.data or {}).get("version_map", {}) if mapped.data else {}
-        if not version_map and not (mapped.data or {}).get("by_project"):
+        if not version_map and not (mapped.data or {}).get("issues"):
             return ComponentResult(success=True, updated=0)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
@@ -114,6 +114,9 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 if assignment:
                     updates.append(assignment)
             except Exception:
+                logger.exception(
+                    "Could not resolve all fix versions for Jira issue %s", self._inner_jira_key(key, wp_entry) or key
+                )
                 failed += 1
 
         return apply_work_package_updates(self, updates, failed)
