@@ -141,9 +141,23 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 - Confirm project modules (`work_package_tracking`, `wiki`, `time_tracking`, `costs`, `calendar`, `news`) stay enabled post-migration; the project component now enables time tracking/costs for Tempo-linked projects and calendar/news when categories or project types are present, then persists provenance (`Jira Project Lead`, `Jira Project Category`, `Jira Project Type`, `Jira Project URL`, `Jira Project Avatar URL`).
 - If you need to rebuild the work-package fast-forward database (e.g., after a rehearsal restore or when corruption is detected) run `uv run python -m src.main migrate --reset-wp-checkpoints --components work_packages`.
 
+### Watch a migration
+
+From the configured checkout, start the dashboard in one terminal:
+
+```sh
+mkdir -p -m 700 var/dashboard
+export J2O_DASHBOARD_PROGRESS_FILE="$PWD/var/dashboard/progress.json"
+uv run uvicorn src.dashboard.app:app --host 127.0.0.1 --port 8001
+```
+
+Open [the local dashboard](http://127.0.0.1:8001/). In the terminal where you run your normal `j2o migrate` command, export the same absolute `J2O_DASHBOARD_PROGRESS_FILE` first. Give each concurrent migration its own file. Only the producer writes it. The dashboard reads completed snapshots and keeps the most recent result available after the process exits. Container processes need a shared volume for this path.
+
+A pilot that separately verifies the target can publish its own aggregate counts and pending checks through `src.utils.dashboard_progress.write_progress`. Use a separate file for each independent producer. Keep issue text, filenames, tokens and person identifiers out of these snapshots. The UI labels system RAM and process RAM separately. Missing measurements appear as unavailable.
+
 ### Optional Tooling
 
-- **Web dashboard** (`src/dashboard`): FastAPI + Vue UI for monitoring migration progress. Uses the Compose Valkey cache through the Redis-compatible client.
+- **Web dashboard** (`src/dashboard`): Local web interface for viewing a migration as it runs. It shows the active phase, reported counts, pending checks and resource usage. See [Watch a migration](#watch-a-migration).
 - **Automated testing suite** (`src/utils/automated_testing_suite.py`): scaffolding for generating test stubs. Experimental—enable only if you plan to grow automated regression coverage.
 - **Integration testing framework** (`src/utils/integration_testing_framework.py`): utilities for mock/real environment setup. Use when rehearsals need scripted data generation.
 - **Comprehensive logging** (`src/utils/comprehensive_logging.py`): structured JSON logging, metrics collection, and health checks. Optional enhancement over the standard logging already in place.

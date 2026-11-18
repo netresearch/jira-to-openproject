@@ -123,6 +123,7 @@ class ChangeAwareRunner:
                 success=True,
                 message=f"No changes detected for {entity_type}, migration skipped",
                 details={
+                    "status": "skipped",
                     "change_report": change_report,
                     "cache_stats": self._cache_stats_snapshot(
                         len(local_cache),

@@ -81,6 +81,7 @@ from src.infrastructure.openproject.docker_client import DockerClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 from src.infrastructure.openproject.ssh_client import SSHClient
+from src.migration_progress import MigrationRunProgress
 from src.models import ComponentResult, MigrationResult
 from src.type_definitions import BackupDir, ComponentName
 from src.utils import data_handler
@@ -821,11 +822,23 @@ async def _continue_after_component(name: str, next_name: str, results: Migratio
     return False
 
 
-def _must_stop(name: str, result: ComponentResult, results: MigrationResult, *, stop_on_error: bool) -> bool:
-    if result.details and result.details.get("status") == "interrupted":
+def _component_status(result: ComponentResult) -> str:
+    if result.details.get("status") == "interrupted":
+        return "paused"
+    if _component_has_errors(result):
+        return "failed"
+    if result.details.get("status") == "skipped":
+        return "skipped"
+    return "completed"
+
+
+def _must_stop(
+    name: str, result: ComponentResult, status: str, results: MigrationResult, *, stop_on_error: bool
+) -> bool:
+    if status == "paused":
         results.overall["status"] = "interrupted"
         return True
-    if not _component_has_errors(result):
+    if status != "failed":
         return False
     results.overall["status"] = "failed"
     if stop_on_error:
@@ -842,17 +855,22 @@ async def _run_components(
     factories: dict[str, Callable[[], BaseMigration]],
     results: MigrationResult,
     health_client: HealthCheckClient,
+    progress: MigrationRunProgress,
     *,
     stop_on_error: bool,
     no_confirm: bool,
 ) -> None:
     try:
+        progress.plan(names)
         for index, name in enumerate(names):
+            progress.start_component(index)
             print_component_header(name)
             preflight = _work_package_preflight() if name == "work_packages" else None
             result = preflight or _run_component(name, factories[name]())
             results.components[name] = result
-            if _must_stop(name, result, results, stop_on_error=stop_on_error):
+            status = _component_status(result)
+            progress.end_component(name, result, status)
+            if _must_stop(name, result, status, results, stop_on_error=stop_on_error):
                 break
             if preflight:
                 continue
@@ -975,7 +993,9 @@ async def run_migration(
         Dictionary with migration results
 
     """
+    progress = MigrationRunProgress()
     try:
+        progress.start(dry_run=bool(config.migration_config.get("dry_run", False)))
         # Resolve the effective component list NOW so the dry-run gate
         # sees the same set the orchestrator will execute. Without this,
         # a bare ``--dry-run`` (no ``--components``, no ``--profile``)
@@ -1015,6 +1035,7 @@ async def run_migration(
 
         jira_client, op_client, health_client = _create_migration_clients(batch_size, max_concurrent)
         if not _check_initial_health(health_client, results):
+            progress.finish(results.overall["status"])
             return results
         # Initialize mappings once via config accessor to avoid double loads
         # Accessing any attribute on config.mappings triggers lazy init via proxy
@@ -1052,13 +1073,22 @@ async def run_migration(
             available_component_factories,
             results,
             health_client,
+            progress,
             stop_on_error=stop_on_error,
             no_confirm=no_confirm,
         )
         _finish_migration(results, migration_timestamp, health_client)
+        progress.finish(results.overall["status"])
         return results
 
+    except KeyboardInterrupt, asyncio.CancelledError:
+        progress.finish("interrupted")
+        raise
+    except SystemExit:
+        progress.finish("failed")
+        raise
     except Exception as e:
+        progress.finish("failed")
         # Handle unexpected errors at the top level
         config.logger.exception(e)
         config.logger.error("Unexpected error during migration: %s", e)

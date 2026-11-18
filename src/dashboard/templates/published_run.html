@@ -1,0 +1,21 @@
+{% macro fact_list(pairs) -%}
+<dl class="counts">
+    {% for name, value in pairs %}<div><dt>{{ name }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+</dl>
+{%- endmacro %}
+<section id="published-run-summary" class="card run" aria-labelledby="published-run-heading">
+    <h1 id="published-run-heading">Migration dashboard</h1>
+    {% if notice %}
+    <p>{{ notice }}</p>
+    {% else %}
+    {{ fact_list(facts) }}
+    {% if counts %}
+    <h2>Reported counts</h2>
+    {{ fact_list(counts) }}
+    {% endif %}
+    {% if pending_checks %}
+    <h2>Pending checks</h2>
+    <ul>{% for check in pending_checks %}<li>{{ check }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% endif %}
+</section>

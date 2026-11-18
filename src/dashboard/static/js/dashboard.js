@@ -1,613 +1,265 @@
-// Dashboard JavaScript with Vue.js 3 and enhanced WebSocket support
+// Copyright (c) 2026 Netresearch DTT GmbH
+// SPDX-License-Identifier: MIT
+'use strict';
 
-const { createApp, ref, reactive, onMounted, onUnmounted, computed, watch } = Vue;
+const element = id => document.getElementById(id);
+const number = new Intl.NumberFormat('en', {maximumFractionDigits: 1});
+const timestamp = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium', timeStyle: 'medium'
+});
+let snapshot = null;
+let socket = null;
+let heartbeat;
+let reconnect;
+let poll;
+let disposed = false;
+let version = 0;
+let refreshing = false;
 
-const dashboardApp = createApp({
-    setup() {
-        // Reactive data
-        const progress = reactive({
-            migration_id: null,
-            total_entities: 0,
-            processed_entities: 0,
-            failed_entities: 0,
-            current_entity: null,
-            current_entity_type: null,
-            current_component: null,
-            status: 'idle', // 'idle', 'running', 'completed', 'failed', 'paused'
-            start_time: null,
-            last_update: null,
-            error_count: 0,
-            success_rate: 0.0,
-            estimated_time_remaining: null,
-            pause_time: null,
-            total_pause_time: 0
-        });
+function formatMemory(mib) {
+    if (!Number.isFinite(mib) || mib < 0) return '—';
+    let value = mib;
+    const units = ['MiB', 'GiB', 'TiB', 'PiB'];
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return number.format(value) + '\u00a0' + units[unit];
+}
 
-        const metrics = reactive({
-            migration_id: null,
-            entities_per_second: 0.0,
-            average_processing_time: 0.0,
-            memory_usage_mb: 0.0,
-            cpu_usage_percent: 0.0,
-            network_requests_per_second: 0.0,
-            error_rate: 0.0,
-            throughput_history: []
-        });
+function formatDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return '';
+    const whole = Math.floor(seconds);
+    const hours = Math.floor(whole / 3600);
+    const minutes = Math.floor(whole / 60) % 60;
+    if (hours) return hours + 'h ' + minutes + 'm';
+    if (minutes) return minutes + 'm ' + whole % 60 + 's';
+    return whole + 's';
+}
 
-        const recentEvents = ref([]);
-        const connectionStatus = ref(false);
-        const websocket = ref(null);
-        const charts = reactive({});
-        const heartbeatInterval = ref(null);
-        const reconnectAttempts = ref(0);
-        const maxReconnectAttempts = 5;
+function formatTimestamp(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? '' : timestamp.format(date);
+}
 
-        // Computed properties
-        const progressPercentage = computed(() => {
-            if (progress.total_entities === 0) return 0;
-            return Math.round((progress.processed_entities / progress.total_entities) * 100);
-        });
+function label(value) {
+    const words = String(value ?? '').replaceAll('_', ' ');
+    return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
-        const elapsedTime = computed(() => {
-            if (!progress.start_time) return '00:00:00';
-            const start = new Date(progress.start_time);
-            const now = new Date();
-            const elapsed = now - start - (progress.total_pause_time * 1000);
-            return formatTime(Math.max(0, elapsed));
-        });
+function node(tag, text, css) {
+    const result = document.createElement(tag);
+    if (text !== undefined) result.textContent = text;
+    if (css) result.className = css;
+    return result;
+}
 
-        const statusClass = computed(() => {
-            switch (progress.status) {
-                case 'running': return 'text-success';
-                case 'completed': return 'text-success';
-                case 'failed': return 'text-danger';
-                case 'paused': return 'text-warning';
-                default: return 'text-muted';
+function stat(term, value) {
+    const row = node('div');
+    row.append(node('dt', term), node('dd', value));
+    return row;
+}
+
+function phaseRow(phase) {
+    const item = node('li');
+    const heading = node('div', undefined, 'phase-row');
+    const status = node('span', label(phase.status), 'status');
+    status.dataset.state = phase.status;
+    heading.append(node('span', label(phase.name), 'phase-name'), status);
+    item.append(heading);
+    const times = [];
+    if (phase.started_at) times.push('Started ' + formatTimestamp(phase.started_at));
+    if (phase.finished_at) times.push('Finished ' + formatTimestamp(phase.finished_at));
+    if (times.length) item.append(node('div', times.join(' · '), 'phase-times'));
+    return item;
+}
+
+function showRows(id, children, emptyId) {
+    element(id).replaceChildren(...children);
+    element(emptyId).hidden = children.length > 0;
+}
+
+function renderProgressBar(data, phases) {
+    let total = phases.length;
+    let done = phases.filter(phase => phase.status === 'completed').length;
+    let description = number.format(done) + ' of ' + number.format(total) + ' phases completed';
+    if (Number.isInteger(data.total_entities) && data.total_entities > 0 && Number.isInteger(data.processed_entities)) {
+        total = data.total_entities;
+        done = data.processed_entities;
+        description = number.format(done) + ' of ' + number.format(total) + ' entities processed';
+    }
+    element('progress-row').hidden = total === 0;
+    if (!total) return;
+    const bar = element('progress-bar');
+    bar.max = total;
+    bar.value = done;
+    bar.setAttribute('aria-valuetext', description);
+    element('progress-label').textContent = description;
+}
+
+function runDetails(data) {
+    const times = [
+        ['Started', formatTimestamp(data.start_time)],
+        ['Last reported', formatTimestamp(data.last_update)],
+        ['Finished', formatTimestamp(data.finished_at)],
+        ['Elapsed', formatDuration(data.elapsed_seconds)]
+    ];
+    for (const [field, name] of [['total_entities', 'Total entities'], ['processed_entities', 'Processed'], ['failed_entities', 'Failed']]) {
+        if (Number.isInteger(data[field])) times.push([name, number.format(data[field])]);
+    }
+    return times.filter(([,value]) => value !== '').map(([key,value]) => stat(key,value));
+}
+
+function renderProgress(data) {
+    if (!data || typeof data.status !== 'string') return;
+    if (snapshot && snapshot.migration_id !== data.migration_id) {
+        element('events').replaceChildren();
+        element('events-card').hidden = true;
+    }
+    snapshot = data;
+    const idle = data.status === 'idle';
+    const phases = data.phases ?? [];
+    const status = element('run-status');
+    status.textContent = label(data.status);
+    status.dataset.state = data.status;
+    element('migration-id').textContent = idle ? '' : data.migration_id;
+    element('run-empty').textContent = 'No migration run has been reported.';
+    element('run-empty').hidden = !idle;
+    element('run-data').hidden = idle;
+    element('active-phase').textContent = data.current_component ? label(data.current_component) : '';
+    element('active-phase').hidden = !data.current_component;
+    renderProgressBar(data, phases);
+    element('run-times').replaceChildren(...runDetails(data));
+    showRows('phases', phases.map(phaseRow), 'phases-empty');
+    const counts = Object.entries(data.verified_counts ?? {});
+    showRows('verified-counts', counts.map(([key,value]) => stat(label(key), number.format(value))), 'counts-empty');
+    const checks = data.pending_checks ?? [];
+    element('checks-empty').textContent = idle ? 'Awaiting check results.' : 'No pending checks reported.';
+    showRows('checks', checks.map(check => node('li', label(check))), 'checks-empty');
+    element('pilot-ram').textContent = formatMemory(data.memory_usage_mb);
+    element('pilot-memory-row').hidden = !Number.isFinite(data.memory_usage_mb);
+    element('export-progress').disabled = idle;
+    const published = element('published-run-summary');
+    if (published) published.hidden = true;
+    element('live-dashboard').hidden = false;
+}
+
+function renderMetrics(data) {
+    element('system-ram').textContent = formatMemory(data.memory_usage_mb);
+    const cpu = data.cpu_usage_percent;
+    element('system-cpu').textContent = Number.isFinite(cpu) ? number.format(cpu) + '%' : '—';
+}
+
+function renderEvent(data) {
+    if (!data || typeof data.message !== 'string') return;
+    const item = node('li');
+    if (data.timestamp) {
+        const time = node('time', formatTimestamp(data.timestamp));
+        time.dateTime = data.timestamp;
+        item.append(time);
+    }
+    item.append(node('span', data.message));
+    const events = element('events');
+    events.prepend(item);
+    if (events.children.length > 25) events.lastElementChild.remove();
+    element('events-card').hidden = false;
+}
+
+async function fetchJson(path) {
+    const response = await fetch(path, {cache: 'no-store'});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return response.json();
+}
+
+async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
+    const fetchVersion = version;
+    try {
+        const [progress, metrics] = await Promise.allSettled([fetchJson('/api/progress'), fetchJson('/api/metrics')]);
+        const problems = [];
+        if (progress.status === 'fulfilled') {
+            if (version === fetchVersion) renderProgress(progress.value);
+        } else {
+            problems.push('Migration data could not be refreshed.');
+            if (!snapshot) {
+                if (!element('published-run-summary')) element('live-dashboard').hidden = false;
+                element('run-status').textContent = 'Unavailable';
+                element('run-empty').textContent = 'Waiting for the migration data source.';
             }
-        });
+        }
+        if (metrics.status === 'fulfilled') renderMetrics(metrics.value);
+        else problems.push('System measurements could not be refreshed.');
+        element('load-error').textContent = problems.join(' ');
+        element('load-error').hidden = problems.length === 0;
+    } finally {
+        refreshing = false;
+    }
+}
 
-        const canStart = computed(() => progress.status === 'idle' || progress.status === 'failed');
-        const canStop = computed(() => progress.status === 'running');
-        const canPause = computed(() => progress.status === 'running');
-        const canResume = computed(() => progress.status === 'paused');
+function connect() {
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    socket = new WebSocket(scheme + '//' + location.host + '/ws/dashboard');
+    const connection = element('connection');
+    socket.onopen = async () => {
+        connection.textContent = 'Live connection';
+        connection.dataset.live = 'true';
+        heartbeat = setInterval(() => {
+            if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type: 'heartbeat'}));
+        }, 25000);
+        await refresh();
+    };
+    socket.onmessage = event => {
+        let message;
+        try { message = JSON.parse(event.data); } catch { return; }
+        if (message.type === 'progress_update') {
+            version++;
+            renderProgress(message.data);
+        }
+        if (message.type === 'event') renderEvent(message.data);
+    };
+    socket.onclose = () => {
+        clearInterval(heartbeat);
+        connection.textContent = 'Periodic refresh';
+        connection.dataset.live = 'false';
+        if (!disposed) reconnect = setTimeout(connect, 5000);
+    };
+}
 
-        // Methods
-        const connectWebSocket = () => {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws/dashboard`;
+function download(content, filename, type) {
+    const url = URL.createObjectURL(new Blob([content], {type}));
+    const link = node('a');
+    link.download = filename;
+    link.href = url;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
-            websocket.value = new WebSocket(wsUrl);
-            connectionStatus.value = false;
-
-            websocket.value.onopen = () => {
-                connectionStatus.value = true;
-                reconnectAttempts.value = 0;
-                console.log('WebSocket connected');
-
-                // Start heartbeat
-                startHeartbeat();
-
-                // Request initial status
-                sendWebSocketMessage({
-                    type: 'request_status'
-                });
-            };
-
-            websocket.value.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    handleWebSocketMessage(data);
-                } catch (error) {
-                    console.error('Error parsing WebSocket message:', error);
-                }
-            };
-
-            websocket.value.onclose = () => {
-                connectionStatus.value = false;
-                console.log('WebSocket disconnected');
-                stopHeartbeat();
-
-                // Attempt to reconnect
-                if (reconnectAttempts.value < maxReconnectAttempts) {
-                    reconnectAttempts.value++;
-                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.value), 30000);
-                    setTimeout(connectWebSocket, delay);
-                }
-            };
-
-            websocket.value.onerror = (error) => {
-                connectionStatus.value = false;
-                console.error('WebSocket error:', error);
-            };
-        };
-
-        const startHeartbeat = () => {
-            heartbeatInterval.value = setInterval(() => {
-                if (websocket.value?.readyState === WebSocket.OPEN) {
-                    sendWebSocketMessage({
-                        type: 'heartbeat',
-                        timestamp: new Date().toISOString()
-                    });
-                }
-            }, 30000); // Send heartbeat every 30 seconds
-        };
-
-        const stopHeartbeat = () => {
-            if (heartbeatInterval.value) {
-                clearInterval(heartbeatInterval.value);
-                heartbeatInterval.value = null;
-            }
-        };
-
-        const sendWebSocketMessage = (message) => {
-            if (websocket.value?.readyState === WebSocket.OPEN) {
-                websocket.value.send(JSON.stringify(message));
-            }
-        };
-
-        const handleWebSocketMessage = (data) => {
-            switch (data.type) {
-                case 'connection_established':
-                    // Connection established - no logging needed (prevents log injection)
-                    break;
-
-                case 'progress_update':
-                    Object.assign(progress, data.data);
-                    updateProgressChart();
-                    break;
-
-                case 'metrics_update':
-                    Object.assign(metrics, data.data);
-                    updateMetricsCharts();
-                    break;
-
-                case 'event':
-                    addEvent(data.data);
-                    break;
-
-                case 'status_update':
-                    updateStatus(data.data);
-                    break;
-
-                case 'heartbeat_response':
-                    // Heartbeat acknowledged
-                    break;
-
-                case 'error':
-                    addEvent({
-                        level: 'error',
-                        message: data.message,
-                        timestamp: new Date().toISOString()
-                    });
-                    break;
-
-                default:
-                    // Unknown message type - silently ignore (prevents log injection)
-                    break;
-            }
-        };
-
-        const addEvent = (eventData) => {
-            const event = {
-                timestamp: new Date(eventData.timestamp || Date.now()),
-                level: eventData.level || 'info',
-                message: eventData.message,
-                entity: eventData.entity,
-                component: eventData.component,
-                details: eventData.details
-            };
-
-            recentEvents.value.unshift(event);
-
-            // Keep only last 50 events
-            if (recentEvents.value.length > 50) {
-                recentEvents.value = recentEvents.value.slice(0, 50);
-            }
-
-            // Update charts if needed
-            if (event.level === 'error') {
-                progress.error_count++;
-            }
-        };
-
-        const updateStatus = (statusData) => {
-            // Update progress with status data
-            if (statusData.is_running !== undefined) {
-                progress.status = statusData.is_running ? 'running' : 'idle';
-            }
-            if (statusData.migration_id) {
-                progress.migration_id = statusData.migration_id;
-            }
-            if (statusData.current_component) {
-                progress.current_component = statusData.current_component;
-            }
-            if (statusData.start_time) {
-                progress.start_time = statusData.start_time;
-            }
-            if (statusData.pause_time) {
-                progress.pause_time = statusData.pause_time;
-            }
-            if (statusData.total_pause_time !== undefined) {
-                progress.total_pause_time = statusData.total_pause_time;
-            }
-        };
-
-        const updateProgressChart = () => {
-            if (charts.progress) {
-                const processed = progress.processed_entities;
-                const remaining = progress.total_entities - progress.processed_entities;
-
-                charts.progress.data.datasets[0].data = [processed, remaining];
-                charts.progress.update('none'); // Update without animation for performance
-            }
-        };
-
-        const updateMetricsCharts = () => {
-            if (charts.throughput) {
-                // Add new data point to throughput chart
-                const now = new Date();
-                charts.throughput.data.labels.push(now.toLocaleTimeString());
-                charts.throughput.data.datasets[0].data.push(metrics.entities_per_second);
-
-                // Keep only last 20 data points
-                if (charts.throughput.data.labels.length > 20) {
-                    charts.throughput.data.labels.shift();
-                    charts.throughput.data.datasets[0].data.shift();
-                }
-
-                charts.throughput.update('none');
-            }
-        };
-
-        const initializeCharts = () => {
-            // Progress Chart
-            const progressCtx = document.getElementById('processingRateChart');
-            if (progressCtx) {
-                charts.progress = new Chart(progressCtx, {
-                    type: 'doughnut',
-                    data: {
-                        labels: ['Processed', 'Remaining'],
-                        datasets: [{
-                            data: [0, 100],
-                            backgroundColor: ['#28a745', '#e9ecef'],
-                            borderWidth: 0
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                display: false
-                            }
-                        }
-                    }
-                });
-            }
-
-            // Entity Distribution Chart
-            const distributionCtx = document.getElementById('entityDistributionChart');
-            if (distributionCtx) {
-                charts.distribution = new Chart(distributionCtx, {
-                    type: 'pie',
-                    data: {
-                        labels: ['Issues', 'Projects', 'Users', 'Comments', 'Attachments'],
-                        datasets: [{
-                            data: [0, 0, 0, 0, 0],
-                            backgroundColor: [
-                                '#007bff',
-                                '#28a745',
-                                '#ffc107',
-                                '#17a2b8',
-                                '#6f42c1'
-                            ],
-                            borderWidth: 0
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                position: 'bottom'
-                            }
-                        }
-                    }
-                });
-            }
-
-            // Throughput Chart
-            const throughputCtx = document.getElementById('throughputChart');
-            if (throughputCtx) {
-                charts.throughput = new Chart(throughputCtx, {
-                    type: 'line',
-                    data: {
-                        labels: [],
-                        datasets: [{
-                            label: 'Entities per Second',
-                            data: [],
-                            borderColor: '#007bff',
-                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                            tension: 0.4,
-                            fill: true
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                display: false
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true
-                            }
-                        }
-                    }
-                });
-            }
-        };
-
-        const formatTime = (milliseconds) => {
-            const seconds = Math.floor(milliseconds / 1000);
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = seconds % 60;
-            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        };
-
-        const startMigration = async () => {
-            try {
-                const response = await fetch('/api/migration/start', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        action: 'start',
-                        components: ['users', 'projects', 'workpackages'],
-                        config: {
-                            component: 'all',
-                            batch_size: 100
-                        }
-                    })
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    console.log('Migration started:', result);
-                    addEvent({
-                        level: 'info',
-                        message: 'Migration started successfully',
-                        timestamp: new Date().toISOString()
-                    });
-                } else {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Failed to start migration');
-                }
-            } catch (error) {
-                console.error('Error starting migration:', error);
-                addEvent({
-                    level: 'error',
-                    message: `Failed to start migration: ${error.message}`,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        };
-
-        const stopMigration = async () => {
-            try {
-                const response = await fetch('/api/migration/stop', {
-                    method: 'POST'
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    console.log('Migration stopped:', result);
-                    addEvent({
-                        level: 'info',
-                        message: 'Migration stop requested',
-                        timestamp: new Date().toISOString()
-                    });
-                } else {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Failed to stop migration');
-                }
-            } catch (error) {
-                console.error('Error stopping migration:', error);
-                addEvent({
-                    level: 'error',
-                    message: `Failed to stop migration: ${error.message}`,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        };
-
-        const pauseMigration = async () => {
-            try {
-                const response = await fetch('/api/migration/pause', {
-                    method: 'POST'
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    console.log('Migration paused:', result);
-                    addEvent({
-                        level: 'info',
-                        message: 'Migration pause requested',
-                        timestamp: new Date().toISOString()
-                    });
-                } else {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Failed to pause migration');
-                }
-            } catch (error) {
-                console.error('Error pausing migration:', error);
-                addEvent({
-                    level: 'error',
-                    message: `Failed to pause migration: ${error.message}`,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        };
-
-        const resumeMigration = async () => {
-            try {
-                const response = await fetch('/api/migration/resume', {
-                    method: 'POST'
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    console.log('Migration resumed:', result);
-                    addEvent({
-                        level: 'info',
-                        message: 'Migration resume requested',
-                        timestamp: new Date().toISOString()
-                    });
-                } else {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Failed to resume migration');
-                }
-            } catch (error) {
-                console.error('Error resuming migration:', error);
-                addEvent({
-                    level: 'error',
-                    message: `Failed to resume migration: ${error.message}`,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        };
-
-        const exportMetrics = async () => {
-            try {
-                const response = await fetch('/api/metrics/csv');
-                if (response.ok) {
-                    const data = await response.json();
-
-                    // Create and download CSV file
-                    const blob = new Blob([data.csv_content], { type: 'text/csv' });
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = data.filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    window.URL.revokeObjectURL(url);
-
-                    addEvent({
-                        level: 'info',
-                        message: 'Metrics exported successfully',
-                        timestamp: new Date().toISOString()
-                    });
-                }
-            } catch (error) {
-                console.error('Error exporting metrics:', error);
-                addEvent({
-                    level: 'error',
-                    message: 'Failed to export metrics',
-                    timestamp: new Date().toISOString()
-                });
-            }
-        };
-
-        const exportProgress = async () => {
-            try {
-                const response = await fetch('/api/progress');
-                if (response.ok) {
-                    const data = await response.json();
-
-                    // Create and download JSON file
-                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `migration_progress_${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.json`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    window.URL.revokeObjectURL(url);
-
-                    addEvent({
-                        level: 'info',
-                        message: 'Progress exported successfully',
-                        timestamp: new Date().toISOString()
-                    });
-                }
-            } catch (error) {
-                console.error('Error exporting progress:', error);
-                addEvent({
-                    level: 'error',
-                    message: 'Failed to export progress',
-                    timestamp: new Date().toISOString()
-                });
-            }
-        };
-
-        const clearEvents = () => {
-            recentEvents.value = [];
-        };
-
-        // Lifecycle hooks
-        onMounted(() => {
-            connectWebSocket();
-            initializeCharts();
-
-            // Load initial data
-            fetch('/api/migration/status')
-                .then(response => response.json())
-                .then(data => {
-                    updateStatus(data);
-                })
-                .catch(error => {
-                    console.error('Error loading migration status:', error);
-                });
-
-            fetch('/api/metrics')
-                .then(response => response.json())
-                .then(data => {
-                    Object.assign(metrics, data);
-                })
-                .catch(error => {
-                    console.error('Error loading metrics:', error);
-                });
-        });
-
-        onUnmounted(() => {
-            stopHeartbeat();
-            if (websocket.value) {
-                websocket.value.close();
-            }
-        });
-
-        return {
-            progress,
-            metrics,
-            recentEvents,
-            connectionStatus,
-            progressPercentage,
-            elapsedTime,
-            statusClass,
-            canStart,
-            canStop,
-            canPause,
-            canResume,
-            startMigration,
-            stopMigration,
-            pauseMigration,
-            resumeMigration,
-            exportMetrics,
-            exportProgress,
-            clearEvents,
-            formatTime
-        };
+element('export-progress').addEventListener('click', () => {
+    if (snapshot) download(JSON.stringify(snapshot, null, 2), 'migration-progress.json', 'application/json');
+});
+element('export-metrics').addEventListener('click', async () => {
+    const error = element('export-error');
+    error.textContent = '';
+    try {
+        const result = await fetchJson('/api/metrics/csv');
+        download(result.csv_content, result.filename, 'text/csv');
+    } catch {
+        error.textContent = 'Metrics download failed. Please try again.';
     }
 });
-
-// Mount the app when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    dashboardApp.mount('#app');
+document.addEventListener('DOMContentLoaded', refresh, {once: true});
+connect();
+poll = setInterval(refresh, 5000);
+window.addEventListener('pagehide', () => {
+    disposed = true;
+    clearInterval(poll);
+    clearInterval(heartbeat);
+    clearTimeout(reconnect);
+    socket?.close();
+});
+window.addEventListener('pageshow', event => {
+    if (event.persisted) location.reload();
 });
