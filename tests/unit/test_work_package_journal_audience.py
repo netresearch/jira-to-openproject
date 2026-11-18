@@ -72,3 +72,15 @@ def test_confirmed_empty_history_is_a_read_only_rerun():
     migration._update_existing_work_package(issue, {"id": 10}, 8)
     assert migration._update_existing_work_packages_batch([(issue, {"id": 10}, 8)]) == (0, 0)
     assert not migration.op_client.mock_calls
+
+
+@pytest.mark.parametrize("total, comments", [(1, []), (1, [{"body": "private-comment-marker"}])])
+def test_legacy_create_refuses_comments_before_inspecting_body(total, comments):
+    issue = {"fields": {"comment": {"total": total, "comments": comments}}}
+    migration = WorkPackageMigration.__new__(WorkPackageMigration)
+    migration.logger = Mock()
+    migration.op_client = Mock()
+    with pytest.raises(LegacyJournalReplayError):
+        migration.prepare_work_package(issue, 7)
+    assert not migration.op_client.mock_calls
+    assert not migration.logger.mock_calls

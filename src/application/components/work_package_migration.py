@@ -864,16 +864,8 @@ class WorkPackageMigration(BaseMigration):
     @staticmethod
     def _reject_source_history(issue: Any) -> None:
         """Refuse legacy replay before projecting source values or contacting the target."""
-        raw = issue if isinstance(issue, dict) else getattr(issue, "raw", None)
-        raw_history = raw.get("changelog") if isinstance(raw, dict) else None
-        sdk_history = getattr(issue, "changelog", None)
-        for history in (raw_history, sdk_history):
-            if history is None:
-                continue
-            histories = IssueTransformer.get_attr(history, "histories")
-            total = IssueTransformer.get_attr(history, "total")
-            if histories != [] or total not in (None, 0):
-                raise LegacyJournalReplayError
+        if not has_no_source_journals(issue, require_complete=False):
+            raise LegacyJournalReplayError
 
     def _update_existing_work_package(
         self,
@@ -2193,6 +2185,9 @@ class WorkPackageMigration(BaseMigration):
             if not record.get("project_id"):
                 record["project_id"] = project_id
             record.pop("_log_counters", None)
+            # The Rails bulk endpoint accepts numeric foreign keys and jira_id for provenance.
+            record.pop("_links", None)
+            record.pop("jira_issue_id", None)
         try:
             result = self.op_client.bulk_create_records(
                 "WorkPackage",
