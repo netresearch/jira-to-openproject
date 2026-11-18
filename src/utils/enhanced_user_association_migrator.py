@@ -74,9 +74,26 @@ class StalenessConfig:
 
 
 # Pre-compiled regex patterns for error message sanitization (ReDoS protection)
-JWT_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}+\.[A-Za-z0-9_-]{20,}+\.[A-Za-z0-9_-]{20,}+")
+JWT_TOKEN_CHARACTERS = re.compile(r"[A-Za-z0-9_.-]+")
 BASE64_PATTERN = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{30,}+={0,2}")
 URL_PATTERN = re.compile(r"https?://[^\s]+")
+
+
+def _redact_jwt_segments(match: re.Match[str]) -> str:
+    """Replace each run of three token-sized segments without rescanning a suffix."""
+    segments = match[0].split(".")
+    if len(segments) < 3:
+        return match[0]
+    result = []
+    index = 0
+    while index < len(segments):
+        if index + 2 < len(segments) and all(len(segment) >= 20 for segment in segments[index : index + 3]):
+            result.append("[REDACTED]")
+            index += 3
+        else:
+            result.append(segments[index])
+            index += 1
+    return ".".join(result)
 
 
 class ThreadSafeConcurrentTracker:
@@ -905,7 +922,7 @@ class EnhancedUserAssociationMigrator:
         """
         # CRITICAL FIX: Apply security patterns FIRST, then truncate
         # This ensures sensitive tokens are redacted even if they get truncated
-        error_msg = JWT_PATTERN.sub("[REDACTED]", error_msg)
+        error_msg = JWT_TOKEN_CHARACTERS.sub(_redact_jwt_segments, error_msg)
         error_msg = "\n".join(self._redact_base64_line(line) for line in error_msg.split("\n"))
         error_msg = URL_PATTERN.sub("[URL]", error_msg)
 
