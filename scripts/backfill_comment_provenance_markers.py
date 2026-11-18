@@ -401,7 +401,7 @@ def run(
         try:
             fetch_result = op_client.execute_query_to_json_file(_build_fetch_journals_script(op_wp_id))
         except Exception as exc:
-            logger.error("WP#%d (%s): Rails fetch failed: %s", op_wp_id, jira_key, exc)
+            logger.exception("WP#%d (%s): Rails fetch failed: %s", op_wp_id, jira_key, exc)
             stats["errors"] += 1
             continue
 
@@ -416,7 +416,7 @@ def run(
         try:
             jira_comments: list[dict[str, Any]] = fetch_jira_comments(jira_key)
         except Exception as exc:
-            logger.error("WP#%d (%s): Jira fetch failed: %s", op_wp_id, jira_key, exc)
+            logger.exception("WP#%d (%s): Jira fetch failed: %s", op_wp_id, jira_key, exc)
             stats["errors"] += 1
             continue
 
@@ -485,7 +485,7 @@ def run(
                     n,
                 )
             except Exception as exc:
-                logger.error("Batch update %d–%d failed: %s", i + 1, i + len(batch), exc)
+                logger.exception("Batch update %d–%d failed: %s", i + 1, i + len(batch), exc)
                 stats["errors"] += 1
 
     logger.info(
@@ -642,10 +642,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         wp_mapping = _load_wp_mapping(data_dir, project_key)
     except FileNotFoundError as exc:
-        logger.error("Cannot load work_package_mapping: %s", exc)
+        logger.exception("Cannot load work_package_mapping: %s", exc)
         return 1
     except Exception as exc:
-        logger.error("Failed to load work_package_mapping: %s", exc)
+        logger.exception("Failed to load work_package_mapping: %s", exc)
         return 1
 
     logger.info("Loaded %d WP entries for project %s", len(wp_mapping), project_key)
@@ -671,7 +671,7 @@ def main(argv: list[str] | None = None) -> int:
             logger=logger,
         )
     except Exception as exc:
-        logger.error("Fatal: %s", exc)
+        logger.exception("Fatal: %s", exc)
         return 1
 
     print(json.dumps(stats, indent=2))
