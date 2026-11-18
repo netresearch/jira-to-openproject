@@ -19,8 +19,8 @@ from typing import Any
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
-from src.models import ComponentResult, WorkPackageMappingEntry
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.models import ComponentResult
 from src.models.jira import JiraIssueFields
 
 RESOLUTION_CF_NAME = "Resolution"
@@ -78,14 +78,8 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
 
         # Set CF value only - audit trail migration handles resolution history
         for jira_key, res_name in reso_by_key.items():
-            raw_entry = wp_map.get(jira_key)
-            if raw_entry is None:
-                continue
-            try:
-                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-            except ValueError:
-                # Corrupt or unsupported wp_map shape — skip silently to
-                # preserve the pre-typed call-site behaviour.
+            entry = self._work_package_entry(jira_key, wp_map.get(jira_key))
+            if entry is None:
                 continue
             wp_id = int(entry.openproject_id)
 
@@ -94,15 +88,7 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
                 projects_with_values.add(int(entry.openproject_project_id))
 
             try:
-                # Set CF value - do NOT create separate journal entry
-                # Resolution changes are captured by audit trail migration from
-                # the Jira changelog (creates "resolution: X → Y" entries)
-                set_script = (
-                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; wp.project_id"
-                    % (wp_id, cf_id, escape_ruby_single_quoted(res_name), escape_ruby_single_quoted(res_name))
-                )
-                result = self.op_client.execute_query(set_script)
+                result = self._write_work_package_custom_value(wp_id, cf_id, res_name, return_project=True)
                 if result:
                     updated += 1
                     # Also track project from WP response if not in mapping
