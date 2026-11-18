@@ -38,10 +38,7 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
 
         # Test valid YAML
         with open(self.compose_file) as f:
-            try:
-                compose_config = yaml.safe_load(f)
-            except yaml.YAMLError as e:
-                self.fail(f"compose.yml is not valid YAML: {e}")
+            compose_config = yaml.safe_load(f)
 
         # Test has services section
         assert "services" in compose_config, "compose.yml missing services section"

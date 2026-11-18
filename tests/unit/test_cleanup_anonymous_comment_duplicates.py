@@ -322,8 +322,9 @@ class TestRunFunction:
             "identifier": "nrs",
         }
 
+        logger = self._make_logger()
         with pytest.raises(RuntimeError, match="project not found"):
-            run("NRS", apply=False, logger=self._make_logger(), op_client=mock_op)
+            run("NRS", apply=False, logger=logger, op_client=mock_op)
 
     def test_apply_batches_large_deletion_lists(self) -> None:
         """Large delete lists must be batched (>100 IDs)."""

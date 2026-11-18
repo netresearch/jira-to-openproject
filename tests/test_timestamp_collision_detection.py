@@ -112,12 +112,9 @@ class TestTimestampCollisionDetection:
         ]
 
         for timestamp_str in test_cases:
-            try:
-                if "T" in timestamp_str:
-                    dt = datetime.fromisoformat(timestamp_str)
-                    assert dt is not None, f"Failed to parse: {timestamp_str}"
-            except Exception as e:
-                pytest.fail(f"Failed to parse {timestamp_str}: {e}")
+            if "T" in timestamp_str:
+                dt = datetime.fromisoformat(timestamp_str)
+                assert dt is not None, f"Failed to parse: {timestamp_str}"
 
     def test_collision_with_mixed_formats(self, wpm):
         """Test collision detection with mixed timestamp formats."""
