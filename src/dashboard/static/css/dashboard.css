@@ -10,7 +10,6 @@
 }
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; }
-[hidden] { display: none !important; }
 .frame { width: min(calc(100% - 3rem), 77rem); margin-inline: auto; }
 .site-header { background: #173d3a; color: #fff; border-bottom: .25rem solid #76b7a5; }
 .header-row, .title-row, .card-heading, .progress-row, footer { display: flex; align-items: center; gap: .75rem; }
@@ -62,10 +61,12 @@ button:hover:enabled { background: #eaf4f0; }
 button:disabled { cursor: default; color: #65706d; border-color: var(--line); }
 :focus-visible { outline: .19rem solid #287bb4; outline-offset: .14rem; }
 .notice, #export-error { color: #873224; }
-.notice { margin-block: .6rem; }
+.notice { display: block; margin-block: .6rem; }
 @media (max-width: 45rem) {
     .frame { width: min(calc(100% - 1.5rem), 77rem); }
     .columns { grid-template-columns: 1fr; gap: .75rem; margin-top: .75rem; }
     .header-row { flex-wrap: wrap; padding-block: .6rem; }
     .timings { gap: .5rem 1rem; }
 }
+
+[hidden] { display: none; }

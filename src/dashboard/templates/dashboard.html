@@ -4,25 +4,25 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Jira to OpenProject · Migration dashboard</title>
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=21d5214bcfac">
-    <script defer src="/static/js/dashboard.js?v=0cdaaa92aaab"></script>
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=3f8e877bfc9e">
+    <script defer src="/static/js/dashboard.js?v=d2bf76a85ece"></script>
 </head>
 <body>
 <header class="site-header">
     <div class="frame header-row">
         <a href="/" class="brand" aria-label="Jira to OpenProject migration dashboard">Jira <span aria-hidden="true">→</span> OpenProject</a>
-        <span id="connection" class="connection" role="status">Published snapshot</span>
+        <output id="connection" class="connection">Published snapshot</output>
     </div>
 </header>
 <main id="app" class="frame">
-    <!-- published-run-summary -->
+    {% include "published_run.html" %}
     <div id="live-dashboard" hidden>
         <noscript>Enable JavaScript to see migration updates.</noscript>
         <div class="title-row">
             <h1>Migration dashboard</h1>
             <span id="run-status" class="status" aria-live="polite">Loading</span>
         </div>
-        <p id="load-error" class="notice" role="status" hidden></p>
+        <output id="load-error" class="notice" hidden></output>
 
         <section class="card run" aria-labelledby="run-heading">
             <div class="card-heading">
@@ -76,7 +76,7 @@
         <footer>
             <button type="button" id="export-progress" disabled>Download progress (JSON)</button>
             <button type="button" id="export-metrics">Download metrics (CSV)</button>
-            <span id="export-error" role="status"></span>
+            <output id="export-error"></output>
         </footer>
     </div>
 </main>

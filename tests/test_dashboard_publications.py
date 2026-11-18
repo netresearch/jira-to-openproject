@@ -50,8 +50,9 @@ def test_atomic_failure_preserves_last_valid_private_file(progress_path, monkeyp
         raise OSError("synthetic publication failure")
 
     monkeypatch.setattr(Path, "replace", fail_write)
+    next_publication = publication("pending")
     with pytest.raises(OSError, match="publication failure"):
-        write_progress(publication("pending"))
+        write_progress(next_publication)
     assert progress_path.read_bytes() == initial
     assert list(progress_path.parent.iterdir()) == [progress_path]
 
@@ -173,3 +174,13 @@ def test_root_shows_unavailable_snapshot_without_echoing_invalid_data(progress_p
         assert "The latest migration progress is unavailable." in result.text
         assert result.headers["cache-control"] == "no-store"
         assert "private-source-content" not in result.text
+
+
+def test_published_api_errors_are_in_the_openapi_contract():
+    paths = app.openapi()["paths"]
+    for route in ("/api/progress", "/api/metrics", "/api/metrics/csv"):
+        assert {"404", "503"} <= paths[route]["get"]["responses"].keys()
+    for route in ("/", "/api/migration/status"):
+        assert "503" in paths[route]["get"]["responses"]
+    for action in ("start", "stop", "pause", "resume"):
+        assert "409" in paths[f"/api/migration/{action}"]["post"]["responses"]

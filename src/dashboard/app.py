@@ -13,7 +13,6 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from html import escape
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -24,11 +23,14 @@ from fastapi import (
     BackgroundTasks,
     FastAPI,
     HTTPException,
+    Request,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 from pydantic import BaseModel, Field, ValidationError
 
 from src.config import bootstrap
@@ -40,6 +42,8 @@ _INTERNAL_SERVER_ERROR = "Internal server error"
 _NO_ACTIVE_MIGRATION = "No migration is running"
 _EXTERNAL_CONTROL = "The migration is controlled by its publishing process."
 _SNAPSHOT_HEADERS = {"Cache-Control": "no-store"}
+_MISSING_RUN = "No snapshot is available for this migration."
+_UNAVAILABLE_RUN = "Published migration progress is unavailable."
 
 
 # No migration component imports needed for dashboard
@@ -101,9 +105,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# The shell is read on each request and enriched with the latest public summary.
 _DASHBOARD_DIR = Path(__file__).resolve().parent
-_DASHBOARD_TEMPLATE_PATH = _DASHBOARD_DIR / "templates" / "dashboard.html"
+_TEMPLATES = Jinja2Templates(env=Environment(loader=FileSystemLoader(_DASHBOARD_DIR / "templates"), autoescape=True))
 
 
 # Static assets directory may be absent in minimal runtime layouts; only
@@ -275,15 +278,13 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-def _progress(migration_id: str | None = None) -> MigrationProgress:
+def _progress() -> MigrationProgress:
     target = progress_file()
     if target is not None:
         try:
             progress = read_progress(target)
         except (OSError, ValidationError) as exc:
-            raise HTTPException(
-                status_code=503, detail="Published migration progress is unavailable.", headers=_SNAPSHOT_HEADERS
-            ) from exc
+            raise HTTPException(status_code=503, detail=_UNAVAILABLE_RUN, headers=_SNAPSHOT_HEADERS) from exc
     elif migration_state["is_running"]:
         progress = MigrationProgress(
             migration_id=migration_state["migration_id"],
@@ -294,10 +295,13 @@ def _progress(migration_id: str | None = None) -> MigrationProgress:
         )
     else:
         progress = MigrationProgress(migration_id="none", status="idle")
+    return progress
+
+
+def _requested_progress(migration_id: str | None) -> MigrationProgress:
+    progress = _progress()
     if migration_id and migration_id != progress.migration_id:
-        raise HTTPException(
-            status_code=404, detail="No snapshot is available for this migration.", headers=_SNAPSHOT_HEADERS
-        )
+        raise HTTPException(status_code=404, detail=_MISSING_RUN, headers=_SNAPSHOT_HEADERS)
     return progress
 
 
@@ -353,64 +357,47 @@ async def update_migration_progress() -> None:
         await asyncio.sleep(1)
 
 
-def _published_summary(progress: MigrationProgress) -> str:
+def _summary_context(progress: MigrationProgress) -> dict[str, Any]:
     if progress.status == "idle":
-        return "<p>No migration run has been published.</p>"
-    facts = [("Status", progress.status.capitalize())]
+        return {"notice": "No migration run has been published."}
     phase = progress.current_component or next(
         (item.name for item in reversed(progress.phases) if item.status != "pending"), None
     )
+    facts = [("Status", progress.status.capitalize())]
     if phase:
         facts.append(("Latest phase", phase))
     if progress.last_update:
         facts.append(("Last update", progress.last_update.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")))
-    sections = [_summary_facts(facts)]
-    counts = [(name, str(amount)) for name, amount in progress.verified_counts.items()]
+    counts = list(progress.verified_counts.items())
     for name, amount in (
         ("Processed entities", progress.processed_entities),
         ("Total entities", progress.total_entities),
         ("Failed entities", progress.failed_entities),
     ):
         if amount is not None:
-            counts.append((name, str(amount)))
-    if counts:
-        sections.extend(("<h2>Reported counts</h2>", _summary_facts(counts)))
-    if progress.pending_checks:
-        checks = "".join(f"<li>{escape(name)}</li>" for name in progress.pending_checks)
-        sections.append(f"<h2>Pending checks</h2><ul>{checks}</ul>")
-    return "".join(sections)
-
-
-def _summary_facts(pairs: list[tuple[str, str]]) -> str:
-    items = "".join(f"<div><dt>{escape(label)}</dt><dd>{escape(value)}</dd></div>" for label, value in pairs)
-    return f'<dl class="counts">{items}</dl>'
+            counts.append((name, amount))
+    return {"facts": facts, "counts": counts, "pending_checks": progress.pending_checks}
 
 
 @app.get(
     "/", response_class=HTMLResponse, responses={503: {"description": "Dashboard or published progress unavailable"}}
 )
-def dashboard() -> HTMLResponse:
-    """Render the last publication immediately, even without scripts, styling or WebSockets."""
+def dashboard(request: Request) -> HTMLResponse:
+    """Render plain observations through the packaged, autoescaping HTML template."""
+    code = 200
     try:
-        shell = _DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
-    except OSError as exc:
+        context = _summary_context(_progress())
+    except HTTPException as exc:
+        context = {"notice": "The latest migration progress is unavailable."}
+        code = exc.status_code
+    try:
+        return _TEMPLATES.TemplateResponse(
+            request, "dashboard.html", context, status_code=code, headers=_SNAPSHOT_HEADERS
+        )
+    except TemplateNotFound as exc:
         raise HTTPException(
             status_code=503, detail="Dashboard template not available in this installation.", headers=_SNAPSHOT_HEADERS
         ) from exc
-    code = 200
-    try:
-        summary = _published_summary(_progress())
-    except HTTPException as exc:
-        summary = "<p>The latest migration progress is unavailable.</p>"
-        code = exc.status_code
-    section = (
-        '<section id="published-run-summary" class="card run" aria-labelledby="published-run-heading">'
-        '<h1 id="published-run-heading">Migration dashboard</h1>'
-        f"{summary}</section>"
-    )
-    return HTMLResponse(
-        shell.replace("<!-- published-run-summary -->", section), status_code=code, headers=_SNAPSHOT_HEADERS
-    )
 
 
 @app.websocket("/ws/dashboard")
@@ -559,16 +546,16 @@ async def resume_migration_background() -> None:
         logger.exception("Error resuming migration")
 
 
-@app.get("/api/progress")
+@app.get("/api/progress", responses={404: {"description": _MISSING_RUN}, 503: {"description": _UNAVAILABLE_RUN}})
 def get_progress(migration_id: str | None = None) -> JSONResponse:
     """Return the latest published run, even after the producer has exited."""
-    return JSONResponse(_progress(migration_id).public_data(), headers=_SNAPSHOT_HEADERS)
+    return JSONResponse(_requested_progress(migration_id).public_data(), headers=_SNAPSHOT_HEADERS)
 
 
-@app.get("/api/metrics")
+@app.get("/api/metrics", responses={404: {"description": _MISSING_RUN}, 503: {"description": _UNAVAILABLE_RUN}})
 def get_metrics(migration_id: str | None = None) -> JSONResponse:
     """Measure host usage; leave unmeasured processing rates unknown."""
-    return JSONResponse(_metrics(_progress(migration_id)).model_dump(mode="json"), headers=_SNAPSHOT_HEADERS)
+    return JSONResponse(_metrics(_requested_progress(migration_id)).model_dump(mode="json"), headers=_SNAPSHOT_HEADERS)
 
 
 def _csv_text(value: object) -> object:
@@ -577,10 +564,10 @@ def _csv_text(value: object) -> object:
     return value
 
 
-@app.get("/api/metrics/csv")
+@app.get("/api/metrics/csv", responses={404: {"description": _MISSING_RUN}, 503: {"description": _UNAVAILABLE_RUN}})
 def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
     """Export measurements and observations from a single generation."""
-    progress = _progress(migration_id)
+    progress = _requested_progress(migration_id)
     data = progress.public_data()
     metrics = _metrics(progress).model_dump()
     when = datetime.now(UTC).isoformat()
@@ -625,7 +612,7 @@ def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
     )
 
 
-@app.get("/api/migration/status")
+@app.get("/api/migration/status", responses={503: {"description": _UNAVAILABLE_RUN}})
 def get_migration_status() -> JSONResponse:
     """Report process activity and the latest recorded outcome."""
     return JSONResponse(_status(_progress()), headers=_SNAPSHOT_HEADERS)
@@ -640,6 +627,7 @@ def _require_local_controls() -> None:
     "/api/migration/start",
     responses={
         400: {"description": "A migration is already running"},
+        409: {"description": _EXTERNAL_CONTROL},
         500: {"description": "Could not schedule the migration start"},
     },
 )
@@ -672,6 +660,7 @@ async def start_migration(
     "/api/migration/stop",
     responses={
         400: {"description": "There is no running migration"},
+        409: {"description": _EXTERNAL_CONTROL},
         500: {"description": "Could not schedule the migration stop"},
     },
 )
@@ -696,6 +685,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     "/api/migration/pause",
     responses={
         400: {"description": "There is no active migration to pause"},
+        409: {"description": _EXTERNAL_CONTROL},
         500: {"description": "Could not schedule the migration pause"},
     },
 )
@@ -723,6 +713,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     "/api/migration/resume",
     responses={
         400: {"description": "There is no paused migration to resume"},
+        409: {"description": _EXTERNAL_CONTROL},
         500: {"description": "Could not schedule the migration resume"},
     },
 )

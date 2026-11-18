@@ -203,13 +203,13 @@ function connect() {
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
     socket = new WebSocket(scheme + '//' + location.host + '/ws/dashboard');
     const connection = element('connection');
-    socket.onopen = () => {
+    socket.onopen = async () => {
         connection.textContent = 'Live connection';
         connection.dataset.live = 'true';
         heartbeat = setInterval(() => {
             if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type: 'heartbeat'}));
         }, 25000);
-        refresh();
+        await refresh();
     };
     socket.onmessage = event => {
         let message;
@@ -250,7 +250,7 @@ element('export-metrics').addEventListener('click', async () => {
         error.textContent = 'Metrics download failed. Please try again.';
     }
 });
-refresh();
+document.addEventListener('DOMContentLoaded', refresh, {once: true});
 connect();
 poll = setInterval(refresh, 5000);
 window.addEventListener('pagehide', () => {
