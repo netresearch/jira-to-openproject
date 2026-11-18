@@ -14,6 +14,8 @@ uv run j2o-history seal --jira https://jira.example.org --project DEMO \
   --archive jira-DEMO-operator-field-history.age
 ```
 
+Run `seal` and `restore` from your chosen output directory. Give each output a simple filename with its required extension (`.age` or `.json`). Input files can use absolute paths.
+
 Store the SHA-256 digest printed by `seal` in your trusted recovery records. Compare it with the downloaded file before recovery.
 
 The archive retains issue and event IDs, timestamps, author keys, item positions and original before/after values. It includes recognized built-in changes and supported structured Agile and Tempo fields. For a reviewed standard custom field, pass its Jira ID with `--field-id`. Review its use before including it, especially for text fields. Unknown fields, comment fields and events or items with audience restrictions are skipped.

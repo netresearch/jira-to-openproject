@@ -77,7 +77,7 @@ def _synthetic_reference(item: dict) -> bool:
             return False
         if not isinstance(value, str) or not ((value.isascii() and value.isdecimal()) or _ISSUE_KEY.fullmatch(value)):
             return False
-    return True
+    return item.get("from") is not None or item.get("to") is not None
 
 
 def _keep(item: dict, history: dict, fields: set[tuple[str, str | None]]) -> bool:
@@ -85,7 +85,9 @@ def _keep(item: dict, history: dict, fields: set[tuple[str, str | None]]) -> boo
         return False
     if any(value is not None and type(value) not in (str, int) for value in (item.get(k) for k in _FIELDS)):
         return False
-    name, fid = item["field"], item.get("fieldId")
+    name, fid = item.get("field"), item.get("fieldId")
+    if not isinstance(name, str):
+        return False
     if item.get("fieldtype") == "jira":
         if name.startswith("customfield_") or (fid and str(fid).casefold() != name.casefold()):
             return False
@@ -149,11 +151,22 @@ def snapshot(issues: list[dict], fields: list[dict], project: str, jira: str, ap
     return {"format": _FORMAT, "jira": jira, "project": project, "issues": source}
 
 
-def _private_create(path: Path, data: bytes) -> None:
+def _output_file(path: Path, suffix: str) -> Path:
+    """Confine new files to the operator's current working directory."""
+    require(
+        path.parent == Path()
+        and path.suffix == suffix
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", path.name, re.ASCII)
+        and not path.is_symlink(),
+        f"Expected a local {suffix} filename in the working directory",
+    )
+    return Path.cwd() / path.name
+
+
+def _private_create(path: Path, data: bytes, suffix: str) -> None:
     """Publish a finished private file atomically, keeping an existing archive intact."""
-    directory = path.parent.resolve(strict=True)
-    leaf = path.name
-    require(leaf not in ("", ".", "..") and not path.is_symlink(), "Expected a regular output filename")
+    leaf = _output_file(path, suffix).name
+    directory = Path.cwd()
     with tempfile.TemporaryDirectory(dir=directory) as staging:
         name = Path(staging) / "complete"
         with os.fdopen(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as tmp:
@@ -176,14 +189,15 @@ def decrypt(data: bytes, identity: x25519.Identity) -> dict:
 
 def seal(value: dict, identity: x25519.Identity, path: Path) -> None:
     """Round-trip both new and previously sealed snapshots before reporting success."""
-    if not path.exists():
+    target = _output_file(path, ".age")
+    if not target.exists():
         data = pyrage.encrypt(encoded(value), [identity.to_public()])
         try:
-            _private_create(path, data)
+            _private_create(path, data, ".age")
         except FileExistsError:
             pass
     require(
-        decrypt(input_file(path).read_bytes(), identity) == value, "Sealed snapshot differs from the supplied export"
+        decrypt(input_file(target).read_bytes(), identity) == value, "Sealed snapshot differs from the supplied export"
     )
 
 
@@ -256,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             data = input_file(args.archive).read_bytes()
             value = decrypt(data, identity)
             if args.command == "restore":
-                _private_create(args.output, encoded(value))
+                _private_create(args.output, encoded(value), ".json")
             else:
                 op = Endpoint(
                     args.openproject,

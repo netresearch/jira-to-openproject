@@ -4,6 +4,7 @@
 """Restore exact field values while withholding comment and ambiguous records."""
 
 import json
+from pathlib import Path
 from unittest.mock import Mock
 
 import pyrage
@@ -78,7 +79,8 @@ def test_scopes_the_export_and_requires_complete_changelog():
         snapshot([row], [], "EX", _JIRA, set())
 
 
-def test_native_archive_restoration_retry_and_drift(tmp_path):
+def test_native_archive_restoration_retry_and_drift(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     private = tmp_path / "operator.key"
     identity = x25519.Identity.generate()
     private.write_text(str(identity))
@@ -92,7 +94,7 @@ def test_native_archive_restoration_retry_and_drift(tmp_path):
         "--identity",
         str(private),
         "--archive",
-        str(archive),
+        archive.name,
         "--issues",
         str(issues),
         "--fields",
@@ -107,13 +109,19 @@ def test_native_archive_restoration_retry_and_drift(tmp_path):
     assert main(args) == 0
     assert archive.read_bytes() == original
     restored = tmp_path / "restored.json"
-    assert main(["restore", "--identity", str(private), "--archive", str(archive), "--output", str(restored)]) == 0
+    assert main(["restore", "--identity", str(private), "--archive", str(archive), "--output", restored.name]) == 0
     assert json.loads(restored.read_text()) == decrypt(original, identity)
     with pytest.raises(pyrage.DecryptError):
         decrypt(original, x25519.Identity.generate())
     with pytest.raises(ArchiveError):
-        seal({"format": "different"}, identity, archive)
+        seal({"format": "different"}, identity, Path(archive.name))
     assert archive.read_bytes() == original
+    for output in (str(tmp_path / "elsewhere.json"), "../elsewhere.json", "elsewhere.txt"):
+        assert main(["restore", "--identity", str(private), "--archive", str(archive), "--output", output]) == 1
+    restored.unlink()
+    restored.symlink_to(fields)
+    assert main(["restore", "--identity", str(private), "--archive", str(archive), "--output", restored.name]) == 1
+    assert fields.read_text() == "[]"
 
 
 def test_checks_project_and_work_package_origin_before_upload(monkeypatch):
