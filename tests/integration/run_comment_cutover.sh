@@ -5,12 +5,15 @@
 set -euo pipefail
 
 network=$(docker network create --internal "j2o-cutover-$(openssl rand -hex 8)")
+fixture_dir=$(mktemp -d)
+export UV_PROJECT_ENVIRONMENT="$fixture_dir/venv"
 db=
 app=
 cleanup() {
     if [[ -n "$app" ]]; then docker rm -fv "$app" >/dev/null; fi
     if [[ -n "$db" ]]; then docker rm -fv "$db" >/dev/null; fi
     docker network rm "$network" >/dev/null
+    rm -rf -- "$fixture_dir"
 }
 trap cleanup EXIT
 # This fixture's pg_dump client ships with the OpenProject image (PostgreSQL 17).
@@ -29,5 +32,6 @@ app=$(docker run -d --network "$network" -e DATABASE_URL=postgres://openproject@
 docker exec "$app" bundle exec rails db:migrate db:seed
 export J2O_TEST_OPENPROJECT_CONTAINER="$app" J2O_OPENPROJECT_CONTAINER="$app"
 export J2O_OPENPROJECT_SERVER=localhost J2O_RUN_INTEGRATION=true J2O_ENABLE_DOCKER=true
-uv run --frozen --extra test --extra dev python -m pytest -o addopts='' -q \
+uv sync --python 3.14 --frozen --no-build --no-install-project --extra test --extra dev
+uv run --no-sync python -m pytest -o addopts='' -q \
     tests/integration/test_protected_comment_cutover.py
