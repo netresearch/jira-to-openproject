@@ -171,6 +171,27 @@ class TimeEntryTransformer:
         else:
             return result_entry
 
+    @staticmethod
+    def _tempo_worklog_key(tempo_log, issue_key) -> str | None:
+        if (jira_id := tempo_log.get("jiraWorklogId")) is not None:
+            return f"{issue_key}:{jira_id}"
+        if (tempo_id := tempo_log.get("tempoWorklogId")) is not None:
+            return f"tempo:{tempo_id}"
+        return None
+
+    def _link_tempo_principals(self, tempo_log, issue_key, time_entry):
+        # Map user
+        user_id = self._map_user_multi(tempo_log.get("author", {}))
+        if user_id:
+            time_entry["_embedded"]["user"] = {"href": f"/api/v3/users/{user_id}"}
+
+        # Map work package
+        work_package_id = self._map_work_package_multi(issue_key, tempo_log)
+        if work_package_id:
+            time_entry["_embedded"]["workPackage"] = {
+                "href": f"/api/v3/work_packages/{work_package_id}",
+            }
+
     def transform_tempo_work_log(
         self,
         tempo_log: dict[str, Any],
@@ -230,30 +251,11 @@ class TimeEntryTransformer:
                     "jira_issue_key": issue_key,
                     "tempo_author": author_username,
                     "import_timestamp": datetime.now(tz=UTC).isoformat(),
-                    "jira_worklog_key": (
-                        f"{issue_key}:{tempo_log.get('jiraWorklogId')}"
-                        if tempo_log.get("jiraWorklogId") is not None
-                        else (
-                            f"tempo:{tempo_log.get('tempoWorklogId')}"
-                            if tempo_log.get("tempoWorklogId") is not None
-                            else None
-                        )
-                    ),
+                    "jira_worklog_key": self._tempo_worklog_key(tempo_log, issue_key),
                 },
             }
 
-            # Map user
-            user_id = self._map_user_multi(tempo_log.get("author", {}))
-            if user_id:
-                time_entry["_embedded"]["user"] = {"href": f"/api/v3/users/{user_id}"}
-
-            # Map work package
-            work_package_id = self._map_work_package_multi(issue_key, tempo_log)
-            if work_package_id:
-                time_entry["_embedded"]["workPackage"] = {
-                    "href": f"/api/v3/work_packages/{work_package_id}",
-                }
-
+            self._link_tempo_principals(tempo_log, issue_key, time_entry)
             # Handle Tempo-specific fields
             self._handle_tempo_specific_fields(tempo_log, time_entry)
 

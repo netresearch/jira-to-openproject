@@ -113,6 +113,120 @@ class EnhancedTimestampMigrator:
         self.jira_timezone = self._detect_jira_timezone()
         self.start_date_fields = self._load_start_date_fields()
 
+    def _server_timezone(self, server_info: dict[str, Any]) -> str | None:
+        zone = server_info.get("serverTimeZone")
+        if isinstance(zone, dict):
+            zone = zone.get("timeZoneId") or None
+        if isinstance(zone, str):
+            return self._normalize_timezone_id(zone)
+        for key in ("timeZone", "timezone", "serverTz"):
+            if isinstance(candidate := server_info.get(key), str) and candidate:
+                return self._normalize_timezone_id(candidate)
+        return None
+
+    def _record_creation_timestamp(
+        self, extracted, work_package_data, use_rails_for_immutable, result, *, jira_key, author_id
+    ):
+        # Migrate creation timestamp
+        creation_result = self._migrate_creation_timestamp(
+            extracted,
+            work_package_data,
+            use_rails_for_immutable,
+        )
+        if creation_result["rails_operation"]:
+            result["rails_operations"].append(creation_result["rails_operation"])
+            # Also generate Journal operations for activity log
+            created_timestamp = creation_result["rails_operation"].get("timestamp")
+            if created_timestamp and author_id:
+                result["rails_operations"].append(
+                    {
+                        "type": "set_journal_created_at",
+                        "jira_key": jira_key,
+                        "timestamp": created_timestamp,
+                    },
+                )
+                result["rails_operations"].append(
+                    {
+                        "type": "set_journal_user",
+                        "jira_key": jira_key,
+                        "user_id": author_id,
+                    },
+                )
+        if creation_result["warnings"]:
+            result["warnings"].extend(creation_result["warnings"])
+
+    def _align_due_date(self, work_package_data):
+        if "due_date" in work_package_data and "start_date" in work_package_data:
+            due_date_str = work_package_data.get("due_date")
+            start_date_str = work_package_data.get("start_date")
+            # Check both are not None before comparing
+            if due_date_str is not None and start_date_str is not None:
+                if due_date_str < start_date_str:  # String comparison works for ISO dates
+                    # Set due_date = start_date to satisfy PostgreSQL constraint
+                    jira_key = work_package_data.get("jira_key", "unknown")
+                    self.logger.warning(
+                        f"Date constraint violation in {jira_key}: "
+                        f"due_date ({due_date_str}) < start_date ({start_date_str}). "
+                        f"Setting due_date = start_date",
+                    )
+                    work_package_data["due_date"] = start_date_str
+
+    def _extract_start_date(self, jira_issue, custom_fields, timestamps):
+        for field_id in self.start_date_fields:
+            value = None
+            try:
+                value = getattr(jira_issue.fields, field_id)
+            except AttributeError:
+                value = None
+            if not value and isinstance(custom_fields, dict):
+                value = custom_fields.get(field_id)
+            if value:
+                normalized = self._normalize_timestamp(str(value))
+                if normalized:
+                    timestamps["start_date"] = {
+                        "raw_value": str(value),
+                        "jira_field": field_id,
+                        "openproject_field": "start_date",
+                        "normalized_utc": normalized,
+                    }
+                    break
+
+    def _extract_time_tracking(self, jira_issue, timestamps):
+
+        # Extract time tracking information
+        if hasattr(jira_issue.fields, "timetracking"):
+            timetracking = jira_issue.fields.timetracking
+            if timetracking:
+                if hasattr(timetracking, "originalEstimate"):
+                    timestamps["original_estimate"] = {
+                        "raw_value": str(timetracking.originalEstimate),
+                        "jira_field": "timetracking.originalEstimate",
+                        "openproject_field": "estimated_hours",
+                        "normalized_utc": None,  # Duration, not timestamp
+                    }
+                if hasattr(timetracking, "timeSpent"):
+                    timestamps["time_spent"] = {
+                        "raw_value": str(timetracking.timeSpent),
+                        "jira_field": "timetracking.timeSpent",
+                        "openproject_field": "spent_hours",
+                        "normalized_utc": None,  # Duration, not timestamp
+                    }
+
+    @staticmethod
+    def _parse_timestamp(timestamp_str) -> datetime:
+        if isinstance(timestamp_str, datetime):
+            return timestamp_str
+        try:
+            return datetime.fromisoformat(timestamp_str)
+        except ValueError:
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(timestamp_str, fmt)
+                except ValueError:
+                    continue
+            msg = f"Could not parse timestamp: {timestamp_str}"
+            raise ValueError(msg) from None
+
     def _detect_jira_timezone(self) -> str:
         """Detect the timezone used by the Jira instance.
 
@@ -141,40 +255,8 @@ class EnhancedTimestampMigrator:
                 )
                 return default_timezone
 
-            # Extract timezone from server info
-            if "serverTimeZone" in server_info:
-                timezone_info = server_info["serverTimeZone"]
-
-                # Handle different possible structures
-                if isinstance(timezone_info, dict):
-                    # Jira Cloud/Server format: {"timeZoneId": "Europe/Berlin", "displayName": "..."}
-                    timezone_id = timezone_info.get("timeZoneId")
-                    if timezone_id:
-                        self.logger.info(
-                            "Detected Jira timezone from server info: %s",
-                            timezone_id,
-                        )
-                        return self._normalize_timezone_id(timezone_id)
-
-                elif isinstance(timezone_info, str):
-                    # Simple string format
-                    self.logger.info(
-                        "Detected Jira timezone from server info: %s",
-                        timezone_info,
-                    )
-                    return self._normalize_timezone_id(timezone_info)
-
-            # Check alternative field names
-            for field in ["timeZone", "timezone", "serverTz"]:
-                if field in server_info:
-                    tz_value = server_info[field]
-                    if isinstance(tz_value, str) and tz_value:
-                        self.logger.info(
-                            "Detected Jira timezone from %s field: %s",
-                            field,
-                            tz_value,
-                        )
-                        return self._normalize_timezone_id(tz_value)
+            if (timezone := self._server_timezone(server_info)) is not None:
+                return timezone
 
             # Log available fields for debugging
             self.logger.debug(
@@ -304,33 +386,9 @@ class EnhancedTimestampMigrator:
             extracted = self._extract_all_timestamps(jira_issue)
             result["extracted_timestamps"] = extracted
 
-            # Migrate creation timestamp
-            creation_result = self._migrate_creation_timestamp(
-                extracted,
-                work_package_data,
-                use_rails_for_immutable,
+            self._record_creation_timestamp(
+                extracted, work_package_data, use_rails_for_immutable, result, jira_key=jira_key, author_id=author_id
             )
-            if creation_result["rails_operation"]:
-                result["rails_operations"].append(creation_result["rails_operation"])
-                # Also generate Journal operations for activity log
-                created_timestamp = creation_result["rails_operation"].get("timestamp")
-                if created_timestamp and author_id:
-                    result["rails_operations"].append(
-                        {
-                            "type": "set_journal_created_at",
-                            "jira_key": jira_key,
-                            "timestamp": created_timestamp,
-                        },
-                    )
-                    result["rails_operations"].append(
-                        {
-                            "type": "set_journal_user",
-                            "jira_key": jira_key,
-                            "user_id": author_id,
-                        },
-                    )
-            if creation_result["warnings"]:
-                result["warnings"].extend(creation_result["warnings"])
 
             # Migrate update timestamp
             update_result = self._migrate_update_timestamp(
@@ -355,20 +413,7 @@ class EnhancedTimestampMigrator:
 
             # Validate date constraint: due_date must be >= start_date (Bug #10 fix)
             # Only validate if BOTH dates are present and not None
-            if "due_date" in work_package_data and "start_date" in work_package_data:
-                due_date_str = work_package_data.get("due_date")
-                start_date_str = work_package_data.get("start_date")
-                # Check both are not None before comparing
-                if due_date_str is not None and start_date_str is not None:
-                    if due_date_str < start_date_str:  # String comparison works for ISO dates
-                        # Set due_date = start_date to satisfy PostgreSQL constraint
-                        jira_key = work_package_data.get("jira_key", "unknown")
-                        self.logger.warning(
-                            f"Date constraint violation in {jira_key}: "
-                            f"due_date ({due_date_str}) < start_date ({start_date_str}). "
-                            f"Setting due_date = start_date",
-                        )
-                        work_package_data["due_date"] = start_date_str
+            self._align_due_date(work_package_data)
 
             # Migrate resolution/closed date
             resolution_result = self._migrate_resolution_date(
@@ -440,25 +485,7 @@ class EnhancedTimestampMigrator:
         custom_fields = getattr(jira_issue, "raw", {}).get("fields", {})
 
         # Start date precedence from configured custom fields
-        for field_id in self.start_date_fields:
-            value = None
-            try:
-                value = getattr(jira_issue.fields, field_id)
-            except AttributeError:
-                value = None
-            if not value and isinstance(custom_fields, dict):
-                value = custom_fields.get(field_id)
-            if value:
-                normalized = self._normalize_timestamp(str(value))
-                if normalized:
-                    timestamps["start_date"] = {
-                        "raw_value": str(value),
-                        "jira_field": field_id,
-                        "openproject_field": "start_date",
-                        "normalized_utc": normalized,
-                    }
-                    break
-
+        self._extract_start_date(jira_issue, custom_fields, timestamps)
         for field_name, field_value in custom_fields.items():
             if field_name in self.start_date_fields:
                 continue
@@ -471,25 +498,7 @@ class EnhancedTimestampMigrator:
                         "openproject_field": f"custom_{field_name}",
                         "normalized_utc": self._normalize_timestamp(field_value),
                     }
-
-        # Extract time tracking information
-        if hasattr(jira_issue.fields, "timetracking"):
-            timetracking = jira_issue.fields.timetracking
-            if timetracking:
-                if hasattr(timetracking, "originalEstimate"):
-                    timestamps["original_estimate"] = {
-                        "raw_value": str(timetracking.originalEstimate),
-                        "jira_field": "timetracking.originalEstimate",
-                        "openproject_field": "estimated_hours",
-                        "normalized_utc": None,  # Duration, not timestamp
-                    }
-                if hasattr(timetracking, "timeSpent"):
-                    timestamps["time_spent"] = {
-                        "raw_value": str(timetracking.timeSpent),
-                        "jira_field": "timetracking.timeSpent",
-                        "openproject_field": "spent_hours",
-                        "normalized_utc": None,  # Duration, not timestamp
-                    }
+        self._extract_time_tracking(jira_issue, timestamps)
 
         return timestamps
 
@@ -514,32 +523,7 @@ class EnhancedTimestampMigrator:
             return None
 
         try:
-            # Parse the timestamp - handle various formats
-            if isinstance(timestamp_str, datetime):
-                dt = timestamp_str
-            else:
-                # Try to parse as ISO format first
-                try:
-                    dt = datetime.fromisoformat(timestamp_str)
-                except ValueError:
-                    # Try other common formats
-                    formats = [
-                        "%Y-%m-%dT%H:%M:%S.%f%z",
-                        "%Y-%m-%dT%H:%M:%S%z",
-                        "%Y-%m-%d %H:%M:%S",
-                        "%Y-%m-%d",
-                    ]
-                    dt = None
-                    for fmt in formats:
-                        try:
-                            dt = datetime.strptime(timestamp_str, fmt)
-                            break
-                        except ValueError:
-                            continue
-
-                    if dt is None:
-                        msg = f"Could not parse timestamp: {timestamp_str}"
-                        raise ValueError(msg) from None
+            dt = self._parse_timestamp(timestamp_str)
 
             # Ensure timezone aware
             if dt.tzinfo is None:

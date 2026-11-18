@@ -412,25 +412,9 @@ def _metric_int(metrics: dict[str, Any], key: str, default: int = 0) -> int:
     return default if value is None else int(value)
 
 
-def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """Return (failures, warnings) per the migration spec."""
-    failures: list[str] = []
-    warnings: list[str] = []
-
-    # Surface the Ruby-side error first — the audit script returns
-    # ``{"error": "OP project '<key>' not found"}`` when the project
-    # identifier doesn't resolve, and downstream rules would otherwise
-    # generate misleading "no work packages" output.
-    error_msg = metrics.get("error")
-    if error_msg:
-        failures.append(f"Audit aborted: {error_msg}")
-        return failures, warnings
-
-    wp_total = _metric_int(metrics, "wp_total")
-    if wp_total == 0:
-        failures.append("No work packages found for project (migration likely never ran for it)")
-        return failures, warnings
-
+def _audit_work_package_fields(
+    metrics: dict[str, Any], wp_total: int, failures: list[str], warnings: list[str]
+) -> None:
     # All WPs must have author + subject
     wp_with_author = _metric_int(metrics, "wp_with_author")
     if wp_with_author < wp_total:
@@ -479,6 +463,8 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             " created_at within last 24h — original Jira timestamps not preserved (Bug E indicator)"
         )
 
+
+def _audit_provenance_fields(metrics: dict[str, Any], wp_total: int, failures: list[str], warnings: list[str]) -> None:
     # Provenance CFs
     wp_provenance = metrics.get("wp_provenance_cfs", {}) or {}
     missing_cfs = [name for name, info in wp_provenance.items() if not info.get("exists")]
@@ -524,6 +510,8 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     if missing_te_cfs:
         failures.append(f"TimeEntry provenance CFs missing: {missing_te_cfs} (Bug D indicator)")
 
+
+def _audit_time_entries(metrics: dict[str, Any], failures: list[str]) -> None:
     # Time entry hours — Bug B indicator
     te_total = _metric_int(metrics, "te_total")
     if te_total > 0:
@@ -550,6 +538,8 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 " fail for entries missing the key",
             )
 
+
+def _audit_work_package_relations_and_journals(metrics: dict[str, Any], wp_total: int, failures: list[str]) -> None:
     # Type / Status / Priority — mapping integrity. Any WP with NULL on
     # one of these is a silent mapping failure (the Jira→OP map for the
     # corresponding domain didn't resolve and the WP got persisted
@@ -576,6 +566,8 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             " creation should emit at least one Journal record",
         )
 
+
+def _warn_on_missing_project_activity(metrics: dict[str, Any], wp_total: int, warnings: list[str]) -> None:
     # Relations / Watchers — size-gated heuristic warnings. A small
     # project legitimately may have neither, but on a project of
     # ``_HEURISTIC_SIZE_THRESHOLD`` WPs or more, zero is suspicious.
@@ -590,6 +582,10 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 f"No watchers found across {wp_total} WPs — watcher migration may have silently skipped",
             )
 
+
+def _compare_jira_issues_and_attachments(
+    metrics: dict[str, Any], wp_total: int, failures: list[str], warnings: list[str]
+) -> None:
     # Jira source comparison: issue count. The audit is otherwise
     # OP-side only — without this check, a wholesale loss (e.g. 1000
     # Jira issues → 800 OP WPs) passes every other rule. Spec mandates
@@ -630,6 +626,8 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                     " attachment loss or phantom OP-side artifacts",
                 )
 
+
+def _compare_jira_watchers(metrics: dict[str, Any], warnings: list[str]) -> None:
     # Jira source comparison: watcher count, ±5% tolerance. The spec
     # uses "should equal" rather than "must equal" for watchers
     # (locked users / disabled accounts won't migrate their watches),
@@ -654,12 +652,7 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
             author_auto = _metric_int(metrics, "wp_watcher_author_auto")
             op_watch = op_watch_total - author_auto
             jira_watch_int = int(jira_watch)
-            if jira_watch_int == 0:
-                tolerance_ok = op_watch == 0
-            else:
-                delta_pct = abs(op_watch - jira_watch_int) / jira_watch_int
-                tolerance_ok = delta_pct <= _WATCHER_TOLERANCE
-            if not tolerance_ok:
+            if _count_outside_tolerance(op_watch, jira_watch_int, _WATCHER_TOLERANCE):
                 # See ``_WATCHER_TOLERANCE`` above for why this is a
                 # warning rather than a failure: the comparison has
                 # known noise sources (permission scope on
@@ -681,6 +674,14 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                     " skip_reasons before treating as loss.",
                 )
 
+
+def _count_outside_tolerance(actual: int, expected: int, tolerance: float) -> bool:
+    if expected == 0:
+        return actual != 0
+    return abs(actual - expected) / expected > tolerance
+
+
+def _compare_jira_links(metrics: dict[str, Any], failures: list[str], warnings: list[str]) -> None:
     # Jira source comparison: relation (issue-link) count, ±5%
     # tolerance per spec. Replaces the size-gated "zero-relations
     # warning" heuristic from #176 with an exact source comparison
@@ -697,12 +698,7 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         op_rel = _metric_int(metrics, "relation_total")
         intra_unique = int(breakdown.get("intra_unique") or 0)
         cross = int(breakdown.get("cross") or 0)
-        if intra_unique == 0:
-            tolerance_ok = op_rel == 0
-        else:
-            delta_pct = abs(op_rel - intra_unique) / intra_unique
-            tolerance_ok = delta_pct <= _RELATION_TOLERANCE
-        if not tolerance_ok:
+        if _count_outside_tolerance(op_rel, intra_unique, _RELATION_TOLERANCE):
             failures.append(
                 f"Jira→OP intra-project relation count mismatch beyond ±5%:"
                 f" Jira intra={intra_unique}, OP has {op_rel}"
@@ -726,12 +722,7 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
         # ``jira_relation_count``. Same halving caveat as before.
         jira_rel_int = int(metrics["jira_relation_count"])
         op_rel = _metric_int(metrics, "relation_total")
-        if jira_rel_int == 0:
-            tolerance_ok = op_rel == 0
-        else:
-            delta_pct = abs(op_rel - jira_rel_int) / jira_rel_int
-            tolerance_ok = delta_pct <= _RELATION_TOLERANCE
-        if not tolerance_ok:
+        if _count_outside_tolerance(op_rel, jira_rel_int, _RELATION_TOLERANCE):
             failures.append(
                 f"Jira→OP relation count mismatch beyond ±5%:"
                 f" Jira reports {jira_rel_int}, OP has {op_rel}"
@@ -739,6 +730,8 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 " duplicated during migration",
             )
 
+
+def _audit_custom_field_formats(metrics: dict[str, Any], failures: list[str]) -> None:
     # WP CF format validation. The Ruby side counts populated values
     # that don't match the expected regex per CF. Missing key = legacy
     # audit run before this branch — silently skip (zero is healthy).
@@ -774,6 +767,10 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
                 f"{count} populated values of User CF '{cf_name}' do not match the expected format",
             )
 
+
+def _audit_references_and_descriptions(
+    metrics: dict[str, Any], wp_total: int, failures: list[str], warnings: list[str]
+) -> None:
     # Orphan referential integrity. Unlike the type/journal contracts
     # (where missing-key-as-zero is *also* a failure to flag a stale
     # Ruby script), a missing orphan key must stay silent — zero is the
@@ -799,6 +796,46 @@ def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
     desc_pct = (_metric_int(metrics, "wp_with_description") / wp_total) * 100
     if desc_pct < 50:
         warnings.append(f"Only {desc_pct:.0f}% of WPs have a description")
+
+
+def _classify(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Return (failures, warnings) per the migration spec."""
+    failures: list[str] = []
+    warnings: list[str] = []
+
+    # Surface the Ruby-side error first — the audit script returns
+    # ``{"error": "OP project '<key>' not found"}`` when the project
+    # identifier doesn't resolve, and downstream rules would otherwise
+    # generate misleading "no work packages" output.
+    error_msg = metrics.get("error")
+    if error_msg:
+        failures.append(f"Audit aborted: {error_msg}")
+        return failures, warnings
+
+    wp_total = _metric_int(metrics, "wp_total")
+    if wp_total == 0:
+        failures.append("No work packages found for project (migration likely never ran for it)")
+        return failures, warnings
+
+    _audit_work_package_fields(metrics, wp_total, failures, warnings)
+
+    _audit_provenance_fields(metrics, wp_total, failures, warnings)
+
+    _audit_time_entries(metrics, failures)
+
+    _audit_work_package_relations_and_journals(metrics, wp_total, failures)
+
+    _warn_on_missing_project_activity(metrics, wp_total, warnings)
+
+    _compare_jira_issues_and_attachments(metrics, wp_total, failures, warnings)
+
+    _compare_jira_watchers(metrics, warnings)
+
+    _compare_jira_links(metrics, failures, warnings)
+
+    _audit_custom_field_formats(metrics, failures)
+
+    _audit_references_and_descriptions(metrics, wp_total, failures, warnings)
 
     return failures, warnings
 
@@ -1010,6 +1047,46 @@ def _fetch_jira_attachment_count(jira_project_key: str) -> int | None:
     )
 
 
+def _jira_attribute(obj: Any, name: str) -> Any:
+    """Dual-shape access: dicts use ``.get``, SDK objects use
+    ``getattr``. Mirrors the dual-shape pattern in
+    ``relation_migration._merge_batch_issues`` so the breakdown
+    works on both live SDK responses AND any future dict-shaped
+    cache the audit might consume.
+    """
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _watch_count(issue: Any) -> int:
+    fields = _jira_attribute(issue, "fields")
+    watches = _jira_attribute(fields, "watches")
+    return int(_jira_attribute(watches, "watchCount") or 0)
+
+
+def _count_issue_relations(issue: Any, project_prefix: str, intra_pairs: set[frozenset[str]]) -> tuple[int, int]:
+    source = _jira_attribute(issue, "key")
+    fields = _jira_attribute(issue, "fields")
+    if not source or fields is None:
+        return 0, 0
+    links = _jira_attribute(fields, "issuelinks") or []
+    raw_count = cross_count = 0
+    for link in links:
+        raw_count += 1
+        target = _jira_attribute(link, "outwardIssue")
+        if target is None:
+            target = _jira_attribute(link, "inwardIssue")
+        key = _jira_attribute(target, "key")
+        if not key:
+            continue
+        if key.startswith(project_prefix):
+            intra_pairs.add(frozenset((source, key)))
+        else:
+            cross_count += 1
+    return raw_count, cross_count
+
+
 def _fetch_jira_watcher_count(jira_project_key: str) -> int | None:
     """Best-effort: sum ``watchCount`` across all issues in the project.
 
@@ -1065,27 +1142,7 @@ def _fetch_jira_watcher_count(jira_project_key: str) -> int | None:
             )
             if not page:
                 break
-            for issue in page:
-                # Same guard as ``_paginated_per_issue_field_count`` —
-                # ``issue.fields`` may be missing on partial / cached
-                # responses. Without this check, one bad issue
-                # collapses the whole audit to "source unavailable".
-                fields_obj = getattr(issue, "fields", None)
-                if fields_obj is None:
-                    continue
-                watches = getattr(fields_obj, "watches", None)
-                if watches is None:
-                    continue
-                # ``python-jira`` usually returns ``Watcher`` resource
-                # objects but some code paths (raw cache, partial
-                # responses) yield a dict. ``getattr`` on a dict
-                # returns the default and would silently zero the
-                # count — explicitly branch on shape.
-                if isinstance(watches, dict):
-                    raw_count = watches.get("watchCount", 0)
-                else:
-                    raw_count = getattr(watches, "watchCount", 0)
-                total += int(raw_count or 0)
+            total += sum(_watch_count(issue) for issue in page)
             start_at += len(page)
         else:
             sys.stderr.write(
@@ -1156,17 +1213,6 @@ def _fetch_jira_relation_breakdown(jira_project_key: str) -> dict[str, int] | No
     cross_count = 0
     raw_count = 0
 
-    def _read_attr(obj: Any, name: str) -> Any:
-        """Dual-shape access: dicts use ``.get``, SDK objects use
-        ``getattr``. Mirrors the dual-shape pattern in
-        ``relation_migration._merge_batch_issues`` so the breakdown
-        works on both live SDK responses AND any future dict-shaped
-        cache the audit might consume.
-        """
-        if isinstance(obj, dict):
-            return obj.get(name)
-        return getattr(obj, name, None)
-
     try:
         jira = JiraClient()
         underlying = jira.jira
@@ -1184,30 +1230,9 @@ def _fetch_jira_relation_breakdown(jira_project_key: str) -> dict[str, int] | No
             if not page:
                 break
             for issue in page:
-                fields_obj = _read_attr(issue, "fields")
-                if fields_obj is None:
-                    continue
-                source_key = _read_attr(issue, "key")
-                if not source_key:
-                    continue
-                links = _read_attr(fields_obj, "issuelinks") or []
-                for link in links:
-                    raw_count += 1
-                    outward = _read_attr(link, "outwardIssue")
-                    inward = _read_attr(link, "inwardIssue")
-                    target = outward if outward is not None else inward
-                    target_key = _read_attr(target, "key") if target is not None else None
-                    if not target_key:
-                        # Malformed link — neither outward nor inward
-                        # carries a key. Skip from both buckets so we
-                        # don't double-count.
-                        continue
-                    if target_key.startswith(project_prefix):
-                        # Intra-project: dedup by sorted pair so each
-                        # link contributes exactly once.
-                        intra_pairs.add(frozenset((source_key, target_key)))
-                    else:
-                        cross_count += 1
+                link_count, cross_links = _count_issue_relations(issue, project_prefix, intra_pairs)
+                raw_count += link_count
+                cross_count += cross_links
             start_at += len(page)
         else:
             sys.stderr.write(

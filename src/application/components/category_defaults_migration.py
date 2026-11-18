@@ -115,19 +115,9 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
 
             for comp in comps:
                 try:
-                    name = comp.name
-                    if not (isinstance(name, str) and name.strip()):
+                    ok = self._assign_component_lead(project_id, comp)
+                    if ok is None:
                         continue
-                    user_id = self._resolve_user_id(comp.effective_lead)
-                    if not user_id:
-                        continue
-                    # Rails script: find category by name+project, set assigned_to
-                    script = (
-                        "p = Project.find(%d); c = Category.find_by(project: p, name: '%s'); "
-                        "if c; c.assigned_to = User.find(%d); c.save!; true; else; false; end"
-                        % (project_id, escape_ruby_single_quoted(name), user_id)
-                    )
-                    ok = self.op_client.execute_query(script)
                     if ok:
                         updated += 1
                     else:
@@ -137,6 +127,21 @@ class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
                     failed += 1
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
+    def _assign_component_lead(self, project_id: int, component: JiraProjectComponent) -> bool | None:
+        """Return None for components with no usable name or assignee."""
+        name = component.name
+        if not isinstance(name, str) or not name.strip():
+            return None
+        user_id = self._resolve_user_id(component.effective_lead)
+        if not user_id:
+            return None
+        script = (
+            "p = Project.find(%d); c = Category.find_by(project: p, name: '%s'); "
+            "if c; c.assigned_to = User.find(%d); c.save!; true; else; false; end"
+            % (project_id, escape_ruby_single_quoted(name), user_id)
+        )
+        return bool(self.op_client.execute_query(script))
 
     def run(self) -> ComponentResult:
         """Run Category defaults migration."""

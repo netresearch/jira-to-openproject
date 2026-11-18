@@ -26,12 +26,13 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
         ruby_str = f.read()
 
     # Extract the array portion
-    match = re.search(r"\[\{.*\}\]", ruby_str, re.DOTALL)
-    if not match:
+    start = ruby_str.find("[{")
+    end = ruby_str.rfind("}]")
+    if start < 0 or end < start:
         print("Could not find array in input file")
         return False
 
-    ruby_array = match.group()
+    ruby_array = ruby_str[start : end + 2]
 
     # Convert Ruby syntax to JSON
 
@@ -40,10 +41,6 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
 
     # Replace nil with null
     json_str = json_str.replace("nil", "null")
-
-    # Handle special cases for possible_values arrays
-    # This specific pattern handles ["5"] format
-    json_str = re.sub(r'\["(\d+)"\]', r'["\1"]', json_str)
 
     try:
         # Parse to validate and pretty-print

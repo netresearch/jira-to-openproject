@@ -4,9 +4,43 @@
 """Offset pagination for Jira Server issue searches."""
 
 from collections.abc import Callable, Iterator
+from itertools import islice
 
 from jira import Issue
 from src.infrastructure.jira.jira_client import JiraApiError
+
+
+def _check_reported_total(kind: str, total: int | None, offset: int, context: str) -> None:
+    if total is not None and offset < total:
+        msg = f"{context}: {kind} page before the reported total of {total}"
+        raise JiraApiError(msg)
+
+
+def _check_page_keys(page: list[Issue], previous_keys: set[str], offset: int, context: str) -> set[str]:
+    if getattr(page, "startAt", offset) != offset:
+        msg = f"{context}: Jira returned a page from the wrong offset"
+        raise JiraApiError(msg)
+    keys = {issue.key for issue in page}
+    if len(keys) != len(page) or not keys.isdisjoint(previous_keys):
+        msg = f"{context}: duplicate issue keys across Jira search results"
+        raise JiraApiError(msg)
+    return keys
+
+
+def _fetch_issue_page(
+    fetch_page: Callable[[int, int], list[Issue]], offset: int, size: int, context: str
+) -> list[Issue]:
+    try:
+        return fetch_page(offset, size)
+    except Exception as exc:
+        msg = f"{context}: search failed: {exc}"
+        raise JiraApiError(msg) from exc
+
+
+def _reported_total(page: list[Issue], known_total: int | None) -> int | None:
+    # python-jira substitutes len(page) when the response omits its total.
+    total = getattr(page, "total", None)
+    return total if isinstance(total, int) and total > len(page) else known_total
 
 
 def iter_issue_pages(
@@ -22,42 +56,21 @@ def iter_issue_pages(
     while limit is None or offset < limit:
         size = page_size if limit is None else min(page_size, limit - offset)
         context = f"Jira project {project_key} at startAt={offset}"
-        try:
-            page = fetch_page(offset, size)
-        except Exception as exc:
-            msg = f"{context}: search failed: {exc}"
-            raise JiraApiError(msg) from exc
-
-        # python-jira substitutes len(page) when Jira omits total. Only a
-        # larger value distinguishes a server total from that SDK fallback.
-        total = getattr(page, "total", None)
-        if isinstance(total, int) and total > len(page):
-            known_total = total
+        page = _fetch_issue_page(fetch_page, offset, size, context)
+        known_total = _reported_total(page, known_total)
 
         if not page:
-            if known_total is not None and offset < known_total:
-                msg = f"{context}: empty page before the reported total of {known_total}"
-                raise JiraApiError(msg)
+            _check_reported_total("empty", known_total, offset, context)
             return
 
-        if getattr(page, "startAt", offset) != offset:
-            msg = f"{context}: Jira returned a page from the wrong offset"
-            raise JiraApiError(msg)
-        keys = {issue.key for issue in page}
-        if len(keys) != len(page) or not keys.isdisjoint(previous_keys):
-            msg = f"{context}: duplicate issue keys across Jira search results"
-            raise JiraApiError(msg)
-        previous_keys = keys
-
-        for issue in page:
-            yield issue
-            offset += 1
-            if limit is not None and offset >= limit:
-                return
+        previous_keys = _check_page_keys(page, previous_keys, offset, context)
+        count = len(page) if limit is None else min(len(page), limit - offset)
+        yield from islice(page, count)
+        offset += count
+        if limit is not None and offset >= limit:
+            return
         if getattr(page, "isLast", False) is True:
-            if known_total is not None and offset < known_total:
-                msg = f"{context}: final page before the reported total of {known_total}"
-                raise JiraApiError(msg)
+            _check_reported_total("final", known_total, offset, context)
             return
         if known_total is not None and offset >= known_total:
             return

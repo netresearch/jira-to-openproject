@@ -2,19 +2,18 @@
 # SPDX-License-Identifier: MIT
 
 
-class JIRA:  # minimal stub for tests
+from . import resources
+from .resources import Issue
+
+__all__ = ["JIRA", "Issue", "JIRAError", "resources"]
+
+
+class JIRA:
+    """SDK stand-in accepting constructor parameters used by offline tests."""
+
     def __init__(self, *args, **kwargs) -> None:
-        pass
-
-
-class Issue:  # minimal stub for tests
-    pass
+        """Accept the real client's constructor arguments without opening a connection."""
 
 
 class JIRAError(Exception):
-    pass
-
-
-# Provide jira.resources.Issue import path compatibility
-class resources:  # type: ignore
-    Issue = Issue
+    """Base Jira error exposed by the offline SDK stand-in."""

@@ -219,7 +219,7 @@ class TestCompanyMigrationRefactored(unittest.TestCase):
         assert "errors = []" in ruby_script
         assert "CustomField.find_by" in ruby_script
         assert "Project.new" in ruby_script
-        assert "result.to_json" in ruby_script
+        assert ruby_script.strip().endswith("result")
 
         # Should include batch file path
         assert str(self.batch_file_path) in ruby_script
@@ -267,8 +267,8 @@ class TestCompanyMigrationRefactored(unittest.TestCase):
         timeout = call_args[1].get("timeout")
         assert timeout == 30
 
-    def test_create_companies_batch_result_file_creation(self) -> None:
-        """Test that Ruby script creates result file for debugging."""
+    def test_create_companies_batch_returns_results_without_shared_debug_file(self) -> None:
+        """The file-backed query result replaces the additional public debug copy."""
         # Setup
         batch_index = 10
         expected_result = {
@@ -280,11 +280,11 @@ class TestCompanyMigrationRefactored(unittest.TestCase):
         self.mock_op_client.execute_json_query.return_value = expected_result
 
         # Execute
-        self.migration._create_companies_batch(self.batch_file_path, batch_index)
+        assert self.migration._create_companies_batch(self.batch_file_path, batch_index) == expected_result
 
-        # Verify result file creation in Ruby script
+        # The runner owns the result lifecycle.
         ruby_script = self.mock_op_client.execute_json_query.call_args[0][0]
-        assert f"File.write('/tmp/batch_result_{batch_index}.json'" in ruby_script
+        assert "File.write(" not in ruby_script
 
     def test_create_companies_batch_handles_value_error(self) -> None:
         """Test that ValueError is properly converted to MigrationError."""
@@ -328,3 +328,26 @@ class TestCompanyMigrationRefactored(unittest.TestCase):
         assert result["error_count"] == 0
         assert len(result["created"]) == 0
         assert len(result["errors"]) == 0
+
+
+def test_company_metadata_roundtrip_uses_structured_input():
+    client = MagicMock()
+    migration = CompanyMigration.__new__(CompanyMigration)
+    migration.op_client = client
+    migration.logger = MagicMock()
+    migration.company_mapping = {"7": {"openproject_id": 42}}
+    migration.tempo_companies = {"7": {"lead": {"key": "user7"}, "_raw": {"city": "Exampleville"}}}
+    client.execute_script_with_data.return_value = {
+        "status": "success",
+        "data": {"status": "success", "updated": [{"tempo_id": "7"}], "errors": []},
+    }
+    result = migration.migrate_customer_metadata()
+    assert result["updated"] == 1
+    script, companies = client.execute_script_with_data.call_args.args
+    assert companies[0]["openproject_id"] == 42
+    assert companies[0]["lead_key"] == "user7"
+    assert companies[0]["city"] == "Exampleville"
+    assert "Exampleville" not in script
+    client.execute_script_with_data.return_value = {"status": "success", "data": {}}
+    with pytest.raises(MigrationError, match="did not confirm"):
+        migration.migrate_customer_metadata()
