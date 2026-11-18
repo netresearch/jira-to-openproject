@@ -23,11 +23,18 @@ Prepare the manifest from the same frozen Jira inventory as the work packages. F
 
 A sprint on a shared board requires a matching ID and name in this project's imported issue history. Each target receives a project-local sprint. The importer currently supports closed sprints with all four timestamps and an empty goal. Other states, missing timestamps, nonempty goals, unknown scopes and conflicting assignments stop the transaction.
 
-Copy the script to the OpenProject application container. Use the container name for your target.
+From a repository checkout, copy the script to the OpenProject application container. Use the container name for your target.
 
 ```sh
 docker cp src/ruby/import_completed_sprints.rb "$OP_CONTAINER:/app/tmp/import_completed_sprints.rb"
 docker exec -i "$OP_CONTAINER" bundle exec rails runner /app/tmp/import_completed_sprints.rb < completed-sprints.json
+```
+
+With an installed Python package, locate the bundled runner in the same environment where you installed the tool. Use this path for the source argument of `docker cp`.
+
+```sh
+sprint_runner=$(python -c 'from importlib.resources import files; print(files("src").joinpath("ruby", "import_completed_sprints.rb"))')
+docker cp "$sprint_runner" "$OP_CONTAINER:/app/tmp/import_completed_sprints.rb"
 ```
 
 The result reports native sprints, linked work packages, historical memberships and changes. Run the same manifest twice and check that the second result reports zero changes. The admin-only project attribute `J2O completed sprint origins` retains the source IDs, raw timestamps, membership IDs and target sprint IDs. The transaction checks the stored snapshot and native values on replay. Existing native sprints with matching names and unknown provenance require reconciliation before the first import.

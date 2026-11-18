@@ -84,6 +84,9 @@ j2o = "src.main:main"
 j2o-history = "src.operator_history:main"
 j2o-comments = "src.comment_archive.cli:main"
 
+[tool.setuptools.package-data]
+src = ["ruby/import_completed_sprints.rb"]
+
 [tool.setuptools.packages.find]
 include = ["src*"]
 
