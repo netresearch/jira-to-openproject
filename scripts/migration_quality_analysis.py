@@ -33,6 +33,7 @@ def load_mappings() -> dict[str, Any]:
         "priority_mapping.json",
         "project_mapping.json",
         "status_mapping.json",
+        "issue_type_mapping.json",
     ]
 
     for fname in mapping_files:
@@ -44,293 +45,155 @@ def load_mappings() -> dict[str, Any]:
     return mappings
 
 
+def _sample_record(issue) -> dict:
+    fields = issue.fields
+    values = {
+        name: getattr(getattr(fields, name, None), "name", None)
+        for name in ("priority", "assignee", "reporter", "status", "issuetype")
+    }
+    values.update(
+        {name + "_id": getattr(getattr(fields, name, None), "id", None) for name in ("priority", "status", "issuetype")}
+    )
+    return {"jira_id": str(issue.id), "jira_key": issue.key, "fields": {**values, "created": fields.created}}
+
+
 def sample_jira_issues(jira_client: JiraClient, sample_size: int = 100) -> list[dict]:
-    """Sample random Jira issues from various projects."""
-    print(f"Sampling {sample_size} random Jira issues...")
+    """Build the sample from mapped Jira issues and keep the fields compared by the audit."""
+    entries = load_mappings().get("work_package_mapping", {})
+    keys = list(
+        dict.fromkeys(entry.get("jira_key") or key for key, entry in entries.items() if isinstance(entry, dict))
+    )
+    selected = random.sample(keys, min(len(keys), sample_size))
+    result = []
+    for offset in range(0, len(selected), 50):
+        batch = selected[offset : offset + 50]
+        issues = jira_client.batch_get_issues(batch)
+        missing = set(batch).difference(issues)
+        if missing:
+            msg = f"Jira did not return {len(missing)} sampled issues"
+            raise ValueError(msg)
+        result.extend(_sample_record(issues[key]) for key in batch)
+    print(f"Sampled {len(result)} mapped Jira issues")
+    return result
 
-    # Get all project keys from mapping
-    mappings = load_mappings()
-    wp_mapping = mappings.get("work_package_mapping", {})
 
-    # Get unique project keys from WP mapping
-    project_keys = set()
-    for entry in wp_mapping.values():
-        if "project_key" in entry:
-            project_keys.add(entry["project_key"])
-
-    print(f"Found {len(project_keys)} unique projects in mapping")
-
-    # Sample issues across projects
-    sampled_issues = []
-    jira_ids = list(wp_mapping.keys())
-
-    if len(jira_ids) < sample_size:
-        sample_ids = jira_ids
-    else:
-        sample_ids = random.sample(jira_ids, sample_size)
-
-    # Get full issue data from Jira
-    batch_size = 50
-    for i in range(0, len(sample_ids), batch_size):
-        batch = sample_ids[i : i + batch_size]
-        jira_keys = [wp_mapping[jid]["jira_key"] for jid in batch if jid in wp_mapping]
-
-        if jira_keys:
-            jql = f"key in ({','.join(jira_keys)})"
-            try:
-                issues = jira_client.jira.search_issues(
-                    jql,
-                    maxResults=len(jira_keys),
-                    fields="*all",
-                    expand="changelog",
-                )
-                for issue in issues:
-                    sampled_issues.append(
-                        {
-                            "jira_id": issue.id,
-                            "jira_key": issue.key,
-                            "fields": {
-                                "summary": issue.fields.summary,
-                                "priority": getattr(issue.fields.priority, "name", None)
-                                if issue.fields.priority
-                                else None,
-                                "priority_id": getattr(issue.fields.priority, "id", None)
-                                if issue.fields.priority
-                                else None,
-                                "assignee": getattr(issue.fields.assignee, "name", None)
-                                if issue.fields.assignee
-                                else None,
-                                "assignee_display": getattr(issue.fields.assignee, "displayName", None)
-                                if issue.fields.assignee
-                                else None,
-                                "reporter": getattr(issue.fields.reporter, "name", None)
-                                if issue.fields.reporter
-                                else None,
-                                "reporter_display": getattr(issue.fields.reporter, "displayName", None)
-                                if issue.fields.reporter
-                                else None,
-                                "status": getattr(issue.fields.status, "name", None) if issue.fields.status else None,
-                                "issuetype": getattr(issue.fields.issuetype, "name", None)
-                                if issue.fields.issuetype
-                                else None,
-                                "created": issue.fields.created,
-                                "updated": issue.fields.updated,
-                                "project_key": issue.fields.project.key,
-                                "description": issue.fields.description[:200] if issue.fields.description else None,
-                            },
-                        },
-                    )
-            except Exception as e:
-                print(f"  Error fetching batch: {e}")
-
-    print(f"Successfully sampled {len(sampled_issues)} issues from Jira")
-    return sampled_issues
+_TARGET_METRICS = """
+packages = WorkPackage.where(id: input_data).includes(:priority, :status, :type, :author, :assigned_to)
+rows = packages.map do |wp|
+  { id: wp.id, priority: wp.priority&.name, priority_id: wp.priority_id,
+    assignee: wp.assigned_to&.name, assignee_id: wp.assigned_to_id,
+    author: wp.author&.name, author_id: wp.author_id, status: wp.status&.name, status_id: wp.status_id,
+    type: wp.type&.name, type_id: wp.type_id, created_at: wp.created_at&.iso8601 }
+end
+puts $j2o_start_marker
+puts JSON.generate(rows)
+puts $j2o_end_marker
+"""
 
 
 def get_op_work_packages(op_client: OpenProjectClient, jira_issues: list[dict], mappings: dict) -> dict[str, dict]:
-    """Get corresponding OpenProject work packages."""
-    print("Fetching corresponding OpenProject work packages...")
-
-    wp_mapping = mappings.get("work_package_mapping", {})
-    op_work_packages = {}
-
-    # Build jira_id to op_id mapping
-    jira_id_to_op_id = {}
-    for jira_id, entry in wp_mapping.items():
-        if "openproject_id" in entry:
-            jira_id_to_op_id[jira_id] = entry["openproject_id"]
-
-    # Fetch work packages from OP
+    lookup = mappings.get("work_package_mapping", {})
+    keys_by_id = {}
     for issue in jira_issues:
-        jira_id = str(issue["jira_id"])
-        jira_key = issue["jira_key"]
+        entry = lookup.get(str(issue["jira_id"])) or lookup.get(issue["jira_key"]) or {}
+        if op_id := entry.get("openproject_id"):
+            number = int(op_id)
+            if number in keys_by_id and keys_by_id[number] != issue["jira_key"]:
+                msg = f"Multiple sampled issues map to OpenProject work package {number}"
+                raise ValueError(msg)
+            keys_by_id[number] = issue["jira_key"]
+    if not keys_by_id:
+        return {}
+    result = op_client.execute_script_with_data(_TARGET_METRICS, list(keys_by_id))
+    if result.get("status") != "success" or not isinstance(result.get("data"), list):
+        msg = "Could not retrieve the sampled OpenProject work packages"
+        raise RuntimeError(msg)
+    return {keys_by_id[row["id"]]: row for row in result["data"]}
 
-        if jira_id in jira_id_to_op_id:
-            op_id = jira_id_to_op_id[jira_id]
-            try:
-                wp = op_client.get_work_package(op_id)
-                if wp:
-                    op_work_packages[jira_key] = {
-                        "op_id": op_id,
-                        "subject": wp.get("subject"),
-                        "priority": wp.get("_links", {}).get("priority", {}).get("title"),
-                        "assignee": wp.get("_links", {}).get("assignee", {}).get("title"),
-                        "author": wp.get("_links", {}).get("author", {}).get("title"),
-                        "status": wp.get("_links", {}).get("status", {}).get("title"),
-                        "type": wp.get("_links", {}).get("type", {}).get("title"),
-                        "created_at": wp.get("createdAt"),
-                        "updated_at": wp.get("updatedAt"),
-                        "project": wp.get("_links", {}).get("project", {}).get("title"),
-                        "description": (wp.get("description", {}) or {}).get("raw", "")[:200]
-                        if wp.get("description")
-                        else None,
-                    }
-            except Exception as e:
-                print(f"  Error fetching WP {op_id} for {jira_key}: {e}")
 
-    print(f"Fetched {len(op_work_packages)} work packages from OpenProject")
-    return op_work_packages
+def _matches_field(source, actual, mapping, target_id) -> bool:
+    """Use the mapped OpenProject identity when present, otherwise compare exact names."""
+    if isinstance(mapping, dict):
+        expected_id = mapping.get("openproject_id")
+        source = mapping.get("openproject_login") or mapping.get("openproject_name") or source
+    else:
+        expected_id = mapping
+    if expected_id is not None and target_id is not None:
+        return str(expected_id) == str(target_id)
+    return str(source).casefold() == str(actual).casefold()
+
+
+def _record_comparison(stats: dict, differences: list, *, key: str, field: str, source, target, matches: bool) -> None:
+    if not source:
+        return
+    if target and matches:
+        stats["matches"] += 1
+        return
+    stats["mismatches" if target else "missing"] += 1
+    differences.append({"field": field, "jira": source, "op": target})
+    if len(stats["examples"]) < 5:
+        stats["examples"].append({"key": key, "jira": source, "op": target})
+
+
+_FIELD_PAIRS = (
+    ("priority", "priority", "priority", "priority_mapping"),
+    ("assignee", "assignee", "assignee", "user_mapping"),
+    ("reporter", "reporter", "author", "user_mapping"),
+    ("status", "status", "status", "status_mapping"),
+    ("type", "issuetype", "type", "issue_type_mapping"),
+)
+
+
+def _compare_sample(issue: dict, target: dict, mappings: dict, stats: dict) -> list:
+    fields = issue["fields"]
+    key = issue["jira_key"]
+    differences = []
+    for metric, source_field, target_field, map_name in _FIELD_PAIRS:
+        source = fields.get(source_field)
+        actual = target.get(target_field)
+        lookup = mappings.get(map_name, {})
+        mapping = lookup.get(str(fields.get(source_field + "_id"))) or lookup.get(source)
+        matches = _matches_field(source, actual, mapping, target.get(target_field + "_id"))
+        _record_comparison(
+            stats[metric], differences, key=key, field=metric, source=source, target=actual, matches=matches
+        )
+    created = fields.get("created") or ""
+    target_created = target.get("created_at") or ""
+    _record_comparison(
+        stats["timestamps"],
+        differences,
+        key=key,
+        field="created_at",
+        source=created,
+        target=target_created,
+        matches=created[:10] == target_created[:10],
+    )
+    return differences
 
 
 def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dict], mappings: dict) -> dict:
-    """Analyze differences between Jira issues and OP work packages."""
-    print("\nAnalyzing differences...")
-
-    user_mapping = mappings.get("user_mapping", {})
-
-    analysis = {
-        "total_sampled": len(jira_issues),
-        "matched_in_op": 0,
-        "missing_in_op": 0,
-        "field_analysis": {
-            "priority": {"matches": 0, "mismatches": 0, "missing": 0, "examples": []},
-            "assignee": {"matches": 0, "mismatches": 0, "missing": 0, "examples": []},
-            "reporter": {"matches": 0, "mismatches": 0, "missing": 0, "examples": []},
-            "timestamps": {"matches": 0, "mismatches": 0, "examples": []},
-            "status": {"matches": 0, "mismatches": 0, "examples": []},
-            "type": {"matches": 0, "mismatches": 0, "examples": []},
-        },
-        "detailed_issues": [],
+    """Compare mapped identities, field values and creation dates for the supplied sample."""
+    stats = {
+        name: {"matches": 0, "mismatches": 0, "missing": 0, "examples": []}
+        for name in ("priority", "assignee", "reporter", "timestamps", "status", "type")
     }
-
+    matched = 0
+    details = []
     for issue in jira_issues:
-        jira_key = issue["jira_key"]
-        jira_fields = issue["fields"]
-
-        if jira_key not in op_work_packages:
-            analysis["missing_in_op"] += 1
+        key = issue["jira_key"]
+        if key not in op_work_packages:
             continue
-
-        analysis["matched_in_op"] += 1
-        op_wp = op_work_packages[jira_key]
-
-        issue_details = {
-            "jira_key": jira_key,
-            "differences": [],
-        }
-
-        # Priority analysis
-        jira_priority = jira_fields.get("priority")
-        op_priority = op_wp.get("priority")
-        if jira_priority and op_priority:
-            if jira_priority.lower() == op_priority.lower():
-                analysis["field_analysis"]["priority"]["matches"] += 1
-            else:
-                analysis["field_analysis"]["priority"]["mismatches"] += 1
-                issue_details["differences"].append(
-                    {
-                        "field": "priority",
-                        "jira": jira_priority,
-                        "op": op_priority,
-                    },
-                )
-                if len(analysis["field_analysis"]["priority"]["examples"]) < 5:
-                    analysis["field_analysis"]["priority"]["examples"].append(
-                        {
-                            "key": jira_key,
-                            "jira": jira_priority,
-                            "op": op_priority,
-                        },
-                    )
-        elif jira_priority and not op_priority:
-            analysis["field_analysis"]["priority"]["missing"] += 1
-
-        # Assignee analysis
-        jira_assignee = jira_fields.get("assignee")
-        op_assignee = op_wp.get("assignee")
-        if jira_assignee:
-            # Look up expected OP user
-            user_entry = user_mapping.get(jira_assignee, {})
-            expected_op_login = user_entry.get("openproject_login", "")
-
-            if op_assignee:
-                if expected_op_login and expected_op_login.lower() in op_assignee.lower():
-                    analysis["field_analysis"]["assignee"]["matches"] += 1
-                else:
-                    analysis["field_analysis"]["assignee"]["mismatches"] += 1
-                    issue_details["differences"].append(
-                        {
-                            "field": "assignee",
-                            "jira": jira_assignee,
-                            "expected_op": expected_op_login,
-                            "actual_op": op_assignee,
-                        },
-                    )
-            else:
-                analysis["field_analysis"]["assignee"]["missing"] += 1
-                if len(analysis["field_analysis"]["assignee"]["examples"]) < 5:
-                    analysis["field_analysis"]["assignee"]["examples"].append(
-                        {
-                            "key": jira_key,
-                            "jira": jira_assignee,
-                            "op": "NONE",
-                        },
-                    )
-
-        # Reporter/Author analysis
-        jira_reporter = jira_fields.get("reporter")
-        op_author = op_wp.get("author")
-        if jira_reporter:
-            user_entry = user_mapping.get(jira_reporter, {})
-            expected_op_login = user_entry.get("openproject_login", "")
-
-            if op_author:
-                if expected_op_login and expected_op_login.lower() in op_author.lower():
-                    analysis["field_analysis"]["reporter"]["matches"] += 1
-                elif "system" in op_author.lower() or "admin" in op_author.lower():
-                    analysis["field_analysis"]["reporter"]["mismatches"] += 1
-                    issue_details["differences"].append(
-                        {
-                            "field": "reporter/author",
-                            "jira": jira_reporter,
-                            "expected_op": expected_op_login,
-                            "actual_op": op_author,
-                        },
-                    )
-                    if len(analysis["field_analysis"]["reporter"]["examples"]) < 5:
-                        analysis["field_analysis"]["reporter"]["examples"].append(
-                            {
-                                "key": jira_key,
-                                "jira": jira_reporter,
-                                "op": op_author,
-                            },
-                        )
-                else:
-                    analysis["field_analysis"]["reporter"]["matches"] += 1
-            else:
-                analysis["field_analysis"]["reporter"]["missing"] += 1
-
-        # Timestamps analysis
-        jira_created = jira_fields.get("created", "")
-        op_created = op_wp.get("created_at", "")
-        if jira_created and op_created:
-            # Check if same day at least
-            jira_date = jira_created[:10]
-            op_date = op_created[:10]
-            if jira_date == op_date:
-                analysis["field_analysis"]["timestamps"]["matches"] += 1
-            else:
-                analysis["field_analysis"]["timestamps"]["mismatches"] += 1
-                issue_details["differences"].append(
-                    {
-                        "field": "created_at",
-                        "jira": jira_created,
-                        "op": op_created,
-                    },
-                )
-                if len(analysis["field_analysis"]["timestamps"]["examples"]) < 5:
-                    analysis["field_analysis"]["timestamps"]["examples"].append(
-                        {
-                            "key": jira_key,
-                            "jira_created": jira_created,
-                            "op_created": op_created,
-                        },
-                    )
-
-        if issue_details["differences"]:
-            analysis["detailed_issues"].append(issue_details)
-
-    return analysis
+        matched += 1
+        differences = _compare_sample(issue, op_work_packages[key], mappings, stats)
+        if differences:
+            details.append({"jira_key": key, "differences": differences})
+    return {
+        "total_sampled": len(jira_issues),
+        "matched_in_op": matched,
+        "missing_in_op": len(jira_issues) - matched,
+        "field_analysis": stats,
+        "detailed_issues": details,
+    }
 
 
 def generate_report(analysis: dict) -> str:
@@ -362,31 +225,6 @@ def generate_report(analysis: dict) -> str:
             report.append("  Examples of issues:")
             for ex in stats["examples"][:3]:
                 report.append(f"    - {ex}")
-
-    report.extend(
-        [
-            "\n" + "-" * 80,
-            "ROOT CAUSES IDENTIFIED",
-            "-" * 80,
-        ]
-    )
-
-    report.append("""
-1. SKELETON MIGRATION USES DEFAULT VALUES
-   - work_package_skeleton_migration.py lines 391-392:
-     priority_id: self._get_default_priority_id()  # Always "Normal"
-     author_id: self._get_default_author_id()      # Always admin (ID 1)
-   - Line 216: Only fetches minimal fields, NOT priority/assignee/reporter
-
-2. CONTENT MIGRATION DOESN'T UPDATE CORE METADATA
-   - work_package_content_migration.py has ZERO references to:
-     priority, assignee, author, created_at, updated_at
-   - These fields are NEVER migrated from Jira
-
-3. MISSING PROJECTS
-   - 8 Jira projects had no OP mapping: BLUG, KRQY, LOOE, MFAG, NEXC, PLASL, PP, STB
-   - Their issues (~4323) were skipped entirely
-""")
 
     return "\n".join(report)
 
