@@ -50,7 +50,7 @@ def test_build_key_exclusion_clause_limits_payload():
     # Implementation limits to 200 keys to keep JQL URL under 8KB
     values = clause.removeprefix("key NOT IN (").removesuffix(")").split(",")
     assert len(values) == 200
-    assert all(value.startswith("KEY-") for value in values)
+    assert all(value.startswith('"KEY-') and value.endswith('"') for value in values)
 
 
 def test_parse_datetime_handles_diverse_inputs():

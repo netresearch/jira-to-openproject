@@ -192,6 +192,7 @@ def test_run_reports_unread_comments_and_individual_field_failures(tmp_path, _mo
         fields=SimpleNamespace(description=None),
         raw={"fields": {"customfield_1": 4, "customfield_2": {"value": "unknown"}}},
     )
+    mig.jira_client.jira.search_issues.return_value = [issue]
     monkeypatch.setattr(mig, "iter_project_issues", lambda project: iter([issue]))
     mig.jira_client.select_comments_for_migration.side_effect = OSError("read failed")
     mig.op_client.batch_update_work_packages.return_value = {

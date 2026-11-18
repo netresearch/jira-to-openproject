@@ -3,6 +3,7 @@
 """Regression checks for the legacy issue reader and its target defaults."""
 
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -63,7 +64,7 @@ def test_http_rate_limiting_retries_a_real_429_response(monkeypatch):
     expected = [SimpleNamespace(id="1")]
     app.jira_client.jira.search_issues.side_effect = [requests.HTTPError(response=response), expected]
     pause = Mock()
-    monkeypatch.setattr(legacy.time, "sleep", pause)
+    monkeypatch.setattr(time, "sleep", pause)
     assert (
         app._fetch_issues_with_retry(
             jql="project=TEST", start_at=0, max_results=20, fields=None, expand=None, project_key="TEST"

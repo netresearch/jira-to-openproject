@@ -143,3 +143,29 @@ def test_paginated_dict_rows_cannot_repeat_an_earlier_nonadjacent_issue():
     pages = [[{"key": "X-1"}], [{"key": "X-2"}], [{"key": "X-1"}]]
     with pytest.raises(JiraApiError, match="duplicate issue"):
         list(iter_issue_pages("X", lambda offset, size: pages[offset], 1))
+
+
+@pytest.mark.parametrize(
+    ("cls", "method"),
+    [
+        (WorkPackageMigration, "_iter_all_project_issues"),
+        (WorkPackageMigration, "iter_project_issues"),
+        (WorkPackageContentMigration, "iter_project_issues"),
+    ],
+)
+def test_normal_work_package_reads_require_an_empty_security_level(cls, method, monkeypatch):
+    monkeypatch.setenv("J2O_FAST_FORWARD", "0")
+    monkeypatch.setenv("J2O_TEST_ISSUES", "TEST-1,TEST-2")
+    monkeypatch.delenv("J2O_MAX_ISSUES", raising=False)
+    migration = object.__new__(cls)
+    migration.jira_client = Mock()
+    migration.logger = Mock()
+    migration._project_latest_issue_ts = {}
+    allowed = SimpleNamespace(key="TEST-1", raw={"fields": {}})
+    restricted = SimpleNamespace(key="TEST-2", raw={"fields": {"security": {"id": "7"}}})
+    search = migration.jira_client.jira.search_issues
+    search.return_value = Page([allowed, restricted], 0, 2)
+    search.return_value.isLast = True
+    assert list(getattr(migration, method)("TEST")) == [allowed]
+    assert 'project = "TEST" AND level IS EMPTY' in search.call_args.args[0]
+    assert search.call_args.kwargs["fields"] == "*all"

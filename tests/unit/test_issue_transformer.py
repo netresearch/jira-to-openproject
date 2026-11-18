@@ -337,7 +337,11 @@ class TestBuildKeyExclusionClause:
     def test_returns_jql_clause_for_keys(self) -> None:
         result = IssueTransformer.build_key_exclusion_clause({"ABC-1", "ABC-2"})
 
-        assert result == "key NOT IN (ABC-1,ABC-2)"
+        assert result == 'key NOT IN ("ABC-1","ABC-2")'
+
+    def test_quotes_nonstandard_cached_key_as_a_single_value(self) -> None:
+        result = IssueTransformer.build_key_exclusion_clause({'OLD"KEY-1'})
+        assert result == r'key NOT IN ("OLD\"KEY-1")'
 
     def test_returns_none_for_empty_input(self) -> None:
         assert IssueTransformer.build_key_exclusion_clause(set()) is None
@@ -355,7 +359,7 @@ class TestBuildKeyExclusionClause:
     def test_strips_whitespace_and_dedups(self) -> None:
         result = IssueTransformer.build_key_exclusion_clause({"  ABC-1 ", "ABC-1", " "})
 
-        assert result == "key NOT IN (ABC-1)"
+        assert result == 'key NOT IN ("ABC-1")'
 
 
 # ---------------------------------------------------------------------- #

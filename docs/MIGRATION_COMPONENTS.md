@@ -859,12 +859,11 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-Handles Jira security level mapping.
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets.
 
 **Features**:
-- Security level → Custom field
-- Access restriction notes
-- Visibility tracking
+- On previously mapped issues, this component records the source level name in the “Security Level” custom field.
+- OpenProject project permissions govern access to those earlier work packages. The custom field stores metadata.
 
 **Dependencies**: CustomFieldMigration
 

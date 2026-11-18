@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Exercise page retries through the Jira wrapper and recover partial provenance lookups."""
 
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
@@ -29,7 +30,7 @@ def page_reader(monkeypatch, replies):
     client.jira.search_issues = Mock(side_effect=search)
     app.jira_client = client
     sleep = Mock()
-    monkeypatch.setattr(legacy.time, "sleep", sleep)
+    monkeypatch.setattr(time, "sleep", sleep)
     return app, sleep
 
 

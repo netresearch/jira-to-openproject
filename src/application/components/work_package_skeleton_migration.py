@@ -60,6 +60,12 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.issue_security import (
+    mapped_project_issues,
+    permits_unrestricted_result,
+    unrestricted_project_jql,
+    warn_if_restricted_mappings,
+)
 from src.domain import provenance_fields
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
@@ -362,17 +368,19 @@ class WorkPackageSkeletonMigration(BaseMigration):
             limit = int(os.environ["J2O_MAX_ISSUES"])
         except KeyError, ValueError:
             limit = None
-        jql = f'project = "{project_key}" ORDER BY created ASC, key ASC'
+        jql = f"{unrestricted_project_jql(project_key)} ORDER BY created ASC, key ASC"
 
         def fetch_page(offset: int, size: int) -> list[Issue]:
             return self.jira_client.jira.search_issues(
                 jql,
                 startAt=offset,
                 maxResults=size,
-                fields="summary,issuetype,status,project,priority,assignee,reporter,created,updated",
+                fields="summary,issuetype,status,project,priority,assignee,reporter,created,updated,security",
             )
 
-        yield from iter_issue_pages(project_key, fetch_page, batch_size, limit)
+        for issue in iter_issue_pages(project_key, fetch_page, batch_size, limit):
+            if permits_unrestricted_result(issue):
+                yield issue
 
     def _get_openproject_type_id(self, jira_issue: Issue) -> int | None:
         """Get OpenProject type ID for a Jira issue type.
@@ -1096,6 +1104,8 @@ class WorkPackageSkeletonMigration(BaseMigration):
         }
 
         self.logger.info("Processing project %s", project_key)
+        known = mapped_project_issues(project_key, self.work_package_mapping)
+        warn_if_restricted_mappings(self.jira_client, project_key, known, self.logger)
 
         # Collect issues into batches
         batch_payloads: list[dict[str, Any]] = []
