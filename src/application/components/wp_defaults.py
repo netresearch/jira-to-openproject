@@ -1,7 +1,10 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
+import logging
 from typing import Any
+
+logger = logging.getLogger("migration.wp_defaults")
 
 # Timeout in seconds for Rails console queries fetching default IDs
 _DEFAULT_TIMEOUT = 180
@@ -10,9 +13,15 @@ _DEFAULT_TIMEOUT = 180
 def _query_ids(op_client: Any, query: str) -> list[Any]:
     try:
         result = op_client.execute_large_query_to_json_file(query, timeout=_DEFAULT_TIMEOUT)
-        return result if isinstance(result, list) else []
-    except Exception:
+    except Exception as exc:
+        logger.warning("OpenProject default lookup %s failed (%s); using fallback", query, type(exc).__name__)
         return []
+    if isinstance(result, list):
+        return result
+    logger.warning(
+        "OpenProject default lookup %s returned %s instead of a list; using fallback", query, type(result).__name__
+    )
+    return []
 
 
 def _first_id(ids: list[Any], fallback: int | None = None) -> int | None:

@@ -3,6 +3,9 @@
 
 """OpenProject custom field names used by migration and audit tools."""
 
+JIRA_SERVER_SOURCE_LABEL = "Jira Server on-prem 9.11"
+JIRA_SOURCE_LABELS = ("jira", JIRA_SERVER_SOURCE_LABEL.lower())
+
 AFFECTS_VERSION = "J2O Affects Version"
 ENTITY_TYPE = "J2O Entity Type"
 EXTERNAL_ID = "J2O External ID"

@@ -86,8 +86,37 @@ def test_partial_batch_records_confirmed_ids_and_stops_rerun(migration):
     assert "reconcile" in retry.error
     bulk.assert_called_once()
 
+    # The operator reconciles the confirmed row and releases the interrupted batch.
+    (migration.data_dir / "legacy-work-package-create.pending.json").unlink()
+    migration.op_client.get_project_wp_cf_snapshot.return_value = [
+        {"id": 12, "jira_source_id": "2", "jira_issue_key": None}
+    ]
+    original = migration._iter_all_project_issues.return_value
+    original[1].changelog = {"total": 0, "histories": []}
+    original[1].fields = SimpleNamespace(comment={"total": 0, "comments": []})
+    bulk.return_value = {"status": "success", "created": [{"index": 0, "id": 11}, {"index": 1, "id": 13}]}
+    result = migration.run()
+    assert result.success, result.error
+    assert result.success_count == 2
+    assert [row["subject"] for row in bulk.call_args.args[1]] == ["ORIGIN-1", "ORIGIN-3"]
+
 
 def test_unreadable_target_inventory_stops_before_writing(migration):
     migration.op_client.get_project_wp_cf_snapshot.side_effect = ConnectionError
+    assert not migration.run().success
+    migration.op_client.bulk_create_records.assert_not_called()
+
+
+def test_directory_sync_failure_prevents_target_submission(migration, monkeypatch):
+    monkeypatch.setattr(legacy, "sync_directory", Mock(side_effect=OSError("cannot sync directory")))
+    assert not migration.run().success
+    migration.op_client.bulk_create_records.assert_not_called()
+
+
+@pytest.mark.parametrize("target", [{"id": 91, "jira_source_id": "2"}, {"id": 12, "jira_source_id": "91"}])
+def test_local_mapping_cannot_exclude_an_unverified_target(migration, target):
+    mapping = {"2": {"openproject_id": 12, "openproject_project_id": 7, "jira_key": "ORIGIN-2"}}
+    (migration.data_dir / "work_package_mapping.json").write_text(json.dumps(mapping))
+    migration.op_client.get_project_wp_cf_snapshot.return_value = [target]
     assert not migration.run().success
     migration.op_client.bulk_create_records.assert_not_called()

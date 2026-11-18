@@ -11,7 +11,7 @@ import requests
 from src.application.components import work_package_migration as legacy
 
 
-def test_cache_and_change_detection_omit_private_text(tmp_path):
+def test_cache_and_change_detection_omit_private_text(tmp_path, monkeypatch):
     marker = "private-history-source-marker"
     private_item = {"field": "description", "toString": marker}
     public_item = {"field": "status", "from": "1", "to": "2", "toString": "Open"}
@@ -36,11 +36,17 @@ def test_cache_and_change_detection_omit_private_text(tmp_path):
     app.iter_project_issues = Mock(return_value=[source])
     app._change_detection_projects = Mock(return_value=["TEST"])
     primary = tmp_path / "jira_issues_TEST.json"
-    app._save_to_json = Mock(side_effect=lambda rows, _filename: primary.write_text(json.dumps(rows)))
     rows = app._extract_jira_issues("TEST")
     assert marker not in primary.read_text()
     assert public_item in rows[0]["changelog"]["histories"][0]["items"]
-    app._save_to_json = Mock(side_effect=OSError("unable to write primary"))
+    original_write = legacy.write_issue_snapshot
+
+    def fail_primary(rows, destination):
+        if destination == primary:
+            raise OSError("unable to write primary")
+        original_write(rows, destination)
+
+    monkeypatch.setattr(legacy, "write_issue_snapshot", fail_primary)
     app._extract_jira_issues("TEST")
     [backup] = tmp_path.glob("jira_issues_TEST_backup_*.json")
     assert json.loads(backup.read_text()) == rows
@@ -84,3 +90,19 @@ def test_target_defaults_preserve_existing_values_and_normalize_invalid_dates():
         "due_date": None,
     }
     assert present == {"project_id": 22, "type_id": 4, "status_id": "6", "priority_id": 11, "author_id": 12}
+
+
+def test_incomplete_snapshots_never_replace_a_complete_file(tmp_path):
+    import pytest
+
+    from src.application.components.work_package_files import write_issue_snapshot
+
+    target = tmp_path / "jira_issues_TEST.json"
+    write_issue_snapshot([{"id": "old"}], target)
+    with pytest.raises(TypeError):
+        write_issue_snapshot([{"id": "new"}, {"unserializable": object()}], target)
+    assert json.loads(target.read_text()) == [{"id": "old"}]
+    backup = tmp_path / "jira_issues_TEST_backup_20261118.json"
+    with pytest.raises(TypeError):
+        write_issue_snapshot([{"id": "new"}, {"unserializable": object()}], backup)
+    assert list(tmp_path.iterdir()) == [target]

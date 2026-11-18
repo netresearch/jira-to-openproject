@@ -443,7 +443,7 @@ class IssueTransformer:
         if field == "issuetype":
             return owner.issue_type_id_mapping.get(str(raw)) if raw and owner.issue_type_id_mapping else None
         if field == "status":
-            return self._journal_status_id(raw)
+            return self.mapped_status_id(raw)
         if field == self._FIX_VERSION_FIELD:
             if display and owner._current_project_id:
                 return owner._get_or_create_version(display, owner._current_project_id)
@@ -451,10 +451,6 @@ class IssueTransformer:
         if field in ("timeestimate", "timeoriginalestimate"):
             return self._hours_from_seconds(raw)
         return display or raw
-
-    def _journal_status_id(self, raw: Any) -> Any:
-        mapping = self._owner.status_mapping.get(str(raw)) if raw and self._owner.status_mapping else None
-        return (mapping or {}).get("openproject_id")
 
     def _journal_user_id(self, username: Any) -> Any:
         mapping = self._owner.user_mapping
@@ -483,14 +479,9 @@ class IssueTransformer:
             if histories:
                 return list(histories)
 
-        raw = getattr(issue, "raw", None)
-        if isinstance(raw, dict):
-            histories = raw.get("changelog", {}).get("histories")
-            if isinstance(histories, list):
-                return histories
-
-        if isinstance(issue, dict):
-            histories = issue.get("changelog", {}).get("histories")
+        for source in (getattr(issue, "raw", None), issue):
+            page = _dict_fields(source).get("changelog")
+            histories = _dict_fields(page).get("histories")
             if isinstance(histories, list):
                 return histories
 
@@ -647,6 +638,17 @@ class IssueTransformer:
         )
         return 1
 
+    def mapped_status_id(self, source_id: Any) -> int | None:
+        """Look up a target ID in scalar and record-shaped Jira status mappings."""
+        if not source_id:
+            return None
+        entry = (self._owner.status_mapping or {}).get(str(source_id))
+        if isinstance(entry, dict):
+            entry = entry.get("openproject_id") or entry.get("id")
+        if isinstance(entry, str) and entry.isdecimal():
+            entry = int(entry)
+        return entry if type(entry) is int and entry > 0 else None
+
     def map_status(
         self,
         status_id: str | None = None,
@@ -659,13 +661,9 @@ class IssueTransformer:
                 msg,
             )
 
-        owner = self._owner
-
-        # Try to find in mapping by ID
-        if status_id and owner.status_mapping and str(status_id) in owner.status_mapping:
-            mapped_id = owner.status_mapping[str(status_id)].get("openproject_id")
-            if mapped_id:
-                return mapped_id
+        mapped = self.mapped_status_id(status_id)
+        if mapped is not None:
+            return mapped
 
         # Default to "New" status (typically ID 1 in OpenProject)
         status_display = status_name or "Unknown"

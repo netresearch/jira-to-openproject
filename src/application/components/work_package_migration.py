@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from jira import Issue
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.work_package_files import sync_directory, write_issue_snapshot
 from src.application.components.work_package_history import has_no_source_journals
 from src.application.components.wp_defaults import fill_missing_fields, work_package_defaults
 from src.application.transformers.issue_transformer import IssueTransformer
@@ -32,7 +33,8 @@ from src.domain import provenance_fields
 from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.comment_audience import issue_without_comments
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
-from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.jira.jira_client import JiraApiError, JiraClient
+from src.infrastructure.jira.jira_issue_service import JiraIssueService
 from src.infrastructure.openproject.openproject_bulk_create_service import (
     LegacyJournalReplayError,
     reject_legacy_journal_operations,
@@ -739,16 +741,31 @@ class WorkPackageMigration(BaseMigration):
         Returns a dict mapping Jira keys to OpenProject work package info.
         """
         snapshot = self.op_client.get_project_wp_cf_snapshot(op_project_id)
+        self._load_confirmed_work_packages()
         existing = {}
         for row in snapshot:
-            key = str(row.get("jira_issue_key") or "").strip()
+            key = str(row.get("jira_issue_key") or self._verified_mapping_key(row, op_project_id) or "").strip()
             if not key:
                 continue
             if key in existing:
                 msg = f"More than one target work package has origin key {key} in project {op_project_id}"
                 raise ValueError(msg)
-            existing[key] = {"id": row.get("id"), "jira_key": key}
+            existing[key] = {"id": row.get("id"), "jira_key": key, "jira_source_id": row.get("jira_source_id")}
         return existing
+
+    def _verified_mapping_key(self, target: dict[str, Any], project_id: int) -> str | None:
+        """Recover a missing key only when the stored target carries this Jira source ID in this project."""
+        source_id = target.get("jira_source_id")
+        if not source_id:
+            return None
+        mapping = self.work_package_mapping.get(str(source_id))
+        if (
+            isinstance(mapping, dict)
+            and mapping.get("openproject_id") == target.get("id")
+            and mapping.get("openproject_project_id") == project_id
+        ):
+            return mapping.get("jira_key")
+        return None
 
     @staticmethod
     def _reject_source_history(issue: Any) -> None:
@@ -763,6 +780,10 @@ class WorkPackageMigration(BaseMigration):
         op_project_id: int,
     ) -> None:
         """The legacy updater cannot distinguish imported journals from native history."""
+        stored_id = existing_wp.get("jira_source_id")
+        if stored_id and str(stored_id) != str(jira_issue.id):
+            msg = f"Target origin ID for {jira_issue.key} disagrees with Jira; reconcile before retrying"
+            raise RuntimeError(msg)
         if has_no_source_journals(jira_issue, require_complete=True):
             return
         self.logger.error(
@@ -940,6 +961,20 @@ class WorkPackageMigration(BaseMigration):
             self.logger.debug("Failed to inspect existing work packages for %s: %s", project_key, exc)
         return timestamp, existing
 
+    @staticmethod
+    def _page_retry_reason(exc: Exception) -> str | None:
+        """Classify the original Jira SDK or requests failure preserved by the client."""
+        cause = (exc.__cause__ or exc) if isinstance(exc, JiraApiError) else exc
+        if isinstance(cause, (requests.RequestException, JiraApiError)) or isinstance(
+            getattr(cause, "status_code", None), int
+        ):
+            status = JiraIssueService._extract_http_status(cause)
+            if status is not None:
+                return "HTTP 429" if status == 429 else None
+            if isinstance(cause, (requests.Timeout, requests.ConnectionError)):
+                return "transport failure"
+        return None
+
     def _fetch_issues_with_retry(
         self,
         *,
@@ -968,64 +1003,44 @@ class WorkPackageMigration(BaseMigration):
 
         """
         max_retries = 5
-        base_delay = 1.0
-
-        attempt = -1
+        attempt = 0
         while True:
-            attempt += 1
+            logger.debug(
+                "Fetching issues for %s: startAt=%s, maxResults=%s (attempt %s)",
+                project_key,
+                start_at,
+                max_results,
+                attempt + 1,
+            )
             try:
-                logger.debug(
-                    "Fetching issues for %s: startAt=%s, maxResults=%s (attempt %s)",
-                    project_key,
-                    start_at,
-                    max_results,
-                    attempt + 1,
-                )
-
                 return self.jira_client.jira.search_issues(
                     jql,
                     startAt=start_at,
                     maxResults=max_results,
                     fields=fields,
                     expand=expand,
-                    json_result=False,  # Get jira.Issue objects
+                    json_result=False,
                 )
-
-            except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code == 429 and attempt < max_retries:
-                    delay = base_delay * (2**attempt)
-                    logger.warning(
-                        "Rate limited for %s. Retrying in %ss (attempt %s/%s)",
-                        project_key,
-                        delay,
-                        attempt + 1,
-                        max_retries + 1,
-                    )
-                    time.sleep(delay)
-                    continue
-                raise
-
-            except requests.exceptions.RequestException as e:
-                if attempt < max_retries:
-                    delay = base_delay * (2**attempt)
-                    logger.warning(
-                        "Request failed for %s. Retrying in %ss (attempt %s/%s): %s",
-                        project_key,
-                        delay,
-                        attempt + 1,
-                        max_retries + 1,
-                        e,
-                    )
-                    time.sleep(delay)
-                    continue
-                raise
-
-            except Exception as e:
-                error_msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {e!s}"
-                logger.exception(error_msg)
-                from src.infrastructure.jira.jira_client import JiraApiError
-
-                raise JiraApiError(error_msg) from e
+            except Exception as exc:
+                reason = self._page_retry_reason(exc)
+                if reason is None or attempt >= max_retries:
+                    if isinstance(exc, (requests.RequestException, JiraApiError)):
+                        raise
+                    msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {exc!s}"
+                    logger.exception(msg)
+                    raise JiraApiError(msg) from exc
+                delay = 2**attempt
+                attempt += 1
+                logger.warning(
+                    "Retrying Jira page for %s at startAt=%s after %ss (retry %s/%s, %s)",
+                    project_key,
+                    start_at,
+                    delay,
+                    attempt,
+                    max_retries,
+                    reason,
+                )
+                time.sleep(delay)
 
     def _get_project_total_issues(self, project_key: str) -> int | None:
         """Return total number of issues in a Jira project using search metadata.
@@ -1074,23 +1089,26 @@ class WorkPackageMigration(BaseMigration):
             current = self._project_latest_issue_ts.get(project_key)
             if updated and (current is None or updated > current):
                 self._project_latest_issue_ts[project_key] = updated
-        return {
+        snapshot = {
             "key": getattr(issue, "key", raw.get("key")),
             "id": getattr(issue, "id", raw.get("id")),
             "self": getattr(issue, "self", raw.get("self")),
             "fields": fields,
-            "changelog": raw.get("changelog"),
         }
+        if "changelog" in raw:
+            snapshot["changelog"] = raw["changelog"]
+        return snapshot
 
     def _save_project_issues(self, rows: list[dict[str, Any]], project_key: str) -> None:
         try:
-            self._save_to_json(rows, f"jira_issues_{project_key}.json")
+            write_issue_snapshot(rows, self.data_dir / f"jira_issues_{project_key}.json")
         except Exception as exc:
             self.logger.exception("Failed to write the issue snapshot for %s", project_key)
-            backup_path = self.data_dir / f"jira_issues_{project_key}_backup_{datetime.now(tz=UTC):%Y%m%d_%H%M%S}.json"
+            backup_path = (
+                self.data_dir / f"jira_issues_{project_key}_backup_{datetime.now(tz=UTC):%Y%m%d_%H%M%S_%f}.json"
+            )
             try:
-                with backup_path.open("w", encoding="utf-8") as backup:
-                    json.dump(rows, backup, indent=2)
+                write_issue_snapshot(rows, backup_path)
             except (OSError, ValueError, TypeError) as backup_error:
                 self.logger.warning("Failed to create backup of state file: %s", backup_error)
             if config.migration_config.get("stop_on_error", False):
@@ -1150,17 +1168,6 @@ class WorkPackageMigration(BaseMigration):
             self.logger.warning("No mapping for Jira issue type %s (%s); using Task", source.name, key)
         return target or 1
 
-    def _source_status_id(self, source: Any) -> int | None:
-        source_id = getattr(source, "id", None)
-        if not source_id:
-            return None
-        entry = self.status_mapping.get(str(source_id))
-        if isinstance(entry, dict):
-            entry = entry.get("openproject_id") or entry.get("id")
-        if isinstance(entry, int):
-            return entry
-        return int(entry) if isinstance(entry, str) and entry.isdigit() else None
-
     def _apply_source_users(self, jira_issue: Any, work_package: dict[str, Any]) -> None:
         association_result = self.enhanced_user_migrator.migrate_user_associations(
             jira_issue=jira_issue,
@@ -1219,7 +1226,7 @@ class WorkPackageMigration(BaseMigration):
         jira_config = config.jira_config or {}
         base_url = jira_config.get("J2O_JIRA_URL") or jira_config.get("url")
         values = {
-            provenance_fields.ORIGIN_SYSTEM: "Jira Server on-prem 9.11",
+            provenance_fields.ORIGIN_SYSTEM: provenance_fields.JIRA_SERVER_SOURCE_LABEL,
             provenance_fields.ORIGIN_ID: str(issue.id) if issue.id else None,
             provenance_fields.ORIGIN_KEY: issue.key,
             provenance_fields.ORIGIN_URL: f"{str(base_url).rstrip('/')}/browse/{issue.key}"
@@ -1261,7 +1268,7 @@ class WorkPackageMigration(BaseMigration):
         start_date = self._resolve_start_date(jira_issue)
         if start_date:
             work_package["start_date"] = start_date
-        status = self._source_status_id(getattr(fields, "status", None))
+        status = self._transformer.mapped_status_id(self._get_attr(getattr(fields, "status", None), "id"))
         if status:
             work_package["status_id"] = status
         custom_fields = self._source_custom_values(jira_issue.raw.get("fields", {}))
@@ -1306,16 +1313,35 @@ class WorkPackageMigration(BaseMigration):
             provenance_fields.EXTERNAL_ID: str(issue["id"]) if issue.get("id") else None,
             provenance_fields.EXTERNAL_KEY: issue.get("key"),
         }
-        if not isinstance(getattr(self, "_j2o_wp_cf_ids", None), dict):
-            self._j2o_wp_cf_ids = {}
-            for name in values:
-                with contextlib.suppress(Exception):
-                    field = self.op_client.ensure_custom_field(
-                        name, field_format="string", cf_type="WorkPackageCustomField"
-                    )
-                    if isinstance(field, dict) and field.get("id"):
-                        self._j2o_wp_cf_ids[name] = int(field["id"])
+        self._j2o_wp_cf_ids = self._custom_field_ids(
+            getattr(self, "_j2o_wp_cf_ids", None),
+            ((name, "string", False) for name in values),
+        )
         return self._provenance_values(self._j2o_wp_cf_ids, values)
+
+    def _custom_field_ids(
+        self,
+        cached: dict[str, int] | None,
+        specs: Iterable[tuple[str, str, bool]],
+    ) -> dict[str, int]:
+        """Reuse confirmed IDs and retry unresolved OpenProject fields on the next row."""
+        field_ids = cached if isinstance(cached, dict) else {}
+        for name, field_format, searchable in specs:
+            if name in field_ids:
+                continue
+            try:
+                field = self.op_client.ensure_custom_field(
+                    name, field_format=field_format, cf_type="WorkPackageCustomField", searchable=searchable
+                )
+                field_id = int(str(field["id"]))
+                if field_id <= 0:
+                    msg = "expected a positive custom field ID"
+                    raise ValueError(msg)
+            except Exception as exc:
+                self.logger.warning("Could not resolve work package provenance field %s: %s", name, exc)
+            else:
+                field_ids[name] = field_id
+        return field_ids
 
     def prepare_work_package(self, jira_issue: dict[str, Any] | Issue, project_id: int) -> dict[str, Any]:
         """Prepare either a cached issue mapping or a live Jira issue."""
@@ -1324,10 +1350,12 @@ class WorkPackageMigration(BaseMigration):
         self._reject_source_history(jira_issue)
         reject_legacy_journal_operations([jira_issue])
         key = jira_issue.get("key", "")
-        description = jira_issue.get("description", "")
+        fields = jira_issue.get("fields")
+        description = jira_issue.get("description", self._get_attr(fields, "description")) or ""
         if description:
             description = self.markdown_converter.convert(description)
-        subject = (jira_issue.get("summary") or "").strip() or key or f"Untitled-{jira_issue.get('id', '')}"
+        summary = jira_issue.get("summary", self._get_attr(fields, "summary"))
+        subject = (summary or "").strip() or key or f"Untitled-{jira_issue.get('id', '')}"
         result: dict[str, Any] = {
             "project_id": project_id,
             "subject": subject,
@@ -1342,11 +1370,11 @@ class WorkPackageMigration(BaseMigration):
         custom_fields = self._dict_provenance(jira_issue)
         if custom_fields:
             result["custom_fields"] = custom_fields
-        type_info = jira_issue.get("issue_type") or {}
+        type_info = jira_issue.get("issue_type") or self._get_attr(fields, "issuetype") or {}
         if type_info.get("id") or type_info.get("name"):
             result["type_id"] = self._map_issue_type(type_info.get("id"), type_info.get("name"))
             result["_links"]["type"] = {"href": f"/api/v3/types/{result['type_id']}"}
-        status = jira_issue.get("status") or {}
+        status = jira_issue.get("status") or self._get_attr(fields, "status") or {}
         if status.get("id") or status.get("name"):
             result["status_id"] = self._map_status(status.get("id"), status.get("name"))
             result["_links"]["status"] = {"href": f"/api/v3/statuses/{result['status_id']}"}
@@ -1407,20 +1435,10 @@ class WorkPackageMigration(BaseMigration):
 
     def _ensure_provenance_field_ids(self) -> None:
         """Cache the field IDs used when mapping work packages and their change history."""
-        if isinstance(getattr(self, "_j2o_wp_cf_ids_full", None), dict):
-            return
-        field_ids: dict[str, int] = {}
-        for name, field_format, searchable in provenance_fields.WORK_PACKAGE_FIELD_SPECS:
-            try:
-                field = self.op_client.ensure_custom_field(
-                    name, field_format=field_format, cf_type="WorkPackageCustomField", searchable=searchable
-                )
-                if isinstance(field, dict) and field.get("id"):
-                    field_ids[name] = int(field["id"])
-            except Exception:
-                continue
-        self._j2o_wp_cf_ids_full = field_ids
-        self.logger.debug("Loaded work package provenance fields: %s", field_ids)
+        self._j2o_wp_cf_ids_full = self._custom_field_ids(
+            getattr(self, "_j2o_wp_cf_ids_full", None),
+            provenance_fields.WORK_PACKAGE_FIELD_SPECS,
+        )
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
         """Load or rebuild custom field mapping from cache or OpenProject metadata.
@@ -1655,7 +1673,9 @@ class WorkPackageMigration(BaseMigration):
             msg = f"Unconfirmed bulk write in {project_key}; reconcile the target by Jira origin ID before retrying"
             raise RuntimeError(msg) from exc
         created = self._confirm_created_work_packages(result, metadata, project_id, project_key)
+        sync_directory(intent.parent)
         intent.unlink()
+        sync_directory(intent.parent)
         return created
 
     def _claim_new_work_packages(self, metadata: list[dict[str, Any]], project_key: str, project_id: int) -> Path:
@@ -1681,6 +1701,7 @@ class WorkPackageMigration(BaseMigration):
                 )
                 intent.flush()
                 os.fsync(intent.fileno())
+            sync_directory(directory)
         except Exception:
             pending.unlink()
             raise
