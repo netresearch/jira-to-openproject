@@ -312,10 +312,10 @@ async def collect_system_metrics() -> None:
                     "cpu_usage_percent": cpu_percent,
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
-                await redis_client.setex(
+                await redis_client.set(
                     "system_metrics",
-                    60,
-                    json.dumps(metrics_data),  # 1 minute TTL
+                    json.dumps(metrics_data),
+                    ex=60,
                 )
 
             await asyncio.sleep(5)  # Update every 5 seconds
