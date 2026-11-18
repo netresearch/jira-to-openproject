@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from itertools import batched
@@ -15,6 +16,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.models import ComponentResult, WorkPackageMappingEntry
 
 SPRINT_CF_NAME = "Sprint"
+SPRINT_HISTORY_CF_NAME = "Jira sprint membership history"
 _BATCH_SIZE = 100
 _GREENHOPPER = "com.pyxis.greenhopper.jira:"
 _LEGACY_SPRINT = re.compile(r"\.Sprint@[^[]+\[id=(\d+),.*?\bname=(.*?),(?:startDate|endDate|completeDate)=")
@@ -85,7 +87,7 @@ class SprintEpicMigration(BaseMigration):
 
         versions = self.mappings.get_mapping("sprint") or {}
         projects = self.mappings.get_mapping("project") or {}
-        parents, assignments, values = [], [], []
+        parents, assignments, values, history = [], [], [], []
         unresolved_epics: dict[str, str] = {}
         unresolved_parents: dict[str, str] = {}
         unresolved_sprints = []
@@ -106,6 +108,14 @@ class SprintEpicMigration(BaseMigration):
                 continue
             names = sorted({name for _, name in sprints})
             values.append({"work_package_id": wp_id, "value": ", ".join(names)})
+            history.append(
+                {
+                    "work_package_id": wp_id,
+                    "value": json.dumps(
+                        [{"id": sid or None, "name": name} for sid, name in sprints], ensure_ascii=False
+                    ),
+                }
+            )
             if has_fix_version:
                 continue  # Jira releases own version_id even on metadata-only reruns.
             version_id = self._sprint_version_id(key, entry, sprints, projects, versions)
@@ -115,7 +125,7 @@ class SprintEpicMigration(BaseMigration):
             assignments.append({"id": wp_id, "version_id": version_id})
         return ComponentResult(
             success=True,
-            data={"parents": parents, "assignments": assignments, "values": values},
+            data={"parents": parents, "assignments": assignments, "values": values, "history": history},
             details={
                 **extracted.details,
                 "invalid_mappings": invalid,
@@ -153,28 +163,37 @@ class SprintEpicMigration(BaseMigration):
             updated += count
             failed += errors
 
-        values = data["values"]
-        cf_id = 0
-        if values:
-            try:
-                cf_id = self._ensure_wp_custom_field(SPRINT_CF_NAME, "text")
-            except Exception:
-                self.logger.exception("Unable to prepare the Sprint field for %d work packages", len(values))
-        details["cf_available"] = bool(cf_id)
-        count = 0
-        if cf_id:
-            for row in values:
-                row["custom_field_id"] = cf_id
-            count, _ = self._apply_batches(values, self.op_client.bulk_set_wp_custom_field_values, "sprint fields")
-        details["sprint_cf_updates"] = count
-        failed += len(values) - count
+        for field_name, rows, count_key in (
+            (SPRINT_CF_NAME, data["values"], "sprint_cf_updates"),
+            (SPRINT_HISTORY_CF_NAME, data["history"], "sprint_history_updates"),
+        ):
+            count, field_id = self._write_sprint_field(field_name, rows)
+            details[count_key] = count
+            if field_name == SPRINT_CF_NAME:
+                details["cf_available"] = bool(field_id)
+            updated += count
+            failed += len(rows) - count
         return ComponentResult(
             success=failed == 0,
-            message=f"Sprint and epic metadata: {updated + count} confirmed, {failed} unresolved or failed",
-            updated=updated + count,
+            message=f"Sprint and epic metadata: {updated} confirmed, {failed} unresolved or failed",
+            updated=updated,
             failed=failed,
             details=details,
         )
+
+    def _write_sprint_field(self, name: str, rows: list[dict]) -> tuple[int, int]:
+        if not rows:
+            return 0, 0
+        try:
+            field_id = self._ensure_wp_custom_field(name, "text")
+        except Exception:
+            self.logger.exception("Unable to prepare the %s field for %d work packages", name, len(rows))
+            return 0, 0
+        if not field_id:
+            return 0, 0
+        values = [dict(row, custom_field_id=field_id) for row in rows]
+        count, _ = self._apply_batches(values, self.op_client.bulk_set_wp_custom_field_values, name)
+        return count, field_id
 
     def run(self) -> ComponentResult:
         """Run on each pass: memberships also depend on mappings from earlier components."""
