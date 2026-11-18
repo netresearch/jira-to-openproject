@@ -533,6 +533,51 @@ class TestEnhancedAuditTrailMigrator:
         assert "hidden edit" not in repr(operations)
         assert migrator.migration_results["comments_processed"] == 0
 
+    def test_hidden_history_never_reaches_audit_activity_or_logs(self, migrator_with_mocks, caplog):
+        migrator = migrator_with_mocks
+        sentinel = "restricted-history-fixture"
+        mixed = [
+            {"field": "Kommentar", "fieldId": "comment", "toString": sentinel},
+            {"field": "summary", "toString": sentinel, "visibility": {"type": "role"}},
+            {
+                "field": "summary",
+                "toString": sentinel,
+                "properties": [{"key": "sd.public.comment", "value": {"internal": True}}],
+            },
+            {"field": "summary", "toString": "Allowed summary"},
+        ]
+
+        def history(items, **extra):
+            return {"id": "4711", "created": "2020-01-01T00:00:00Z", "author": None, "items": items, **extra}
+
+        cached = [history(mixed), history([{"field": "summary", "toString": sentinel}], jsdPublic=False)]
+        issue = SimpleNamespace(
+            key="TEST-1",
+            changelog=SimpleNamespace(
+                histories=[
+                    SimpleNamespace(**{**row, "items": [SimpleNamespace(**item) for item in row["items"]]})
+                    for row in cached
+                ]
+            ),
+        )
+        extracted = migrator.extract_changelog_from_issue(issue)
+        assert sentinel not in json.dumps(extracted)
+        for entries in (extracted, cached):
+            migrator.changelog_data = {"TEST-1": entries}
+            migrator.op_client.bulk_create_work_package_activities.return_value = {"success": True, "created": 1}
+            assert migrator.execute_rails_audit_operations({"TEST-1": 1})["status"] == "success"
+            written = json.dumps(migrator.op_client.bulk_create_work_package_activities.call_args.args[0])
+            assert "Allowed summary" in written
+            assert sentinel not in written
+
+        migrator.rails_operations = [{"work_package_id": 1, "notes": sentinel, "internal": True}]
+        migrator.op_client.bulk_create_work_package_activities.reset_mock()
+        report = migrator.execute_rails_audit_operations()
+        assert report["status"] == "error"
+        migrator.op_client.bulk_create_work_package_activities.assert_not_called()
+        assert sentinel not in json.dumps(report)
+        assert sentinel not in caplog.text
+
     def test_execute_rails_audit_operations_success(self, migrator_with_mocks) -> None:
         migrator = migrator_with_mocks
         writer = migrator.op_client.bulk_create_work_package_activities

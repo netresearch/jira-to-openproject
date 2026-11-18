@@ -147,10 +147,25 @@ class EnhancedAuditTrailMigrator:
             self.logger.warning(f"Failed to load project mapping: {e}")
 
     @staticmethod
-    def _history_entry(history: Any) -> dict[str, Any]:
+    def _has_comment_audience(record: Any) -> bool:
+        """A comment audience marker makes even an otherwise recognized history field ambiguous."""
+        fields = record if isinstance(record, dict) else getattr(record, "__dict__", {})
+        raw = fields.get("raw")
+        if isinstance(raw, dict):
+            fields = {**raw, **fields}
+        return bool(
+            fields.get("visibility") is not None
+            or fields.get("properties")
+            or any(key in fields for key in ("internal", "isInternal", "public", "jsdPublic"))
+        )
+
+    @classmethod
+    def _history_entry(cls, history: Any) -> dict[str, Any]:
         author = getattr(history, "author", None)
         items = []
         for raw in history.items:
+            if cls._has_comment_audience(raw):
+                continue
             item = {
                 key: getattr(raw, key, None)
                 for key in ("field", "fieldtype", "fieldId", "from", "fromString", "to", "toString")
@@ -164,7 +179,7 @@ class EnhancedAuditTrailMigrator:
             "items": items,
         }
 
-    def _audit_author(self, entry, jira_issue_key):
+    def _audit_author(self, entry: dict[str, Any], jira_issue_key: str) -> tuple[int, str | None]:
         # Map user
         user_id = None
         user_name = None
@@ -181,7 +196,7 @@ class EnhancedAuditTrailMigrator:
             user_id = 1  # Assuming admin user ID is 1
         return user_id, user_name
 
-    def _queue_grouped_events(self, audit_events):
+    def _queue_grouped_events(self, audit_events: list[AuditEventData]) -> None:
         grouped = {}
         for event in audit_events:
             changelog_id = str(event.get("jira_changelog_id", ""))
@@ -219,6 +234,8 @@ class EnhancedAuditTrailMigrator:
             )
 
             for history in jira_issue.changelog.histories:
+                if self._has_comment_audience(history):
+                    continue
                 # Extract basic history information
                 entry = self._history_entry(history)
 
@@ -262,12 +279,14 @@ class EnhancedAuditTrailMigrator:
         audit_events = []
 
         for entry in changelog_entries:
+            if self._has_comment_audience(entry):
+                continue
             try:
                 user_id, user_name = self._audit_author(entry, jira_issue_key)
 
                 # Process each change item in the entry
                 for item in entry.get("items", []) or []:
-                    if not may_copy_history_item(item):
+                    if self._has_comment_audience(item) or not may_copy_history_item(item):
                         continue
                     # Map field changes to OpenProject audit format
                     changes = self._map_field_changes(item)
@@ -642,13 +661,16 @@ class EnhancedAuditTrailMigrator:
             self.migration_results["errors"].extend(errors)
         return {"status": "success" if success else "error", "processed": processed, "total": total, "errors": errors}
 
-    @staticmethod
-    def _audit_activity(operation: dict[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _audit_activity(cls, operation: dict[str, Any]) -> dict[str, Any]:
         """Build a repeatable, dated history note for the OpenProject activity writer."""
         import hashlib
         import json
 
         event = operation.get("data", operation)
+        if cls._has_comment_audience(operation) or cls._has_comment_audience(event):
+            msg = "Refusing an audit event with comment audience metadata"
+            raise ValueError(msg)
         note = event.get("comment") or event.get("notes") or ""
         changes = event.get("changes") or {}
         if changes:
