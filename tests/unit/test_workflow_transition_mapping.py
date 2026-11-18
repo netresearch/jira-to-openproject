@@ -10,7 +10,11 @@ def test_named_status_fallback_dedup_and_unmapped_sources(monkeypatch):
     from src import config
 
     jira, op = Mock(), Mock()
-    jira.get_issue_types.return_value = [{"id": "10", "name": "Bug"}]
+    jira.get_issue_types.return_value = [
+        {"id": "10", "name": "Bug"},
+        {"id": "11", "name": "Task"},
+        {"id": "12", "name": "Story"},
+    ]
     jira.get_workflow_schemes.return_value = [{"defaultWorkflow": "Standard"}]
     jira.get_workflow_transitions.return_value = [
         {"from": ["1", "1", "unknown"], "to": {"name": "Closed"}},
@@ -21,7 +25,7 @@ def test_named_status_fallback_dedup_and_unmapped_sources(monkeypatch):
     mappings = Mock()
     mappings.get_mapping.side_effect = {
         "status": {"1": {"openproject_id": 11}, "2": {"jira_name": "Closed", "openproject_id": 12}},
-        "issue_type": {"Bug": {"openproject_id": 8}},
+        "issue_type": {"Bug": {"openproject_id": 8}, "Task": {"openproject_id": "invalid"}},
     }.get
     monkeypatch.setattr(config, "mappings", mappings)
     monkeypatch.setattr(config, "migration_config", {"workflow_roles": ["Project member"]})
@@ -40,6 +44,8 @@ def test_named_status_fallback_dedup_and_unmapped_sources(monkeypatch):
             }
         ],
         "skipped": [
-            {"reason": "missing_status_mapping", "issue_type": "Bug", "workflow": "Standard", "status_id": "unknown"}
+            {"reason": "missing_status_mapping", "issue_type": "Bug", "workflow": "Standard", "status_id": "unknown"},
+            {"reason": "invalid_openproject_type", "issue_type": "Task"},
+            {"reason": "missing_issue_type_mapping", "issue_type": "Story"},
         ],
     }

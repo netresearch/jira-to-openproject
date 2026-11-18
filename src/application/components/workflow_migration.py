@@ -197,26 +197,9 @@ class WorkflowMigration(BaseMigration):
         skipped: list[dict[str, Any]] = []
 
         for issue_type_name, workflow_name in issue_type_to_workflow.items():
-            mapping_entry = issue_type_mapping.get(issue_type_name)
-            if not isinstance(mapping_entry, dict):
-                skipped.append(
-                    {
-                        "reason": "missing_issue_type_mapping",
-                        "issue_type": issue_type_name,
-                    },
-                )
+            type_id = self._workflow_type_id(issue_type_mapping, issue_type_name, skipped)
+            if type_id is None:
                 continue
-
-            type_id = int(mapping_entry.get("openproject_id", 0) or 0)
-            if type_id <= 0:
-                skipped.append(
-                    {
-                        "reason": "invalid_openproject_type",
-                        "issue_type": issue_type_name,
-                    },
-                )
-                continue
-
             mapping = _WorkflowMapping(issue_type_name, workflow_name, type_id, status_by_id, status_by_name)
             for transition in workflow_transitions.get(workflow_name, []):
                 for key, row in mapping.rows(transition, skipped):
@@ -237,6 +220,21 @@ class WorkflowMigration(BaseMigration):
                 "skipped": len(skipped),
             },
         )
+
+    @staticmethod
+    def _workflow_type_id(entries: dict, issue_type: str, skipped: list[dict[str, Any]]) -> int | None:
+        entry = entries.get(issue_type)
+        if not isinstance(entry, dict):
+            skipped.append({"reason": "missing_issue_type_mapping", "issue_type": issue_type})
+            return None
+        try:
+            target = int(entry.get("openproject_id") or 0)
+        except ValueError, TypeError:
+            target = 0
+        if target <= 0:
+            skipped.append({"reason": "invalid_openproject_type", "issue_type": issue_type})
+            return None
+        return target
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Create workflow entries in OpenProject."""

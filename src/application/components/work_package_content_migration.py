@@ -102,8 +102,6 @@ class WorkPackageContentMigration(BaseMigration):
     OpenProject API URLs (/api/v3/attachments/{id}/content).
     """
 
-    WORK_PACKAGE_MAPPING_FILE = "work_package_mapping.json"
-    ATTACHMENT_MAPPING_FILE = "attachment_mapping.json"
     _JIRA_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 
     def __init__(
