@@ -1177,14 +1177,10 @@ async def run_migration(
 
                         next_component = components[components.index(component_name) + 1]
 
-                        user_input = (
-                            input(
-                                f"\nContinue to next component: {next_component}? [Y/n]: ",
-                            )
-                            .strip()
-                            .lower()
+                        answer = await asyncio.to_thread(
+                            input, f"\nContinue to next component: {next_component}? [Y/n]: "
                         )
-                        if user_input and user_input not in ("y", "yes"):
+                        if answer.strip().lower() not in ("", "y", "yes"):
                             config.logger.warning("Migration paused by user")
                             results.overall["status"] = "interrupted"
                             results.overall["message"] = "Migration was paused by user"
