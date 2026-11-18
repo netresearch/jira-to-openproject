@@ -3,15 +3,17 @@
 
 """Snapshot Jira board layouts as native basic boards in a private OpenProject archive project."""
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
 import sys
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
-from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.native_board_writer import save_layout
-from src.infrastructure.openproject.openproject_client import OpenProjectClient
+if TYPE_CHECKING:
+    from src.infrastructure.jira.jira_client import JiraClient
 
 
 def layout(jira: JiraClient, board: dict, project: str) -> dict:
@@ -49,6 +51,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--target-project", required=True, help="Imported OpenProject project identifier")
     parser.add_argument("--archive-project", required=True, help="Private, memberless OpenProject board archive")
     args = parser.parse_args(argv)
+    from src.infrastructure.jira.jira_client import JiraClient
+    from src.infrastructure.openproject.native_board_writer import save_layout
+    from src.infrastructure.openproject.openproject_client import OpenProjectClient
+
     jira, target = JiraClient(), OpenProjectClient()
     for board in jira.get_boards_for_project(args.jira_project):
         data = layout(jira, board, args.jira_project)

@@ -403,10 +403,10 @@ OpenProject to hold archived boards. Run the following command for each source
 project, specifying the OpenProject project containing its imported cards.
 
 ```sh
-uv run python -m src.native_boards --jira-project APP --target-project app --archive-project board-archive
+uv run j2o-boards --jira-project APP --target-project app --archive-project board-archive
 ```
 
-The command reads each project-scoped board twice, then verifies Jira origin
+Run the import from the configured migration directory. Help is available from any directory with `j2o-boards --help`. The command reads each project-scoped board twice, then verifies Jira origin
 IDs, keys, URLs, and systems on the target work packages. Each native basic
 board preserves the visible cards in Jira order, column names, and the source
 configuration. Shared boards contain only the selected project's cards. The
