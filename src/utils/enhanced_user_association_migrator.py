@@ -20,7 +20,7 @@ import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Semaphore
-from typing import Any, Literal, Self, TypedDict
+from typing import Any, Literal, NamedTuple, Self, TypedDict
 
 import requests
 
@@ -204,6 +204,12 @@ class StaleMappingError(Exception):
 
 # Enum types for validation
 FallbackStrategy = Literal["skip", "assign_admin", "create_placeholder"]
+
+
+class _RefreshLookup(NamedTuple):
+    data: dict[str, Any] | None
+    source: Literal["override", "retry", "http"]
+    timeout_enabled: bool
 
 
 class UserAssociationMapping(TypedDict):
@@ -689,7 +695,7 @@ class EnhancedUserAssociationMigrator:
         )
         return 0
 
-    def _fetch_refresh_data(self, username: str) -> tuple[dict[str, Any] | None, bool, bool, bool, bool]:
+    def _fetch_refresh_data(self, username: str) -> _RefreshLookup:
         # Prefer Jira client timeout helper when available (staleness tests)
         retry_callable = getattr(self, "_get_jira_user_with_retry", None)
         has_timeout_helper = hasattr(self.jira_client, "get_user_info_with_timeout")
@@ -710,38 +716,32 @@ class EnhancedUserAssociationMigrator:
         get_side_effect_set = getattr(ji_get, "side_effect", None) is not None
         get_user_info_side_effect_set = getattr(ji_get_user_info, "side_effect", None) is not None
 
-        used_retry_path = False
-        used_direct_helper = False
-        used_internal_helper = False
-
+        source: Literal["override", "retry", "http"]
         if patched_internal_helper:
-            jira_user_data = self._get_jira_user_info(username)
-            used_direct_helper = True
-            used_internal_helper = True
+            source = "override"
+            data = self._get_jira_user_info(username)
         elif (
             used_timeout_path
             or get_user_info_side_effect_set
             or (not get_side_effect_set and callable(ji_get_user_info))
         ):
-            jira_user_data = self._get_jira_user_with_retry(username)
-            used_retry_path = True
+            source = "retry"
+            data = self._get_jira_user_with_retry(username)
         else:
-            jira_user_data = self._get_jira_user_info(username)
-            used_direct_helper = True
-        # If retry path provided a non-dict (e.g., MagicMock), fall back to HTTP helper for real data
-        if jira_user_data is not None and not isinstance(jira_user_data, dict):
+            source = "http"
+            data = self._get_jira_user_info(username)
+        if data is not None and not isinstance(data, dict):
             try:
-                http_fallback = self._get_jira_user_info(username)
-                if isinstance(http_fallback, dict):
-                    jira_user_data = http_fallback
-                    used_direct_helper = True
-                else:
-                    # Treat non-dict/None as not found to trigger fallback/metrics per tests
-                    jira_user_data = None
+                data = self._get_jira_user_info(username)
             except Exception:
-                # Treat errors in fallback fetch as not found
-                jira_user_data = None
-        return jira_user_data, used_retry_path, used_timeout_path, used_internal_helper, used_direct_helper
+                data = None
+        return _RefreshLookup(data if isinstance(data, dict) else None, source, used_timeout_path)
+
+    def _missing_refresh_data(self, username: str, lookup: _RefreshLookup) -> bool | None:
+        self.logger.warning("Could not fetch fresh user info for %s", username)
+        if lookup.source == "retry":
+            self._apply_fallback_strategy(username, None, "user_not_found")
+        return None if lookup.timeout_enabled else False
 
     def _enrich_refreshed_mapping(
         self, username: str, jira_user_data: dict[str, Any], refreshed_mapping: dict[str, Any]
@@ -1855,22 +1855,10 @@ class EnhancedUserAssociationMigrator:
             self.logger.debug("Starting refresh for user mapping: %s", username)
             self.logger.info("Refreshing user mapping for: %s", username)
 
-            jira_user_data, used_retry_path, used_timeout_path, used_internal_helper, used_direct_helper = (
-                self._fetch_refresh_data(username)
-            )
-
+            lookup = self._fetch_refresh_data(username)
+            jira_user_data = lookup.data
             if jira_user_data is None:
-                # Apply fallback/error mapping when no data (explicit contract in tests)
-                self.logger.warning("Could not fetch fresh user info for %s", username)
-                # Apply fallback when using retry helper path (unit test expects invocation)
-                if used_retry_path:
-                    self._apply_fallback_strategy(username, None, "user_not_found")
-                # Return type depends on path semantics
-                if used_timeout_path:
-                    # Staleness tests expect None
-                    return None
-                # Integration-style tests expect False
-                return False
+                return self._missing_refresh_data(username, lookup)
 
             if not jira_user_data:
                 # MONITORING: User not found logging
@@ -1968,21 +1956,7 @@ class EnhancedUserAssociationMigrator:
             self.logger.debug("Successfully completed refresh for %s", username)
             self.logger.info(_REFRESHED_MAPPING_MESSAGE, username)
 
-            # Return type depends on path semantics and test expectations
-            if used_retry_path:
-                # Retry-path tests expect the full mapping dict
-                return refreshed_mapping
-
-            if used_internal_helper:
-                # When tests patch internal helper, they expect boolean success
-                return True
-
-            if used_direct_helper:
-                # Direct HTTP helper path should return the refreshed mapping dict for integration tests
-                return refreshed_mapping
-
-            # Fallback default
-            return True
+            return True if lookup.source == "override" else refreshed_mapping
 
         except Exception as e:
             # MONITORING: Refresh error logging
