@@ -118,16 +118,7 @@ class WatcherMigration(BaseMigration):
         # human-readable PROJ-123 form. Read the inner ``jira_key`` for
         # the typed entry so downstream code uses the human-readable key
         # rather than the numeric id.
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys: list[str] = []
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            key_for_legacy = inner_jira_key or str(outer_key)
-            try:
-                entry = WorkPackageMappingEntry.from_legacy(str(key_for_legacy), raw_entry)
-            except ValueError:
-                continue
-            jira_keys.append(str(entry.jira_key))
+        jira_keys = self._mapped_issue_keys()
         if not jira_keys:
             # FAIL LOUD. Same anti-pattern as pre-#194 attachments and
             # pre-#197 wp_skeleton — silent ``success=True`` here masks
@@ -178,25 +169,7 @@ class WatcherMigration(BaseMigration):
         # every empty placeholder failed the truthiness check and got
         # categorised as ``empty_issue``, dropping all 4204 watchers
         # silently on the live TEST run (2026-05-07).
-        issues: dict[str, Any] = {}
-        cache_file = self.data_dir / "jira_issues_cache.json"
-        if cache_file.exists():
-            try:
-                import json
-
-                with open(cache_file) as f:
-                    issues = json.load(f)
-                logger.info("Using cached issues for watcher migration (%d issues)", len(issues))
-            except Exception:
-                issues = {}
-
-        # If no cache, create a minimal dict from jira_keys for iteration.
-        # The empty placeholder values are intentional — the explicit
-        # watchers API call below doesn't need any issue body, and the
-        # field-fallback handles the empty case gracefully.
-        if not issues:
-            logger.info("No cached issues, will iterate through %d Jira keys", len(jira_keys))
-            issues = {k: {} for k in jira_keys}
+        issues = self._watcher_issues(jira_keys)
 
         for key, issue in issues.items():
             wp_id = self._resolve_wp_id(str(key))
@@ -204,56 +177,9 @@ class WatcherMigration(BaseMigration):
                 skip_reasons["wp_unmapped"] += 1
                 continue
 
-            watchers = []
-            try:
-                # Prefer explicit API for watchers (more complete)
-                watchers = self.jira_client.get_issue_watchers(str(key))
-            except Exception:
-                # Fallback to fields if available
-                try:
-                    w = getattr(getattr(issue, "fields", None), "watches", None)
-                    watchers = getattr(w, "watchers", []) or []
-                except Exception:
-                    watchers = []
+            watchers = self._read_watchers(key, issue)
 
-            for w in watchers or []:
-                try:
-                    parsed = JiraWatcher.from_any(w)
-                    if parsed is None:
-                        skip_reasons["watcher_parse_failed"] += 1
-                        continue
-                    user_id = self._resolve_user_id(parsed)
-                    if not user_id:
-                        # Biggest bucket in practice — Jira watchers
-                        # whose account_id/name/email/display_name
-                        # never made it into the user mapping (locked
-                        # users, accounts deleted in OP, mapping
-                        # not refreshed, etc.).
-                        skip_reasons["user_unmapped"] += 1
-                        # Record the distinct identity. Prefer the
-                        # most stable probe (account_id) and fall
-                        # back through the same probe order
-                        # ``_resolve_user_id`` uses, so the logged
-                        # value is the one an operator would search
-                        # the user mapping for.
-                        identity = (
-                            parsed.account_id
-                            or parsed.name
-                            or parsed.email_address
-                            or parsed.display_name
-                            or "<unknown>"
-                        )
-                        unmapped_users.add(str(identity))
-                        continue
-                    watchers_to_create.append(
-                        {
-                            "work_package_id": wp_id,
-                            "user_id": user_id,
-                        },
-                    )
-                except Exception:
-                    skip_reasons["exception"] += 1
-                    continue
+            self._collect_watchers(watchers, wp_id, watchers_to_create, skip_reasons, unmapped_users)
 
         skipped = sum(skip_reasons.values())
         if skipped:
@@ -323,3 +249,94 @@ class WatcherMigration(BaseMigration):
         result.message = f"Watchers created={created}, skipped={skipped + bulk_skipped}, errors={errors}"
         logger.info(result.message)
         return result
+
+    def _mapped_issue_keys(self) -> list[str]:
+        """Read the Jira keys that can be correlated with target work packages."""
+        wp_map = self.mappings.get_mapping("work_package") or {}
+        jira_keys: list[str] = []
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            key_for_legacy = inner_jira_key or str(outer_key)
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(str(key_for_legacy), raw_entry)
+            except ValueError:
+                continue
+            jira_keys.append(str(entry.jira_key))
+        return jira_keys
+
+    def _watcher_issues(self, jira_keys: list[str]) -> dict[str, Any]:
+        """Use cached issue fields when available and retain API-only issues otherwise."""
+        issues: dict[str, Any] = {}
+        cache_file = self.data_dir / "jira_issues_cache.json"
+        if cache_file.exists():
+            try:
+                import json
+
+                with open(cache_file) as f:
+                    issues = json.load(f)
+                logger.info("Using cached issues for watcher migration (%d issues)", len(issues))
+            except Exception:
+                issues = {}
+
+        # If no cache, create a minimal dict from jira_keys for iteration.
+        # The empty placeholder values are intentional — the explicit
+        # watchers API call below doesn't need any issue body, and the
+        # field-fallback handles the empty case gracefully.
+        if not issues:
+            logger.info("No cached issues, will iterate through %d Jira keys", len(jira_keys))
+            issues = {k: {} for k in jira_keys}
+        return issues
+
+    def _read_watchers(self, key: str, issue: Any) -> list:
+        """Prefer the watchers endpoint, then fall back to embedded watcher records."""
+        watchers = []
+        try:
+            # Prefer explicit API for watchers (more complete)
+            watchers = self.jira_client.get_issue_watchers(str(key))
+        except Exception:
+            # Fallback to fields if available
+            try:
+                w = getattr(getattr(issue, "fields", None), "watches", None)
+                watchers = getattr(w, "watchers", []) or []
+            except Exception:
+                watchers = []
+        return watchers
+
+    def _collect_watchers(
+        self, watchers: list, wp_id: int, watchers_to_create: list, skip_reasons: Counter, unmapped_users: set
+    ) -> None:
+        """Resolve watcher identities and record why individual watcher rows were skipped."""
+        for w in watchers or []:
+            try:
+                parsed = JiraWatcher.from_any(w)
+                if parsed is None:
+                    skip_reasons["watcher_parse_failed"] += 1
+                    continue
+                user_id = self._resolve_user_id(parsed)
+                if not user_id:
+                    # Biggest bucket in practice — Jira watchers
+                    # whose account_id/name/email/display_name
+                    # never made it into the user mapping (locked
+                    # users, accounts deleted in OP, mapping
+                    # not refreshed, etc.).
+                    skip_reasons["user_unmapped"] += 1
+                    # Record the distinct identity. Prefer the
+                    # most stable probe (account_id) and fall
+                    # back through the same probe order
+                    # ``_resolve_user_id`` uses, so the logged
+                    # value is the one an operator would search
+                    # the user mapping for.
+                    identity = (
+                        parsed.account_id or parsed.name or parsed.email_address or parsed.display_name or "<unknown>"
+                    )
+                    unmapped_users.add(str(identity))
+                    continue
+                watchers_to_create.append(
+                    {
+                        "work_package_id": wp_id,
+                        "user_id": user_id,
+                    },
+                )
+            except Exception:
+                skip_reasons["exception"] += 1
+                continue
