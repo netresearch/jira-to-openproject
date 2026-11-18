@@ -4,11 +4,11 @@
 ## Overview
 - FastAPI admin dashboard exposing migration metrics, websocket feeds, and HTML templates.
 - Primary entry: `src/dashboard/app.py`; static assets live under `src/dashboard/static`, templates under `src/dashboard/templates`.
-- Depends on Redis for live metrics fan-out and uses Vue + Chart.js on the client.
+- Streams progress over WebSockets and serves the HTML, CSS and JavaScript locally. Valkey is an optional metrics cache.
 
 ## Setup & environment
 - Ensure `uv sync --frozen` has installed FastAPI, redis, and frontend dependencies.
-- Dashboard expects Redis on `localhost:6379`; override connection details before shipping (see `startup_event`).
+- The shared progress file is set with `J2O_DASHBOARD_PROGRESS_FILE`. The optional cache defaults to `localhost:6379`; override connection details before shipping (see `startup_event`).
 - Run locally via `uv run uvicorn src.dashboard.app:app --reload --host 0.0.0.0 --port 8001` after the main stack is up (`make dev`).
 
 ## Build & tests (prefer file-scoped)
@@ -35,8 +35,8 @@
 
 ## Good vs. bad examples
 - Good: `src/dashboard/app.py` — shows async route structure, websocket broadcasting, and Redis lifecycle management.
-- Good: `src/dashboard/static/js/dashboard.js` — encapsulates Vue components and websocket handling cleanly.
-- Caution: `src/dashboard/templates/dashboard.html` — relies on CDN assets; prefer bundling or pinning hashes for new dependencies.
+- Good: `src/dashboard/static/js/dashboard.js` — renders measured progress and handles WebSocket reconnects.
+- Caution: `src/dashboard/templates/dashboard.html` — keep operator-visible data and browser assets on the local origin.
 
 ## When stuck
 - Inspect `tests/test_dashboard_simple.py` for expected routes/resources; extend it when adding endpoints.
@@ -44,6 +44,6 @@
 
 ## Decision Log
 - Derived runtime expectations and commands from existing Makefile targets and FastAPI module setup.
-- Highlighted CDN usage from current template to ensure future work documents security posture.
+- The browser loads its assets from the dashboard origin.
 - Documented lack of mypy coverage because `src/dashboard/app.py` currently fails strict type checking.
 - Added container smoke guidance (`make container-test …`) to align with the docker-first testing workflow.

@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from html import escape
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -24,16 +27,19 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from src.config import bootstrap
 from src.config import logger as _migration_logger
+from src.dashboard.progress import MigrationProgress, progress_file, read_progress
 from src.display import ExtendedLogger
 
 _INTERNAL_SERVER_ERROR = "Internal server error"
 _NO_ACTIVE_MIGRATION = "No migration is running"
+_EXTERNAL_CONTROL = "The migration is controlled by its publishing process."
+_SNAPSHOT_HEADERS = {"Cache-Control": "no-store"}
 
 
 # No migration component imports needed for dashboard
@@ -79,6 +85,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        for task in (t_progress, t_metrics):
+            task.cancel()
+        await asyncio.gather(t_progress, t_metrics, return_exceptions=True)
         if redis_client:
             await redis_client.aclose()
         logger.info("Dashboard shutdown complete")
@@ -92,12 +101,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Dashboard is a Vue.js SPA; the HTML shell is served verbatim (no Jinja
-# templating) to avoid Jinja ↔ Vue `{{ ... }}` delimiter conflicts. The
-# template file is loaded lazily on the first request and cached, so an
-# install layout that doesn't ship the templates directory still imports
-# cleanly — the `/` handler is the only thing that fails, with a clear
-# 503 message.
+# The shell is read on each request and enriched with the latest public summary.
 _DASHBOARD_DIR = Path(__file__).resolve().parent
 _DASHBOARD_TEMPLATE_PATH = _DASHBOARD_DIR / "templates" / "dashboard.html"
 
@@ -129,36 +133,17 @@ migration_state = {
 
 
 # Pydantic models for API responses
-class MigrationProgress(BaseModel):
-    """Migration progress data model."""
-
-    migration_id: str
-    total_entities: int = 0
-    processed_entities: int = 0
-    failed_entities: int = 0
-    current_entity: str | None = None
-    current_entity_type: str | None = None
-    current_component: str | None = None
-    status: str = "idle"  # 'idle', 'running', 'completed', 'failed', 'paused'
-    start_time: datetime | None = None
-    last_update: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    error_count: int = 0
-    success_rate: float = 0.0
-    estimated_time_remaining: str | None = None
-    pause_time: datetime | None = None
-    total_pause_time: int = 0
-
-
 class MigrationMetrics(BaseModel):
     """Migration metrics data model."""
 
     migration_id: str
-    entities_per_second: float = 0.0
-    average_processing_time: float = 0.0
-    memory_usage_mb: float = 0.0
-    cpu_usage_percent: float = 0.0
-    network_requests_per_second: float = 0.0
-    error_rate: float = 0.0
+    entities_per_second: float | None = None
+    average_processing_time: float | None = None
+    memory_usage_mb: float | None = None
+    pilot_memory_usage_mb: float | None = None
+    cpu_usage_percent: float | None = None
+    network_requests_per_second: float | None = None
+    error_rate: float | None = None
     throughput_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -260,7 +245,7 @@ class ConnectionManager:
         await self.broadcast(
             {
                 "type": "progress_update",
-                "data": progress.model_dump(),
+                "data": progress.public_data(),
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
@@ -290,129 +275,198 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# Background task for system metrics collection
+def _progress(migration_id: str | None = None) -> MigrationProgress:
+    target = progress_file()
+    if target is not None:
+        try:
+            progress = read_progress(target)
+        except (OSError, ValidationError) as exc:
+            raise HTTPException(
+                status_code=503, detail="Published migration progress is unavailable.", headers=_SNAPSHOT_HEADERS
+            ) from exc
+    elif migration_state["is_running"]:
+        progress = MigrationProgress(
+            migration_id=migration_state["migration_id"],
+            status="paused" if migration_state["pause_time"] else "running",
+            current_component=migration_state["current_component"],
+            start_time=migration_state["start_time"],
+            last_update=migration_state["pause_time"] or migration_state["start_time"],
+        )
+    else:
+        progress = MigrationProgress(migration_id="none", status="idle")
+    if migration_id and migration_id != progress.migration_id:
+        raise HTTPException(
+            status_code=404, detail="No snapshot is available for this migration.", headers=_SNAPSHOT_HEADERS
+        )
+    return progress
+
+
+def _status(progress: MigrationProgress) -> dict[str, Any]:
+    return {
+        **progress.public_data(),
+        "is_running": progress.status in {"running", "paused"} and progress.finished_at is None,
+        "pause_time": None,
+        "total_pause_time": None,
+    }
+
+
+def _metrics(progress: MigrationProgress) -> MigrationMetrics:
+    return MigrationMetrics(
+        migration_id=progress.migration_id,
+        memory_usage_mb=psutil.virtual_memory().used / (1024 * 1024),
+        pilot_memory_usage_mb=progress.memory_usage_mb,
+        cpu_usage_percent=psutil.cpu_percent(interval=0.1),
+    )
+
+
 async def collect_system_metrics() -> None:
-    """Collect system metrics for dashboard display."""
+    """Publish measured host metrics and maintain the optional Redis cache."""
     while True:
         try:
-            # Get system metrics
-            memory = psutil.virtual_memory()
-            cpu_percent = psutil.cpu_percent(interval=1)
-
-            # Update metrics in Redis if available
+            progress = await asyncio.to_thread(_progress)
+            metrics = await asyncio.to_thread(_metrics, progress)
+            await manager.broadcast_metrics(metrics)
             if redis_client:
-                metrics_data = {
-                    "memory_usage_mb": memory.used / 1024 / 1024,
-                    "cpu_usage_percent": cpu_percent,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                }
-                await redis_client.set(
-                    "system_metrics",
-                    json.dumps(metrics_data),
-                    ex=60,
-                )
-
-            await asyncio.sleep(5)  # Update every 5 seconds
-
+                await redis_client.set("system_metrics", metrics.model_dump_json(), ex=60)
+        except HTTPException:
+            pass  # The progress watcher reports unavailable snapshots to clients.
         except Exception:
             logger.exception("Error collecting system metrics")
-            await asyncio.sleep(10)  # Wait longer on error
+        await asyncio.sleep(5)
 
 
-# Background task for migration progress updates
 async def update_migration_progress() -> None:
-    """Update migration progress and broadcast to clients."""
+    """Broadcast each complete publication, including the final snapshot."""
+    previous: MigrationProgress | None = None
+    unavailable = False
     while True:
         try:
-            if migration_state["is_running"] and migration_state["migration_id"]:
-                # Progress tracking would come from actual migration state
-                progress_data: dict[str, Any] = {
-                    "total_entities": 0,
-                    "processed_entities": 0,
-                    "failed_entities": 0,
-                    "error_count": 0,
-                    "success_rate": 0.0,
-                }
-
-                # Create progress object
-                progress = MigrationProgress(
-                    migration_id=migration_state["migration_id"],
-                    total_entities=progress_data.get("total_entities", 0),
-                    processed_entities=progress_data.get("processed_entities", 0),
-                    failed_entities=progress_data.get("failed_entities", 0),
-                    current_entity=progress_data.get("current_entity"),
-                    current_entity_type=progress_data.get("current_entity_type"),
-                    current_component=migration_state["current_component"],
-                    status="running",
-                    start_time=migration_state["start_time"],
-                    last_update=datetime.now(UTC),
-                    error_count=progress_data.get("error_count", 0),
-                    success_rate=progress_data.get("success_rate", 0.0),
-                    pause_time=migration_state.get("pause_time"),
-                    total_pause_time=migration_state.get("total_pause_time", 0),
-                )
-
-                # Broadcast progress update
+            progress = await asyncio.to_thread(_progress)
+            if unavailable or progress != previous:
                 await manager.broadcast_progress(progress)
-
-            await asyncio.sleep(1)  # Update every second during migration
-
-        except Exception:
-            logger.exception("Error updating migration progress")
-            await asyncio.sleep(5)
-
-
-@app.get("/", response_class=HTMLResponse, responses={503: {"description": "Dashboard template unavailable"}})
-def dashboard() -> FileResponse:
-    """Serve the packaged Vue template as a static HTML file."""
-    if not _DASHBOARD_TEMPLATE_PATH.is_file():
-        logger.error("Dashboard template missing at %s", _DASHBOARD_TEMPLATE_PATH)
-        raise HTTPException(status_code=503, detail="Dashboard template not available in this installation.")
-    return FileResponse(_DASHBOARD_TEMPLATE_PATH, media_type="text/html")
+                previous = progress
+            unavailable = False
+        except HTTPException as exc:
+            if not unavailable:
+                await manager.broadcast({"type": "error", "message": exc.detail})
+            unavailable = True
+        await asyncio.sleep(1)
 
 
+def _published_summary(progress: MigrationProgress) -> str:
+    if progress.status == "idle":
+        return "<p>No migration run has been published.</p>"
+    facts = [("Status", progress.status.capitalize())]
+    phase = progress.current_component or next(
+        (item.name for item in reversed(progress.phases) if item.status != "pending"), None
+    )
+    if phase:
+        facts.append(("Latest phase", phase))
+    if progress.last_update:
+        facts.append(("Last update", progress.last_update.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")))
+    sections = [_summary_facts(facts)]
+    counts = [(name, str(amount)) for name, amount in progress.verified_counts.items()]
+    for name, amount in (
+        ("Processed entities", progress.processed_entities),
+        ("Total entities", progress.total_entities),
+        ("Failed entities", progress.failed_entities),
+    ):
+        if amount is not None:
+            counts.append((name, str(amount)))
+    if counts:
+        sections.extend(("<h2>Reported counts</h2>", _summary_facts(counts)))
+    if progress.pending_checks:
+        checks = "".join(f"<li>{escape(name)}</li>" for name in progress.pending_checks)
+        sections.append(f"<h2>Pending checks</h2><ul>{checks}</ul>")
+    return "".join(sections)
+
+
+def _summary_facts(pairs: list[tuple[str, str]]) -> str:
+    items = "".join(f"<div><dt>{escape(label)}</dt><dd>{escape(value)}</dd></div>" for label, value in pairs)
+    return f'<dl class="counts">{items}</dl>'
+
+
+@app.get(
+    "/", response_class=HTMLResponse, responses={503: {"description": "Dashboard or published progress unavailable"}}
+)
+def dashboard() -> HTMLResponse:
+    """Render the last publication immediately, even without scripts, styling or WebSockets."""
+    try:
+        shell = _DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503, detail="Dashboard template not available in this installation.", headers=_SNAPSHOT_HEADERS
+        ) from exc
+    code = 200
+    try:
+        summary = _published_summary(_progress())
+    except HTTPException as exc:
+        summary = "<p>The latest migration progress is unavailable.</p>"
+        code = exc.status_code
+    section = (
+        '<section id="published-run-summary" class="card run" aria-labelledby="published-run-heading">'
+        '<h1 id="published-run-heading">Migration dashboard</h1>'
+        f"{summary}</section>"
+    )
+    return HTMLResponse(
+        shell.replace("<!-- published-run-summary -->", section), status_code=code, headers=_SNAPSHOT_HEADERS
+    )
+
+
+@app.websocket("/ws/dashboard")
 @app.websocket("/ws/progress")
 async def websocket_progress(websocket: WebSocket) -> None:
-    """WebSocket endpoint for real-time progress updates."""
+    """Serve an initial snapshot, live changes, and the existing request/heartbeat protocol."""
     await manager.connect(websocket)
-
     try:
+        await _send_progress(websocket)
         while True:
-            # Handle incoming messages (heartbeats, control commands)
-            data = await websocket.receive_text()
             try:
-                message = json.loads(data)
-
-                if message.get("type") == "heartbeat":
-                    # Update heartbeat timestamp
-                    if websocket in manager.connection_metadata:
-                        manager.connection_metadata[websocket]["last_heartbeat"] = datetime.now(UTC)
-
-                    # Send heartbeat response
-                    await manager.send_personal_message(
-                        {
-                            "type": "heartbeat_response",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        },
-                        websocket,
-                    )
-
-                elif message.get("type") == "control_command":
-                    # Handle control commands from frontend
-                    await handle_control_command(message.get("data", {}), websocket)
-
+                message = json.loads(await websocket.receive_text())
             except json.JSONDecodeError:
-                logger.warning("Received invalid JSON from WebSocket")
-
+                continue
+            if isinstance(message, dict):
+                await _websocket_message(websocket, message)
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(websocket)
-    except Exception:
-        logger.exception("WebSocket error")
-        manager.disconnect(websocket)
+
+
+async def _send_progress(websocket: WebSocket, *, status_only: bool = False) -> None:
+    try:
+        progress = await asyncio.to_thread(_progress)
+    except HTTPException as exc:
+        await manager.send_personal_message({"type": "error", "message": exc.detail}, websocket)
+        return
+    message = {
+        "type": "status_update" if status_only else "progress_update",
+        "data": _status(progress) if status_only else progress.public_data(),
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    await manager.send_personal_message(message, websocket)
+
+
+async def _websocket_message(websocket: WebSocket, message: dict[str, Any]) -> None:
+    match message.get("type"):
+        case "heartbeat":
+            now = datetime.now(UTC)
+            if websocket in manager.connection_metadata:
+                manager.connection_metadata[websocket]["last_heartbeat"] = now
+            await manager.send_personal_message({"type": "heartbeat_response", "timestamp": now.isoformat()}, websocket)
+        case "request_status":
+            await _send_progress(websocket, status_only=True)
+        case "control_command":
+            command = message.get("data")
+            if isinstance(command, dict):
+                await handle_control_command(command, websocket)
 
 
 async def handle_control_command(command: dict[str, Any], websocket: WebSocket) -> None:
     """Handle control commands from the frontend."""
+    if progress_file() is not None:
+        await manager.send_personal_message({"type": "error", "message": _EXTERNAL_CONTROL}, websocket)
+        return
     action = command.get("action")
 
     if action == "start_migration":
@@ -443,7 +497,6 @@ async def start_migration_background(config: dict[str, Any]) -> None:
             level="info",
             message="Migration started",
             component=migration_state["current_component"],
-            details=config,
         )
         await manager.broadcast_event(event)
 
@@ -506,139 +559,81 @@ async def resume_migration_background() -> None:
         logger.exception("Error resuming migration")
 
 
-@app.get("/api/progress", responses={500: {"description": "Migration progress unavailable"}})
-async def get_progress(migration_id: str | None = None) -> JSONResponse:
-    """Get current migration progress."""
-    try:
-        if migration_state["is_running"]:
-            # Progress tracking would come from actual migration state
-            progress_data: dict[str, Any] = {
-                "total_entities": 0,
-                "processed_entities": 0,
-                "failed_entities": 0,
-                "error_count": 0,
-                "success_rate": 0.0,
-            }
-
-            progress = MigrationProgress(
-                migration_id=migration_state["migration_id"],
-                total_entities=progress_data.get("total_entities", 0),
-                processed_entities=progress_data.get("processed_entities", 0),
-                failed_entities=progress_data.get("failed_entities", 0),
-                current_entity=progress_data.get("current_entity"),
-                current_entity_type=progress_data.get("current_entity_type"),
-                current_component=migration_state["current_component"],
-                status="running" if migration_state["is_running"] else "idle",
-                start_time=migration_state["start_time"],
-                last_update=datetime.now(UTC),
-                error_count=progress_data.get("error_count", 0),
-                success_rate=progress_data.get("success_rate", 0.0),
-                pause_time=migration_state.get("pause_time"),
-                total_pause_time=migration_state.get("total_pause_time", 0),
-            )
-        else:
-            progress = MigrationProgress(
-                migration_id=migration_id or "none",
-                status="idle",
-            )
-
-        return JSONResponse(content=progress.model_dump())
-
-    except Exception as e:
-        logger.exception("Error getting progress")
-        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
+@app.get("/api/progress")
+def get_progress(migration_id: str | None = None) -> JSONResponse:
+    """Return the latest published run, even after the producer has exited."""
+    return JSONResponse(_progress(migration_id).public_data(), headers=_SNAPSHOT_HEADERS)
 
 
-@app.get("/api/metrics", responses={500: {"description": "Migration metrics unavailable"}})
-async def get_metrics(migration_id: str | None = None) -> JSONResponse:
-    """Get current migration metrics."""
-    try:
-        # Get system metrics
-        memory = psutil.virtual_memory()
-        cpu_percent = psutil.cpu_percent(interval=1)
-
-        # Calculate migration-specific metrics
-        entities_per_second = 0.0
-        average_processing_time = 0.0
-        error_rate = 0.0
-
-        if migration_state["is_running"]:
-            # Progress tracking would come from actual migration state
-            progress_data: dict[str, Any] = {
-                "processed_entities": 0,
-            }
-
-            if migration_state["start_time"]:
-                elapsed_time = (datetime.now(UTC) - migration_state["start_time"]).total_seconds()
-                if elapsed_time > 0:
-                    entities_per_second = progress_data.get("processed_entities", 0) / elapsed_time
-
-        metrics = MigrationMetrics(
-            migration_id=migration_id or migration_state.get("migration_id") or "none",
-            entities_per_second=entities_per_second,
-            average_processing_time=average_processing_time,
-            memory_usage_mb=memory.used / 1024 / 1024,
-            cpu_usage_percent=cpu_percent,
-            network_requests_per_second=0.0,  # Network monitoring not implemented
-            error_rate=error_rate,
-        )
-
-        return JSONResponse(content=metrics.model_dump())
-
-    except Exception as e:
-        logger.exception("Error getting metrics")
-        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
+@app.get("/api/metrics")
+def get_metrics(migration_id: str | None = None) -> JSONResponse:
+    """Measure host usage; leave unmeasured processing rates unknown."""
+    return JSONResponse(_metrics(_progress(migration_id)).model_dump(mode="json"), headers=_SNAPSHOT_HEADERS)
 
 
-@app.get("/api/metrics/csv", responses={500: {"description": "Metrics export failed"}})
-async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
-    """Export metrics as CSV."""
-    try:
-        # Get current metrics
-        metrics_response = await get_metrics(migration_id)
-        metrics_data = metrics_response.body
-
-        # Generate CSV content
-        csv_content = "timestamp,metric,value\n"
-        timestamp = datetime.now(UTC).isoformat()
-
-        for key, value in metrics_data.items():
-            if key not in {"migration_id", "throughput_history"}:
-                csv_content += f"{timestamp},{key},{value}\n"
-
-        return JSONResponse(
-            content={
-                "csv_content": csv_content,
-                "filename": (
-                    f"migration_metrics_{migration_id or 'current'}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
-                ),
-            },
-        )
-
-    except Exception as e:
-        logger.exception("Error generating CSV")
-        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
+def _csv_text(value: object) -> object:
+    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
 
 
-@app.get("/api/migration/status", responses={500: {"description": "Migration status unavailable"}})
-async def get_migration_status() -> JSONResponse:
-    """Get current migration status."""
-    try:
-        status = {
-            "is_running": migration_state["is_running"],
-            "migration_id": migration_state["migration_id"],
-            "current_component": migration_state["current_component"],
-            "start_time": (migration_state["start_time"].isoformat() if migration_state["start_time"] else None),
-            "pause_time": (migration_state["pause_time"].isoformat() if migration_state["pause_time"] else None),
-            "total_pause_time": migration_state["total_pause_time"],
-            "status": "running" if migration_state["is_running"] else "idle",
-        }
+@app.get("/api/metrics/csv")
+def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
+    """Export measurements and observations from a single generation."""
+    progress = _progress(migration_id)
+    data = progress.public_data()
+    metrics = _metrics(progress).model_dump()
+    when = datetime.now(UTC).isoformat()
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer)
+    writer.writerow(("timestamp", "metric", "value"))
 
-        return JSONResponse(content=status)
+    def row(stamp: str | None, name: str, value: object) -> None:
+        if value is not None:
+            writer.writerow((stamp, _csv_text(name), _csv_text(value)))
 
-    except Exception as e:
-        logger.exception("Error getting migration status")
-        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
+    measured = data["last_update"]
+    for name in (
+        "migration_id",
+        "status",
+        "current_component",
+        "start_time",
+        "last_update",
+        "finished_at",
+        "elapsed_seconds",
+        "total_entities",
+        "processed_entities",
+        "failed_entities",
+        "error_count",
+    ):
+        row(measured, name, data[name])
+    row(measured, "pilot_memory_usage_mb", progress.memory_usage_mb)
+    for name, value in progress.verified_counts.items():
+        row(measured, f"verified_counts.{name}", value)
+    for phase in progress.phases:
+        row(measured, f"phase.{phase.name}", phase.status)
+        if phase.started_at:
+            row(measured, f"phase.{phase.name}.started_at", phase.started_at.isoformat())
+        if phase.finished_at:
+            row(measured, f"phase.{phase.name}.finished_at", phase.finished_at.isoformat())
+    for check in progress.pending_checks:
+        row(measured, "pending_check", check)
+    for name in ("memory_usage_mb", "cpu_usage_percent"):
+        row(when, name, metrics[name])
+    return JSONResponse(
+        {"csv_content": buffer.getvalue(), "filename": "migration_metrics.csv"}, headers=_SNAPSHOT_HEADERS
+    )
+
+
+@app.get("/api/migration/status")
+def get_migration_status() -> JSONResponse:
+    """Report process activity and the latest recorded outcome."""
+    return JSONResponse(_status(_progress()), headers=_SNAPSHOT_HEADERS)
+
+
+def _require_local_controls() -> None:
+    if progress_file() is not None:
+        raise HTTPException(status_code=409, detail=_EXTERNAL_CONTROL)
 
 
 @app.post(
@@ -653,6 +648,7 @@ async def start_migration(
     background_tasks: BackgroundTasks,
 ) -> JSONResponse:
     """Start migration with specified configuration."""
+    _require_local_controls()
     if migration_state["is_running"]:
         raise HTTPException(status_code=400, detail="Migration is already running")
 
@@ -681,6 +677,7 @@ async def start_migration(
 )
 async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Stop current migration."""
+    _require_local_controls()
     if not migration_state["is_running"]:
         raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
@@ -704,6 +701,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 )
 async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Pause current migration."""
+    _require_local_controls()
     if not migration_state["is_running"]:
         raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
@@ -730,6 +728,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 )
 async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Resume paused migration."""
+    _require_local_controls()
     if not migration_state["is_running"]:
         raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
@@ -745,54 +744,6 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     except Exception as e:
         logger.exception("Error resuming migration")
         raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
-
-
-@app.websocket("/ws/dashboard")
-async def websocket_dashboard(websocket: WebSocket) -> None:
-    """WebSocket endpoint for dashboard updates."""
-    await manager.connect(websocket)
-
-    try:
-        while True:
-            # Handle incoming messages
-            data = await websocket.receive_text()
-            try:
-                message = json.loads(data)
-
-                if message.get("type") == "heartbeat":
-                    # Update heartbeat timestamp
-                    if websocket in manager.connection_metadata:
-                        manager.connection_metadata[websocket]["last_heartbeat"] = datetime.now(UTC)
-
-                    # Send heartbeat response
-                    await manager.send_personal_message(
-                        {
-                            "type": "heartbeat_response",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        },
-                        websocket,
-                    )
-
-                elif message.get("type") == "request_status":
-                    # Send current status
-                    status = await get_migration_status()
-                    await manager.send_personal_message(
-                        {
-                            "type": "status_update",
-                            "data": status.body,
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        },
-                        websocket,
-                    )
-
-            except json.JSONDecodeError:
-                logger.warning("Received invalid JSON from WebSocket")
-
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-    except Exception:
-        logger.exception("WebSocket error")
-        manager.disconnect(websocket)
 
 
 if __name__ == "__main__":
