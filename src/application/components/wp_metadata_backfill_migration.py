@@ -254,21 +254,7 @@ class WpMetadataBackfillMigration(BaseMigration):
                 errors=["missing_work_package_mapping"],
             )
 
-        # Build (wp_id, jira_key) records from the mapping. Skip legacy
-        # bare-int rows — they have no recoverable Jira key, same
-        # filter pattern as ``AttachmentsMigration._wp_lookup_by_jira_key``.
-        records: list[tuple[int, str]] = []
-        for outer_key, raw in wp_map.items():
-            if not isinstance(raw, dict):
-                continue
-            jira_key = raw.get("jira_key") or outer_key
-            wp_id = raw.get("openproject_id")
-            if not (jira_key and wp_id):
-                continue
-            try:
-                records.append((int(wp_id), str(jira_key)))
-            except TypeError, ValueError:
-                continue
+        records = self._mapping_records(wp_map)
 
         if not records:
             msg = (
@@ -292,78 +278,29 @@ class WpMetadataBackfillMigration(BaseMigration):
             jira_base_url,
         )
 
-        rails_script = self._rails_script()
         totals: Counter[str] = Counter()
         skip_reasons: Counter[str] = Counter()
-
-        for i in range(0, len(records), self.BATCH_SIZE):
-            batch = records[i : i + self.BATCH_SIZE]
-            jira_keys = [k for _, k in batch]
-            try:
-                issues = self._merge_batch_issues(jira_keys)
-            except Exception:
-                self.logger.exception(
-                    "Failed to batch-fetch Jira issues for backfill batch %d",
-                    i // self.BATCH_SIZE,
-                )
-                skip_reasons["jira_batch_failed"] += len(batch)
-                continue
-
-            payload: list[dict[str, Any]] = []
-            for wp_id, jira_key in batch:
-                issue = issues.get(jira_key)
-                if issue is None:
-                    skip_reasons["jira_issue_missing"] += 1
-                    continue
-                rec = self._build_record(wp_id, issue, cf_ids, jira_base_url, today_iso)
-                if rec is None:
-                    skip_reasons["nothing_to_update"] += 1
-                    continue
-                payload.append(rec)
-
-            if not payload:
-                continue
-
-            try:
-                envelope = self.op_client.execute_script_with_data(rails_script, payload)
-            except Exception:
-                self.logger.exception(
-                    "Rails backfill failed for batch %d (%d records)",
-                    i // self.BATCH_SIZE,
-                    len(payload),
-                )
-                skip_reasons["rails_call_failed"] += len(payload)
-                continue
-
-            # ``execute_script_with_data`` returns an envelope:
-            # ``{status, message, data, output}``. The actual counters
-            # live under ``data`` (the parsed JSON the Ruby script
-            # printed between ``$j2o_start_marker`` / ``$j2o_end_marker``).
-            # If markers were missing → ``status="error"`` and ``data``
-            # is absent; treat as a Rails-side failure for this batch
-            # so the operator sees it instead of a silent ``updated=0``.
-            # Caught by PR #201 review (copilot-pull-request-reviewer).
-            if not isinstance(envelope, dict):
-                skip_reasons["rails_envelope_malformed"] += len(payload)
-                continue
-            status = envelope.get("status")
-            if status != "success":
-                self.logger.warning(
-                    "Rails backfill batch %d returned status=%r message=%r",
-                    i // self.BATCH_SIZE,
-                    status,
-                    envelope.get("message"),
-                )
-                skip_reasons["rails_status_not_success"] += len(payload)
-                continue
-            data = envelope.get("data") or {}
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(v, int):
-                        totals[k] += v
+        for offset in range(0, len(records), self.BATCH_SIZE):
+            batch = records[offset : offset + self.BATCH_SIZE]
+            payload = self._backfill_payload(batch, cf_ids, jira_base_url, today_iso, skip_reasons)
+            if payload:
+                self._apply_backfill_batch(payload, offset // self.BATCH_SIZE, totals, skip_reasons)
 
         updated = totals.get("updated_assignee", 0) + totals.get("updated_cf", 0)
-        failed = totals.get("failed", 0)
+        failed = (
+            totals["failed"]
+            + totals["wp_missing"]
+            + sum(
+                skip_reasons[reason]
+                for reason in (
+                    "jira_issue_missing",
+                    "jira_batch_failed",
+                    "rails_call_failed",
+                    "rails_envelope_malformed",
+                    "rails_status_not_success",
+                )
+            )
+        )
         msg = (
             f"WP metadata backfill: assignee_updates={totals.get('updated_assignee', 0)},"
             f" cf_updates={totals.get('updated_cf', 0)},"
@@ -377,6 +314,7 @@ class WpMetadataBackfillMigration(BaseMigration):
             success=failed == 0,
             updated=updated,
             failed=failed,
+            failed_count=failed,
             message=msg,
             details={
                 **dict(totals),
@@ -384,3 +322,71 @@ class WpMetadataBackfillMigration(BaseMigration):
                 "records_examined": len(records),
             },
         )
+
+    @staticmethod
+    def _mapping_records(wp_map: dict) -> list[tuple[int, str]]:
+        """Select rows with a recoverable Jira key and OpenProject ID, retaining legacy key layout."""
+        records: list[tuple[int, str]] = []
+        for outer_key, raw in wp_map.items():
+            if not isinstance(raw, dict):
+                continue
+            jira_key = raw.get("jira_key") or outer_key
+            wp_id = raw.get("openproject_id")
+            if not (jira_key and wp_id):
+                continue
+            try:
+                records.append((int(wp_id), str(jira_key)))
+            except TypeError, ValueError:
+                continue
+
+        return records
+
+    def _backfill_payload(
+        self,
+        batch: list[tuple[int, str]],
+        cf_ids: dict[str, int],
+        jira_base_url: str,
+        today_iso: str,
+        skip_reasons: Counter[str],
+    ) -> list[dict[str, Any]]:
+        try:
+            issues = self._merge_batch_issues([key for _, key in batch])
+        except Exception:
+            self.logger.exception("Failed to fetch %d Jira issues for metadata backfill", len(batch))
+            skip_reasons["jira_batch_failed"] += len(batch)
+            return []
+        payload = []
+        for wp_id, jira_key in batch:
+            issue = issues.get(jira_key)
+            if issue is None:
+                skip_reasons["jira_issue_missing"] += 1
+                continue
+            record = self._build_record(wp_id, issue, cf_ids, jira_base_url, today_iso)
+            if record is None:
+                skip_reasons["nothing_to_update"] += 1
+                continue
+            payload.append(record)
+        return payload
+
+    def _apply_backfill_batch(
+        self, payload: list[dict[str, Any]], number: int, totals: Counter[str], skip_reasons: Counter[str]
+    ) -> None:
+        try:
+            envelope = self.op_client.execute_script_with_data(self._rails_script(), payload)
+        except Exception:
+            self.logger.exception("Rails backfill failed for batch %d (%d records)", number, len(payload))
+            skip_reasons["rails_call_failed"] += len(payload)
+            return
+        if not isinstance(envelope, dict):
+            skip_reasons["rails_envelope_malformed"] += len(payload)
+            return
+        if envelope.get("status") != "success":
+            self.logger.warning("Rails backfill batch %d returned status=%r", number, envelope.get("status"))
+            skip_reasons["rails_status_not_success"] += len(payload)
+            return
+        data = envelope.get("data")
+        keys = ("updated_assignee", "updated_cf", "failed", "skipped", "wp_missing")
+        if not isinstance(data, dict) or any(type(data.get(key)) is not int or data[key] < 0 for key in keys):
+            skip_reasons["rails_envelope_malformed"] += len(payload)
+            return
+        totals.update({key: data[key] for key in keys})
