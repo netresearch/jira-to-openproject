@@ -43,7 +43,7 @@ for jira_id, entry in data.items():
         break
 ")
 
-if [ -z "$wp_id" ]; then
+if [[ -z "$wp_id" ]]; then
     echo "❌ FAIL - NRS-182 not found in mapping"
     exit 1
 fi

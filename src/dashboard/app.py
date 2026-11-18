@@ -32,6 +32,10 @@ from src.config import bootstrap
 from src.config import logger as _migration_logger
 from src.display import ExtendedLogger
 
+_INTERNAL_SERVER_ERROR = "Internal server error"
+_NO_ACTIVE_MIGRATION = "No migration is running"
+
+
 # No migration component imports needed for dashboard
 
 # Phase 6a (ADR-002): the dashboard logger is the same lazy ``migration``
@@ -560,7 +564,7 @@ async def get_progress(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting progress")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.get("/api/metrics")
@@ -601,7 +605,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting metrics")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.get("/api/metrics/csv")
@@ -631,7 +635,7 @@ async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error generating CSV")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.get("/api/migration/status")
@@ -652,7 +656,7 @@ async def get_migration_status() -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error getting migration status")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/start")
@@ -677,7 +681,7 @@ async def start_migration(
 
     except Exception as e:
         logger.exception("Error starting migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/stop")
@@ -685,7 +689,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Stop current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
         # Stop migration in background
         background_tasks.add_task(stop_migration_background)
@@ -694,7 +698,7 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error stopping migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/pause")
@@ -702,7 +706,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Pause current migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
         if migration_state["pause_time"]:
             raise HTTPException(status_code=400, detail="Migration is already paused")
@@ -714,7 +718,7 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error pausing migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.post("/api/migration/resume")
@@ -722,7 +726,7 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Resume paused migration."""
     try:
         if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+            raise HTTPException(status_code=400, detail=_NO_ACTIVE_MIGRATION)
 
         if not migration_state["pause_time"]:
             raise HTTPException(status_code=400, detail="Migration is not paused")
@@ -734,7 +738,7 @@ async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
 
     except Exception as e:
         logger.exception("Error resuming migration")
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=_INTERNAL_SERVER_ERROR) from e
 
 
 @app.websocket("/ws/dashboard")

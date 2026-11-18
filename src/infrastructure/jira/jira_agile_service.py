@@ -20,6 +20,7 @@ from typing import Any
 
 from requests import exceptions
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     HTTP_BAD_REQUEST_MIN,
     JiraApiError,
@@ -53,7 +54,7 @@ class JiraAgileService:
     def _paged_values(self, resource: str) -> list[dict[str, Any]]:
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
         url = f"{client.base_url}/rest/agile/1.0/{resource}"
         items: list[dict[str, Any]] = []
@@ -77,7 +78,7 @@ class JiraAgileService:
         """Return configuration details for a Jira Software board."""
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         url = f"{client.base_url}/rest/agile/1.0/board/{board_id}/configuration"
@@ -100,7 +101,7 @@ class JiraAgileService:
         """Return sprints associated with a Jira Software board."""
         client = self._client
         if not client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         url = f"{client.base_url}/rest/agile/1.0/board/{board_id}/sprint"

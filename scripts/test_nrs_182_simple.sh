@@ -1,10 +1,12 @@
 #!/bin/bash
+
+readonly section_separator="================================================================================"
 # Simple test script for Bug #32 comprehensive fix validation on NRS-182
 
-echo "================================================================================"
+echo "$section_separator"
 echo "Testing Bug #32 Comprehensive Fix on NRS-182"
 echo "Start Time: $(date -Iseconds)"
-echo "================================================================================"
+echo "$section_separator"
 echo ""
 echo "🧪 Target Issue: NRS-182"
 echo "Previous Result: 22/23 journals with NO AUDIT TRAIL"
@@ -64,9 +66,9 @@ python3 /home/sme/p/j2o/src/main.py \
     2>&1 | tee /tmp/bug32_comprehensive_fix_migration.log
 
 echo ""
-echo "================================================================================"
+echo "$section_separator"
 echo "VALIDATION:"
-echo "================================================================================"
+echo "$section_separator"
 echo ""
 
 # Verify journal count
@@ -130,8 +132,8 @@ except Exception as e:
 
 exit_code=$?
 echo ""
-echo "================================================================================"
+echo "$section_separator"
 echo "Test completed at: $(date -Iseconds)"
-echo "================================================================================"
+echo "$section_separator"
 
 exit $exit_code

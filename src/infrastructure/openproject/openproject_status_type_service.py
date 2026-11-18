@@ -50,6 +50,8 @@ from src import config
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
+_MISSING_FILE_ERROR = "No such file or directory"
+
 
 class OpenProjectStatusTypeService:
     """Status + work-package-type read helpers for ``OpenProjectClient``."""
@@ -134,7 +136,7 @@ class OpenProjectStatusTypeService:
                     try:
                         stdout, stderr, returncode = client.ssh_client.execute_command(ssh_command)
                     except Exception as e:
-                        if "No such file or directory" in str(e):
+                        if _MISSING_FILE_ERROR in str(e):
                             time.sleep(0.25)
                             continue
                         raise
@@ -146,7 +148,7 @@ class OpenProjectStatusTypeService:
                                 file_path,
                             )
                         break
-                    if stderr and "No such file or directory" in stderr:
+                    if stderr and _MISSING_FILE_ERROR in stderr:
                         time.sleep(0.25)
                         continue
                     _emsg = f"Failed to read statuses file: {stderr or 'unknown error'}"
@@ -263,13 +265,13 @@ class OpenProjectStatusTypeService:
                     try:
                         stdout, stderr, returncode = client.ssh_client.execute_command(ssh_command)
                     except Exception as e:
-                        if "No such file or directory" in str(e):
+                        if _MISSING_FILE_ERROR in str(e):
                             time.sleep(0.25)
                             continue
                         raise
                     if returncode == 0:
                         break
-                    if stderr and "No such file or directory" in stderr:
+                    if stderr and _MISSING_FILE_ERROR in stderr:
                         time.sleep(0.25)
                         continue
                     _emsg = f"Failed to read work package types file: {stderr or 'unknown error'}"
