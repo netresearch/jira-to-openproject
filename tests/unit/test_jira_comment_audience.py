@@ -130,3 +130,53 @@ def test_legacy_history_requires_an_identifiable_non_comment_field():
     ]
     result = issue_without_comments({"changelog": {"histories": [{"items": history}]}})
     assert result["changelog"]["histories"][0]["items"] == history[3:]
+
+
+@pytest.mark.parametrize(
+    "audience",
+    [
+        {"visibility": {"type": "role", "value": "Support"}},
+        {"public": True},
+        {"jsdPublic": False},
+        {"internal": False},
+        {"isInternal": True},
+        {"properties": [{"key": "sd.public.comment", "value": {"internal": True}}]},
+        {"properties": {"unexpected": "shape"}},
+        {"historyMetadata": {"extraData": {"groupLevel": "private"}}},
+    ],
+)
+def test_restricted_histories_and_individual_items_are_withheld(audience):
+    from types import SimpleNamespace
+
+    from src.infrastructure.jira.comment_audience import (
+        has_comment_audience,
+        issue_without_comments,
+        may_copy_history_item,
+    )
+
+    safe = {"field": "status", "toString": "Done"}
+    restricted = {**safe, **audience, "toString": "RESTRICTED-CHANGE"}
+    cache = issue_without_comments(
+        {
+            "changelog": {
+                "histories": [
+                    {**audience, "items": [{**safe, "toString": "RESTRICTED-HISTORY"}]},
+                    {"items": [safe, restricted]},
+                ]
+            }
+        }
+    )
+    assert cache["changelog"]["histories"] == [{"items": [safe]}]
+    assert has_comment_audience(SimpleNamespace(raw=audience))
+    assert not may_copy_history_item(SimpleNamespace(raw=restricted))
+    assert not may_copy_history_item(SimpleNamespace(**safe), SimpleNamespace(raw=audience))
+    assert may_copy_history_item(SimpleNamespace(raw=safe), SimpleNamespace(raw={"items": [restricted]}))
+
+
+def test_sdk_field_identity_disagreement_withholds_history():
+    from types import SimpleNamespace
+
+    from src.infrastructure.jira.comment_audience import may_copy_history_item
+
+    item = SimpleNamespace(field="status", raw={"field": "comment"})
+    assert not may_copy_history_item(item)
