@@ -3,6 +3,7 @@
 
 """Record CLI orchestration events in the opt-in dashboard snapshot."""
 
+import re
 from collections import Counter
 from datetime import UTC, datetime
 from logging import getLogger
@@ -20,6 +21,10 @@ _RESULT_COUNTS = {
     "extracted": "Extracted items",
     "updated": "Updated items",
     "failed": "Failed operations",
+}
+_COMPARISON_LABELS = {
+    "time_entries": "Jira worklogs on selected issues",
+    "attachments": "Attachments on selected issues (target SHA-256 verified)",
 }
 _WORK_PACKAGE_COUNTS = {
     "work_packages_skeleton": {
@@ -51,6 +56,19 @@ def _reported_counts(name: str, result: ComponentResult) -> dict[str, int]:
     return {key: value for key, value in counts.items() if type(value) is int and value >= 0}
 
 
+def _comparison_sides(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {side: value[side] for side in ("source", "target") if type(value.get(side)) is int and value[side] >= 0}
+
+
+def _comparison_projects(result: ComponentResult) -> dict[str, dict[str, int]]:
+    raw = result.details.get("comparison_by_project")
+    if not isinstance(raw, dict) or any(not isinstance(k, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", k) for k in raw):
+        return {}
+    return {project: _comparison_sides(pair) for project, pair in raw.items()}
+
+
 class MigrationRunProgress:
     """Track ordered component attempts, including repeated names and unfinished phases."""
 
@@ -60,12 +78,16 @@ class MigrationRunProgress:
         self.snapshot: dict[str, Any] = {}
         self.phases: list[dict[str, str]] = []
         self.active: dict[str, str] | None = None
+        self._observations: dict[str, dict[str, dict[str, int]]] = {}
 
     def start(self, *, dry_run: bool) -> None:
         """Record a fresh run before preflight or client construction."""
         if self.path is None:
             return
         self.dry_run = dry_run
+        self._observations.clear()
+        self.phases.clear()
+        self.active = None
         mode = "dry-run" if dry_run else "run"
         self.snapshot = {
             "migration_id": f"{mode}-{uuid4()}",
@@ -93,6 +115,9 @@ class MigrationRunProgress:
             self.active = self.phases[index]
             self.active.update(status="running", started_at=datetime.now(UTC).isoformat())
             self.snapshot["current_component"] = self.active["name"]
+            label = _COMPARISON_LABELS.get(self.active["name"].partition(" (attempt ")[0])
+            if label is not None and self._observations.pop(label, None) is not None:
+                self._publish_comparisons()
             self._publish()
 
     def end_component(self, name: str, result: ComponentResult, status: str) -> None:
@@ -101,10 +126,29 @@ class MigrationRunProgress:
             return
         phase = self.active["name"]
         if not self.dry_run and not result.dry_run:
+            if label := _COMPARISON_LABELS.get(name):
+                self._observations[label] = _comparison_projects(result)
+                self._publish_comparisons()
             counts = _reported_counts(name, result)
             self.snapshot["verified_counts"].update({f"{phase} · {label}": value for label, value in counts.items()})
         self._close_phase(status)
         self._publish()
+
+    def _publish_comparisons(self) -> None:
+        projects: dict[str, dict[str, dict[str, int]]] = {}
+        totals = {}
+        for label, observations in self._observations.items():
+            for project, pair in observations.items():
+                if pair:
+                    projects.setdefault(project, {})[label] = pair
+            measured = {
+                side: sum(pair[side] for pair in observations.values())
+                for side in ("source", "target")
+                if observations and all(side in pair for pair in observations.values())
+            }
+            if measured:
+                totals[label] = measured
+        self.snapshot.update(project_comparisons=projects, comparison_counts=totals)
 
     def _close_phase(self, status: str) -> None:
         if self.active is not None:

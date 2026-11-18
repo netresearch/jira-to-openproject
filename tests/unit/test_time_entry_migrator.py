@@ -907,3 +907,20 @@ class TestTimeEntryMigratorEdgeCases:
         # Assert
         # Processing time should be calculated correctly
         mock_datetime.now.assert_called()
+
+
+def test_worklog_comparison_uses_complete_source_and_verified_target_receipts(
+    migrator, mock_jira_client, mock_op_client, sample_openproject_time_entry
+):
+    mock_jira_client.get_work_logs_for_issue.side_effect = [[{"id": "7"}], [], RuntimeError("source unavailable")]
+    migrator.extract_jira_work_logs_for_issues(["DEMO-1", "DEMO-2", "OTHER-1"], save_to_file=False)
+    assert migrator._worklog_receipts.counts() == {"DEMO": {"source": 1}, "OTHER": {}}
+    generic = {"success": True, "id": 21}
+    mock_op_client.create_time_entry.side_effect = [
+        generic,
+        {**generic, "verified_worklog_key": "DEMO-1:7", "reused": True},
+    ]
+    migrator._create_time_entry(sample_openproject_time_entry, parallel=False)
+    assert migrator._worklog_receipts.counts()["DEMO"] == {"source": 1}
+    migrator._create_time_entry(sample_openproject_time_entry, parallel=False)
+    assert migrator._worklog_receipts.counts()["DEMO"] == {"source": 1, "target": 1}
