@@ -72,13 +72,15 @@ class JiraAgileService:
         if not client.jira:
             raise JiraConnectionError(CLIENT_NOT_INITIALIZED)
         url = f"{client.base_url}/rest/agile/1.0/board/{int(board_id)}/issue"
+        fields = "project,status" if ranked else "project"
+        ordering = "" if ranked else " ORDER BY id"
         issues: list[dict] = []
         keys: set[str] = set()
         total: int | None = None
         while total is None or len(issues) < total:
             params = {
-                "jql": f'project = "{project_key}"' + ("" if ranked else " ORDER BY id"),
-                "fields": "project,status" if ranked else "project",
+                "jql": f'project = "{project_key}"{ordering}',
+                "fields": fields,
                 "startAt": len(issues),
                 "maxResults": 50,
             }
