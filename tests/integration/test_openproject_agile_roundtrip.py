@@ -93,7 +93,18 @@ def rails(tmp_path, request):
                     return result["value"]
             pytest.fail(f"Rails runner exited before returning a result ({proc.poll()})")
 
+        def execute_container(command: str):
+            result = subprocess.run(
+                ["docker", "exec", container, "sh", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            return result.stdout, result.stderr, result.returncode
+
         client = Mock()
+        client.docker_client.execute_command.side_effect = execute_container
         client.execute_query.side_effect = query
         client.execute_large_query_to_json_file.side_effect = lambda source, **kwargs: query(f"({source}).as_json")
         runner_service = OpenProjectRailsRunnerService(client)

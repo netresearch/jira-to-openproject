@@ -1,102 +1,55 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Container ``/tmp`` cleanup must run as root.
-
-When ``OpenProjectBulkCreateService.bulk_create_records`` finishes, it cleans
-up the input JSON, the result JSON, and the progress file inside the
-container's ``/tmp``. The input JSON was uploaded via ``docker cp`` which
-preserves the host uid (which doesn't map to the container's ``app`` user).
-Combined with ``/tmp``'s sticky bit, ``app`` cannot delete it — yielding
-``rm: cannot remove '/tmp/user_bulk_*.json': Operation not permitted`` after
-every batch (~28 batches x per-run = >100 noisy ERROR lines in production).
-
-Running the cleanup as ``root`` (via ``user="root"`` on
-``docker_client.execute_command``) lets the rm succeed regardless of who owns
-the file.
-"""
-
-from __future__ import annotations
+"""Bulk retries discard partial transfer artifacts on both machines."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import Mock
 
-from src.infrastructure.openproject.openproject_bulk_create_service import (
-    OpenProjectBulkCreateService,
-)
+import pytest
 
-# Constant pulled out so SonarCloud's ``python:S5443`` matcher (which
-# fires on hard-coded ``/tmp/...`` literals) doesn't flag the test
-# fixtures below — these paths are *container-side* arguments to
-# ``docker exec rm``, not host-side I/O. The production code under
-# test (``OpenProjectBulkCreateService._cleanup_container_temps``)
-# already uses real container paths; the tests only assert the call
-# args. The runtime concatenation of ``"/" + "tmp"`` keeps the static
-# matcher from firing on the assignment line itself.
-_CONTAINER_TMP = "/" + "tmp"
+from src.infrastructure.openproject.openproject_bulk_create_service import OpenProjectBulkCreateService
 
 
-def _ctmp(name: str) -> Path:
-    """Build a container-side ``/tmp/<name>`` Path for test fixtures."""
-    return Path(_CONTAINER_TMP) / name
+def test_cleanup_after_failed_bulk_upload(tmp_path: Path) -> None:
+    client = Mock()
+    client.file_manager.data_dir = tmp_path
+    staging = tmp_path / "j2o-stage.abcdefghij"
+    client.docker_client.execute_command.side_effect = [(str(staging), "", 0), ("", "", 0)]
+    client.transfer_file_to_container.side_effect = OSError("transfer interrupted")
+    service = OpenProjectBulkCreateService(client)
+    with pytest.raises(OSError, match="transfer interrupted"):
+        service.bulk_create_records("User", [{"login": "fixture"}])
+
+    local_input, remote_input = client.transfer_file_to_container.call_args.args
+    assert remote_input.parent == staging
+    assert not local_input.exists()
+    client.docker_client.execute_command.assert_called_with(f"rm -rf -- {staging}")
 
 
-def _make_service_with_fake_docker() -> tuple[OpenProjectBulkCreateService, MagicMock]:
-    fake_docker = MagicMock()
-    fake_docker.execute_command.return_value = ("", "", 0)
-    fake_client = MagicMock()
-    fake_client.docker_client = fake_docker
-    fake_client.logger = MagicMock()
-    return OpenProjectBulkCreateService(fake_client), fake_docker
+def test_bulk_rows_continue_after_assignment_error(tmp_path: Path) -> None:
+    import json
+    import shutil
+    import subprocess
 
-
-def test_cleanup_container_temps_runs_as_root() -> None:
-    """The cleanup helper must pass ``user="root"`` on every rm call."""
-    service, fake_docker = _make_service_with_fake_docker()
-
-    service._cleanup_container_temps(
-        service._client,
-        (_ctmp("user_bulk_abc.json"),),
-    )
-
-    assert fake_docker.execute_command.call_count == 1
-    call_args, call_kwargs = fake_docker.execute_command.call_args
-    rm_cmd = call_args[0]
-    assert "rm -f" in rm_cmd
-    assert f"{_CONTAINER_TMP}/user_bulk_abc.json" in rm_cmd
-    assert call_kwargs.get("user") == "root"
-
-
-def test_cleanup_container_temps_iterates_all_paths() -> None:
-    """Each path in the tuple gets its own rm call."""
-    service, fake_docker = _make_service_with_fake_docker()
-
-    service._cleanup_container_temps(
-        service._client,
-        (
-            _ctmp("user_bulk_a.json"),
-            _ctmp("bulk_result_user_b.json"),
-            _ctmp("bulk_result_user_b.json.progress"),
-        ),
-    )
-
-    assert fake_docker.execute_command.call_count == 3
-    for call in fake_docker.execute_command.call_args_list:
-        assert call.kwargs.get("user") == "root"
-
-
-def test_cleanup_swallows_per_path_failures() -> None:
-    """A failed rm on one path must not block the rest — best-effort."""
-    service, fake_docker = _make_service_with_fake_docker()
-
-    fake_docker.execute_command.side_effect = [
-        Exception("boom"),
-        ("", "", 0),
-    ]
-
-    service._cleanup_container_temps(
-        service._client,
-        (_ctmp("a.json"), _ctmp("b.json")),
-    )
-
-    assert fake_docker.execute_command.call_count == 2
+    ruby = shutil.which("ruby")
+    if not ruby:
+        pytest.skip("Ruby is required to exercise the generated bulk script")
+    source = tmp_path / "input.json"
+    result = tmp_path / "result.json"
+    source.write_text('[{"name":"invalid"},{"name":"valid"}]')
+    harness = """
+class FixtureType
+  def assign_attributes(attrs)
+    raise ArgumentError, 'bad attribute' if attrs['name'] == 'invalid'
+  end
+  def save = true
+  def id = 71
+end
+"""
+    service = OpenProjectBulkCreateService(Mock())
+    program = harness + service._bulk_script("FixtureType", source, result, tmp_path / "progress")
+    subprocess.run([ruby, "-"], input=program, text=True, check=True, capture_output=True)
+    envelope = json.loads(result.read_text())
+    assert envelope["created"] == [{"index": 1, "id": 71}]
+    assert envelope["errors"] == [{"index": 0, "errors": ["bad attribute"]}]

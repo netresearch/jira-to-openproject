@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -39,8 +40,16 @@ class FakeRailsConsoleClient:
 
 
 class FakeDockerClient:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, root: Path) -> None:
+        self.stage = root / "j2o-stage.0123456789"
+
+    def execute_command(self, command: str) -> tuple[str, str, int]:
+        if "mktemp -d" in command:
+            self.stage.mkdir(mode=0o700)
+            return str(self.stage), "", 0
+        assert command == f"rm -rf -- {self.stage}"
+        shutil.rmtree(self.stage)
+        return "", "", 0
 
     # Simulate copying to container by copying to target path on host FS
     def transfer_file_to_container(self, local_path: Path, container_path: Path) -> None:
@@ -70,7 +79,7 @@ def make_client(tmp_path: Path) -> OpenProjectClient:
         ssh_host="localhost",
         ssh_user="tester",
         ssh_client=FakeSSHClient(),
-        docker_client=FakeDockerClient(),
+        docker_client=FakeDockerClient(tmp_path),
         rails_client=FakeRailsConsoleClient(),
     )
     return client

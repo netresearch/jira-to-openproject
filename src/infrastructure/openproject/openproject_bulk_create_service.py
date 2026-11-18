@@ -44,18 +44,18 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 import tempfile
 import time
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from src import config
 from src.infrastructure.exceptions import QueryExecutionError
+from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.rails_execution import once_per_staging_directory
 
 _JSON_SUFFIX = ".json"
 
@@ -66,6 +66,30 @@ _JSON_SUFFIX = ".json"
 # runner`` per batch. Override via ``J2O_SCRIPT_LOAD_MODE=runner`` if the
 # tmux console is unavailable.
 DEFAULT_SCRIPT_LOAD_MODE = "console"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name) or default)
+    except ValueError:
+        return default
+
+
+def _bulk_result_name(model: str, basename: str | None) -> str:
+    if not basename:
+        return f"bulk_result_{model.lower()}_{int(time.time())}_{os.getpid()}_{os.urandom(3).hex()}.json"
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", Path(basename).name) or "bulk_result"
+    return f"{base.removesuffix(_JSON_SUFFIX)}_{int(time.time())}_{os.getpid()}_{os.urandom(2).hex()}.json"
+
+
+def _bulk_hint(model: str) -> str:
+    try:
+        ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        proj = (config.jira_config or {}).get("project_filter")
+        proj_part = f" project={proj}" if proj else ""
+        return f"j2o: migration/bulk_create model={model}{proj_part} ts={ts} pid={os.getpid()}"
+    except Exception:
+        return f"j2o: migration/bulk_create model={model} pid={os.getpid()}"
 
 
 class LegacyJournalReplayError(QueryExecutionError):
@@ -98,33 +122,6 @@ class OpenProjectBulkCreateService:
         self._logger = client.logger
 
     # ── helpers ──────────────────────────────────────────────────────────
-
-    def _cleanup_container_temps(
-        self,
-        client: OpenProjectClient,
-        paths: tuple[Path, ...],
-    ) -> None:
-        """Best-effort delete of container ``/tmp/...`` files.
-
-        Runs ``rm -f`` as ``root`` so files transferred via ``docker cp``
-        (which preserves the host uid) can be deleted regardless of the
-        container's default user (otherwise ``/tmp``'s sticky bit blocks
-        the delete with ``Operation not permitted``).
-        """
-        for cpath in paths:
-            try:
-                client.docker_client.execute_command(
-                    f"rm -f {shlex.quote(cpath.as_posix())}",
-                    user="root",
-                )
-            except Exception as cleanup_err:
-                self._logger.debug(
-                    "Non-critical: failed to remove container temp %s: %s",
-                    cpath,
-                    cleanup_err,
-                )
-
-    # ── generic mass-create ──────────────────────────────────────────────
 
     def bulk_create_records(
         self,
@@ -160,10 +157,30 @@ class OpenProjectBulkCreateService:
             reject_legacy_journal_operations(records)
         client._validate_model_name(model)
 
+        temp_root = Path(client.file_manager.data_dir) / "bulk_create"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        with (
+            tempfile.TemporaryDirectory(dir=temp_root) as local,
+            private_container_directory(client.docker_client) as directory,
+        ):
+            return self._bulk_create_in_directory(
+                model, records, timeout=timeout, result_basename=result_basename, directory=directory, local=Path(local)
+            )
+
+    def _bulk_create_in_directory(
+        self,
+        model: str,
+        records: list[dict[str, Any]],
+        *,
+        timeout: int | None,
+        result_basename: str | None,
+        directory: Path,
+        local: Path,
+    ) -> dict[str, Any]:
+        client = self._client
         # Prepare local JSON payload
         temp_dir = Path(client.file_manager.data_dir) / "bulk_create"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        local_json = temp_dir / f"{model.lower()}_bulk_{os.urandom(4).hex()}.json"
+        local_json = local / "input.json"
         try:
             with local_json.open("w", encoding="utf-8") as f:
                 json.dump(records, f)
@@ -172,50 +189,30 @@ class OpenProjectBulkCreateService:
             raise QueryExecutionError(_msg) from e
 
         # Transfer JSON to container
-        container_json = Path("/tmp") / local_json.name
+        container_json = directory / local_json.name
         client.transfer_file_to_container(local_json, container_json)
 
-        # Result file path in container and local debug path.
-        # Always ensure uniqueness to avoid collisions across batches.
-        # Sanitise ``result_basename``: it's caller-supplied and lands
-        # both in filesystem paths AND in a Ruby single-quoted literal.
-        # Reduce to a strict ``[A-Za-z0-9._-]`` basename so a
-        # value like ``../etc/passwd`` or ``foo'; system('rm -rf /') #``
-        # can't escape the temp dir or break out of the Ruby string.
-        if result_basename:
-            base = re.sub(r"[^A-Za-z0-9._-]", "_", Path(str(result_basename)).name)
-            if not base:
-                base = "bulk_result"
-            if not base.endswith(_JSON_SUFFIX):
-                base = f"{base}.json"
-            unique_suffix = f"_{int(time.time())}_{os.getpid()}_{os.urandom(2).hex()}"
-            # Insert suffix before .json
-            if base.lower().endswith(_JSON_SUFFIX):
-                result_name = base[:-5] + unique_suffix + _JSON_SUFFIX
-            else:
-                result_name = base + unique_suffix
-        else:
-            result_name = f"bulk_result_{model.lower()}_{int(time.time())}_{os.getpid()}_{os.urandom(3).hex()}.json"
-        container_result = Path("/tmp") / result_name
+        result_name = _bulk_result_name(model, result_basename)
+        container_result = directory / result_name
         local_result = temp_dir / result_name
+        progress = container_result.with_suffix(".json.progress")
+        script = self._bulk_script(model, container_json, container_result, progress)
+        script = once_per_staging_directory(script, directory)
+        output, runner = self._execute_bulk_script(script, local, progress, timeout)
+        self._wait_for_bulk_result(container_result, local_result, runner)
+        try:
+            with local_result.open(encoding="utf-8") as f:
+                result = json.load(f)
+            if isinstance(output, str):
+                result["output"] = output[:2000]
+            return result
+        except Exception as e:
+            msg = f"Failed to parse result JSON: {e}"
+            raise QueryExecutionError(msg) from e
 
-        # Progress file within the container, mirrored locally for monitoring
-        container_progress = Path("/tmp") / (result_name + ".progress")
-        local_progress = local_result.with_suffix(local_result.suffix + ".progress")
-
-        # Compose minimal Ruby script
-        # Provenance hint for bulk create
-        def _bulk_hint() -> str:
-            try:
-                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-                proj = (config.jira_config or {}).get("project_filter")
-                proj_part = f" project={proj}" if proj else ""
-                return f"j2o: migration/bulk_create model={model}{proj_part} ts={ts} pid={os.getpid()}"
-            except Exception:
-                return f"j2o: migration/bulk_create model={model} pid={os.getpid()}"
-
+    def _bulk_script(self, model: str, container_json: Path, container_result: Path, container_progress: Path) -> str:
         header = (
-            f"# {_bulk_hint()}\n"
+            f"# {_bulk_hint(model)}\n"
             "require 'json'\n"
             "require 'logger'\n"
             "begin; require 'fileutils'; rescue; end\n"
@@ -223,7 +220,7 @@ class OpenProjectBulkCreateService:
             f"data_path = '{container_json.as_posix()}'\n"
             f"result_path = '{container_result.as_posix()}'\n"
             # Ensure progress ENV defaults are present in both console and runner modes
-            f"ENV['J2O_BULK_PROGRESS_FILE'] ||= '{container_progress.as_posix()}'\n"
+            f"progress_file = '{container_progress.as_posix()}'\n"
             "ENV['J2O_BULK_PROGRESS_N'] ||= (ENV['J2O_BULK_PROGRESS_N'] || '50')\n"
         )
         ruby = (
@@ -238,7 +235,6 @@ class OpenProjectBulkCreateService:
             "verbose = (ENV['J2O_BULK_RUBY_VERBOSE'] == '1')\n"
             'puts "[RUBY] Verbose mode: #{verbose}"\n'
             "STDOUT.flush\n"
-            "progress_file = ENV['J2O_BULK_PROGRESS_FILE']\n"
             "begin; FileUtils.rm_f(progress_file); rescue; end if progress_file\n"
             "progress_n = (ENV['J2O_BULK_PROGRESS_N'] || '50').to_i\n"
             "begin\n"
@@ -293,16 +289,14 @@ class OpenProjectBulkCreateService:
             "    begin\n"
             "      cf_data = attrs.delete('custom_fields') if attrs.key?('custom_fields')\n"
             "      attrs.delete('_rails_operations')\n"
-            "      jira_id = attrs.delete('jira_id') if attrs.key?('jira_id')\n"
+            "      jira_id = attrs.delete('jira_id')\n"
+            "      jira_issue_id = attrs.delete('jira_issue_id')\n"
+            "      jira_id ||= jira_issue_id\n"
             "      jira_key = attrs.delete('jira_key') if attrs.key?('jira_key')\n"
             "      jira_issue_key = attrs.delete('jira_issue_key') if attrs.key?('jira_issue_key')\n"
             "    rescue\n"
             "    end\n"
-            "    begin\n"
-            "      rec.assign_attributes(attrs)\n"
-            "    rescue => e\n"
-            "      # If assign fails, proceed to save with preassigned associations only\n"
-            "    end\n"
+            "    rec.assign_attributes(attrs)\n"
             "    # Ensure defaults are applied AFTER assign_attributes to avoid blank overrides\n"
             "    if model_name == 'WorkPackage'\n"
             "      begin\n"
@@ -410,263 +404,116 @@ class OpenProjectBulkCreateService:
             "end\n"
         )
 
-        # Decide execution mode: prefer rails runner for long scripts to avoid pasting into console
-        full_script = header + ruby
-        max_lines_env = os.environ.get("J2O_SCRIPT_RUNNER_MAX_LINES")
-        char_thresh_env = os.environ.get("J2O_SCRIPT_RUNNER_THRESHOLD")
-        try:
-            max_lines = int(max_lines_env) if max_lines_env else 10
-        except Exception:
-            max_lines = 10
-        try:
-            char_threshold = int(char_thresh_env) if char_thresh_env else 200
-        except Exception:
-            char_threshold = 200
+        return header + ruby
 
-        script_lines = full_script.count("\n") + 1
-        use_runner = (script_lines >= max_lines) or (len(full_script) >= char_threshold)
-
-        output: str | None = None
-        if use_runner:
-            runner_script_path = f"/tmp/j2o_bulk_{os.urandom(4).hex()}.rb"
-            local_tmp = Path(client.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
-            local_tmp.parent.mkdir(parents=True, exist_ok=True)
-            with local_tmp.open("w", encoding="utf-8") as f:
-                f.write(full_script)
-            client.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-            mode = (os.environ.get("J2O_SCRIPT_LOAD_MODE") or DEFAULT_SCRIPT_LOAD_MODE).lower()
-            allow_runner_fallback = str(os.environ.get("J2O_ALLOW_RUNNER_FALLBACK", "0")).lower() in {"1", "true"}
-            if mode == "console":
-                try:
-                    _console_output = client.rails_client.execute(
-                        f"load '{runner_script_path}'",
-                        timeout=timeout or 120,
-                        suppress_output=True,
-                    )
-                except Exception as e:
-                    if not allow_runner_fallback:
-                        msg = "Rails console execution failed and runner fallback is disabled"
-                        raise QueryExecutionError(
-                            msg,
-                        ) from e
-                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
-                    try:
-                        stdout, stderr, rc = client.docker_client.execute_command(
-                            runner_cmd,
-                            timeout=timeout or 120,
-                            env={
-                                "J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1"),
-                                "J2O_BULK_PROGRESS_FILE": container_progress.as_posix(),
-                                "J2O_BULK_PROGRESS_N": os.environ.get("J2O_BULK_PROGRESS_N", "50"),
-                            },
-                        )
-                    except subprocess.TimeoutExpired as te:
-                        # Best-effort remote cleanup of the timed-out runner
-                        try:
-                            client.docker_client.execute_command(
-                                f'pkill -f "rails runner {runner_script_path}" || true',
-                                timeout=10,
-                            )
-                        except Exception:
-                            pass
-                        msg = f"rails runner timed out for {runner_script_path}"
-                        raise QueryExecutionError(
-                            msg,
-                        ) from te
-                    if rc != 0:
-                        q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                        raise QueryExecutionError(q_msg) from e
-                    if stdout:
-                        self._logger.info("runner stdout: %s", stdout[:500])
-            else:
-                runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
-                try:
-                    stdout, stderr, rc = client.docker_client.execute_command(
-                        runner_cmd,
-                        timeout=timeout or 120,
-                        env={
-                            "J2O_BULK_RUBY_VERBOSE": os.environ.get("J2O_BULK_RUBY_VERBOSE", "1"),
-                            "J2O_BULK_PROGRESS_FILE": container_progress.as_posix(),
-                            "J2O_BULK_PROGRESS_N": os.environ.get("J2O_BULK_PROGRESS_N", "50"),
-                        },
-                    )
-                except subprocess.TimeoutExpired as te:
-                    # Best-effort remote cleanup of the timed-out runner
-                    try:
-                        client.docker_client.execute_command(
-                            f'pkill -f "rails runner {runner_script_path}" || true',
-                            timeout=10,
-                        )
-                    except Exception:
-                        pass
-                    msg = f"rails runner timed out for {runner_script_path}"
-                    raise QueryExecutionError(
-                        msg,
-                    ) from te
-                if rc != 0:
-                    q_msg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                    raise QueryExecutionError(q_msg)
-                if stdout:
-                    self._logger.info("runner stdout: %s", stdout[:10000])
-        else:
-            # Execute via persistent Rails console with suppressed output (file-based result only)
+    def _execute_bulk_script(
+        self, script: str, local: Path, progress: Path, timeout: int | None
+    ) -> tuple[str | None, Path | None]:
+        max_lines = _env_int("J2O_SCRIPT_RUNNER_MAX_LINES", 10)
+        max_chars = _env_int("J2O_SCRIPT_RUNNER_THRESHOLD", 200)
+        if script.count("\n") + 1 < max_lines and len(script) < max_chars:
             try:
-                # Allow opt-in console progress visibility
-                suppress = os.environ.get("J2O_BULK_PROGRESS_CONSOLE", "0") != "1"
-                output = client.rails_client.execute(full_script, timeout=timeout or 120, suppress_output=suppress)
-            except Exception as e:
-                _msg = f"Rails execution failed for bulk_create_records: {e}"
-                raise QueryExecutionError(_msg) from e
+                suppress_output = os.getenv("J2O_BULK_PROGRESS_CONSOLE", "0") != "1"
+                return self._client.rails_client.execute(
+                    script, timeout=timeout or 120, suppress_output=suppress_output
+                ), None
+            except Exception as exc:
+                msg = f"Rails execution failed for bulk_create_records: {exc}"
+                raise QueryExecutionError(msg) from exc
 
-        # Poll-copy result back to local (allow slow writes on busy systems)
-        max_wait_seconds_env = os.environ.get("J2O_BULK_RESULT_WAIT_SECONDS")
+        runner = progress.parent / "bulk.rb"
+        source = local / runner.name
+        source.write_text(script, encoding="utf-8")
+        self._client.docker_client.transfer_file_to_container(source, runner)
+        if (os.getenv("J2O_SCRIPT_LOAD_MODE") or DEFAULT_SCRIPT_LOAD_MODE).lower() == "console":
+            try:
+                self._client.rails_client.execute(
+                    f"load '{runner.as_posix()}'", timeout=timeout or 120, suppress_output=True
+                )
+                return None, runner
+            except Exception as exc:
+                if os.getenv("J2O_ALLOW_RUNNER_FALLBACK", "0").lower() not in {"1", "true"}:
+                    msg = "Rails console execution failed and runner fallback is disabled"
+                    raise QueryExecutionError(msg) from exc
+        self._run_bulk_runner(runner, progress, timeout)
+        return None, runner
+
+    def _stop_bulk_runner(self, runner: Path | None) -> None:
+        if runner is None:
+            return
         try:
-            max_wait_seconds = int(max_wait_seconds_env) if max_wait_seconds_env else 180
-        except Exception:
-            max_wait_seconds = 180
-        poll_interval = 1.0
-        waited = 0.0
-        copied = False
-        # Stall detection and heartbeats
-        stall_env = os.environ.get("J2O_BULK_STALL_SECONDS")
-        try:
-            stall_seconds = int(stall_env) if stall_env else 120
-        except Exception:
-            stall_seconds = 120
-        last_progress_len = -1
-        last_progress_change_at = 0.0
-        last_heartbeat_logged = -10.0
-        runner_script_known = "runner_script_path" in locals()
-        while waited < max_wait_seconds:
-            # Avoid noisy SSH errors: first, check for existence using Docker API
-            if client.docker_client.check_file_exists_in_container(container_result):
-                # Attempt direct copy from container to local
-                try:
-                    client.transfer_file_from_container(container_result, local_result)
-                    copied = True
-                    break
-                except FileNotFoundError:
-                    # Race: file appeared in stat but not yet readable; keep polling
-                    pass
-                except Exception:
-                    # Fall back to next poll iteration
-                    pass
-
-            # If an error sidecar file exists, fetch it for diagnostics
-            try:
-                err_remote = Path(container_result.as_posix() + ".error.json")
-                if client.docker_client.check_file_exists_in_container(err_remote):
-                    err_local = local_result.with_suffix(local_result.suffix + ".error.json")
-                    client.transfer_file_from_container(err_remote, err_local)
-                    try:
-                        with err_local.open("r", encoding="utf-8") as ef:
-                            err_txt = ef.read()[:500]
-                        self._logger.error("Bulk runner error: %s", err_txt)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # Probe progress file occasionally to provide live feedback and detect stalls
-            try:
-                if client.docker_client.check_file_exists_in_container(container_progress):
-                    # Copy progress file locally at a modest cadence
-                    if (waited - last_heartbeat_logged) >= 5.0:
-                        try:
-                            client.transfer_file_from_container(container_progress, local_progress)
-                            prog_text = ""
-                            try:
-                                with local_progress.open("r", encoding="utf-8") as pf:
-                                    prog_text = pf.read()
-                            except Exception:
-                                prog_text = ""
-                            prog_len = len(prog_text)
-                            # Count dots as a rough processed counter
-                            processed_est = prog_text.count(".")
-                            # Extract total from START line if present
-                            total_est = None
-                            try:
-                                for line in prog_text.splitlines():
-                                    if line.startswith("START total="):
-                                        total_est = int(line.split("=", 1)[1])
-                                        break
-                            except Exception:
-                                total_est = None
-                            self._logger.info(
-                                "Bulk progress: ~%s%s processed (waited %.0fs)",
-                                processed_est,
-                                f"/{total_est}" if total_est is not None else "",
-                                waited,
-                            )
-                            if prog_len != last_progress_len:
-                                last_progress_len = prog_len
-                                last_progress_change_at = waited
-                            elif (waited - last_progress_change_at) >= stall_seconds:
-                                # Consider the run stalled; attempt to stop runner and error out
-                                try:
-                                    if runner_script_known:
-                                        client.docker_client.execute_command(
-                                            f'pkill -f "rails runner {runner_script_path}" || true',
-                                            timeout=10,
-                                        )
-                                except Exception:
-                                    pass
-                                msg = f"bulk_create_records stalled for {stall_seconds}s without progress"
-                                raise QueryExecutionError(
-                                    msg,
-                                )
-                            last_heartbeat_logged = waited
-                        except Exception:
-                            # Ignore progress read errors; continue polling
-                            pass
-            except Exception:
-                pass
-
-            # Periodic heartbeat even without progress file
-            try:
-                if (waited - last_heartbeat_logged) >= 10.0:
-                    self._logger.info(
-                        "Waiting for bulk result file %s (waited %.0fs)",
-                        container_result,
-                        waited,
-                    )
-                    last_heartbeat_logged = waited
-            except Exception:
-                pass
-
-            time.sleep(poll_interval)
-            waited += poll_interval
-
-        if not copied:
-            _msg = "Result file not found after bulk_create_records execution"
-            raise QueryExecutionError(_msg)
-
-        # Parse and return result. Wrap in try/finally to clean up
-        # container temp files on the happy path (the most common
-        # exit point and where disk pressure accumulates). Failures
-        # earlier in the method body — JSON serialisation,
-        # ``transfer_file_to_container``, the Rails execution path —
-        # still leak their respective temps, matching the
-        # pre-extraction behaviour; an unhappy-path-cleanup pass can
-        # land as a follow-up.
-        try:
-            try:
-                with local_result.open("r", encoding="utf-8") as f:
-                    result = json.load(f)
-                    # Attach raw output snippet for callers that want to persist it
-                    if isinstance(output, str):
-                        result["output"] = output[:2000]
-                    return result
-            except Exception as e:
-                _msg = f"Failed to parse result JSON: {e}"
-                raise QueryExecutionError(_msg) from e
-        finally:
-            # Best-effort cleanup of container temp files. Failures
-            # log at debug only so they don't mask the real result.
-            self._cleanup_container_temps(
-                client,
-                (container_json, container_result, container_progress),
+            self._client.docker_client.execute_command(
+                f'pkill -f "rails runner {runner.as_posix()}" || true', timeout=10
             )
+        except Exception:
+            self._logger.debug("Could not stop timed-out bulk runner %s", runner, exc_info=True)
+
+    def _run_bulk_runner(self, runner: Path, progress: Path, timeout: int | None) -> None:
+        try:
+            stdout, stderr, status = self._client.docker_client.execute_command(
+                f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner.as_posix()}",
+                timeout=timeout or 120,
+                env={
+                    "J2O_BULK_RUBY_VERBOSE": os.getenv("J2O_BULK_RUBY_VERBOSE", "1"),
+                    "J2O_BULK_PROGRESS_FILE": progress.as_posix(),
+                    "J2O_BULK_PROGRESS_N": os.getenv("J2O_BULK_PROGRESS_N", "50"),
+                },
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._stop_bulk_runner(runner)
+            msg = f"rails runner timed out for {runner}"
+            raise QueryExecutionError(msg) from exc
+        if status:
+            msg = f"rails runner failed (rc={status}): {stderr[:500]}"
+            raise QueryExecutionError(msg)
+        if stdout:
+            self._logger.info("runner stdout: %s", stdout[:10000])
+
+    def _copy_if_ready(self, remote: Path, local: Path) -> bool:
+        try:
+            if not self._client.docker_client.check_file_exists_in_container(remote):
+                return False
+            self._client.transfer_file_from_container(remote, local)
+        except Exception:
+            self._logger.debug("Bulk file not yet readable: %s", remote, exc_info=True)
+            return False
+        return True
+
+    def _read_sidecar(self, remote: Path, local: Path, suffix: str) -> str | None:
+        source = remote.with_suffix(remote.suffix + suffix)
+        target = local.with_suffix(local.suffix + suffix)
+        if not self._copy_if_ready(source, target):
+            return None
+        try:
+            return target.read_text(encoding="utf-8")
+        except OSError:
+            self._logger.debug("Could not read bulk sidecar %s", target, exc_info=True)
+            return None
+
+    def _wait_for_bulk_result(self, remote: Path, local: Path, runner: Path | None) -> None:
+        wait_seconds = _env_int("J2O_BULK_RESULT_WAIT_SECONDS", 180)
+        stall_seconds = _env_int("J2O_BULK_STALL_SECONDS", 120)
+        progress_size, last_change = -1, 0
+        for elapsed in range(wait_seconds):
+            if self._copy_if_ready(remote, local):
+                return
+            error = self._read_sidecar(remote, local, ".error.json")
+            if error:
+                self._logger.error("Bulk runner error: %s", error[:500])
+            if elapsed % 5 == 0:
+                progress = self._read_sidecar(remote, local, ".progress")
+                if progress is None:
+                    self._logger.info("Waiting for bulk result file %s (waited %ds)", remote, elapsed)
+                elif len(progress) != progress_size:
+                    progress_size, last_change = len(progress), elapsed
+                    self._logger.info("Bulk progress: ~%s processed (waited %ds)", progress.count("."), elapsed)
+                elif elapsed - last_change >= stall_seconds:
+                    self._stop_bulk_runner(runner)
+                    msg = f"bulk_create_records stalled for {stall_seconds}s without progress"
+                    raise QueryExecutionError(msg)
+            time.sleep(1)
+        msg = "Result file not found after bulk_create_records execution"
+        raise QueryExecutionError(msg)
 
     # ── work-package batch wrappers ──────────────────────────────────────
 
@@ -696,30 +543,16 @@ class OpenProjectBulkCreateService:
 
         client = self._client
 
-        # Write JSON to a temp file in container to avoid escaping issues
-        batch_id = uuid.uuid4().hex[:8]
-        container_json_path = f"/tmp/j2o_batch_{batch_id}.json"
+        with private_container_directory(client.docker_client) as directory:
+            return self._execute_work_package_batch(work_packages, directory)
 
-        # Write JSON to local temp file, then transfer to container.
-        # ``local_json_path`` is captured BEFORE ``json.dump`` so the
-        # finally-block cleanup still works if dump raises (e.g. on
-        # non-JSON-serialisable data) — otherwise ``unlink`` would
-        # raise ``UnboundLocalError`` and mask the original error.
-        with tempfile.NamedTemporaryFile(mode="w", suffix=_JSON_SUFFIX, delete=False) as f:
-            local_json_path = f.name
-            json.dump(work_packages, f)
-
-        try:
-            client.docker_client.transfer_file_to_container(Path(local_json_path), Path(container_json_path))
-        finally:
-            # Guard against ``FileNotFoundError`` so a missing temp
-            # (e.g. if a future change ever moves the dump into a
-            # try/except that deletes on failure) doesn't shadow the
-            # real error.
-            try:
-                os.unlink(local_json_path)
-            except FileNotFoundError:
-                pass
+    def _execute_work_package_batch(self, work_packages: list[dict[str, Any]], directory: Path) -> dict[str, Any]:
+        client = self._client
+        container_json_path = (directory / "work_packages.json").as_posix()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=_JSON_SUFFIX, encoding="utf-8") as payload:
+            json.dump(work_packages, payload)
+            payload.flush()
+            client.docker_client.transfer_file_to_container(Path(payload.name), Path(container_json_path))
 
         # Build batch work package creation script - read JSON from file
         script = f"""
@@ -884,28 +717,9 @@ class OpenProjectBulkCreateService:
         }}
         """
 
-        operation_succeeded = False  # Track success for debug file preservation
         try:
             result = client.execute_json_query(script)
-            operation_succeeded = True
             return result if isinstance(result, dict) else {"created": 0, "failed": len(work_packages), "results": []}
         except Exception as e:
             msg = f"Failed to batch create work packages: {e}"
             raise QueryExecutionError(msg) from e
-        finally:
-            # Clean up container JSON file - preserve on error for debugging
-            preserve_on_error = config.migration_config.get("preserve_debug_files_on_error", True)
-            should_cleanup = operation_succeeded or not preserve_on_error
-            if not should_cleanup:
-                self._logger.warning(
-                    "Preserving debug file due to error: %s (set preserve_debug_files_on_error=false to auto-cleanup)",
-                    container_json_path,
-                )
-            else:
-                # Run as root: ``container_json_path`` was uploaded via
-                # ``docker cp`` so it carries the host uid; the container's
-                # default user can't delete it under ``/tmp``'s sticky bit.
-                self._cleanup_container_temps(
-                    client,
-                    (Path(container_json_path),),
-                )

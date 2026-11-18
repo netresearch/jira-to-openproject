@@ -391,7 +391,7 @@ class OpenProjectUserService:
         safe_filename = escape_ruby_single_quoted(filename)
         head = (
             f"user_id = {int(user_id)}\n"
-            f"file_path = '{container_path.as_posix()}'\n"
+            f"file_path = '{escape_ruby_single_quoted(container_path.as_posix())}'\n"
             f"filename = '{safe_filename}'\n"
             f"content_type = '{safe_content_type}'\n"
         )

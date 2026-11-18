@@ -147,7 +147,7 @@ J2O_UPDATES
           begin
             wp = WorkPackage.find(update.fetch('id'))
             wp.with_lock(requires_new: true) do
-              attributes = update.except('id')
+              attributes = update.except('id', '_rails_operations')
               fields = attributes.extract!(*attributes.keys.grep(/\\AcustomField[0-9]+\\z/))
               wp.assign_attributes(attributes)
               expected = {{}}
