@@ -105,6 +105,35 @@ def _safe_user(obj: Any) -> JiraUser | None:
         return None
 
 
+def _jira_remote_links(sdk_fields: Any) -> list[dict[str, Any]]:
+    # ``remotelinks`` is not a standard inner ``fields`` attribute on the
+    # Jira SDK — it surfaces as a per-issue dict on cached/test payloads.
+    # We accept any of a handful of synonym attributes and normalise into
+    # a single ``remote_links`` list of ``{title, url}`` dicts. The model
+    # validates these into typed :class:`JiraRemoteLinkRef` instances.
+    remote_links_payload: list[dict[str, Any]] = []
+    for attr in ("remotelinks", "remote_links", "webLinks", "weblinks", "issuelinks"):
+        candidates = getattr(sdk_fields, attr, None)
+        if candidates is None:
+            continue
+        for item in _safe_iter(candidates):
+            obj: Any
+            if isinstance(item, dict):
+                obj = item.get("object", item)
+            else:
+                obj = getattr(item, "object", item)
+            if isinstance(obj, dict):
+                url = obj.get("url")
+                title = obj.get("title") or obj.get("summary")
+            else:
+                url = getattr(obj, "url", None)
+                title = getattr(obj, "title", None) or getattr(obj, "summary", None)
+            remote_links_payload.append({"title": title, "url": url})
+        break
+
+    return remote_links_payload
+
+
 def _jira_fields_payload(sdk_fields: Any) -> dict[str, Any]:
     """Translate a Jira SDK ``fields`` object into a validation-ready dict.
 
@@ -159,30 +188,7 @@ def _jira_fields_payload(sdk_fields: Any) -> dict[str, Any]:
     components_iter = getattr(sdk_fields, "components", None)
     components_payload = [_jira_ref(c) for c in _safe_iter(components_iter) if c is not None]
 
-    # ``remotelinks`` is not a standard inner ``fields`` attribute on the
-    # Jira SDK — it surfaces as a per-issue dict on cached/test payloads.
-    # We accept any of a handful of synonym attributes and normalise into
-    # a single ``remote_links`` list of ``{title, url}`` dicts. The model
-    # validates these into typed :class:`JiraRemoteLinkRef` instances.
-    remote_links_payload: list[dict[str, Any]] = []
-    for attr in ("remotelinks", "remote_links", "webLinks", "weblinks", "issuelinks"):
-        candidates = getattr(sdk_fields, attr, None)
-        if candidates is None:
-            continue
-        for item in _safe_iter(candidates):
-            obj: Any
-            if isinstance(item, dict):
-                obj = item.get("object", item)
-            else:
-                obj = getattr(item, "object", item)
-            if isinstance(obj, dict):
-                url = obj.get("url")
-                title = obj.get("title") or obj.get("summary")
-            else:
-                url = getattr(obj, "url", None)
-                title = getattr(obj, "title", None) or getattr(obj, "summary", None)
-            remote_links_payload.append({"title": title, "url": url})
-        break
+    remote_links_payload = _jira_remote_links(sdk_fields)
 
     votes_obj = getattr(sdk_fields, "votes", None)
     votes_payload: dict[str, Any] | None = None

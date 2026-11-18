@@ -231,6 +231,7 @@ def configure_comprehensive_mocks(mock_jira, mock_op):
     mock_op.execute_script_with_data.return_value = {"result": "success"}
 
     # File transfer methods
+    mock_op.docker_client.execute_command.return_value = ("/tmp/j2o-stage.0123456789", "", 0)
     mock_op.transfer_file_to_container.return_value = True
     mock_op.transfer_file_from_container.return_value = Path("/tmp/test_file")
 

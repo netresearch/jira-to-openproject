@@ -135,8 +135,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=False, failed=1)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
-        data = mapped.data or {}
-        text_by_key: dict[str, str] = data.get("sp_text", {}) if isinstance(data, dict) else {}
+        text_by_key: dict[str, str] = mapped.data.get("sp_text", {}) if isinstance(mapped.data, dict) else {}
 
         updated = 0
         failed = 0
@@ -147,13 +146,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         # layout: outer key is numeric jira_id, inner ``jira_key`` is the
         # human-readable form) so subsequent lookups work regardless of
         # which key shape the on-disk file uses.
-        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            key_for_legacy = str(inner_jira_key or outer_key)
-            entry = self._work_package_entry(key_for_legacy, raw_entry)
-            if entry is not None:
-                entries_by_jira_key[key_for_legacy] = entry
+        entries_by_jira_key = self._entries_by_jira_key(wp_map)
 
         for jira_key, text in text_by_key.items():
             if text is None or text == "0":
@@ -161,12 +154,8 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             entry = entries_by_jira_key.get(jira_key)
             if entry is None:
                 continue
-            wp_id = int(entry.openproject_id)
-            # Track project for selective enablement
-            if entry.openproject_project_id is not None:
-                projects_with_values.add(int(entry.openproject_project_id))
             try:
-                result = self._write_work_package_custom_value(wp_id, cf_id, str(text), return_project=False)
+                result = self._write_work_package_custom_value(entry, cf_id, str(text), projects_with_values)
                 if result:
                     updated += 1
                 else:
@@ -184,3 +173,14 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
     def run(self) -> ComponentResult:
         """Run Story points migration."""
         return self._run_etl_pipeline("Story points")
+
+    def _entries_by_jira_key(self, wp_map: dict) -> dict[str, WorkPackageMappingEntry]:
+        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            key_for_legacy = str(inner_jira_key or outer_key)
+            entry = self._work_package_entry(key_for_legacy, raw_entry)
+            if entry is not None:
+                entries_by_jira_key[key_for_legacy] = entry
+
+        return entries_by_jira_key

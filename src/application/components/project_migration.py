@@ -384,51 +384,7 @@ class ProjectMigration(BaseMigration):
             )
             project = None
 
-        if project is not None and "project_type_key" not in jira_project and project.project_type_key:
-            jira_project["project_type_key"] = project.project_type_key
-        elif "project_type_key" not in jira_project and raw_detail.get("projectTypeKey"):
-            jira_project["project_type_key"] = raw_detail.get("projectTypeKey")
-
-        if project is not None and "description" not in jira_project and project.description:
-            jira_project["description"] = project.description
-        elif "description" not in jira_project and raw_detail.get("description") is not None:
-            jira_project["description"] = raw_detail.get("description") or ""
-
-        if "project_category" not in jira_project or "project_category_name" not in jira_project:
-            # JiraProject.project_category is a typed JiraProjectCategoryRef
-            # but the legacy on-disk shape stores the raw dict from the
-            # Jira REST payload. Preserve the raw dict shape for consumers.
-            category = raw_detail.get("projectCategory") or {}
-            if isinstance(category, dict):
-                jira_project["project_category"] = category
-                if project is not None and project.project_category is not None:
-                    jira_project["project_category_name"] = project.project_category.name
-                    jira_project["project_category_id"] = project.project_category.id
-                else:
-                    jira_project["project_category_name"] = category.get("name")
-                    jira_project["project_category_id"] = category.get("id")
-
-        if "avatar_urls" not in jira_project or "avatar_url" not in jira_project:
-            # JiraProject only exposes ``avatar_url`` (best single URL);
-            # we still mirror the full ``avatarUrls`` size-keyed dict for
-            # downstream consumers that read ``jira_project["avatar_urls"]``.
-            avatar_urls = raw_detail.get("avatarUrls") or {}
-            if isinstance(avatar_urls, dict):
-                jira_project["avatar_urls"] = avatar_urls
-                if "avatar_url" not in jira_project:
-                    if project is not None and project.avatar_url:
-                        jira_project["avatar_url"] = project.avatar_url
-                    else:
-                        for size_key in ("128x128", "64x64", "48x48", "32x32", "24x24", "16x16"):
-                            candidate = avatar_urls.get(size_key)
-                            if candidate:
-                                jira_project["avatar_url"] = str(candidate)
-                                break
-
-        if "browse_url" not in jira_project:
-            jira_project["browse_url"] = (
-                project.browse_url if project is not None and project.browse_url else browse_url
-            )
+        self._apply_project_details(jira_project, raw_detail, project, browse_url)
 
     def _extract_jira_lead(self, jira_project: dict[str, Any]) -> tuple[str | None, str | None]:
         """Return the project's ``(lead_login, lead_display)`` tuple.
@@ -536,85 +492,7 @@ class ProjectMigration(BaseMigration):
         # Collect all attributes data
         attributes_data = []
         for op_id, jira_project in projects:
-            # Lead information
-            lead_login, lead_display = self._extract_jira_lead(jira_project)
-            if lead_login:
-                op_user_id = self._lookup_op_user_id(lead_login)
-                if op_user_id:
-                    attributes_data.append(
-                        {
-                            "project_id": op_id,
-                            "name": PROJECT_LEAD_CF_NAME,
-                            "value": str(op_user_id),
-                            "field_format": "user",
-                        },
-                    )
-                else:
-                    safe_value = self._sanitize_cf_value(lead_login)
-                    attributes_data.append(
-                        {
-                            "project_id": op_id,
-                            "name": PROJECT_LEAD_CF_NAME,
-                            "value": safe_value,
-                            "field_format": "string",
-                        },
-                    )
-                if lead_display:
-                    safe_display = self._sanitize_cf_value(lead_display)
-                    attributes_data.append(
-                        {
-                            "project_id": op_id,
-                            "name": PROJECT_LEAD_DISPLAY_CF_NAME,
-                            "value": safe_display,
-                            "field_format": "string",
-                        },
-                    )
-
-            # Metadata fields
-            category_name = jira_project.get("project_category_name") or ""
-            if category_name:
-                attributes_data.append(
-                    {
-                        "project_id": op_id,
-                        "name": PROJECT_CATEGORY_CF_NAME,
-                        "value": self._sanitize_cf_value(str(category_name)),
-                        "field_format": "string",
-                    },
-                )
-
-            project_type_key = jira_project.get("project_type_key") or ""
-            if project_type_key:
-                display_type = str(project_type_key).replace("_", " ").title()
-                attributes_data.append(
-                    {
-                        "project_id": op_id,
-                        "name": PROJECT_TYPE_CF_NAME,
-                        "value": self._sanitize_cf_value(display_type),
-                        "field_format": "string",
-                    },
-                )
-
-            browse_url = jira_project.get("browse_url") or jira_project.get("url")
-            if browse_url:
-                attributes_data.append(
-                    {
-                        "project_id": op_id,
-                        "name": PROJECT_URL_CF_NAME,
-                        "value": self._sanitize_cf_value(str(browse_url)),
-                        "field_format": "string",
-                    },
-                )
-
-            avatar_url = jira_project.get("avatar_url")
-            if avatar_url:
-                attributes_data.append(
-                    {
-                        "project_id": op_id,
-                        "name": PROJECT_AVATAR_CF_NAME,
-                        "value": self._sanitize_cf_value(str(avatar_url)),
-                        "field_format": "string",
-                    },
-                )
+            attributes_data.extend(self._project_attributes(op_id, jira_project))
 
         # Execute bulk operations
         modules_result = {"processed": 0, "failed": 0}
@@ -652,26 +530,7 @@ class ProjectMigration(BaseMigration):
         op_user_id = self._lookup_op_user_id(lead_login)
         if not op_user_id:
             logger.debug("No OpenProject mapping for Jira project lead %s", lead_login)
-            display_value = lead_display or lead_login
-            if display_value:
-                try:
-                    safe_value = self._sanitize_cf_value(lead_login)
-                    self.op_client.upsert_project_attribute(
-                        project_id=op_project_id,
-                        name=PROJECT_LEAD_CF_NAME,
-                        value=safe_value,
-                        field_format="string",
-                    )
-                    if lead_display:
-                        safe_display = self._sanitize_cf_value(lead_display)
-                        self.op_client.upsert_project_attribute(
-                            project_id=op_project_id,
-                            name=PROJECT_LEAD_DISPLAY_CF_NAME,
-                            value=safe_display,
-                            field_format="string",
-                        )
-                except Exception as exc:
-                    logger.debug("Failed to upsert textual project lead attribute: %s", exc)
+            self._store_unmapped_lead(op_project_id, lead_login, lead_display)
             return
 
         role_id = self._get_role_id("project admin") or self._get_role_id("member")
@@ -835,12 +694,7 @@ class ProjectMigration(BaseMigration):
                 if not project_key:
                     continue
 
-                # Create project entry if it doesn't exist
-                if project_key not in mapping:
-                    mapping[project_key] = []
-
-                # Add account info to this project
-                mapping[project_key].append(
+                mapping.setdefault(project_key, []).append(
                     {
                         "id": str(acct_id),
                         "key": acct_key,
@@ -991,8 +845,180 @@ class ProjectMigration(BaseMigration):
             Dictionary mapping Jira project keys to OpenProject project IDs
 
         """
-        logger.info("Starting bulk project migration using Rails client...")
+        self._load_project_sources()
+        plans, mapping, setup = self._plan_projects()
+        if config.migration_config.get("dry_run", False):
+            return ComponentResult(success=True, message=f"DRY RUN: Would have created {len(plans)} projects")
 
+        created, failed = self._migrate_planned_projects(plans, mapping, setup)
+        if setup:
+            self._bulk_post_project_setup(setup)
+        if created:
+            try:
+                self.extract_openproject_projects(refresh=True)
+            except Exception as exc:
+                logger.debug("Deferred project cache refresh failed: %s", exc)
+        self._save_project_mapping(mapping)
+        return ComponentResult(
+            success=not failed,
+            success_count=len(setup),
+            failed_count=failed,
+            message=f"Bulk project migration completed: {created} created, {failed} errors",
+        )
+
+    def _apply_project_details(self, jira_project, raw_detail, project, browse_url):
+        if project is not None and "project_type_key" not in jira_project and project.project_type_key:
+            jira_project["project_type_key"] = project.project_type_key
+        elif "project_type_key" not in jira_project and raw_detail.get("projectTypeKey"):
+            jira_project["project_type_key"] = raw_detail.get("projectTypeKey")
+
+        if project is not None and "description" not in jira_project and project.description:
+            jira_project["description"] = project.description
+        elif "description" not in jira_project and raw_detail.get("description") is not None:
+            jira_project["description"] = raw_detail.get("description") or ""
+
+        self._apply_category(jira_project, raw_detail, project)
+        self._apply_avatar(jira_project, raw_detail, project)
+        if "browse_url" not in jira_project:
+            jira_project["browse_url"] = (
+                project.browse_url if project is not None and project.browse_url else browse_url
+            )
+
+    def _apply_category(self, jira_project, raw_detail, project):
+        if "project_category" not in jira_project or "project_category_name" not in jira_project:
+            # JiraProject.project_category is a typed JiraProjectCategoryRef
+            # but the legacy on-disk shape stores the raw dict from the
+            # Jira REST payload. Preserve the raw dict shape for consumers.
+            category = raw_detail.get("projectCategory") or {}
+            if isinstance(category, dict):
+                jira_project["project_category"] = category
+                if project is not None and project.project_category is not None:
+                    jira_project["project_category_name"] = project.project_category.name
+                    jira_project["project_category_id"] = project.project_category.id
+                else:
+                    jira_project["project_category_name"] = category.get("name")
+                    jira_project["project_category_id"] = category.get("id")
+
+    def _apply_avatar(self, jira_project, raw_detail, project):
+        urls = raw_detail.get("avatarUrls") or {}
+        if not isinstance(urls, dict) or ("avatar_urls" in jira_project and "avatar_url" in jira_project):
+            return
+        jira_project["avatar_urls"] = urls
+        if "avatar_url" in jira_project:
+            return
+        preferred = getattr(project, "avatar_url", None)
+        if preferred:
+            jira_project["avatar_url"] = preferred
+            return
+        for size in ("128x128", "64x64", "48x48", "32x32", "24x24", "16x16"):
+            if value := urls.get(size):
+                jira_project["avatar_url"] = str(value)
+                return
+
+    def _project_attributes(self, op_id, jira_project):
+        attributes_data = []
+        # Lead information
+        lead_login, lead_display = self._extract_jira_lead(jira_project)
+        if lead_login:
+            op_user_id = self._lookup_op_user_id(lead_login)
+            if op_user_id:
+                attributes_data.append(
+                    {
+                        "project_id": op_id,
+                        "name": PROJECT_LEAD_CF_NAME,
+                        "value": str(op_user_id),
+                        "field_format": "user",
+                    },
+                )
+            else:
+                safe_value = self._sanitize_cf_value(lead_login)
+                attributes_data.append(
+                    {
+                        "project_id": op_id,
+                        "name": PROJECT_LEAD_CF_NAME,
+                        "value": safe_value,
+                        "field_format": "string",
+                    },
+                )
+            if lead_display:
+                safe_display = self._sanitize_cf_value(lead_display)
+                attributes_data.append(
+                    {
+                        "project_id": op_id,
+                        "name": PROJECT_LEAD_DISPLAY_CF_NAME,
+                        "value": safe_display,
+                        "field_format": "string",
+                    },
+                )
+
+        # Metadata fields
+        category_name = jira_project.get("project_category_name") or ""
+        if category_name:
+            attributes_data.append(
+                {
+                    "project_id": op_id,
+                    "name": PROJECT_CATEGORY_CF_NAME,
+                    "value": self._sanitize_cf_value(str(category_name)),
+                    "field_format": "string",
+                },
+            )
+
+        project_type_key = jira_project.get("project_type_key") or ""
+        if project_type_key:
+            display_type = str(project_type_key).replace("_", " ").title()
+            attributes_data.append(
+                {
+                    "project_id": op_id,
+                    "name": PROJECT_TYPE_CF_NAME,
+                    "value": self._sanitize_cf_value(display_type),
+                    "field_format": "string",
+                },
+            )
+
+        browse_url = jira_project.get("browse_url") or jira_project.get("url")
+        if browse_url:
+            attributes_data.append(
+                {
+                    "project_id": op_id,
+                    "name": PROJECT_URL_CF_NAME,
+                    "value": self._sanitize_cf_value(str(browse_url)),
+                    "field_format": "string",
+                },
+            )
+
+        avatar_url = jira_project.get("avatar_url")
+        if avatar_url:
+            attributes_data.append(
+                {
+                    "project_id": op_id,
+                    "name": PROJECT_AVATAR_CF_NAME,
+                    "value": self._sanitize_cf_value(str(avatar_url)),
+                    "field_format": "string",
+                },
+            )
+        return attributes_data
+
+    def _store_unmapped_lead(self, op_project_id, lead_login, lead_display):
+        try:
+            safe_value = self._sanitize_cf_value(lead_login)
+            self.op_client.upsert_project_attribute(
+                project_id=op_project_id,
+                name=PROJECT_LEAD_CF_NAME,
+                value=safe_value,
+                field_format="string",
+            )
+            if lead_display:
+                safe_display = self._sanitize_cf_value(lead_display)
+                self.op_client.upsert_project_attribute(
+                    project_id=op_project_id,
+                    name=PROJECT_LEAD_DISPLAY_CF_NAME,
+                    value=safe_display,
+                    field_format="string",
+                )
+        except Exception as exc:
+            logger.debug("Failed to upsert textual project lead attribute: %s", exc)
+
+    def _load_project_sources(self):
         if not self.jira_projects:
             self.extract_jira_projects()
 
@@ -1008,632 +1034,207 @@ class ProjectMigration(BaseMigration):
         if not self.company_mapping:
             self.load_company_mapping()
 
-        # Create lookup dictionaries for O(1) access instead of O(n) linear search
-        # This optimizes the algorithm from O(n²) to O(n)
-        op_projects_by_name = {}
-        op_projects_by_identifier = {}
+    def _project_account(self, jira_key):
+        account_id = None
+        account_name = None
+        if jira_key in self.project_account_mapping:
+            accounts = self.project_account_mapping[jira_key]
+            if isinstance(accounts, (int, str)):
+                account_id = accounts
+            elif isinstance(accounts, list) and len(accounts) > 0:
+                account_id = accounts[0].get("id")
 
-        for op_project in self.op_projects:
-            op_name = op_project.get("name", "").lower()
-            op_identifier = op_project.get("identifier", "")
+            if account_id and str(account_id) in self.account_mapping:
+                account_name = self.account_mapping[str(account_id)].get(
+                    "tempo_name",
+                )
+        return account_id, account_name
 
-            if op_name:
-                op_projects_by_name[op_name] = op_project
-            if op_identifier:
-                op_projects_by_identifier[op_identifier] = op_project
+    def _plan_project(self, jira_project, existing_by_name, existing_by_identifier):
+        jira_key = jira_project.get("key", "")
+        if self.project_filters and str(jira_key).upper() not in self.project_filters:
+            return None
+        jira_name = jira_project.get("name", "")
 
-        # Prepare project data for bulk creation
-        projects_data = []
-        for _i, jira_project in enumerate(self.jira_projects):
-            # Note: no refresh here; we haven't written anything yet. Reuse cached list during analysis.
+        self._populate_additional_metadata(jira_project)
 
-            jira_key = jira_project.get("key", "")
-            if self.project_filters and str(jira_key).upper() not in self.project_filters:
-                continue
-            jira_name = jira_project.get("name", "")
+        jira_description = jira_project.get("description", "")
 
-            self._populate_additional_metadata(jira_project)
+        lead_login, lead_display = self._extract_jira_lead(jira_project)
+        if lead_login:
+            jira_project["lead"] = lead_login
+        if lead_display:
+            jira_project["lead_display"] = lead_display
 
-            jira_description = jira_project.get("description", "")
+        # Generate identifier
+        identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
+        if not identifier:
+            msg = "Jira project has no key"
+            raise ValueError(msg)
+        if not identifier[0].isalpha():
+            identifier = "p-" + identifier
+        identifier = identifier[:100]
+        by_id = existing_by_identifier.get(identifier)
+        by_name = existing_by_name.get(jira_name.lower())
+        if by_id and by_name and by_id["id"] != by_name["id"]:
+            msg = f"Project name and identifier refer to different OpenProject projects for {jira_key}"
+            raise ValueError(msg)
+        existing = by_id or by_name
+        if existing:
+            return jira_project, existing, None
+        # Find parent company
+        parent_company = self.find_parent_company_for_project(jira_project)
+        parent_id = parent_company.get("openproject_id") if parent_company else None
 
-            lead_login, lead_display = self._extract_jira_lead(jira_project)
-            if lead_login:
-                jira_project["lead"] = lead_login
-            if lead_display:
-                jira_project["lead_display"] = lead_display
-
-            # Generate identifier
-            identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
-            if not identifier[0].isalpha():
-                identifier = "p-" + identifier
-            identifier = identifier[:100]
-
-            # Find if it already exists using O(1) dictionary lookups
-            existing_project = None
-            jira_name_lower = jira_name.lower()
-
-            # Log the current project being checked
-            logger.debug(
-                "Checking existence for project: '%s' with identifier: '%s'",
-                jira_name,
-                identifier,
+        # Log warning if parent company is missing (project will be created at root level)
+        if parent_company is None:
+            logger.warning(
+                f"Parent company not found for project {jira_key} - creating at root level (no parent hierarchy)",
             )
-            logger.debug(
-                "Available OpenProject projects count: %d",
-                len(self.op_projects),
-            )
+        account_id, account_name = self._project_account(jira_key)
+        has_tempo_account = bool(account_id)
+        jira_project["has_tempo_account"] = has_tempo_account
 
-            # Log a few existing projects for comparison
-            if self.op_projects:
-                logger.debug("Sample existing projects:")
-                for j, op_project in enumerate(self.op_projects[:3]):
-                    logger.debug(
-                        "  %d: name='%s', identifier='%s'",
-                        j + 1,
-                        op_project.get("name", ""),
-                        op_project.get("identifier", ""),
-                    )
+        # Determine project status based on Jira project category
+        # "Closed" category → "FINISHED" status, everything else → "ON_TRACK"
+        project_category_name = jira_project.get("project_category_name", "")
+        if str(project_category_name).lower() == "closed":
+            project_status = "FINISHED"
+        else:
+            project_status = "ON_TRACK"
 
-            # Check for existing project using O(1) lookups instead of O(n) linear search
-            name_match_project = op_projects_by_name.get(jira_name_lower)
-            identifier_match_project = op_projects_by_identifier.get(identifier)
+        # Add to projects data
+        project_data = {
+            "name": jira_name,
+            "identifier": identifier,
+            "description": jira_description or "",
+            "parent_id": parent_id,
+            "jira_key": jira_key,
+            "jira_id": jira_project.get("id"),
+            "account_name": account_name,
+            "account_id": account_id,
+            "public": False,
+            "status": project_status,
+            "lead": lead_login,
+            "lead_display": lead_display,
+            "project_type_key": jira_project.get("project_type_key"),
+            "project_category_name": jira_project.get("project_category_name"),
+            "project_category_id": jira_project.get("project_category_id"),
+            "avatar_url": jira_project.get("avatar_url"),
+            "browse_url": jira_project.get("browse_url"),
+            "has_tempo_account": has_tempo_account,
+        }
+        return jira_project, None, project_data
 
-            if name_match_project:
-                logger.debug("Found existing project by name match:")
-                logger.debug(
-                    "  Name: '%s' vs '%s'",
-                    name_match_project.get("name", ""),
-                    jira_name,
+    def _project_creation_script(self, project_data):
+        name_escaped = escape_ruby_single_quoted(project_data["name"])
+        # SECURITY FIX: Escape identifier to prevent injection
+        identifier_escaped = escape_ruby_single_quoted(project_data["identifier"])
+        desc_escaped = escape_ruby_single_quoted(project_data.get("description", ""))
+        # Parent ID for project hierarchy (Tempo Customer → Jira Project)
+        parent_id_value = project_data.get("parent_id")
+        parent_id_ruby = str(int(parent_id_value)) if parent_id_value else "nil"
+
+        # Use a Rails command with proper exception handling that returns JSON in all cases
+        # SECURITY: All dynamic fields are now properly escaped to prevent command injection
+        jira_base = escape_ruby_single_quoted(config.jira_config.get("url", ""))
+        cf_key_id = int(self.cf_jira_project_key_id) if self.cf_jira_project_key_id else "nil"
+        cf_id_id = int(self.cf_jira_project_id_id) if self.cf_jira_project_id_id else "nil"
+        cf_url_id = int(self.cf_jira_base_url_id) if self.cf_jira_base_url_id else "nil"
+        source_key = escape_ruby_single_quoted(str(project_data["jira_key"]))
+        source_id = escape_ruby_single_quoted(str(project_data.get("jira_id") or ""))
+        return (
+            "begin\n"
+            "Project.transaction do\n"
+            f"p = Project.find_by(identifier: '{identifier_escaped}');\n"
+            "created = false;\n"
+            "if !p\n"
+            f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false, parent_id: {parent_id_ruby});\n"
+            "  if p.respond_to?(:workspace_type=)\n"
+            "    begin\n"
+            "      p.workspace_type = 'project'\n"
+            "    rescue => e\n"
+            '      Rails.logger.warn("Failed to assign workspace_type: #{e.message}")\n'
+            "    end\n"
+            "  end\n"
+            "  if defined?(Type) && p.respond_to?(:types=)\n"
+            "    begin\n"
+            "      default_types = Type.where.not(id: nil)\n"
+            "      if default_types.empty?\n"
+            "        color = defined?(Color) ? (Color.respond_to?(:active) ? Color.active.first : Color.first) : nil\n"
+            "        color ||= Color.create!(name: 'J2O Blue', hexcode: '#0A84FF') if defined?(Color)\n"
+            "        position = (Type.maximum(:position) || 0) + 1\n"
+            "        default_types = [Type.create!(name: 'Standard', position: position, color_id: color&.id)]\n"
+            "      end\n"
+            "      p.types = default_types if default_types.any?\n"
+            "    rescue => type_error\n"
+            '      Rails.logger.warn("Failed to assign work package types: #{type_error.message}")\n'
+            "    end\n"
+            "  end\n"
+            "  p.save!;\n"
+            "  p.enabled_module_names = ['work_package_tracking', 'wiki'];\n"
+            "  p.save!;\n"
+            "  created = true;\n"
+            "end;\n"
+            f"attributes = [['Jira Project Key', {cf_key_id}, '{source_key}'], "
+            f"['Jira Project ID', {cf_id_id}, '{source_id}'], ['Jira Base URL', {cf_url_id}, '{jira_base}']];\n"
+            "section = CustomFieldSection.find_or_create_by!(type: 'ProjectCustomFieldSection', name: 'J2O Origin');\n"
+            "attributes.each do |name, id, value|\n"
+            "  next if value.blank?\n"
+            "  cf = ProjectCustomField.find_by(id: id, name: name) if id\n"
+            "  cf ||= ProjectCustomField.find_or_create_by!(name: name) do |field|\n"
+            "    field.field_format = 'string'; field.is_for_all = true; field.custom_field_section_id = section.id\n"
+            "  end\n"
+            "  ProjectCustomFieldProjectMapping.find_or_create_by!(project_id: p.id, custom_field_id: cf.id)\n"
+            "  cv = p.custom_values.find_or_initialize_by(custom_field_id: cf.id); cv.value = value; cv.save!\n"
+            "end\n"
+            "{ id: p.id, name: p.name, identifier: p.identifier, created_new: created }\n"
+            "end\n"
+            "rescue => e\n"
+            "  { error: e.message, error_class: e.class.name }\n"
+            "end"
+        )
+
+    def _create_or_find_project(self, data):
+        identifier = data["identifier"]
+        existing = self._get_existing_project_details(identifier)
+        if existing:
+            return existing, False
+        try:
+            result = self.op_client.execute_query_to_json_file(self._project_creation_script(data))
+            if not isinstance(result, dict) or not result.get("id"):
+                message = (
+                    str(result.get("error") or "Project creation returned no ID")
+                    if isinstance(result, dict)
+                    else "Invalid project creation response"
                 )
-                existing_project = name_match_project
-            elif identifier_match_project:
-                logger.debug("Found existing project by identifier match:")
-                logger.debug(
-                    "  Identifier: '%s' vs '%s'",
-                    identifier_match_project.get("identifier", ""),
-                    identifier,
-                )
-                existing_project = identifier_match_project
+                raise QueryExecutionError(message)
+            return result, result.get("created_new", True)
+        except QueryExecutionError:
+            existing = self._get_existing_project_details(identifier)
+            if existing:
+                return existing, False
+            raise
 
-            if existing_project:
-                logger.info(
-                    "Project '%s' already exists in OpenProject with ID %s",
-                    jira_name,
-                    existing_project.get("id"),
-                )
-                # Add to project mapping so work packages can be migrated
-                self.project_mapping[jira_key] = {
-                    "openproject_id": existing_project.get("id"),
-                    "openproject_identifier": existing_project.get("identifier"),
-                    "jira_key": jira_key,
-                    "jira_name": jira_name,
-                    "matched_existing": True,
-                }
-                continue
-            logger.debug(
-                "No existing project found for '%s' (identifier: '%s') - will create",
-                jira_name,
-                identifier,
-            )
+    def _migration_mapping(self, jira, target, *, created=False):
+        return {
+            "jira_key": jira.get("key"),
+            "jira_name": jira.get("name"),
+            "openproject_id": target.get("id"),
+            "openproject_identifier": target.get("identifier"),
+            "openproject_name": target.get("name"),
+            "created_new": created,
+            "jira_lead": jira.get("lead"),
+            "jira_lead_display": jira.get("lead_display"),
+            "jira_project_type": jira.get("project_type_key"),
+            "jira_project_category": jira.get("project_category_name"),
+            "jira_project_category_id": jira.get("project_category_id"),
+            "jira_project_url": jira.get("browse_url") or jira.get("url"),
+            "jira_project_avatar_url": jira.get("avatar_url"),
+            "has_tempo_account": jira.get("has_tempo_account", False),
+        }
 
-            # Find parent company
-            parent_company = self.find_parent_company_for_project(jira_project)
-            parent_id = parent_company.get("openproject_id") if parent_company else None
-
-            # Log warning if parent company is missing (project will be created at root level)
-            if parent_company is None:
-                logger.warning(
-                    f"Parent company not found for project {jira_key} - creating at root level (no parent hierarchy)",
-                )
-
-            # Get account ID if available
-            account_id = None
-            account_name = None
-            if jira_key in self.project_account_mapping:
-                accounts = self.project_account_mapping[jira_key]
-                if isinstance(accounts, (int, str)):
-                    account_id = accounts
-                elif isinstance(accounts, list) and len(accounts) > 0:
-                    account_id = accounts[0].get("id")
-
-                if account_id and str(account_id) in self.account_mapping:
-                    account_name = self.account_mapping[str(account_id)].get(
-                        "tempo_name",
-                    )
-
-            has_tempo_account = bool(account_id)
-            jira_project["has_tempo_account"] = has_tempo_account
-
-            # Determine project status based on Jira project category
-            # "Closed" category → "FINISHED" status, everything else → "ON_TRACK"
-            project_category_name = jira_project.get("project_category_name", "")
-            if str(project_category_name).lower() == "closed":
-                project_status = "FINISHED"
-            else:
-                project_status = "ON_TRACK"
-
-            # Add to projects data
-            project_data = {
-                "name": jira_name,
-                "identifier": identifier,
-                "description": jira_description or "",
-                "parent_id": parent_id,
-                "jira_key": jira_key,
-                "account_name": account_name,
-                "account_id": account_id,
-                "public": False,
-                "status": project_status,
-                "lead": lead_login,
-                "lead_display": lead_display,
-                "project_type_key": jira_project.get("project_type_key"),
-                "project_category_name": jira_project.get("project_category_name"),
-                "project_category_id": jira_project.get("project_category_id"),
-                "avatar_url": jira_project.get("avatar_url"),
-                "browse_url": jira_project.get("browse_url"),
-                "has_tempo_account": has_tempo_account,
-            }
-            projects_data.append(project_data)
-
-        if not projects_data:
-            logger.info("No new projects to create")
-            # Build and persist full project mapping even when nothing is created.
-            # This ensures downstream components (work_packages) have 'openproject_id' for Jira projects.
-            try:
-                mapping: dict[str, dict[str, Any]] = {}
-                # Collect projects for bulk post-setup
-                bulk_setup_projects: list[tuple[int, dict[str, Any]]] = []
-
-                for jira_project in self.jira_projects:
-                    jira_key = jira_project.get("key", "")
-                    jira_name = jira_project.get("name", "")
-                    identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
-                    if identifier and not identifier[0].isalpha():
-                        identifier = "p-" + identifier
-                    identifier = identifier[:100]
-
-                    self._populate_additional_metadata(jira_project)
-
-                    lead_login, lead_display = self._extract_jira_lead(jira_project)
-
-                    jira_name_lower = jira_name.lower()
-                    existing_by_name = op_projects_by_name.get(jira_name_lower)
-                    existing_by_identifier = op_projects_by_identifier.get(identifier)
-                    existing = existing_by_name or existing_by_identifier
-
-                    if existing:
-                        mapping[jira_key] = {
-                            "jira_key": jira_key,
-                            "jira_name": jira_name,
-                            "openproject_id": existing.get("id"),
-                            "openproject_identifier": existing.get("identifier"),
-                            "openproject_name": existing.get("name"),
-                            "created_new": False,
-                            "jira_lead": lead_login,
-                            "jira_lead_display": lead_display,
-                            "jira_project_type": jira_project.get("project_type_key"),
-                            "jira_project_category": jira_project.get("project_category_name"),
-                            "jira_project_category_id": jira_project.get("project_category_id"),
-                            "jira_project_url": jira_project.get("browse_url") or jira_project.get("url"),
-                            "jira_project_avatar_url": jira_project.get("avatar_url"),
-                            "has_tempo_account": jira_project.get("has_tempo_account", False),
-                        }
-                        # Collect for bulk post-setup instead of individual calls
-                        bulk_setup_projects.append((int(existing.get("id")), jira_project))
-                    else:
-                        # Record unmapped project explicitly
-                        mapping[jira_key] = {
-                            "jira_key": jira_key,
-                            "jira_name": jira_name,
-                            "openproject_id": None,
-                            "openproject_identifier": None,
-                            "openproject_name": None,
-                            "created_new": False,
-                            "failed": True,
-                            "error": "OpenProject project not found by name or identifier",
-                            "jira_lead": lead_login,
-                            "jira_lead_display": lead_display,
-                        }
-
-                # Execute bulk post-setup for all existing projects (2 Rails calls instead of N*7)
-                if bulk_setup_projects:
-                    logger.info(
-                        "Running bulk post-setup for %d existing projects",
-                        len(bulk_setup_projects),
-                    )
-                    try:
-                        self._bulk_post_project_setup(bulk_setup_projects)
-                    except Exception as exc:
-                        logger.warning("Bulk post-setup failed: %s", exc)
-
-                # Persist mapping for downstream usage
-                self.project_mapping = mapping
-                config.mappings.set_mapping("project", mapping)
-                logger.info("Saved project mapping with %d entries", len(mapping))
-            except Exception as map_err:
-                logger.warning("Failed to persist project mapping: %s", map_err)
-
-            return ComponentResult(
-                success=True,
-                message="No new projects to create",
-            )
-
-        # Check for dry run
-        if config.migration_config.get("dry_run", False):
-            logger.info(
-                "DRY RUN: Skipping Rails script execution. Would have created these projects:",
-            )
-            for project in projects_data:
-                logger.info(
-                    "  - %s (identifier: %s)",
-                    project["name"],
-                    project["identifier"],
-                )
-
-            # Create a dummy mapping for dry run
-            mapping = {}
-            for project in projects_data:
-                jira_key = project.get("jira_key")
-                mapping[jira_key] = {
-                    "jira_key": jira_key,
-                    "jira_name": project.get("name"),
-                    "openproject_id": None,  # None for dry run
-                    "openproject_identifier": project.get("identifier"),
-                    "openproject_name": project.get("name"),
-                    "created_new": False,
-                    "dry_run": True,
-                    "jira_lead": project.get("lead"),
-                    "jira_lead_display": project.get("lead_display"),
-                }
-
-            self.project_mapping = mapping
-            config.mappings.set_mapping("project", mapping)
-            logger.info("DRY RUN: Would have created %s projects", len(projects_data))
-            return ComponentResult(
-                success=True,
-                message=f"DRY RUN: Would have created {len(projects_data)} projects",
-            )
-
-        # Create projects individually using simple Rails commands
-        # This is more reliable than complex bulk scripts
-        created_projects = []
-        errors = []
-        # Collect projects for bulk post-setup after the loop
-        bulk_setup_projects: list[tuple[int, dict[str, Any]]] = []
-
-        logger.info("Creating %d projects individually...", len(projects_data))
-
-        for i, project_data in enumerate(projects_data):
-            try:
-                logger.info(
-                    "Creating project %d/%d: %s",
-                    i + 1,
-                    len(projects_data),
-                    project_data["name"],
-                )
-
-                # Check if project already exists using optimized single-query method
-                identifier = project_data["identifier"]
-
-                existing_project_details = self._get_existing_project_details(
-                    identifier,
-                )
-
-                if existing_project_details:
-                    logger.info(
-                        "Project '%s' already exists with ID %s",
-                        project_data["name"],
-                        existing_project_details["id"],
-                    )
-                    # Collect for bulk post-setup instead of individual calls
-                    bulk_setup_projects.append(
-                        (int(existing_project_details["id"]), project_data),
-                    )
-                    created_projects.append(
-                        {
-                            "jira_key": project_data["jira_key"],
-                            "openproject_id": existing_project_details["id"],
-                            "name": existing_project_details["name"],
-                            "identifier": existing_project_details["identifier"],
-                            "created_new": False,
-                            "jira_lead": project_data.get("lead"),
-                            "jira_lead_display": project_data.get("lead_display"),
-                        },
-                    )
-                    continue
-
-                # Create the project using simplified Rails command (atomic and concise)
-                # Properly escape strings for Rails/Ruby
-                # Handle quotes, backslashes, newlines, Ruby interpolation patterns, and dangerous functions
-                name_escaped = escape_ruby_single_quoted(project_data["name"])
-                # SECURITY FIX: Escape identifier to prevent injection
-                identifier_escaped = escape_ruby_single_quoted(project_data["identifier"])
-                desc_escaped = escape_ruby_single_quoted(project_data.get("description", ""))
-                # Parent ID for project hierarchy (Tempo Customer → Jira Project)
-                parent_id_value = project_data.get("parent_id")
-                parent_id_ruby = str(parent_id_value) if parent_id_value else "nil"
-
-                # Use a Rails command with proper exception handling that returns JSON in all cases
-                # SECURITY: All dynamic fields are now properly escaped to prevent command injection
-                jira_base = escape_ruby_single_quoted(config.jira_config.get("url", ""))
-                cf_key_id = self.cf_jira_project_key_id or "nil"
-                cf_id_id = self.cf_jira_project_id_id or "nil"
-                cf_url_id = self.cf_jira_base_url_id or "nil"
-                ensure_cfs = (
-                    "begin;"
-                    " k = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira Project Key');"
-                    " k ||= CustomField.create(name: 'Jira Project Key', field_format: 'string', is_required: false, is_for_all: true, type: 'ProjectCustomField');"
-                    " i = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira Project ID');"
-                    " i ||= CustomField.create(name: 'Jira Project ID', field_format: 'string', is_required: false, is_for_all: true, type: 'ProjectCustomField');"
-                    " u = CustomField.find_by(type: 'ProjectCustomField', name: 'Jira Base URL');"
-                    " u ||= CustomField.create(name: 'Jira Base URL', field_format: 'string', is_required: false, is_for_all: true, type: 'ProjectCustomField');"
-                    " rescue => e; end;"
-                )
-                create_script = (
-                    "begin\n"
-                    f"{ensure_cfs}"
-                    f"p = Project.find_by(identifier: '{identifier_escaped}');\n"
-                    "created = false;\n"
-                    "if !p\n"
-                    f"  p = Project.new(name: '{name_escaped}', identifier: '{identifier_escaped}', description: '{desc_escaped}', public: false, parent_id: {parent_id_ruby});\n"
-                    "  if p.respond_to?(:workspace_type=)\n"
-                    "    begin\n"
-                    "      p.workspace_type = 'project'\n"
-                    "    rescue => e\n"
-                    '      Rails.logger.warn("Failed to assign workspace_type: #{e.message}")\n'
-                    "    end\n"
-                    "  end\n"
-                    "  if defined?(Type) && p.respond_to?(:types=)\n"
-                    "    begin\n"
-                    "      default_types = Type.where.not(id: nil)\n"
-                    "      if default_types.empty?\n"
-                    "        color = defined?(Color) ? (Color.respond_to?(:active) ? Color.active.first : Color.first) : nil\n"
-                    "        color ||= Color.create!(name: 'J2O Blue', hexcode: '#0A84FF') if defined?(Color)\n"
-                    "        position = (Type.maximum(:position) || 0) + 1\n"
-                    "        default_types = [Type.create!(name: 'Standard', position: position, color_id: color&.id)]\n"
-                    "      end\n"
-                    "      p.types = default_types if default_types.any?\n"
-                    "    rescue => type_error\n"
-                    '      Rails.logger.warn("Failed to assign work package types: #{type_error.message}")\n'
-                    "    end\n"
-                    "  end\n"
-                    "  p.save!;\n"
-                    "  p.enabled_module_names = ['work_package_tracking', 'wiki'];\n"
-                    "  p.save!;\n"
-                    "  created = true;\n"
-                    "end;\n"
-                    f"if {cf_key_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_key_id}); cv.value = '{jira_key}'; cv.save; end;\n"
-                    f"if {cf_id_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_id_id}); cv.value = '{jira_project.get('id', '')}'; cv.save; end;\n"
-                    f"if {cf_url_id} != nil; cv = p.custom_values.find_or_initialize_by(custom_field_id: {cf_url_id}); cv.value = '{jira_base}'; cv.save; end;\n"
-                    "{ id: p.id, name: p.name, identifier: p.identifier, created_new: created }\n"
-                    "rescue => e\n"
-                    "  { error: e.message, error_class: e.class.name }\n"
-                    "end"
-                )
-
-                try:
-                    result = self.op_client.execute_query_to_json_file(create_script)
-
-                    if isinstance(result, dict) and result.get("error"):
-                        raise QueryExecutionError(result.get("error"))
-
-                    # Validate that we got a proper project result
-                    if not isinstance(result, dict) or not result.get("id"):
-                        error_msg = f"Unexpected result format: {result}"
-                        logger.error(
-                            "Error creating project '%s': %s",
-                            project_data["name"],
-                            error_msg,
-                        )
-                        errors.append(
-                            {
-                                "jira_key": project_data["jira_key"],
-                                "name": project_data["name"],
-                                "errors": [error_msg],
-                                "error_type": "invalid_result",
-                            },
-                        )
-                        continue
-
-                    logger.info(
-                        "Successfully created project '%s' with ID %s",
-                        project_data["name"],
-                        result["id"],
-                    )
-                    created_projects.append(
-                        {
-                            "jira_key": project_data["jira_key"],
-                            "openproject_id": result["id"],
-                            "name": result["name"],
-                            "identifier": result["identifier"],
-                            "created_new": True,
-                            "jira_lead": lead_login,
-                            "jira_lead_display": lead_display,
-                        },
-                    )
-
-                    # Collect for bulk post-setup instead of individual calls
-                    bulk_setup_projects.append((int(result["id"]), project_data))
-
-                except QueryExecutionError as e:
-                    existing_project_details = self._get_existing_project_details(identifier)
-                    if existing_project_details:
-                        logger.info(
-                            "Project '%s' already exists in OpenProject with ID %s (detected during creation retry)",
-                            project_data["name"],
-                            existing_project_details.get("id"),
-                        )
-                        created_projects.append(
-                            {
-                                "jira_key": project_data["jira_key"],
-                                "openproject_id": existing_project_details.get("id"),
-                                "name": existing_project_details.get("name"),
-                                "identifier": existing_project_details.get("identifier"),
-                                "created_new": False,
-                                "jira_lead": project_data.get("lead"),
-                                "jira_lead_display": project_data.get("lead_display"),
-                            },
-                        )
-                        # Collect for bulk post-setup instead of individual calls
-                        bulk_setup_projects.append(
-                            (int(existing_project_details.get("id")), project_data),
-                        )
-                        continue
-
-                    error_msg = f"Rails validation error: {e}"
-                    logger.exception(
-                        "Rails validation error creating project '%s': %s",
-                        project_data["name"],
-                        error_msg,
-                    )
-                    errors.append(
-                        {
-                            "jira_key": project_data["jira_key"],
-                            "name": project_data["name"],
-                            "errors": [str(e)],
-                            "error_type": "validation_error",
-                        },
-                    )
-
-                    # Check if we should stop on error
-                    if config.migration_config.get("stop_on_error", False):
-                        logger.exception(
-                            "Stopping migration due to validation error and --stop-on-error flag is set",
-                        )
-                        msg = f"Project validation failed: {e}"
-                        raise QueryExecutionError(
-                            msg,
-                        ) from e
-
-                except Exception as e:
-                    error_msg = f"Unexpected error: {e}"
-                    logger.exception(
-                        "Error creating project '%s': %s",
-                        project_data["name"],
-                        error_msg,
-                    )
-                    errors.append(
-                        {
-                            "jira_key": project_data["jira_key"],
-                            "name": project_data["name"],
-                            "errors": [error_msg],
-                            "error_type": "format_error",
-                        },
-                    )
-
-                    # Check if we should stop on error
-                    if config.migration_config.get("stop_on_error", False):
-                        logger.exception(
-                            "Stopping migration due to format error and --stop-on-error flag is set",
-                        )
-                        msg = f"Project creation failed: {error_msg}"
-                        raise QueryExecutionError(
-                            msg,
-                        ) from e
-
-            except Exception as e:
-                logger.exception(
-                    "Exception creating project '%s': %s",
-                    project_data.get("name", "unknown"),
-                    e,
-                )
-                errors.append(
-                    {
-                        "jira_key": project_data.get("jira_key"),
-                        "name": project_data.get("name"),
-                        "errors": [str(e)],
-                        "error_type": "exception",
-                    },
-                )
-
-                # Check if we should stop on error
-                if config.migration_config.get("stop_on_error", False):
-                    logger.exception(
-                        "Stopping migration due to error and --stop-on-error flag is set",
-                    )
-                    raise
-
-            # Small delay to avoid overwhelming the Rails console
-            time.sleep(0.2)
-
-        # Execute bulk post-setup for all projects (2 Rails calls instead of N*7)
-        if bulk_setup_projects:
-            logger.info(
-                "Running bulk post-setup for %d projects",
-                len(bulk_setup_projects),
-            )
-            try:
-                self._bulk_post_project_setup(bulk_setup_projects)
-            except Exception as exc:
-                logger.warning("Bulk post-setup failed: %s", exc)
-
-        # Create mapping from results
-        mapping = {}
-        for project in created_projects:
-            jira_key = project.get("jira_key")
-            if jira_key:
-                if self.project_filters and str(jira_key).upper() not in self.project_filters:
-                    continue
-                jira_project = next(
-                    (p for p in self.jira_projects if p.get("key") == jira_key),
-                    {},
-                )
-                self._populate_additional_metadata(jira_project)
-                mapping[jira_key] = {
-                    "jira_key": jira_key,
-                    "jira_name": (jira_project.get("name") if jira_project else project.get("name")),
-                    "openproject_id": project.get("openproject_id"),
-                    "openproject_identifier": project.get("identifier"),
-                    "openproject_name": project.get("name"),
-                    "created_new": project.get("created_new", True),
-                    "jira_lead": jira_project.get("lead"),
-                    "jira_lead_display": jira_project.get("lead_display"),
-                    "jira_project_type": jira_project.get("project_type_key"),
-                    "jira_project_category": jira_project.get("project_category_name"),
-                    "jira_project_category_id": jira_project.get("project_category_id"),
-                    "jira_project_url": jira_project.get("browse_url") or jira_project.get("url"),
-                    "jira_project_avatar_url": jira_project.get("avatar_url"),
-                    "has_tempo_account": jira_project.get("has_tempo_account", False),
-                }
-
-        # Add errors to mapping
-        for error in errors:
-            jira_key = error.get("jira_key")
-            if jira_key:
-                if self.project_filters and str(jira_key).upper() not in self.project_filters:
-                    continue
-                jira_project = next(
-                    (p for p in self.jira_projects if p.get("key") == jira_key),
-                    {},
-                )
-                self._populate_additional_metadata(jira_project)
-                mapping[jira_key] = {
-                    "jira_key": jira_key,
-                    "jira_name": (jira_project.get("name") if jira_project else error.get("name")),
-                    "openproject_id": None,
-                    "openproject_identifier": None,
-                    "openproject_name": None,
-                    "created_new": False,
-                    "failed": True,
-                    "error": ", ".join(error.get("errors", [])),
-                    "jira_lead": jira_project.get("lead") if jira_project else None,
-                    "jira_lead_display": jira_project.get("lead_display") if jira_project else None,
-                    "jira_project_type": jira_project.get("project_type_key") if jira_project else None,
-                    "jira_project_category": jira_project.get("project_category_name") if jira_project else None,
-                    "jira_project_category_id": jira_project.get("project_category_id") if jira_project else None,
-                    "jira_project_url": (jira_project.get("browse_url") if jira_project else None),
-                    "jira_project_avatar_url": jira_project.get("avatar_url") if jira_project else None,
-                    "has_tempo_account": jira_project.get("has_tempo_account", False) if jira_project else False,
-                }
-
-        # After writes, refresh OpenProject projects once to update in-run cache
-        if created_projects:
-            try:
-                self.extract_openproject_projects(refresh=True)
-            except Exception as _e:
-                # Non-fatal: cache will be rebuilt on next component run
-                logger.debug("Deferred project cache refresh failed; will rebuild later")
-
-        # Save the mapping via controller
+    def _save_project_mapping(self, mapping):
         self.project_mapping = mapping
         config.mappings.set_mapping("project", mapping)
 
@@ -1659,20 +1260,43 @@ class ProjectMigration(BaseMigration):
             except Exception as prov_err:
                 logger.warning("Failed to record project provenance: %s", prov_err)
 
-        logger.info(
-            "Bulk project migration completed: %s created, %s errors",
-            len(created_projects),
-            len(errors),
-        )
+    def _migrate_planned_projects(self, plans, mapping, setup):
+        created = 0
+        failed = 0
+        for jira, data in plans:
+            key = data["jira_key"]
+            try:
+                target, is_new = self._create_or_find_project(data)
+                mapping[key] = self._migration_mapping(jira, target, created=is_new)
+                setup.append((int(target["id"]), jira))
+                created += int(is_new)
+            except Exception as exc:
+                logger.exception("Could not migrate Jira project %s", key)
+                mapping[key] = {**self._migration_mapping(jira, {}), "failed": True, "error": str(exc)}
+                failed += 1
+                if config.migration_config.get("stop_on_error", False):
+                    self._save_project_mapping(mapping)
+                    raise
+            time.sleep(0.2)
+        return created, failed
 
-        # If there are errors and stop_on_error is True, return failed status
-        has_errors = len(errors) > 0
-        should_fail = has_errors and config.migration_config.get("stop_on_error", False)
-
-        return ComponentResult(
-            success=not should_fail,
-            message=f"Bulk project migration completed: {len(created_projects)} created, {len(errors)} errors",
-        )
+    def _plan_projects(self):
+        by_name = {p["name"].lower(): p for p in self.op_projects if p.get("name")}
+        by_identifier = {p["identifier"]: p for p in self.op_projects if p.get("identifier")}
+        plans = []
+        setup = []
+        mapping = dict(self.project_mapping)
+        for jira in self.jira_projects:
+            planned = self._plan_project(jira, by_name, by_identifier)
+            if planned is None:
+                continue
+            source, target, data = planned
+            if target is not None:
+                mapping[source["key"]] = self._migration_mapping(source, target)
+                setup.append((int(target["id"]), source))
+            else:
+                plans.append((source, data))
+        return plans, mapping, setup
 
     def analyze_project_mapping(self) -> dict[str, Any]:
         """Analyze the project mapping to identify potential issues.

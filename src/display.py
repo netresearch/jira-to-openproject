@@ -90,6 +90,47 @@ _LOGGER: logging.Logger | None = None
 _LOG_LEVEL_NUM: int | None = None
 
 
+def _numeric_log_level(level: str) -> int:
+    name = level.upper()
+    if name == "NOTICE":
+        return 21
+    if name == "SUCCESS":
+        return 25
+    return getattr(logging, name, logging.INFO)
+
+
+# Define a success method for the logger
+def _log_success(
+    self: logging.Logger,
+    message: str,
+    *args: object,
+    **kwargs: object,
+) -> None:
+    if self.isEnabledFor(25):
+        existing_extra = kwargs.get("extra")
+        extra_mapping: dict[str, object] = {}
+        if isinstance(existing_extra, dict):
+            extra_mapping.update(existing_extra)  # type: ignore[arg-type]
+        extra_mapping["markup"] = True
+        self._log(25, f"[success]{message}[/]", args, extra=extra_mapping, stacklevel=2)
+
+
+# Define a notice method for the logger (less prominent than INFO)
+def _log_notice(
+    self: logging.Logger,
+    message: str,
+    *args: object,
+    **kwargs: object,
+) -> None:
+    if self.isEnabledFor(21):
+        existing_extra = kwargs.get("extra")
+        extra_mapping: dict[str, object] = {}
+        if isinstance(existing_extra, dict):
+            extra_mapping.update(existing_extra)  # type: ignore[arg-type]
+        extra_mapping["markup"] = True
+        self._log(21, message, args, extra=extra_mapping, stacklevel=2)
+
+
 def configure_logging(
     level: str = "INFO",
     log_file: Path | None = None,
@@ -116,12 +157,7 @@ def configure_logging(
             current_level = logging.INFO
 
         # Compute requested numeric level (including custom levels)
-        if level.upper() == "NOTICE":
-            requested_level = 21
-        elif level.upper() == "SUCCESS":
-            requested_level = 25
-        else:
-            requested_level = getattr(logging, level.upper(), logging.INFO)
+        requested_level = _numeric_log_level(level)
 
         # Never downgrade. Only upgrade verbosity (e.g., INFO -> DEBUG)
         if requested_level < current_level:
@@ -140,12 +176,7 @@ def configure_logging(
     logging.addLevelName(21, "NOTICE")
 
     # Get the numeric logging level - now we support our custom levels too
-    if level.upper() == "NOTICE":
-        numeric_level = 21
-    elif level.upper() == "SUCCESS":
-        numeric_level = 25
-    else:
-        numeric_level = getattr(logging, level.upper(), logging.INFO)
+    numeric_level = _numeric_log_level(level)
 
     # Create handlers list starting with the rich handler
     handlers: list[logging.Handler] = [rich_handler]
@@ -178,42 +209,12 @@ def configure_logging(
     # Get the logger and report configuration
     logger = logging.getLogger("migration")
 
-    # Define a success method for the logger
-    def success(
-        self: logging.Logger,
-        message: str,
-        *args: object,
-        **kwargs: object,
-    ) -> None:
-        if self.isEnabledFor(25):
-            existing_extra = kwargs.get("extra")
-            extra_mapping: dict[str, object] = {}
-            if isinstance(existing_extra, dict):
-                extra_mapping.update(existing_extra)  # type: ignore[arg-type]
-            extra_mapping["markup"] = True
-            self._log(25, f"[success]{message}[/]", args, extra=extra_mapping, stacklevel=2)
-
-    # Define a notice method for the logger (less prominent than INFO)
-    def notice(
-        self: logging.Logger,
-        message: str,
-        *args: object,
-        **kwargs: object,
-    ) -> None:
-        if self.isEnabledFor(21):
-            existing_extra = kwargs.get("extra")
-            extra_mapping: dict[str, object] = {}
-            if isinstance(existing_extra, dict):
-                extra_mapping.update(existing_extra)  # type: ignore[arg-type]
-            extra_mapping["markup"] = True
-            self._log(21, message, args, extra=extra_mapping, stacklevel=2)
-
     # Add the success method to the logger class
     # Attach dynamic methods; acceptable for runtime extension in app code
-    logging.Logger.success = success  # type: ignore[attr-defined,assignment]
+    logging.Logger.success = _log_success  # type: ignore[attr-defined,assignment]
 
     # Add the notice method to the logger class
-    logging.Logger.notice = notice  # type: ignore[attr-defined,assignment]
+    logging.Logger.notice = _log_notice  # type: ignore[attr-defined,assignment]
 
     logger.info("Rich logging configured")
     if log_file:

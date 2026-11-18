@@ -281,6 +281,13 @@ class TestCustomFieldMigration(unittest.TestCase):
         }
         assert self.migration.map_jira_field_to_openproject_format(date_field) == "date"
 
+    def test_flattened_cache_and_current_schema_preserve_custom_field_formats(self) -> None:
+        field = {"id": "customfield_123", "name": "Project date", "schema": {"type": "date", "custom": "datepicker"}}
+        extracted = self.migration._extract_field_definition(field, {}, [])
+        historical = {key: value for key, value in extracted.items() if key != "schema"}
+        for record in (extracted, historical):
+            assert self.migration.map_jira_field_to_openproject_format(record) == "date"
+
     def test_handle_list_field_possible_values(self) -> None:
         """Test the handling of possible values for list-type custom fields."""
         # Create a test field with list type
@@ -293,26 +300,16 @@ class TestCustomFieldMigration(unittest.TestCase):
             "possible_values": ["Value 1", "Value 2", "Value 3"],
         }
 
-        # Ensure execute is called with proper values
-        self.mock_op_client.execute = Mock(return_value={"status": "success"})
-
-        # Call the method directly to ensure the mock gets called
-        self.migration.create_custom_field_via_rails(test_field)
-
-        # Verify execute was called
-        self.mock_op_client.execute.assert_called_once()
-
-        # Check that the script contains the correct possible values
-        args, _ = self.mock_op_client.execute.call_args
-        script_content = args[0]
-
-        # Check for expected values in the script
-        assert "field_format" in script_content
-        assert "list" in script_content
-        assert "possible_values" in script_content
-        assert "Value 1" in script_content
-        assert "Value 2" in script_content
-        assert "Value 3" in script_content
+        self.mock_op_client.execute_script_with_data.return_value = {
+            "status": "success",
+            "data": {"id": 42, "name": "Test List Field"},
+        }
+        result = self.migration.create_custom_field_via_rails(test_field)
+        script, values = self.mock_op_client.execute_script_with_data.call_args.args
+        assert result["id"] == 42
+        assert values["possible_values"] == test_field["possible_values"]
+        assert values["field_format"] == "list"
+        assert "Value 1" not in script
 
     def test_migrate_custom_fields(self) -> None:
         """Test migrating custom fields using ``bulk_create_records``."""
@@ -449,22 +446,13 @@ class TestCustomFieldMigration(unittest.TestCase):
             "matched_by": "create",
         }
 
-        # Mock successful return for execute method
-        self.mock_op_client.execute = Mock(return_value={"status": "success"})
-
-        # Call the method directly to ensure the mock gets called
-        self.migration.create_custom_field_via_rails(test_field)
-
-        # Get the script content from the execute call
-        args, _ = self.mock_op_client.execute.call_args
-        script_content = args[0]
-
-        # Verify script structure
-        assert "begin" in script_content
-        assert "rescue" in script_content
-
-        # Check for proper error handling
-        assert "Error creating custom field" in script_content
+        self.mock_op_client.execute_script_with_data.return_value = {"status": "error", "message": "validation failed"}
+        result = self.migration.create_custom_field_via_rails(test_field)
+        assert result["status"] == "error"
+        assert "Test Field" in result["error"]
+        script, data = self.mock_op_client.execute_script_with_data.call_args.args
+        assert "Test Field" not in script
+        assert data["name"] == "Test Field"
 
 
 if __name__ == "__main__":

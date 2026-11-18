@@ -247,6 +247,7 @@ def test_attachment_provenance_pipeline(monkeypatch: pytest.MonkeyPatch, patched
     jira_client.batch_get_issues.return_value = {"KEY-1": issue}
 
     op_client = MagicMock()
+    op_client.docker_client.execute_command.return_value = ("/tmp/j2o-stage.0123456789", "", 0)
 
     # The attachments + provenance pipeline now issues three
     # ``execute_script_with_data`` flavours:

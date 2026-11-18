@@ -195,51 +195,30 @@ class OpenProjectCleaner:
             "issue_link_types_deleted": 0,
         }
 
-        # Define the order of operations
-        # Order is important: work packages must be deleted before projects
-        # Custom fields, issue types, statuses should be cleaned after work packages
-        cleanup_order = ["wp", "cf", "it", "is", "il", "p", "u"]
+        # Work packages must be removed before their projects and metadata.
+        operations = [
+            ("wp", "work_packages_deleted", self.cleanup_work_packages),
+            ("cf", "custom_fields_deleted", self.cleanup_custom_fields),
+            ("it", "issue_types_deleted", self.cleanup_issue_types),
+            ("is", "issue_statuses_deleted", self.cleanup_issue_statuses),
+            ("p", "projects_deleted", self.cleanup_projects),
+            ("u", "users_deleted", self.cleanup_users),
+        ]
+        for code, name, cleanup in operations:
+            if code not in self.entities:
+                continue
+            try:
+                results[name] = cleanup()
+            except Exception:
+                logger.exception("Error during cleanup of %s", code)
 
-        for entity_type in cleanup_order:
-            if entity_type in self.entities:
-                try:
-                    if entity_type == "wp":
-                        results["work_packages_deleted"] = self.cleanup_work_packages()
-                    elif entity_type == "p":
-                        results["projects_deleted"] = self.cleanup_projects()
-                    elif entity_type == "cf":
-                        results["custom_fields_deleted"] = self.cleanup_custom_fields()
-                    elif entity_type == "u":
-                        results["users_deleted"] = self.cleanup_users()
-                    elif entity_type == "it":
-                        results["issue_types_deleted"] = self.cleanup_issue_types()
-                    elif entity_type == "is":
-                        results["issue_statuses_deleted"] = self.cleanup_issue_statuses()
-                except Exception:
-                    logger.exception("Error during cleanup of %s", entity_type)
-
-        logger.success(
-            "OpenProject cleanup completed for specified entities",
-        )
+        logger.success("OpenProject cleanup completed for specified entities")
         logger.info("Summary:")
-        if "wp" in self.entities:
-            logger.info("  Work packages deleted: %s", results["work_packages_deleted"])
-        if "p" in self.entities:
-            logger.info("  Projects deleted: %s", results["projects_deleted"])
-        if "cf" in self.entities:
-            logger.info("  Custom fields deleted: %s", results["custom_fields_deleted"])
-        if "u" in self.entities:
-            logger.info("  Users deleted: %s", results["users_deleted"])
-        if "it" in self.entities:
-            logger.info("  Issue types deleted: %s", results["issue_types_deleted"])
-        if "is" in self.entities:
-            logger.info("  Issue statuses deleted: %s", results["issue_statuses_deleted"])
+        for code, name, _ in operations:
+            if code in self.entities:
+                logger.info("  %s: %s", name.replace("_", " ").capitalize(), results[name])
         if "il" in self.entities:
-            logger.info(
-                "  Issue link types deleted: %s",
-                results["issue_link_types_deleted"],
-            )
-
+            logger.info("  Issue link types deleted: %s", results["issue_link_types_deleted"])
         return results
 
 

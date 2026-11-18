@@ -240,62 +240,9 @@ class GroupMigration(BaseMigration):
             op_groups = self.extract_openproject_groups()
             existing_groups = {str(g.get("name", "")).lower(): g for g in op_groups}
 
-        mapping: dict[str, Any] = {}
-        for group in jira_groups:
-            name = group.get("name")
-            if not name:
-                continue
-            op_group = existing_groups.get(name.lower())
-            if not op_group:
-                continue
-            mapping[name] = {
-                "jira_name": name,
-                "jira_group_id": group.get("groupId"),
-                "openproject_id": op_group.get("id"),
-                "created_new": name not in self.group_mapping,
-            }
+        mapping = self._index_groups(jira_groups, role_groups, existing_groups)
 
-        for role_group_name in role_groups:
-            op_group = existing_groups.get(role_group_name.lower())
-            if not op_group:
-                continue
-            mapping[role_group_name] = {
-                "jira_name": role_group_name,
-                "jira_group_id": None,
-                "openproject_id": op_group.get("id"),
-                "created_new": role_group_name not in self.group_mapping,
-                "role_backed": True,
-            }
-
-        if mapping:
-            config.mappings.set_mapping("group", mapping)
-            self.group_mapping = mapping
-            try:
-                self._save_to_json(mapping, self.group_mapping_file)
-            except Exception:
-                self.logger.debug("Failed to persist group mapping to %s", self.group_mapping_file)
-
-            # Record provenance for all successfully migrated groups
-            # This enables restoration of mappings from OP alone without local files
-            provenance_mappings = [
-                {
-                    "jira_key": m["jira_name"],  # Use group name as key
-                    "jira_name": m.get("jira_name"),
-                    "op_entity_id": m["openproject_id"],
-                }
-                for m in mapping.values()
-                if m.get("openproject_id")
-            ]
-            if provenance_mappings:
-                try:
-                    result = self.op_client.bulk_record_entity_provenance("group", provenance_mappings)
-                    self.logger.info(
-                        "Recorded group provenance: %d success, %d failed",
-                        result.get("success", 0),
-                        result.get("failed", 0),
-                    )
-                except Exception as prov_err:
-                    self.logger.warning("Failed to record group provenance: %s", prov_err)
+        self._persist_group_mapping(mapping)
 
         membership_updates = self._synchronize_memberships(jira_members_by_group, role_groups, mapping)
         role_updates = self._assign_project_roles(project_role_assignments, mapping)
@@ -321,16 +268,7 @@ class GroupMigration(BaseMigration):
         mapping: dict[str, Any],
     ) -> dict[str, int]:
         user_mapping = config.mappings.get_mapping("user") or {}
-        user_lookup: dict[str, Any] = {}
-        for key, entry in user_mapping.items():
-            if not isinstance(entry, dict):
-                continue
-            lower_key = str(key).lower()
-            user_lookup[lower_key] = entry
-            if entry.get("jira_key"):
-                user_lookup[str(entry["jira_key"]).lower()] = entry
-            if entry.get("jira_name"):
-                user_lookup[str(entry["jira_name"]).lower()] = entry
+        user_lookup = self._user_aliases(user_mapping)
 
         assignments: list[dict[str, Any]] = []
         role_groups_lower = {name.lower(): members for name, members in (role_groups or {}).items()}
@@ -343,19 +281,7 @@ class GroupMigration(BaseMigration):
                 member_keys.update(jira_members_by_group[lookup_key])
             if lookup_key in role_groups_lower:
                 member_keys.update(role_groups_lower[lookup_key])
-            openproject_ids: set[int] = set()
-            for key in member_keys:
-                if not key:
-                    continue
-                entry_map = user_lookup.get(str(key).lower())
-                if not entry_map:
-                    continue
-                op_id = entry_map.get("openproject_id") or entry_map.get("openproject_user_id")
-                try:
-                    if op_id:
-                        openproject_ids.add(int(op_id))
-                except Exception:
-                    continue
+            openproject_ids = self._group_member_ids(member_keys, user_lookup)
             assignments.append({"name": group_name, "user_ids": sorted(openproject_ids)})
 
         result = self.op_client.sync_group_memberships(assignments)
@@ -381,28 +307,14 @@ class GroupMigration(BaseMigration):
             except Exception:
                 continue
 
-            try:
-                roles = self.jira_client.get_project_roles(project_key)
-            except Exception as exc:
-                self.logger.warning("Failed to fetch roles for project %s: %s", project_key, exc)
-                continue
-
+            roles = self._read_project_roles(project_key)
             for role in roles:
                 role_name = role.get("name") or ""
                 if not role_name:
                     continue
                 group_name = f"J2O Role {project_key}::{role_name}".strip()
                 members: set[str] = role_groups.setdefault(group_name, set())
-                for actor in role.get("actors", []):
-                    actor_type = str(actor.get("type", "")).lower()
-                    if "group" in actor_type:
-                        actor_group = actor.get("name") or actor.get("groupName")
-                        if actor_group and actor_group.lower() in jira_members_by_group:
-                            members.update(jira_members_by_group[actor_group.lower()])
-                    elif "user" in actor_type:
-                        key = actor.get("userKey") or actor.get("name") or actor.get("accountId")
-                        if key:
-                            members.add(str(key))
+                self._collect_role_members(role, members, jira_members_by_group)
                 if members:
                     assignments.append(
                         {
@@ -415,6 +327,13 @@ class GroupMigration(BaseMigration):
 
         role_groups = {name: members for name, members in role_groups.items() if members}
         return role_groups, assignments
+
+    def _read_project_roles(self, project_key: str) -> list[dict]:
+        try:
+            return self.jira_client.get_project_roles(project_key)
+        except Exception as exc:
+            self.logger.warning("Failed to fetch roles for project %s: %s", project_key, exc)
+            return []
 
     def _assign_project_roles(
         self,
@@ -479,3 +398,112 @@ class GroupMigration(BaseMigration):
                 if candidate_key in role_lookup:
                     return [role_lookup[candidate_key]]
         return []
+
+    @staticmethod
+    def _user_aliases(user_mapping: dict) -> dict[str, Any]:
+        """Index mapped Jira users by stored key and alternate Jira name."""
+        user_lookup: dict[str, Any] = {}
+        for key, entry in user_mapping.items():
+            if not isinstance(entry, dict):
+                continue
+            lower_key = str(key).lower()
+            user_lookup[lower_key] = entry
+            if entry.get("jira_key"):
+                user_lookup[str(entry["jira_key"]).lower()] = entry
+            if entry.get("jira_name"):
+                user_lookup[str(entry["jira_name"]).lower()] = entry
+        return user_lookup
+
+    @staticmethod
+    def _group_member_ids(member_keys: set, user_lookup: dict) -> set[int]:
+        """Resolve Jira group members to existing OpenProject users."""
+        openproject_ids: set[int] = set()
+        for key in member_keys:
+            if not key:
+                continue
+            entry_map = user_lookup.get(str(key).lower())
+            if not entry_map:
+                continue
+            op_id = entry_map.get("openproject_id") or entry_map.get("openproject_user_id")
+            try:
+                if op_id:
+                    openproject_ids.add(int(op_id))
+            except Exception:
+                continue
+        return openproject_ids
+
+    @staticmethod
+    def _collect_role_members(role: dict, members: set, jira_members_by_group: dict) -> None:
+        """Collect role members from individual users and source groups."""
+        for actor in role.get("actors", []):
+            actor_type = str(actor.get("type", "")).lower()
+            if "group" in actor_type:
+                actor_group = actor.get("name") or actor.get("groupName")
+                if actor_group and actor_group.lower() in jira_members_by_group:
+                    members.update(jira_members_by_group[actor_group.lower()])
+            elif "user" in actor_type:
+                key = actor.get("userKey") or actor.get("name") or actor.get("accountId")
+                if key:
+                    members.add(str(key))
+
+    def _index_groups(self, jira_groups: list[dict], role_groups: dict, existing_groups: dict) -> dict:
+        """Match source groups and role-backed groups to the refreshed target inventory."""
+        mapping: dict[str, Any] = {}
+        for group in jira_groups:
+            name = group.get("name")
+            if not name:
+                continue
+            op_group = existing_groups.get(name.lower())
+            if not op_group:
+                continue
+            mapping[name] = {
+                "jira_name": name,
+                "jira_group_id": group.get("groupId"),
+                "openproject_id": op_group.get("id"),
+                "created_new": name not in self.group_mapping,
+            }
+
+        for role_group_name in role_groups:
+            op_group = existing_groups.get(role_group_name.lower())
+            if not op_group:
+                continue
+            mapping[role_group_name] = {
+                "jira_name": role_group_name,
+                "jira_group_id": None,
+                "openproject_id": op_group.get("id"),
+                "created_new": role_group_name not in self.group_mapping,
+                "role_backed": True,
+            }
+        return mapping
+
+    def _persist_group_mapping(self, mapping: dict) -> None:
+        """Persist the updated group mapping and its OpenProject provenance."""
+        if mapping:
+            config.mappings.set_mapping("group", mapping)
+            self.group_mapping = mapping
+            try:
+                self._save_to_json(mapping, self.group_mapping_file)
+            except Exception:
+                self.logger.debug("Failed to persist group mapping to %s", self.group_mapping_file)
+
+            # Record provenance for all successfully migrated groups
+            # This enables restoration of mappings from OP alone without local files
+            provenance_mappings = [
+                {
+                    "jira_key": m["jira_name"],  # Use group name as key
+                    "jira_name": m.get("jira_name"),
+                    "op_entity_id": m["openproject_id"],
+                }
+                for m in mapping.values()
+                if m.get("openproject_id")
+            ]
+            if provenance_mappings:
+                try:
+                    result = self.op_client.bulk_record_entity_provenance("group", provenance_mappings)
+                    self.logger.info(
+                        "Recorded group provenance: %d success, %d failed",
+                        result.get("success", 0),
+                        result.get("failed", 0),
+                    )
+                except Exception as prov_err:
+                    self.logger.warning("Failed to record group provenance: %s", prov_err)

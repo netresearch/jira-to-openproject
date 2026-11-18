@@ -44,6 +44,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 
@@ -186,36 +187,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 atts = getattr(fields, "attachment", None)
                 if not isinstance(atts, list) or not atts:
                     continue
-                items: list[dict[str, Any]] = []
-                for a in atts:
-                    try:
-                        aid = getattr(a, "id", None)
-                        filename = getattr(a, "filename", None)
-                        size = getattr(a, "size", None)
-                        url = getattr(a, "content", None)
-                        # Without ``url`` we can't download — that's a
-                        # genuine skip. But ``filename`` may be empty
-                        # or the literal string ``"noname"`` for
-                        # rich-text-paste images / clipboard uploads;
-                        # those are still real attachments and we
-                        # must preserve them. Derive a stable name
-                        # from the Jira attachment id so the file
-                        # ends up under a unique key downstream and
-                        # the Rails LOWER(filename) idempotency check
-                        # doesn't collapse multiple ``noname``s into
-                        # one.
-                        if not url:
-                            self._loss_counters["extract_no_url"] += 1
-                            continue
-                        if not filename or not str(filename).strip() or str(filename).lower() == "noname":
-                            if aid is None:
-                                self._loss_counters["extract_no_id_no_filename"] += 1
-                                continue
-                            filename = f"jira-attachment-{aid}"
-                        items.append({"id": aid, "filename": filename, "size": size, "url": url})
-                    except Exception:
-                        self._loss_counters["extract_per_attachment_exception"] += 1
-                        continue
+                items = self._attachment_records(atts)
                 if items:
                     by_key[key] = items
             except Exception:
@@ -223,6 +195,40 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 continue
 
         return by_key
+
+    def _attachment_records(self, attachments: list) -> list[dict[str, Any]]:
+        """Keep attachments with a download URL and a recoverable filename."""
+        items = []
+        for attachment in attachments:
+            try:
+                aid = getattr(attachment, "id", None)
+                filename = getattr(attachment, "filename", None)
+                size = getattr(attachment, "size", None)
+                url = getattr(attachment, "content", None)
+                # Without ``url`` we can't download — that's a
+                # genuine skip. But ``filename`` may be empty
+                # or the literal string ``"noname"`` for
+                # rich-text-paste images / clipboard uploads;
+                # those are still real attachments and we
+                # must preserve them. Derive a stable name
+                # from the Jira attachment id so the file
+                # ends up under a unique key downstream and
+                # the Rails LOWER(filename) idempotency check
+                # doesn't collapse multiple ``noname``s into
+                # one.
+                if not url:
+                    self._loss_counters["extract_no_url"] += 1
+                    continue
+                if not filename or not str(filename).strip() or str(filename).lower() == "noname":
+                    if aid is None:
+                        self._loss_counters["extract_no_id_no_filename"] += 1
+                        continue
+                    filename = f"jira-attachment-{aid}"
+                items.append({"id": aid, "filename": filename, "size": size, "url": url})
+            except Exception:
+                self._loss_counters["extract_per_attachment_exception"] += 1
+                continue
+        return items
 
     def _extract(self) -> ComponentResult:
         """Collect attachments from Jira issues mapped to work packages.
@@ -279,74 +285,18 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         ``%252F`` / ``%252C`` to bypass Tomcat's literal-encoded-slash
         block. See :meth:`_double_encode_slashes`.
         """
-
-        def _fetch(target_url: str) -> None:
-            # Always wrap the response in a ``with`` block so the
-            # underlying connection is returned to the pool even on
-            # iteration errors mid-stream — without this, a partial
-            # read can leak the keep-alive socket. Per PR #217 review.
-            session = getattr(self.jira_client.jira, "_session", None)
-            if session is None:
-                import requests
-
-                logger.warning("Jira session not available, attempting unauthenticated download")
-                with requests.get(target_url, stream=True, timeout=60) as r:
-                    r.raise_for_status()
-                    _stream_to(r, dest_path)
-                return
-            with session.get(target_url, stream=True) as response:
-                response.raise_for_status()
-                _stream_to(response, dest_path)
-
-        def _stream_to(response: Any, target_path: Path) -> None:
-            # Stream-write into a tempfile + rename so a mid-stream
-            # error never leaves a truncated file behind for callers
-            # that only check ``local_path.exists()``. Per PR #217 review.
-            tmp_path = target_path.with_name(target_path.name + ".part")
-            try:
-                with tmp_path.open("wb") as f:
-                    for chunk in response.iter_content(chunk_size=65536):
-                        if chunk:
-                            f.write(chunk)
-                tmp_path.replace(target_path)
-            except Exception:
-                # Clean up the partial file on failure so the caller
-                # sees ``not local_path.exists()`` and counts it under
-                # ``map_download_failed`` instead of misinterpreting
-                # an N-byte fragment as a successful download.
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise
-
-        def _is_http_400(exc: Exception) -> bool:
-            # Prefer the structured status code over substring
-            # matching against ``str(exc)``: ``requests.HTTPError``
-            # carries the ``Response`` it was raised from, and
-            # ``response.status_code`` is the canonical signal. Fall
-            # through to substring match only for non-``HTTPError``
-            # cases (e.g. tests with custom exception classes that
-            # mirror the surface but don't carry ``response``).
-            response = getattr(exc, "response", None)
-            status = getattr(response, "status_code", None)
-            if isinstance(status, int):
-                return status == 400
-            err_text = str(exc)
-            return "400" in err_text or "Bad Request" in err_text
-
         try:
-            _fetch(url)
+            self._fetch_attachment(url, dest_path)
         except Exception as e:
             # Retry with double-encoded slashes/commas if Tomcat
             # rejected the URL with HTTP 400. At most one extra HTTP
             # call per genuinely-failing download.
             retried = False
-            if _is_http_400(e):
+            if self._is_http_400(e):
                 fallback = self._double_encode_slashes(url)
                 if fallback:
                     try:
-                        _fetch(fallback)
+                        self._fetch_attachment(fallback, dest_path)
                         retried = True
                     except Exception as e2:
                         logger.warning(
@@ -357,6 +307,63 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             if not retried:
                 logger.warning("Attachment download failed for %s: %s", url, e)
         return dest_path
+
+    def _fetch_attachment(self, target_url: str, dest_path: Path) -> None:
+        # Always wrap the response in a ``with`` block so the
+        # underlying connection is returned to the pool even on
+        # iteration errors mid-stream — without this, a partial
+        # read can leak the keep-alive socket. Per PR #217 review.
+        session = getattr(self.jira_client.jira, "_session", None)
+        if session is None:
+            import requests
+
+            logger.warning("Jira session not available, attempting unauthenticated download")
+            with requests.get(target_url, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                self._stream_to(r, dest_path)
+            return
+        with session.get(target_url, stream=True) as response:
+            response.raise_for_status()
+            self._stream_to(response, dest_path)
+
+    @staticmethod
+    def _stream_to(response: Any, target_path: Path) -> None:
+        # Stream-write into a tempfile + rename so a mid-stream
+        # error never leaves a truncated file behind for callers
+        # that only check ``local_path.exists()``. Per PR #217 review.
+        tmp_path = target_path.with_name(target_path.name + ".part")
+        try:
+            with tmp_path.open("wb") as f:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+            tmp_path.replace(target_path)
+        except Exception:
+            # Clean up the partial file on failure so the caller
+            # sees ``not local_path.exists()`` and counts it under
+            # ``map_download_failed`` instead of misinterpreting
+            # an N-byte fragment as a successful download.
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _is_http_400(exc: Exception) -> bool:
+        # Prefer the structured status code over substring
+        # matching against ``str(exc)``: ``requests.HTTPError``
+        # carries the ``Response`` it was raised from, and
+        # ``response.status_code`` is the canonical signal. Fall
+        # through to substring match only for non-``HTTPError``
+        # cases (e.g. tests with custom exception classes that
+        # mirror the surface but don't carry ``response``).
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status == 400
+        err_text = str(exc)
+        return "400" in err_text or "Bad Request" in err_text
 
     @staticmethod
     def _sha256_of(path: Path) -> str:
@@ -440,6 +447,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
         key_to_wp_id = self._wp_lookup_by_jira_key()
 
+        ops = self._attachment_operations(att_by_key, key_to_wp_id)
+        return ComponentResult(success=True, data={"ops": ops})
+
+    def _attachment_operations(self, att_by_key: dict, key_to_wp_id: dict) -> list[dict[str, Any]]:
+        """Prepare mapped attachments and count unmatched or invalid source rows."""
         ops: list[dict[str, Any]] = []
 
         for key, items in att_by_key.items():
@@ -461,14 +473,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     self._loss_counters["map_per_item_exception"] += 1
                     continue
 
-        return ComponentResult(success=True, data={"ops": ops})
+        return ops
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         ops: list[dict[str, Any]] = (mapped.data or {}).get("ops", []) if mapped.data else []
         if not ops:
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
-        # Copy files to container and build data payload for Rails script
+        with private_container_directory(self.op_client.docker_client) as directory:
+            container_ops = self._transfer_attachments(ops, directory)
+            return self._attach_files(container_ops)
+
+    def _transfer_attachments(self, ops: list[dict[str, Any]], directory: Path) -> list[dict[str, Any]]:
+        """Stage attachment bytes under unique names, keeping display names in the payload."""
         logger.info("_load: transferring %d files to container", len(ops))
         container_ops: list[dict[str, Any]] = []
         for idx, op in enumerate(ops):
@@ -484,9 +501,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 wp_id = int(op["work_package_id"])  # type: ignore[arg-type]
                 jira_key = str(op["jira_key"])
                 filename = str(op["filename"])
-                digest = str(op["digest"])
-                # Place in /tmp with digest prefix to avoid collisions
-                container_path = f"/tmp/j2o_att_{digest[:12]}_{os.path.basename(filename)}"
+                container_path = directory / f"{idx}-{Path(filename).name}"
                 try:
                     logger.info("_load: transferring file %d/%d: %s", idx + 1, len(ops), filename)
                     self.op_client.transfer_file_to_container(local_path, container_path)
@@ -500,13 +515,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         "work_package_id": wp_id,
                         "jira_key": jira_key,
                         "filename": filename,
-                        "container_path": container_path,
+                        "container_path": container_path.as_posix(),
                     },
                 )
             except Exception:
                 self._loss_counters["load_per_op_exception"] += 1
                 continue
 
+        return container_ops
+
+    def _attach_files(self, container_ops: list[dict[str, Any]]) -> ComponentResult:
+        """Apply the staged files to OpenProject before the staging directory is removed."""
         if not container_ops:
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
@@ -599,97 +618,31 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         updated = 0
         failed = 0
         attachment_mapping: dict[str, dict[str, int]] = {}
-        logger.info("_load: all %d files transferred, executing Rails script with %d ops", len(ops), len(container_ops))
+        logger.info("_load: executing Rails script with %d staged attachments", len(container_ops))
         try:
             envelope = self.op_client.execute_script_with_data(ruby_runner, container_ops)
             logger.info("_load: Rails script completed")
-            # ``execute_script_with_data`` returns an envelope:
-            # ``{status, message, data, output}``. The actual results
-            # live under ``data`` (the parsed JSON the Ruby script
-            # printed between the markers). The pre-fix code read
-            # ``res.get("results")`` directly on the envelope and
-            # always saw an empty list — silently returning
-            # ``updated=0, failed=0`` regardless of what Rails did.
-            # Same envelope-bug class PR #201 caught for
-            # ``wp_metadata_backfill``.
-            if isinstance(envelope, dict):
-                if envelope.get("status") != "success":
-                    logger.warning(
-                        "_load: Rails returned status=%r message=%r — counting batch as failed",
-                        envelope.get("status"),
-                        envelope.get("message"),
-                    )
-                    failed = len(container_ops)
-                    self._loss_counters["load_rails_status_not_success"] += len(container_ops)
-                else:
-                    data = envelope.get("data")
-                    # Defensive type validation. A malformed Rails
-                    # response shouldn't crash on ``len()``/iteration,
-                    # but it ALSO shouldn't silently report a green
-                    # batch — count the whole batch as failed and
-                    # surface a named bucket so the operator can tell
-                    # this from a normal per-op error. Per PR #211/#223
-                    # review.
-                    if not isinstance(data, dict):
-                        logger.warning(
-                            "_load: Rails returned non-dict ``data`` (%r) — counting batch as failed",
-                            type(data).__name__,
-                        )
-                        failed = len(container_ops)
-                        self._loss_counters["load_rails_malformed_data"] += len(container_ops)
-                        return ComponentResult(
-                            success=False,
-                            updated=updated,
-                            failed=failed,
-                            data={"attachment_mapping": attachment_mapping},
-                        )
-                    raw_results = data.get("results")
-                    raw_errors = data.get("errors")
-                    if not isinstance(raw_results, list) or not isinstance(raw_errors, list):
-                        logger.warning(
-                            "_load: Rails ``results``/``errors`` shape unexpected"
-                            " (results=%r, errors=%r) — counting batch as failed",
-                            type(raw_results).__name__,
-                            type(raw_errors).__name__,
-                        )
-                        failed = len(container_ops)
-                        self._loss_counters["load_rails_malformed_data"] += len(container_ops)
-                        return ComponentResult(
-                            success=False,
-                            updated=updated,
-                            failed=failed,
-                            data={"attachment_mapping": attachment_mapping},
-                        )
-                    results = raw_results
-                    errors = raw_errors
-                    # Build attachment mapping: {jira_key: {filename: attachment_id}}
-                    for r in results:
-                        if not isinstance(r, dict):
-                            continue
-                        jira_key = r.get("jira_key")
-                        filename = r.get("filename")
-                        att_id = r.get("attachment_id")
-                        if jira_key and filename and att_id:
-                            if jira_key not in attachment_mapping:
-                                attachment_mapping[jira_key] = {}
-                            attachment_mapping[jira_key][filename] = int(att_id)
-                            if not r.get("existed"):
-                                updated += 1
-                    failed = len(errors)
-                    if errors:
-                        self._loss_counters["load_rails_per_op_error"] += len(errors)
-                        # Surface the first few error objects so future
-                        # runs can diagnose why Rails rejected an
-                        # attach. Without this the counter alone
-                        # gives no clue what failed; the live re-run
-                        # on NRS reported 39 errors with no text.
-                        sample = errors[:5]
-                        logger.warning(
-                            "_load: Rails returned %d per-op errors (sample of %d): %s",
-                            len(errors),
-                            len(sample),
-                            sample,
-                        )
+            rows = self._attachment_rows(envelope, len(container_ops))
+            if rows is None:
+                return ComponentResult(
+                    success=False, updated=0, failed=len(container_ops), data={"attachment_mapping": {}}
+                )
+            results, errors = rows
+            for result in results:
+                if not isinstance(result, dict):
+                    continue
+                jira_key = result.get("jira_key")
+                filename = result.get("filename")
+                attachment_id = result.get("attachment_id")
+                if jira_key and filename and attachment_id:
+                    attachment_mapping.setdefault(jira_key, {})[filename] = int(attachment_id)
+                    if not result.get("existed"):
+                        updated += 1
+            failed = len(errors)
+            if errors:
+                self._loss_counters["load_rails_per_op_error"] += failed
+                sample = errors[:5]
+                logger.warning("_load: Rails returned %d per-op errors (sample of %d): %s", failed, len(sample), sample)
         except Exception:
             logger.exception("Rails attach operation failed")
             failed = len(container_ops)
@@ -701,6 +654,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             failed=failed,
             data={"attachment_mapping": attachment_mapping},
         )
+
+    def _attachment_rows(self, envelope: Any, count: int) -> tuple[list, list] | None:
+        """Validate the Rails runner envelope before treating the batch as complete."""
+        if not isinstance(envelope, dict) or envelope.get("status") != "success":
+            logger.warning("_load: Rails did not return a successful attachment response")
+            self._loss_counters["load_rails_status_not_success"] += count
+            return None
+        data = envelope.get("data")
+        if isinstance(data, dict) and isinstance(data.get("results"), list) and isinstance(data.get("errors"), list):
+            return data["results"], data["errors"]
+        logger.warning("_load: Rails attachment results or errors have an unexpected format")
+        self._loss_counters["load_rails_malformed_data"] += count
+        return None
 
     @staticmethod
     def disambiguate_duplicate_filenames_in_group(
@@ -922,25 +888,7 @@ puts end_marker
         # Single normalisation source — see ``_wp_lookup_by_jira_key``.
         key_to_wp = self._wp_lookup_by_jira_key()
 
-        # Download attachments and prepare ops
-        ops: list[dict[str, Any]] = []
-
-        for key, items in att_by_key.items():
-            # Find work package ID from reverse lookup
-            wp_id = key_to_wp.get(key)
-            if not wp_id:
-                self._loss_counters["map_wp_unmapped"] += len(items)
-                continue
-
-            for item in items:
-                try:
-                    op = self._prepare_op_from_item(item=item, jira_key=key, work_package_id=int(wp_id))
-                    if op is None:
-                        continue
-                    ops.append(op)
-                except Exception:
-                    self._loss_counters["map_per_item_exception"] += 1
-                    continue
+        ops = self._attachment_operations(att_by_key, key_to_wp)
 
         if not ops:
             logger.info("_process_batch_end_to_end: no ops to load, returning early")
@@ -984,36 +932,7 @@ puts end_marker
         # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
         key_to_wp_id = self._wp_lookup_by_jira_key()
         if not key_to_wp_id:
-            # FAIL LOUD. Silent ``success=True`` here masks a 100%
-            # attachment loss (operator postmortem in PR #194). The
-            # mapping may be either *absent* (skeleton never ran /
-            # ``_save_mapping`` swallowed an error) or *present but
-            # unusable* (only legacy bare-int rows that
-            # ``_wp_lookup_by_jira_key`` skips). Distinguish both
-            # cases in the message so the operator knows whether to
-            # re-run skeleton or to back-fill ``jira_key`` on the
-            # legacy rows.
-            raw_wp_map = self.mappings.get_mapping("work_package") or {}
-            if raw_wp_map:
-                msg = (
-                    f"work_package mapping present ({len(raw_wp_map)} entries) but"
-                    " contains no usable rows (no entry has a recoverable Jira key"
-                    " — likely all legacy bare-int entries). Re-run"
-                    " work_packages_skeleton to refresh the mapping shape."
-                )
-            else:
-                msg = (
-                    "No work_package mapping available — attachments cannot be"
-                    " correlated to OP work packages. Run the work_packages_skeleton"
-                    " component first (or verify it persisted its mapping)."
-                )
-            self.logger.error(msg)
-            return ComponentResult(
-                success=False,
-                updated=0,
-                message=msg,
-                errors=["missing_work_package_mapping"],
-            )
+            return self._missing_work_package_mapping()
 
         by_project: dict[str, list[str]] = {}
         for jira_key in key_to_wp_id:
@@ -1082,6 +1001,39 @@ puts end_marker
                         original_max_kb,
                         target_max_kb,
                     )
+
+    def _missing_work_package_mapping(self) -> ComponentResult:
+        """Distinguish an absent mapping from one containing only unusable rows."""
+        # FAIL LOUD. Silent ``success=True`` here masks a 100%
+        # attachment loss (operator postmortem in PR #194). The
+        # mapping may be either *absent* (skeleton never ran /
+        # ``_save_mapping`` swallowed an error) or *present but
+        # unusable* (only legacy bare-int rows that
+        # ``_wp_lookup_by_jira_key`` skips). Distinguish both
+        # cases in the message so the operator knows whether to
+        # re-run skeleton or to back-fill ``jira_key`` on the
+        # legacy rows.
+        raw_wp_map = self.mappings.get_mapping("work_package") or {}
+        if raw_wp_map:
+            msg = (
+                f"work_package mapping present ({len(raw_wp_map)} entries) but"
+                " contains no usable rows (no entry has a recoverable Jira key"
+                " — likely all legacy bare-int entries). Re-run"
+                " work_packages_skeleton to refresh the mapping shape."
+            )
+        else:
+            msg = (
+                "No work_package mapping available — attachments cannot be"
+                " correlated to OP work packages. Run the work_packages_skeleton"
+                " component first (or verify it persisted its mapping)."
+            )
+        self.logger.error(msg)
+        return ComponentResult(
+            success=False,
+            updated=0,
+            message=msg,
+            errors=["missing_work_package_mapping"],
+        )
 
     def _run_per_project_loop(
         self,

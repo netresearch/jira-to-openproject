@@ -75,35 +75,16 @@ class AgileBoardMigration(BaseMigration):
             if board_id is None:
                 continue
 
-            candidates: list[str] = []
             try:
                 configuration = self.jira_client.get_board_configuration(board_id)
                 board_sprints = [] if board.get("type") == "kanban" else self.jira_client.get_board_sprints(board_id)
-                location = board.get("location") or {}
-                project_key = location.get("projectKey") or board.get("locationProjectKey")
-                if not project_key:
-                    # A cross-project filter does not identify a single owning project.
-                    projects = self.jira_client.get_board_projects(board_id)
-                    candidates = sorted({p["key"] for p in projects if p.get("key")})
-                    if len(candidates) == 1:
-                        project_key = candidates[0]
+                project_key, candidates = self._board_project(board, board_id)
             except Exception as exc:
                 self.logger.exception("Failed reading Jira board %s", board_id)
                 read_errors.append({"board_id": board_id, "error": str(exc)})
                 continue
 
-            columns = configuration.get("columnConfig", {}).get("columns", [])
-            statuses: list[str] = []
-            for column in columns:
-                column_statuses = column.get("statuses", [])
-                if isinstance(column_statuses, list):
-                    for status in column_statuses:
-                        if isinstance(status, dict):
-                            status_id = status.get("id") or status.get("name")
-                        else:
-                            status_id = status
-                        if status_id:
-                            statuses.append(str(status_id))
+            statuses = self._column_statuses(configuration)
 
             query = configuration.get("filter", {}) or {}
             filter_jql = query.get("query") or query.get("queryString") or ""
@@ -235,34 +216,7 @@ class AgileBoardMigration(BaseMigration):
                 },
             )
 
-        for sprint in sprints:
-            project_key = sprint.get("project_key")
-            project_entry = self.project_mapping.get(project_key) if project_key else None
-            op_project_id = int(project_entry.get("openproject_id", 0)) if isinstance(project_entry, dict) else 0
-            if op_project_id <= 0:
-                skipped_sprints.append(
-                    {
-                        "reason": "missing_project_mapping",
-                        "sprint_id": sprint.get("id"),
-                        "project_key": project_key,
-                    },
-                )
-                continue
-
-            state = str(sprint.get("state", "")).lower()
-            status = "closed" if state == "closed" else "open"
-
-            version_payloads.append(
-                {
-                    "project_id": op_project_id,
-                    "jira_sprint_id": sprint.get("id"),
-                    "name": sprint.get("name") or f"Sprint {sprint.get('id')}",
-                    "description": sprint.get("goal"),
-                    "start_date": sprint.get("startDate"),
-                    "due_date": sprint.get("endDate"),
-                    "status": status,
-                },
-            )
+        self._map_sprints(sprints, skipped_sprints, version_payloads)
 
         mapped = {
             "read_errors": extracted.data.get("read_errors", []),
@@ -296,53 +250,16 @@ class AgileBoardMigration(BaseMigration):
         queries: list[dict[str, Any]] = mapped.data.get("queries", [])
         versions: list[dict[str, Any]] = mapped.data.get("versions", [])
 
-        created_queries = 0
-        created_versions = 0
         skipped = mapped.data.get("skipped_boards", []) + mapped.data.get("skipped_sprints", [])
         read_errors = mapped.data.get("read_errors", [])
         errors = len(skipped) + len(read_errors)
         sprint_mapping_updates: dict[str, Any] = {}
 
-        for payload in queries:
-            try:
-                result = self.op_client.create_or_update_query(**payload)
-                if result.get("success"):
-                    if result.get("created"):
-                        created_queries += 1
-                else:
-                    errors += 1
-            except Exception as exc:
-                errors += 1
-                self.logger.exception("Failed to create query for board %s: %s", payload.get("name"), exc)
+        created_queries, query_errors = self._load_board_queries(queries)
+        errors += query_errors
 
-        for payload in versions:
-            jira_sprint_id = payload.get("jira_sprint_id")
-            try:
-                result = self.op_client.ensure_project_version(
-                    **{k: v for k, v in payload.items() if k != "jira_sprint_id"}
-                )
-                if result.get("success"):
-                    if result.get("created"):
-                        created_versions += 1
-                    if jira_sprint_id:
-                        entry = {
-                            "openproject_id": result.get("id"),
-                            "project_id": payload["project_id"],
-                            "name": payload.get("name"),
-                        }
-                        sprint_mapping_updates[str(jira_sprint_id)] = entry
-                        sprint_name = payload.get("name")
-                        if sprint_name:
-                            sprint_mapping_updates[sprint_name] = entry
-                else:
-                    errors += 1
-            except Exception as exc:
-                errors += 1
-                self.logger.exception(
-                    "Failed to create version for sprint %s: %s",
-                    jira_sprint_id,
-                    exc,
-                )
+        created_versions, version_errors = self._load_sprint_versions(versions, sprint_mapping_updates)
+        errors += version_errors
 
         if sprint_mapping_updates:
             updated_mapping = dict(self.sprint_mapping)
@@ -399,3 +316,113 @@ class AgileBoardMigration(BaseMigration):
                 result.details.get("errors", 0),
             )
         return result
+
+    def _board_project(self, board: dict, board_id: int) -> tuple[str | None, list[str]]:
+        """Resolve the owning project or preserve the cross-project candidates."""
+        candidates: list[str] = []
+        location = board.get("location") or {}
+        project_key = location.get("projectKey") or board.get("locationProjectKey")
+        if not project_key:
+            # A cross-project filter does not identify a single owning project.
+            projects = self.jira_client.get_board_projects(board_id)
+            candidates = sorted({p["key"] for p in projects if p.get("key")})
+            if len(candidates) == 1:
+                project_key = candidates[0]
+        return project_key, candidates
+
+    @staticmethod
+    def _column_statuses(configuration: dict) -> list[str]:
+        """Collect the Jira status IDs in board column order."""
+        columns = configuration.get("columnConfig", {}).get("columns", [])
+        statuses: list[str] = []
+        for column in columns:
+            column_statuses = column.get("statuses", [])
+            if not isinstance(column_statuses, list):
+                continue
+            for status in column_statuses:
+                if isinstance(status, dict):
+                    status_id = status.get("id") or status.get("name")
+                else:
+                    status_id = status
+                if status_id:
+                    statuses.append(str(status_id))
+        return statuses
+
+    def _map_sprints(self, sprints: list[dict], skipped_sprints: list[dict], version_payloads: list[dict]) -> None:
+        """Assign Jira sprints to project-scoped OpenProject versions."""
+        for sprint in sprints:
+            project_key = sprint.get("project_key")
+            project_entry = self.project_mapping.get(project_key) if project_key else None
+            op_project_id = int(project_entry.get("openproject_id", 0)) if isinstance(project_entry, dict) else 0
+            if op_project_id <= 0:
+                skipped_sprints.append(
+                    {
+                        "reason": "missing_project_mapping",
+                        "sprint_id": sprint.get("id"),
+                        "project_key": project_key,
+                    },
+                )
+                continue
+
+            state = str(sprint.get("state", "")).lower()
+            status = "closed" if state == "closed" else "open"
+
+            version_payloads.append(
+                {
+                    "project_id": op_project_id,
+                    "jira_sprint_id": sprint.get("id"),
+                    "name": sprint.get("name") or f"Sprint {sprint.get('id')}",
+                    "description": sprint.get("goal"),
+                    "start_date": sprint.get("startDate"),
+                    "due_date": sprint.get("endDate"),
+                    "status": status,
+                },
+            )
+
+    def _load_board_queries(self, queries: list[dict]) -> tuple[int, int]:
+        """Create the saved queries and count successful creations and errors."""
+        created_queries = errors = 0
+        for payload in queries:
+            try:
+                result = self.op_client.create_or_update_query(**payload)
+                if result.get("success"):
+                    if result.get("created"):
+                        created_queries += 1
+                else:
+                    errors += 1
+            except Exception as exc:
+                errors += 1
+                self.logger.exception("Failed to create query for board %s: %s", payload.get("name"), exc)
+        return created_queries, errors
+
+    def _load_sprint_versions(self, versions: list[dict], sprint_mapping_updates: dict) -> tuple[int, int]:
+        """Record OpenProject IDs for successfully migrated sprints."""
+        created_versions = errors = 0
+        for payload in versions:
+            jira_sprint_id = payload.get("jira_sprint_id")
+            try:
+                result = self.op_client.ensure_project_version(
+                    **{k: v for k, v in payload.items() if k != "jira_sprint_id"}
+                )
+                if not result.get("success"):
+                    errors += 1
+                    continue
+                if result.get("created"):
+                    created_versions += 1
+                if jira_sprint_id:
+                    entry = {
+                        "openproject_id": result.get("id"),
+                        "project_id": payload["project_id"],
+                        "name": payload.get("name"),
+                    }
+                    sprint_mapping_updates[str(jira_sprint_id)] = entry
+                    if sprint_name := payload.get("name"):
+                        sprint_mapping_updates[sprint_name] = entry
+            except Exception as exc:
+                errors += 1
+                self.logger.exception(
+                    "Failed to create version for sprint %s: %s",
+                    jira_sprint_id,
+                    exc,
+                )
+        return created_versions, errors

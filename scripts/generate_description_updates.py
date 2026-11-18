@@ -2,141 +2,47 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Generate description updates JSON for NRS work packages.
-Uses existing J2O infrastructure to fetch Jira descriptions and map to OpenProject WP IDs.
-"""
+"""Generate NRS description updates from the local work-package mapping."""
 
 import json
-import os
 import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src import config
 from src.infrastructure.jira.jira_client import JiraClient
 from src.utils.markdown_converter import MarkdownConverter
 
 
-def main():
-    print("=" * 60)
-    print("NRS Description Updates Generator")
-    print("=" * 60)
-
-    # Load existing work package mapping
-    from src import config
-
-    data_dir = Path(config.get_path("data"))
-    wp_mapping_file = data_dir / "work_package_mapping.json"
-
-    print(f"\nLoading work package mapping from {wp_mapping_file}...")
-    if not os.path.exists(wp_mapping_file):
-        print(f"ERROR: Work package mapping file not found: {wp_mapping_file}")
-        return 1
-
-    with open(wp_mapping_file) as f:
-        wp_mapping = json.load(f)
-
-    # Filter for NRS issues only - key is jira_id, but we need to filter by project_key
-    # and create a lookup by jira_key for matching with fetched Jira issues
-    nrs_mappings = {}
-    for jira_id, data in wp_mapping.items():
-        if data.get("project_key") == "NRS":
-            jira_key = data.get("jira_key")
-            if jira_key:
-                nrs_mappings[jira_key] = data
-    print(f"Found {len(nrs_mappings)} NRS work packages in mapping")
-
-    if not nrs_mappings:
-        print("ERROR: No NRS mappings found")
-        return 1
-
-    # Initialize Jira client
-    print("\nInitializing Jira client...")
-    jira_client = JiraClient()
-
-    # Initialize markdown converter
-    markdown = MarkdownConverter()
-
-    # Fetch all NRS issues with descriptions from Jira
-    print("\nFetching NRS issues from Jira...")
-    jql = "project = NRS ORDER BY key ASC"
-
-    # Fetch in batches
-    all_issues = []
-    start_at = 0
-    batch_size = 100
-
-    while True:
-        try:
-            issues = jira_client.jira.search_issues(
-                jql,
-                startAt=start_at,
-                maxResults=batch_size,
-                fields="description,key,summary",
-            )
-            if not issues:
-                break
-            all_issues.extend(issues)
-            print(f"  Fetched {len(all_issues)} issues...")
-            if len(issues) < batch_size:
-                break
-            start_at += batch_size
-        except Exception as e:
-            print(f"ERROR fetching issues: {e}")
-            break
-
-    print(f"Total Jira issues fetched: {len(all_issues)}")
-
-    # Build description updates
+def build_updates(jira_client: JiraClient, targets: dict[str, int]) -> list[dict]:
+    """Read every page, including pages shorter than the requested size."""
+    converter = MarkdownConverter(work_package_mapping=targets)
+    issues = jira_client.stream_all_issues_for_project("NRS", fields="description,key", batch_size=100)
     updates = []
-    issues_with_desc = 0
-    issues_without_desc = 0
-    issues_not_in_mapping = 0
-
-    for issue in all_issues:
-        jira_key = issue.key
-        description = getattr(issue.fields, "description", "") or ""
-
-        if not description:
-            issues_without_desc += 1
+    for issue in issues:
+        raw = getattr(issue, "raw", issue)
+        key = raw["key"]
+        description = raw["fields"].get("description")
+        if key not in targets or not description:
             continue
+        converted = converter.convert(description, jira_key=key)
+        if converted:
+            updates.append(
+                {"jira_key": key, "wp_id": targets[key], "description": converted, "description_length": len(converted)}
+            )
+    return updates
 
-        issues_with_desc += 1
 
-        if jira_key not in nrs_mappings:
-            issues_not_in_mapping += 1
-            continue
-
-        # Convert Jira markdown to OpenProject format
-        try:
-            converted_desc = markdown.convert(description)
-        except Exception as e:
-            print(f"  WARNING: Failed to convert description for {jira_key}: {e}")
-            converted_desc = description
-
-        if converted_desc:
-            op_wp_id = nrs_mappings[jira_key].get("openproject_id")
-            if op_wp_id:
-                updates.append(
-                    {
-                        "jira_key": jira_key,
-                        "wp_id": op_wp_id,
-                        "description": converted_desc,
-                        "description_length": len(converted_desc),
-                    },
-                )
-
-    print("\nStatistics:")
-    print(f"  Issues with description: {issues_with_desc}")
-    print(f"  Issues without description: {issues_without_desc}")
-    print(f"  Issues not in mapping: {issues_not_in_mapping}")
-    print(f"  Updates to apply: {len(updates)}")
-
-    # Publish one complete file in the configured migration data directory.
+def publish_updates(targets: dict[str, int], data_dir: Path) -> int:
+    if not targets:
+        print("No NRS work packages with a Jira key and OpenProject ID", file=sys.stderr)
+        return 1
     output_file = data_dir / "nrs_description_updates.json"
     try:
+        updates = build_updates(JiraClient(), targets)
+        data_dir.mkdir(parents=True, exist_ok=True)
         with NamedTemporaryFile(mode="w", encoding="utf-8", dir=data_dir, delete=False) as staged:
             staged_path = Path(staged.name)
             try:
@@ -145,12 +51,27 @@ def main():
                 staged_path.replace(output_file)
             finally:
                 staged_path.unlink(missing_ok=True)
-    except OSError as exc:
+    except Exception as exc:
         print(f"Failed to publish description updates to {output_file}: {exc}", file=sys.stderr)
         return 1
-    print(f"Saved updates to {output_file}")
-
+    print(f"Saved {len(updates)} description updates to {output_file}")
     return 0
+
+
+def main() -> int:
+    data_dir = Path(config.get_path("data"))
+    path = data_dir / "work_package_mapping.json"
+    try:
+        mapping = json.loads(path.read_text(encoding="utf-8"))
+        targets = {
+            entry["jira_key"]: int(entry["openproject_id"])
+            for entry in mapping.values()
+            if entry.get("project_key") == "NRS" and entry.get("jira_key") and entry.get("openproject_id")
+        }
+    except (OSError, TypeError, ValueError, AttributeError) as exc:
+        print(f"Cannot read work-package mapping at {path}: {exc}", file=sys.stderr)
+        return 1
+    return publish_updates(targets, data_dir)
 
 
 if __name__ == "__main__":
