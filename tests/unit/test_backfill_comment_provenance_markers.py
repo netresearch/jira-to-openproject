@@ -23,6 +23,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.infrastructure.jira.comment_audience import CommentSelection
+
 # ---------------------------------------------------------------------------
 # Helpers – minimal fake objects that mimic the data shapes the script uses.
 # ---------------------------------------------------------------------------
@@ -938,8 +940,7 @@ class TestJiraServerProbeOrder:
 
         class FakeJiraClient:
             @staticmethod
-            def select_comments_for_migration(_key: str):
-                from src.infrastructure.jira.comment_audience import CommentSelection
+            def select_comments_for_migration(_key: str) -> CommentSelection:
 
                 return CommentSelection([comment], 0)
 
@@ -956,8 +957,6 @@ class TestJiraServerProbeOrder:
 
 
 def test_held_jira_comments_block_positional_backfill():
-
-    from src.infrastructure.jira.comment_audience import CommentSelection
 
     client = MagicMock()
     client.select_comments_for_migration.return_value = CommentSelection([], 1)
