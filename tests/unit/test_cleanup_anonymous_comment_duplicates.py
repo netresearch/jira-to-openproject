@@ -796,3 +796,14 @@ class TestOrphanAnonymousTightenedHeuristic:
         assert stats["to_delete"] == 0, (
             f"Expected 0 deletions (anon is newer than real-author), got {stats['to_delete']}"
         )
+
+
+def test_identical_notes_from_distinct_jira_comments_are_preserved():
+    from scripts.cleanup_anonymous_comment_duplicates import _plan_deletions, _plan_orphan_anonymous_deletions
+
+    rows = [
+        {"id": 1, "user_id": 2, "created_at": "2024", "notes": "OK\n<!-- j2o:jira-comment-id:41 -->"},
+        {"id": 2, "user_id": 3, "created_at": "2025", "notes": "OK\n<!-- j2o:jira-comment-id:42 -->"},
+    ]
+    assert _plan_deletions(rows) == (rows, [])
+    assert _plan_orphan_anonymous_deletions(rows) == []
