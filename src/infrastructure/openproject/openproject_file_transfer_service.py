@@ -35,7 +35,6 @@ from __future__ import annotations
 import os
 import secrets
 import shlex
-import time
 from pathlib import Path
 from typing import Any
 
@@ -52,18 +51,8 @@ class OpenProjectFileTransferService:
     # ── local temp file management ────────────────────────────────────────
 
     def generate_unique_temp_filename(self, base_name: str) -> str:
-        """Generate a temporary filename; stable for tests, unique in prod.
-
-        In normal runs we include timestamp/pid/random for uniqueness.
-        Under unit tests (detected via PYTEST_CURRENT_TEST), we return
-        deterministic ``/tmp/{base_name}.json`` to match test expectations.
-        """
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return f"/tmp/{base_name}.json"
-        timestamp = int(time.time())
-        pid = os.getpid()
-        random_suffix = secrets.token_hex(3)
-        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"
+        """Name a query result within the private directory created by the runner."""
+        return f"{Path(base_name).name}_{secrets.token_hex(8)}.json"
 
     def create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the given Ruby script content.

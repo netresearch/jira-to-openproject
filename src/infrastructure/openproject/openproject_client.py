@@ -454,7 +454,7 @@ class OpenProjectClient:
     def execute_large_query_to_json_file(
         self,
         query: str,
-        container_file: str = "/tmp/j2o_query.json",
+        container_file: str | None = None,
         timeout: int | None = None,
     ) -> dict[str, Any]:
         """Execute a Rails query by writing JSON to a container file, then read it back.

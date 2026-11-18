@@ -133,7 +133,7 @@ def test_jira_connection(settings: Settings) -> bool:
         return server_ok and auth_ok
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"✗ Jira connection failed - {e}")
+        logger.exception(f"✗ Jira connection failed - {e}")
         return False
 
 
@@ -169,7 +169,7 @@ def test_openproject_connection(settings: Settings) -> bool:
         return False
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"✗ OpenProject connection failed - {e}")
+        logger.exception(f"✗ OpenProject connection failed - {e}")
         return False
 
 
@@ -398,7 +398,7 @@ Examples:
             create_envrc_template(settings, args.output or Path(".envrc"))
 
     except Exception as e:
-        logger.error(f"Command failed: {e}")
+        logger.exception(f"Command failed: {e}")
         sys.exit(1)
 
 

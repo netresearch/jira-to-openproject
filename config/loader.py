@@ -298,5 +298,5 @@ def load_settings(config_file_path: Path | None = None) -> Settings:
         loader = get_config_loader(config_file_path)
         return loader.settings
     except Exception as e:
-        logger.error("Failed to load configuration: %s", e)
+        logger.exception("Failed to load configuration: %s", e)
         raise ValueError(f"Configuration validation failed: {e}") from e

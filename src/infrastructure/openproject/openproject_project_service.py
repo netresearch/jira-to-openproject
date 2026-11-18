@@ -31,13 +31,8 @@ work unchanged.
 
 from __future__ import annotations
 
-import json
-import os
-import shlex
-from pathlib import Path
 from typing import Any
 
-from src import config
 from src.infrastructure.exceptions import (
     QueryExecutionError,
     RecordNotFoundError,
@@ -68,25 +63,10 @@ class OpenProjectProjectService:
             QueryExecutionError: If unable to retrieve projects
 
         """
-        client = self._client
-        # Track temp paths so the ``finally`` block can clean them up even
-        # when an early exception bypasses normal flow. Container paths
-        # land in ``/tmp`` inside the OpenProject container; the local
-        # ``runner_script_local_tmp`` is written under the data dir.
-        runner_script_container: str | None = None
-        runner_script_local_tmp: Path | None = None
-        file_path: str | None = None
         try:
-            # Use pure file-based approach - write to file and read directly from filesystem
-            file_path = client._generate_unique_temp_filename("projects")
-
-            # Execute command to write JSON to file - use a simple command that returns minimal output
-            # Split into Python variable interpolation (f-string) and Ruby script (raw string)
-            file_path_interpolated = f"'{file_path}'"
             scope = "Project.where(parent_id: nil)" if top_level_only else "Project.all"
-            write_query = (
-                "require 'json'\n"
-                "projects = " + scope + ".includes(:enabled_modules).map do |p|\n"
+            query = (
+                f"{scope}.includes(:enabled_modules).map do |p|\n"
                 "  {\n"
                 "    id: p.id,\n"
                 "    name: p.name,\n"
@@ -99,92 +79,9 @@ class OpenProjectProjectService:
                 "    active: p.active?,\n"
                 "    enabled_modules: p.enabled_module_names\n"
                 "  }\n"
-                "end\n" + f"File.write({file_path_interpolated}, JSON.pretty_generate(projects))\n" + "nil"
+                "end"
             )
-
-            # Execute the write command - verify console output and fallback if needed
-            try:
-                out = client.rails_client.execute(write_query, suppress_output=True)
-                client._check_console_output_for_errors(out or "", context="get_projects")
-                self._logger.debug("Successfully executed projects write command")
-            except Exception as e:
-                from src.infrastructure.openproject.rails_console_client import (
-                    CommandExecutionError,
-                    ConsoleNotReadyError,
-                    RubyError,
-                )
-
-                if isinstance(e, (ConsoleNotReadyError, CommandExecutionError, RubyError, QueryExecutionError)):
-                    if not config.migration_config.get("enable_runner_fallback", False):
-                        raise
-                    self._logger.warning(
-                        "Rails console failed for projects (%s); falling back to rails runner",
-                        type(e).__name__,
-                    )
-                    runner_script_path = f"/tmp/j2o_runner_{os.urandom(4).hex()}.rb"
-                    runner_script_container = runner_script_path
-                    local_tmp = Path(client.file_manager.data_dir) / "temp_scripts" / Path(runner_script_path).name
-                    runner_script_local_tmp = local_tmp
-                    local_tmp.parent.mkdir(parents=True, exist_ok=True)
-                    top_selector_line = (
-                        "projects = Project.where(parent_id: nil).select("
-                        ":id, :name, :identifier, :description, :status_code"
-                        ").as_json\n"
-                    )
-                    all_selector_line = (
-                        "projects = Project.all.select(:id, :name, :identifier, :description, :status_code).as_json\n"
-                    )
-                    ruby_runner = (
-                        "require 'json'\n"
-                        + (top_selector_line if top_level_only else all_selector_line)
-                        + f"File.write('{file_path}', JSON.pretty_generate(projects))\n"
-                    )
-                    with local_tmp.open("w", encoding="utf-8") as f:
-                        f.write(ruby_runner)
-                    client.docker_client.transfer_file_to_container(local_tmp, Path(runner_script_path))
-                    runner_cmd = f"(cd /app || cd /opt/openproject) && bundle exec rails runner {runner_script_path}"
-                    stdout, stderr, rc = client.docker_client.execute_command(runner_cmd)
-                    if rc != 0:
-                        _emsg = f"rails runner failed (rc={rc}): {stderr[:500]}"
-                        raise QueryExecutionError(_emsg) from e
-                else:
-                    raise
-
-            # Read the JSON directly from the Docker container file system via SSH
-            # Use SSH to read the file from the Docker container
-            ssh_command = f"docker exec {shlex.quote(client.container_name)} cat {shlex.quote(file_path)}"
-            try:
-                stdout, stderr, returncode = client.ssh_client.execute_command(ssh_command)
-            except Exception as e:
-                msg = f"SSH command failed: {e}"
-                raise QueryExecutionError(msg) from e
-            if returncode != 0:
-                self._logger.error(
-                    "Failed to read file from container, stderr: %s",
-                    stderr,
-                )
-                msg = f"SSH command failed with code {returncode}: {stderr}"
-                raise QueryExecutionError(msg)
-
-            file_content = stdout.strip()
-            self._logger.debug(
-                "Successfully read projects file from container, content length: %d",
-                len(file_content),
-            )
-
-            # Parse the JSON content
-            try:
-                result = json.loads(file_content)
-            except json.JSONDecodeError as e:
-                self._logger.exception("Failed to read projects from container file %s", file_path)
-                msg = f"Failed to read projects from container file: {e}"
-                raise QueryExecutionError(msg) from e
-            else:
-                self._logger.info(
-                    "Successfully loaded %d projects from container file",
-                    len(result) if isinstance(result, list) else 0,
-                )
-
+            result = self._client.rails_runner.read_catalog(query, "get_projects")
             # The execute_query_to_json_file method should return the parsed JSON
             if not isinstance(result, list):
                 self._logger.error(
@@ -240,44 +137,6 @@ class OpenProjectProjectService:
             self._logger.exception("Failed to get projects using file-based method")
             msg = f"Failed to retrieve projects: {e}"
             raise QueryExecutionError(msg) from e
-        finally:
-            # Best-effort cleanup of temp files left behind in the
-            # container (and on the host for the runner-fallback script).
-            # Failures here are logged and swallowed because cleanup is
-            # advisory — the real work has already succeeded or raised
-            # by this point.
-            if file_path:
-                try:
-                    rm_cmd = f"docker exec {shlex.quote(client.container_name)} rm -f {shlex.quote(file_path)}"
-                    client.ssh_client.execute_command(rm_cmd, check=False)
-                except Exception as cleanup_err:
-                    self._logger.debug(
-                        "Non-critical: failed to remove container projects file %s: %s",
-                        file_path,
-                        cleanup_err,
-                    )
-            if runner_script_container:
-                try:
-                    rm_cmd = (
-                        f"docker exec {shlex.quote(client.container_name)} rm -f {shlex.quote(runner_script_container)}"
-                    )
-                    client.ssh_client.execute_command(rm_cmd, check=False)
-                except Exception as cleanup_err:
-                    self._logger.debug(
-                        "Non-critical: failed to remove container runner script %s: %s",
-                        runner_script_container,
-                        cleanup_err,
-                    )
-            if runner_script_local_tmp is not None:
-                try:
-                    if runner_script_local_tmp.exists():
-                        runner_script_local_tmp.unlink()
-                except Exception as cleanup_err:
-                    self._logger.debug(
-                        "Non-critical: failed to remove local runner script %s: %s",
-                        runner_script_local_tmp,
-                        cleanup_err,
-                    )
 
     def get_project_by_identifier(self, identifier: str) -> dict[str, Any]:
         """Get a project by identifier.

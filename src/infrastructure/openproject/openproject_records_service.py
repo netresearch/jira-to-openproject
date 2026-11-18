@@ -306,7 +306,7 @@ class OpenProjectRecordsService:
             # Prefer file-based for multi-record results to avoid console artifacts
             data = client.execute_large_query_to_json_file(
                 ruby_expr,
-                container_file=f"/tmp/j2o_{model.lower()}_records.json",
+                container_file=f"j2o_{model.lower()}_records.json",
                 timeout=60,
             )
             if data is None:
