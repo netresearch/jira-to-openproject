@@ -250,8 +250,9 @@ class TestStreamingDecorator:
         stub = _make_jira_stub(jira=None)
         decorator = StreamingDecorator(stub)
 
+        issues = decorator.stream_search_issues("project=X")
         with pytest.raises(RuntimeError, match="not initialized"):
-            next(iter(decorator.stream_search_issues("project=X")))
+            next(issues)
 
 
 class TestPerformanceMonitoringDecorator:

@@ -114,8 +114,9 @@ class TestLooksLikeHtml:
 
 class TestAssertJsonResponse:
     def test_raises_on_html_response(self) -> None:
+        response = _resp(content_type="text/html", body="<html/>")
         with pytest.raises(JiraServiceUnavailableError) as excinfo:
-            _assert_json_response(_resp(content_type="text/html", body="<html/>"), path="/rest/x/y")
+            _assert_json_response(response, path="/rest/x/y")
         # The exception message must contain the path (so logs are useful)
         # and at least one of the canonical causes (so users know where to look).
         msg = str(excinfo.value)

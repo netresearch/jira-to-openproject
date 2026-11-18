@@ -417,12 +417,7 @@ class TestResourceLeakPrevention:
         )
 
         # Act: Cleanup should not raise exception
-        try:
-            op_client._cleanup_script_files(["test_script.rb"])
-        except Exception:
-            pytest.fail(
-                "Cleanup should suppress exceptions to prevent breaking migrations",
-            )
+        op_client._cleanup_script_files(["test_script.rb"])
 
         # Assert: Should attempt cleanup despite failures
         mock_clients["ssh_client"].execute_command.assert_called()

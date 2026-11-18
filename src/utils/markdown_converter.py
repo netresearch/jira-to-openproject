@@ -136,14 +136,14 @@ class MarkdownConverter:
         # and allows filenames with mixed-case extensions (e.g. .PDF, .Docx).
         # Spaces are permitted in filenames (e.g. "some report.pdf").
         self.attachment_pattern = re.compile(
-            r"\[([^\|\]]+)\|(?!https?://|ftp://)([^\]|]+\.[a-zA-Z0-9]{1,10})\]",
+            r"\[([^\|\]]+)\|(?!https?://|ftp://)([^\]|]+\.[a-z0-9]{1,10})\]",
             re.IGNORECASE,
         )
         # Pattern for [^filename.ext] format (Jira attachment reference).
         # Matches any filename with a dot-extension (not just the original whitelist).
         # re.IGNORECASE allows mixed-case extensions; spaces permitted in filenames.
         self.attachment_ref_pattern = re.compile(
-            r"\[\^([^\]]+\.[a-zA-Z0-9]{1,10})\]",
+            r"\[\^([^\]]+\.[a-z0-9]{1,10})\]",
             re.IGNORECASE,
         )
 
