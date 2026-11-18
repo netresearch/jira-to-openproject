@@ -160,6 +160,7 @@ class OpenProjectProvenanceService:
             ("J2O OP Account ID", "int"),  # Tempo Account → OP Project ID
             ("J2O OP Custom_field ID", "int"),  # Jira CF ID → OP CustomField ID
             ("J2O OP Link_type ID", "int"),  # Jira Link Type ID → OP CustomField ID
+            (provenance_fields.ORIGIN_ID, "string"),
             (provenance_fields.ENTITY_TYPE, "string"),  # Entity type for filtering
         ]
 
@@ -178,6 +179,24 @@ class OpenProjectProvenanceService:
         return cf_ids
 
     # ── recording / restoring ─────────────────────────────────────────────
+
+    @staticmethod
+    def _mapping_subject(entity_type: str, jira_key: str, jira_name: str | None) -> str:
+        subject = f"{entity_type.upper()}: {jira_key}"
+        return f"{subject} ({jira_name})" if jira_name else subject
+
+    @staticmethod
+    def _enable_mapping_fields(cf_ids: dict[str, int], op_id_field: str) -> str:
+        """Enable the mapping fields on this reporting project and type, including legacy targets."""
+        names = (op_id_field, provenance_fields.ENTITY_TYPE, provenance_fields.ORIGIN_ID)
+        ids = [int(cf_ids[name]) for name in names if cf_ids.get(name)]
+        return (
+            "  owner = wp_type.respond_to?(:default_variant) ? wp_type.default_variant : wp_type\n"
+            f"  WorkPackageCustomField.where(id: {ids}).each do |field|\n"
+            "    field.projects << project unless field.is_for_all? || field.projects.exists?(project.id)\n"
+            "    owner.custom_fields << field unless owner.custom_fields.exists?(field.id)\n"
+            "  end\n"
+        )
 
     def record_entity(
         self,
@@ -217,9 +236,7 @@ class OpenProjectProvenanceService:
             raise QueryExecutionError(msg)
 
         # Build work package subject (unique identifier for this mapping)
-        subject = f"{entity_type.upper()}: {jira_key}"
-        if jira_name:
-            subject = f"{subject} ({jira_name})"
+        subject = self._mapping_subject(entity_type, jira_key, jira_name)
 
         # Get CF IDs for the mapping fields. ``capitalize`` (not ``title``)
         # so ``custom_field`` -> ``Custom_field`` matches the CF name created
@@ -238,6 +255,12 @@ class OpenProjectProvenanceService:
         cf_value_lines = ""
         if cf_op_id:
             cf_value_lines += f"  cf_values[{cf_op_id}] = {op_entity_id} if {cf_op_id}\n"
+        origin_id_field = cf_ids.get(provenance_fields.ORIGIN_ID)
+        if jira_id is not None and not origin_id_field:
+            return {"success": False, "error": "Cannot record Jira source ID without J2O Origin ID"}
+        if jira_id is not None:
+            source_id = escape_ruby_single_quoted(str(jira_id))
+            cf_value_lines += f"  cf_values[{origin_id_field}] = '{source_id}'\n"
         if cf_entity_type_id:
             cf_value_lines += (
                 f"  cf_values[{cf_entity_type_id}] = "
@@ -248,6 +271,7 @@ class OpenProjectProvenanceService:
             "begin\n"
             f"  project = Project.find({project_id})\n"
             f"  wp_type = Type.find({type_id})\n"
+            f"{self._enable_mapping_fields(cf_ids, cf_op_id_field)}"
             f"  subject = '{escape_ruby_single_quoted(subject)}'\n"
             "  status = Status.default || Status.first\n"
             "  priority = IssuePriority.default || IssuePriority.first\n"
@@ -360,40 +384,63 @@ class OpenProjectProvenanceService:
             if not isinstance(result, list):
                 return {}
 
-            # Build mapping from subject parsing and CF values
-            mappings: dict[str, dict[str, Any]] = {}
-            for wp in result:
-                # Parse subject to extract Jira key: "TYPE: jira-key (name)" or "TYPE: jira-key"
-                subject = wp.get("subject", "")
-                prefix = f"{entity_type.upper()}: "
-                if subject.startswith(prefix):
-                    rest = subject[len(prefix) :]
-                    # Handle "(name)" suffix
-                    if " (" in rest and rest.endswith(")"):
-                        jira_key = rest.split(" (")[0]
-                        jira_name = rest.split(" (")[1].rstrip(")")
-                    else:
-                        jira_key = rest
-                        jira_name = None
-
-                    mappings[jira_key] = {
-                        "jira_key": jira_key,
-                        "jira_name": jira_name,
-                        "openproject_id": wp.get("op_entity_id"),
-                        "matched_by": "j2o_provenance",
-                        "j2o_origin_key": wp.get("j2o_origin_key"),
-                        "j2o_origin_id": wp.get("j2o_origin_id"),
-                        "j2o_origin_system": wp.get("j2o_origin_system"),
-                        "restored_from_op": True,
-                        "provenance_wp_id": wp.get("id"),
-                    }
-
+            mappings = self._restore_rows(entity_type, result)
             self._logger.info("Restored %d %s mappings from provenance", len(mappings), entity_type)
             return mappings
 
         except Exception as e:
             self._logger.warning("Failed to restore %s mappings from provenance: %s", entity_type, e)
             return {}
+
+    @staticmethod
+    def _restore_rows(entity_type: str, result: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        mappings: dict[str, dict[str, Any]] = {}
+        for wp in result:
+            # Parse subject to extract Jira key: "TYPE: jira-key (name)" or "TYPE: jira-key"
+            subject = wp.get("subject", "")
+            prefix = f"{entity_type.upper()}: "
+            if subject.startswith(prefix):
+                rest = subject[len(prefix) :]
+                # Handle "(name)" suffix
+                if " (" in rest and rest.endswith(")"):
+                    jira_key = rest.split(" (")[0]
+                    jira_name = rest.split(" (")[1].rstrip(")")
+                else:
+                    jira_key = rest
+                    jira_name = None
+
+                mappings[jira_key] = {
+                    "jira_key": jira_key,
+                    "jira_name": jira_name,
+                    "openproject_id": wp.get("op_entity_id"),
+                    "matched_by": "j2o_provenance",
+                    "j2o_origin_key": wp.get("j2o_origin_key"),
+                    "j2o_origin_id": wp.get("j2o_origin_id"),
+                    "j2o_origin_system": wp.get("j2o_origin_system"),
+                    "restored_from_op": True,
+                    "provenance_wp_id": wp.get("id"),
+                }
+
+        return mappings
+
+    @staticmethod
+    def _mapping_rows(entity_type: str, mappings: list[dict[str, Any]]) -> list[str]:
+        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+
+        ruby_mappings = []
+        for m in mappings:
+            jira_key = m.get("jira_key", "")
+            jira_name = m.get("jira_name", "")
+            op_entity_id = m.get("op_entity_id") or m.get("openproject_id")
+            if jira_key and op_entity_id:
+                subject = OpenProjectProvenanceService._mapping_subject(entity_type, jira_key, jira_name)
+                source_id = m.get("jira_id")
+                source = "nil" if source_id is None else f"'{escape_ruby_single_quoted(str(source_id))}'"
+                ruby_mappings.append(
+                    f"  {{ jira_id: {source}, subject: '{escape_ruby_single_quoted(subject)}', op_entity_id: {int(op_entity_id)} }}",
+                )
+
+        return ruby_mappings
 
     def bulk_record_entities(
         self,
@@ -412,7 +459,6 @@ class OpenProjectProvenanceService:
 
         """
         # Lazy import avoids the openproject_client ↔ this-module import cycle.
-        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
 
         if entity_type not in self.ENTITY_TYPES:
             msg = f"Invalid entity type: {entity_type}. Must be one of {self.ENTITY_TYPES}"
@@ -435,19 +481,13 @@ class OpenProjectProvenanceService:
         cf_entity_type_id = cf_ids.get(provenance_fields.ENTITY_TYPE)
 
         # Build Ruby array of mappings
-        ruby_mappings = []
-        for m in mappings:
-            jira_key = m.get("jira_key", "")
-            jira_name = m.get("jira_name", "")
-            op_entity_id = m.get("op_entity_id") or m.get("openproject_id")
-            if jira_key and op_entity_id:
-                subject = f"{entity_type.upper()}: {jira_key}"
-                if jira_name:
-                    subject = f"{subject} ({jira_name})"
-                ruby_mappings.append(
-                    f"  {{ subject: '{escape_ruby_single_quoted(subject)}', op_entity_id: {op_entity_id} }}",
-                )
-
+        if not cf_ids.get(provenance_fields.ORIGIN_ID) and any(m.get("jira_id") is not None for m in mappings):
+            return {
+                "success": 0,
+                "failed": len(mappings),
+                "errors": ["Cannot record Jira source ID without J2O Origin ID"],
+            }
+        ruby_mappings = self._mapping_rows(entity_type, mappings)
         if not ruby_mappings:
             return {"success": 0, "failed": 0, "errors": []}
 
@@ -455,11 +495,13 @@ class OpenProjectProvenanceService:
             "begin\n"
             f"  project = Project.find({project_id})\n"
             f"  wp_type = Type.find({type_id})\n"
+            f"{self._enable_mapping_fields(cf_ids, cf_op_id_field)}"
             "  status = Status.default || Status.first\n"
             "  priority = IssuePriority.default || IssuePriority.first\n"
             "  author = User.admin.first || User.first\n"
             f"  cf_op_id = {cf_op_id or 'nil'}\n"
             f"  cf_entity_type_id = {cf_entity_type_id or 'nil'}\n"
+            f"  cf_origin_id = {cf_ids.get(provenance_fields.ORIGIN_ID) or 'nil'}\n"
             "  mappings = [\n" + ",\n".join(ruby_mappings) + "\n  ]\n"
             "  success = 0\n"
             "  failed = 0\n"
@@ -479,6 +521,7 @@ class OpenProjectProvenanceService:
             "      end\n"
             "      cf_values = {}\n"
             "      cf_values[cf_op_id] = m[:op_entity_id] if cf_op_id\n"
+            "      cf_values[cf_origin_id] = m[:jira_id] if cf_origin_id && !m[:jira_id].nil?\n"
             f"      cf_values[cf_entity_type_id] = '{entity_type}' if cf_entity_type_id\n"
             "      wp.custom_field_values = cf_values if cf_values.any?\n"
             "      wp.save!\n"

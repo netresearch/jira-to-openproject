@@ -407,16 +407,7 @@ class WorkPackageContentMigration(BaseMigration):
         """Prepare values according to their target format without changing selection labels."""
         field_format = mapping.get("openproject_type") if isinstance(mapping, dict) else None
         if field_format == "user":
-            # Never use a numeric Jira user ID as an OpenProject user ID.
-            users = value if isinstance(value, list) else [value]
-            ids = []
-            for user in users:
-                payload = {"name": user, "key": user} if isinstance(user, str) else user
-                op_id = self._resolve_jira_user_id(payload)
-                if op_id is None:
-                    return {"unmapped_jira_user": True}
-                ids.append(op_id)
-            return ids if isinstance(value, list) else ids[0]
+            return self._mapped_user_field(value)
         if isinstance(value, str) and field_format in (None, "text", "string"):
             return self._convert_jira_links(value, jira_key=issue_key)
         return value
@@ -437,21 +428,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         """
         # Get custom field values from Jira issue
-        raw_fields = getattr(jira_issue, "raw", {}).get("fields", {})
-        updates = {}
-
-        for jira_field_id, value in raw_fields.items():
-            if not jira_field_id.startswith("customfield_"):
-                continue
-            if value is None:
-                continue
-
-            # Check if we have a mapping for this field
-            if jira_field_id in self.custom_field_mapping:
-                mapping = self.custom_field_mapping[jira_field_id]
-                op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
-                if op_cf_id:
-                    updates[f"customField{op_cf_id}"] = self._mapped_field_value(mapping, value, jira_issue.key)
+        updates = self._custom_field_updates(jira_issue)
 
         if updates:
             try:
@@ -660,20 +637,7 @@ class WorkPackageContentMigration(BaseMigration):
             converted_description = self._convert_jira_links(description, jira_key=jira_issue.key)
             collected["description_update"] = converted_description
 
-        # Collect custom field updates
-        raw_fields = getattr(jira_issue, "raw", {}).get("fields", {})
-        for jira_field_id, value in raw_fields.items():
-            if not jira_field_id.startswith("customfield_"):
-                continue
-            if value is None:
-                continue
-            if jira_field_id in self.custom_field_mapping:
-                mapping = self.custom_field_mapping[jira_field_id]
-                op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
-                if op_cf_id:
-                    collected["custom_field_updates"][f"customField{op_cf_id}"] = self._mapped_field_value(
-                        mapping, value, jira_issue.key
-                    )
+        collected["custom_field_updates"] = self._custom_field_updates(jira_issue)
 
         try:
             collected["comments"], collected["comments_held"] = self._collect_approved_comments(jira_issue.key)
@@ -722,37 +686,7 @@ class WorkPackageContentMigration(BaseMigration):
             {item["wp_id"]: item["comments"] for item in collected_items}
         )
 
-        descriptions = [
-            {"id": item["wp_id"], "description": item["description_update"]}
-            for item in collected_items
-            if item["description_update"]
-        ]
-        # An unmapped selection or reference must not roll back the other
-        # fields on the same issue. All rows still travel in one Rails call.
-        fields = [
-            {"id": item["wp_id"], key: value}
-            for item in collected_items
-            for key, value in item["custom_field_updates"].items()
-        ]
-        for kind, updates in (("descriptions", descriptions), ("custom_fields", fields)):
-            if not updates:
-                continue
-            try:
-                result = self.op_client.batch_update_work_packages(updates)
-                updated = int(result["updated"])
-                if not 0 <= updated <= len(updates):
-                    msg = "Invalid work package update count"
-                    raise ValueError(msg)
-                results[f"{kind}_updated"] = updated
-                results[f"{kind}_failed"] = len(updates) - updated
-                if results[f"{kind}_failed"]:
-                    errors = [row for row in result.get("results", []) if row.get("status") == "failed"]
-                    self.logger.warning(
-                        "Incomplete %s batch: %d failed. First failures: %s", kind, len(updates) - updated, errors[:3]
-                    )
-            except Exception as exc:
-                results[f"{kind}_failed"] = len(updates)
-                self.logger.warning("Could not confirm %s writes: %s", kind, exc)
+        self._write_work_package_fields(collected_items, results)
 
         # Batch 3: Comments (using bulk_create_work_package_activities).
         # Each entry in item["comments"] carries comment text, user_id,
@@ -760,67 +694,10 @@ class WorkPackageContentMigration(BaseMigration):
         # authorship; jira_comment_id enables provenance-based idempotency so
         # re-runs skip already-migrated comments instead of duplicating them;
         # created_at back-dates the journal to the original Jira comment time (#260).
-        all_comments = []
-        for item in collected_items:
-            for comment_entry in item["comments"]:
-                all_comments.append(
-                    {
-                        "work_package_id": item["wp_id"],
-                        "comment": comment_entry["comment"],
-                        "user_id": comment_entry["user_id"],
-                        "jira_comment_id": comment_entry.get("jira_comment_id"),
-                        # Forward the original Jira comment date (#260).
-                        "created_at": comment_entry.get("created_at"),
-                    },
-                )
-
-        if all_comments:
-            try:
-                result = self.op_client.bulk_create_work_package_activities(all_comments)
-                results["comments_migrated"] = result.get("created", 0)
-                # Surface the Rails-side failure count instead of discarding it —
-                # previously only ``created`` was read, so dropped comments
-                # (e.g. all but the first per WP) looked like a clean success (#260).
-                failed = int(result.get("failed", 0) or 0)
-                acknowledged = int(result.get("created", 0)) + int(result.get("skipped", 0))
-                failed = max(failed, len(all_comments) - acknowledged, int(result.get("success") is False))
-                results["comments_failed"] = failed
-                if failed or result.get("success") is False:
-                    self.logger.warning(
-                        "Bulk comment creation: %d created, %d failed (success=%s) — "
-                        "failed comments were dropped; check the OpenProject Rails errors. "
-                        "First errors: %s",
-                        result.get("created", 0),
-                        failed,
-                        result.get("success"),
-                        (result.get("errors") or [])[:3],
-                    )
-            except Exception as e:
-                # A thrown bulk call drops the whole batch of comments; record
-                # and warn rather than swallowing it at debug level (#260).
-                self.logger.warning("Bulk comment creation failed (%d comments dropped): %s", len(all_comments), e)
-                results["comments_failed"] = len(all_comments)
+        self._write_approved_comments(collected_items, results)
 
         # Batch 4: Watchers (using bulk_add_watchers)
-        if os.environ.get("J2O_SKIP_WATCHERS"):
-            self.logger.debug("Skipping watchers (J2O_SKIP_WATCHERS=1)")
-        else:
-            all_watchers = []
-            for item in collected_items:
-                for user_id in item["watchers"]:
-                    all_watchers.append(
-                        {
-                            "work_package_id": item["wp_id"],
-                            "user_id": user_id,
-                        },
-                    )
-
-            if all_watchers:
-                try:
-                    result = self.op_client.bulk_add_watchers(all_watchers)
-                    results["watchers_added"] = result.get("created", 0)
-                except Exception as e:
-                    self.logger.debug("Bulk watcher addition failed: %s", e)
+        self._write_watchers(collected_items, results)
 
         return results
 
@@ -894,61 +771,7 @@ class WorkPackageContentMigration(BaseMigration):
 
         for project in projects:
             project_key = project.get("key")
-            project_results = {
-                "processed": 0,
-                "updated": 0,
-                "skipped": 0,
-                "failed": 0,
-            }
-
-            self.logger.info("Processing content for project %s", project_key)
-
-            # Collect content in batches
-            collected_batch: list[dict[str, Any]] = []
-
-            for issue in self.iter_project_issues(project_key):
-                project_results["processed"] += 1
-                wp_id = self._get_wp_id_for_issue(issue)
-
-                if not wp_id:
-                    project_results["skipped"] += 1
-                    self.logger.debug(
-                        "No WP mapping for %s, skipping",
-                        issue.key,
-                    )
-                    continue
-
-                # Collect content for bulk processing
-                collected = self._collect_content_for_issue(issue, wp_id)
-                collected_batch.append(collected)
-
-                # Process batch when full
-                if len(collected_batch) >= batch_size:
-                    batch_results = self._bulk_process_collected_content(collected_batch)
-                    project_results["updated"] += len(collected_batch)
-                    for metric, count in batch_results.items():
-                        results[metric] += count
-
-                    self.logger.info(
-                        "  Bulk processed %d work packages for %s (total: %d)",
-                        len(collected_batch),
-                        project_key,
-                        project_results["updated"],
-                    )
-                    collected_batch = []
-
-            # Process remaining items in batch
-            if collected_batch:
-                batch_results = self._bulk_process_collected_content(collected_batch)
-                project_results["updated"] += len(collected_batch)
-                for metric, count in batch_results.items():
-                    results[metric] += count
-
-                self.logger.info(
-                    "  Bulk processed %d work packages for %s (final batch)",
-                    len(collected_batch),
-                    project_key,
-                )
+            project_results = self._process_project_content(project_key, batch_size, results)
 
             # Aggregate
             results["projects"][project_key] = project_results
@@ -1060,3 +883,193 @@ class WorkPackageContentMigration(BaseMigration):
                 start_time=start_time.isoformat(),
                 duration_seconds=duration_seconds,
             )
+
+    def _mapped_user_field(self, value: Any) -> Any:
+        """Map individual Jira identities before writing an OpenProject user field."""
+        # Never use a numeric Jira user ID as an OpenProject user ID.
+        users = value if isinstance(value, list) else [value]
+        ids = []
+        for user in users:
+            payload = {"name": user, "key": user} if isinstance(user, str) else user
+            op_id = self._resolve_jira_user_id(payload)
+            if op_id is None:
+                return {"unmapped_jira_user": True}
+            ids.append(op_id)
+        return ids if isinstance(value, list) else ids[0]
+
+    def _custom_field_updates(self, jira_issue: Issue) -> dict:
+        """Project the issue values that have a target custom field."""
+        raw_fields = getattr(jira_issue, "raw", {}).get("fields", {})
+        updates = {}
+
+        for jira_field_id, value in raw_fields.items():
+            if not jira_field_id.startswith("customfield_"):
+                continue
+            if value is None:
+                continue
+
+            # Check if we have a mapping for this field
+            if jira_field_id in self.custom_field_mapping:
+                mapping = self.custom_field_mapping[jira_field_id]
+                op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
+                if op_cf_id:
+                    updates[f"customField{op_cf_id}"] = self._mapped_field_value(mapping, value, jira_issue.key)
+        return updates
+
+    def _write_work_package_fields(self, collected_items: list, results: dict) -> None:
+        """Write descriptions and field changes, counting each acknowledged row."""
+        descriptions = [
+            {"id": item["wp_id"], "description": item["description_update"]}
+            for item in collected_items
+            if item["description_update"]
+        ]
+        # An unmapped selection or reference must not roll back the other
+        # fields on the same issue. All rows still travel in one Rails call.
+        fields = [
+            {"id": item["wp_id"], key: value}
+            for item in collected_items
+            for key, value in item["custom_field_updates"].items()
+        ]
+        for kind, updates in (("descriptions", descriptions), ("custom_fields", fields)):
+            if not updates:
+                continue
+            try:
+                result = self.op_client.batch_update_work_packages(updates)
+                updated = int(result["updated"])
+                if not 0 <= updated <= len(updates):
+                    msg = "Invalid work package update count"
+                    raise ValueError(msg)
+                results[f"{kind}_updated"] = updated
+                results[f"{kind}_failed"] = len(updates) - updated
+                if results[f"{kind}_failed"]:
+                    errors = [row for row in result.get("results", []) if row.get("status") == "failed"]
+                    self.logger.warning(
+                        "Incomplete %s batch: %d failed. First failures: %s", kind, len(updates) - updated, errors[:3]
+                    )
+            except Exception as exc:
+                results[f"{kind}_failed"] = len(updates)
+                self.logger.warning("Could not confirm %s writes: %s", kind, exc)
+
+    def _write_approved_comments(self, collected_items: list, results: dict) -> None:
+        """Write approved comment rows and account for missing acknowledgments."""
+        all_comments = []
+        for item in collected_items:
+            for comment_entry in item["comments"]:
+                all_comments.append(
+                    {
+                        "work_package_id": item["wp_id"],
+                        "comment": comment_entry["comment"],
+                        "user_id": comment_entry["user_id"],
+                        "jira_comment_id": comment_entry.get("jira_comment_id"),
+                        # Forward the original Jira comment date (#260).
+                        "created_at": comment_entry.get("created_at"),
+                    },
+                )
+
+        if all_comments:
+            try:
+                result = self.op_client.bulk_create_work_package_activities(all_comments)
+                results["comments_migrated"] = result.get("created", 0)
+                # Surface the Rails-side failure count instead of discarding it —
+                # previously only ``created`` was read, so dropped comments
+                # (e.g. all but the first per WP) looked like a clean success (#260).
+                failed = int(result.get("failed", 0) or 0)
+                acknowledged = int(result.get("created", 0)) + int(result.get("skipped", 0))
+                failed = max(failed, len(all_comments) - acknowledged, int(result.get("success") is False))
+                results["comments_failed"] = failed
+                if failed or result.get("success") is False:
+                    self.logger.warning(
+                        "Bulk comment creation: %d created, %d failed (success=%s) — "
+                        "failed comments were dropped; check the OpenProject Rails errors. "
+                        "First errors: %s",
+                        result.get("created", 0),
+                        failed,
+                        result.get("success"),
+                        (result.get("errors") or [])[:3],
+                    )
+            except Exception as e:
+                # A thrown bulk call drops the whole batch of comments; record
+                # and warn rather than swallowing it at debug level (#260).
+                self.logger.warning("Bulk comment creation failed (%d comments dropped): %s", len(all_comments), e)
+                results["comments_failed"] = len(all_comments)
+
+    def _write_watchers(self, collected_items: list, results: dict) -> None:
+        """Send optional watcher assignments to their bulk endpoint."""
+        if os.environ.get("J2O_SKIP_WATCHERS"):
+            self.logger.debug("Skipping watchers (J2O_SKIP_WATCHERS=1)")
+        else:
+            all_watchers = []
+            for item in collected_items:
+                for user_id in item["watchers"]:
+                    all_watchers.append(
+                        {
+                            "work_package_id": item["wp_id"],
+                            "user_id": user_id,
+                        },
+                    )
+
+            if all_watchers:
+                try:
+                    result = self.op_client.bulk_add_watchers(all_watchers)
+                    results["watchers_added"] = result.get("created", 0)
+                except Exception as e:
+                    self.logger.debug("Bulk watcher addition failed: %s", e)
+
+    def _process_project_content(self, project_key: str, batch_size: int, results: dict) -> dict:
+        """Collect and write all mapped issues of one project."""
+        project_results = {
+            "processed": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        self.logger.info("Processing content for project %s", project_key)
+
+        # Collect content in batches
+        collected_batch: list[dict[str, Any]] = []
+
+        for issue in self.iter_project_issues(project_key):
+            project_results["processed"] += 1
+            wp_id = self._get_wp_id_for_issue(issue)
+
+            if not wp_id:
+                project_results["skipped"] += 1
+                self.logger.debug(
+                    "No WP mapping for %s, skipping",
+                    issue.key,
+                )
+                continue
+
+            # Collect content for bulk processing
+            collected = self._collect_content_for_issue(issue, wp_id)
+            collected_batch.append(collected)
+
+            # Process batch when full
+            if len(collected_batch) >= batch_size:
+                batch_results = self._bulk_process_collected_content(collected_batch)
+                project_results["updated"] += len(collected_batch)
+                for metric, count in batch_results.items():
+                    results[metric] += count
+
+                self.logger.info(
+                    "  Bulk processed %d work packages for %s (total: %d)",
+                    len(collected_batch),
+                    project_key,
+                    project_results["updated"],
+                )
+                collected_batch = []
+
+        # Process remaining items in batch
+        if collected_batch:
+            batch_results = self._bulk_process_collected_content(collected_batch)
+            project_results["updated"] += len(collected_batch)
+            for metric, count in batch_results.items():
+                results[metric] += count
+
+            self.logger.info(
+                "  Bulk processed %d work packages for %s (final batch)",
+                len(collected_batch),
+                project_key,
+            )
+        return project_results

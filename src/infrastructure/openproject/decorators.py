@@ -26,7 +26,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Any, Protocol, runtime_checkable
 
@@ -194,9 +194,6 @@ class ParallelReadsDecorator(_BaseOPDecorator):
         results: dict[int, dict[str, Any] | None] = {}
         with ThreadPoolExecutor(max_workers=self._parallel_workers) as executor:
             futures = [executor.submit(self._get_work_package_safe, wp_id) for wp_id in ids_list]
-            # Drain to surface exceptions; results below are matched by index.
-            for _ in as_completed(futures):
-                pass
         for idx, wp_id in enumerate(ids_list):
             try:
                 results[wp_id] = futures[idx].result()

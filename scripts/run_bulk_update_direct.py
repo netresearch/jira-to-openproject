@@ -56,7 +56,7 @@ puts results.to_json
 """
 
 
-def run_batch_update(updates: list[dict], batch_num: int, total_batches: int) -> dict:
+def run_batch_update(updates: list[dict]) -> dict:
     """Run a batch update via SSH/rails runner with stdin data."""
     if not updates:
         return {"updated": 0, "skipped": 0, "errors": []}
@@ -113,7 +113,7 @@ def main():
         print(f"Processing batch {batch_num}/{total_batches} ({len(batch_keys)} WPs)...", end=" ", flush=True)
 
         updates = prepare_update_batch(lookups, batch_keys)
-        result = run_batch_update(updates, batch_num, total_batches)
+        result = run_batch_update(updates)
 
         total_updated += result.get("updated", 0)
         total_skipped += result.get("skipped", 0)

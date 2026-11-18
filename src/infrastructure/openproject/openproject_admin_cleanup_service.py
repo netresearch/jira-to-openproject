@@ -93,6 +93,9 @@ class OpenProjectAdminCleanupService:
 
         """
         script = """
+        if (["is_default", "is_standard"] - Type.column_names).any?
+          raise "Cannot classify default work package types on this OpenProject version; all types were preserved"
+        end
         non_default_types = Type.where(is_default: false, is_standard: false)
         count = non_default_types.count
         non_default_types.destroy_all
@@ -112,7 +115,7 @@ class OpenProjectAdminCleanupService:
             )
             return 0
         except Exception as e:
-            msg = "Failed to delete non-default issue types."
+            msg = f"Failed to delete non-default issue types: {e}"
             raise QueryExecutionError(msg) from e
 
     def delete_non_default_issue_statuses(self) -> int:

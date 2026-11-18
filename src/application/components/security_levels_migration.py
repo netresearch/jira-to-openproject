@@ -14,8 +14,8 @@ from typing import Any
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
-from src.models import ComponentResult, WorkPackageMappingEntry
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.models import ComponentResult
 from src.models.jira import JiraIssueFields
 
 SECURITY_LEVEL_CF_NAME = "Security Level"
@@ -75,28 +75,12 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
         for jira_key, sec_name in sec_by_key.items():
             if not sec_name:
                 continue
-            raw_entry = wp_map.get(jira_key)
-            if raw_entry is None:
+            entry = self._work_package_entry(jira_key, wp_map.get(jira_key))
+            if entry is None:
                 continue
             try:
-                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-            except ValueError:
-                # Corrupt or unsupported wp_map shape — skip silently to
-                # preserve the pre-typed call-site behaviour.
-                continue
-            wp_id = int(entry.openproject_id)
-            # Track project for selective enablement
-            if entry.openproject_project_id is not None:
-                projects_with_values.add(int(entry.openproject_project_id))
-            try:
-                # Set CF value
-                set_script = (
-                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                    % (wp_id, cf_id, escape_ruby_single_quoted(sec_name), escape_ruby_single_quoted(sec_name))
-                )
-                ok = self.op_client.execute_query(set_script)
-                if ok:
+                result = self._write_work_package_custom_value(entry, cf_id, sec_name, projects_with_values)
+                if result:
                     updated += 1
             except Exception:
                 logger.exception("Failed to apply security level for %s", jira_key)

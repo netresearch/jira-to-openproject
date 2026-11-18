@@ -17,9 +17,7 @@ The service owns:
   optional progress sidecar, and reads back a structured envelope
   (``status``, ``created``, ``errors``, ``created_count``,
   ``error_count``, ``total``). The Ruby script knows enough about
-  ``WorkPackage`` to apply Jira-key + provenance custom fields and
-  optionally execute a journal-creation template loaded from
-  ``src/ruby/create_work_package_journals.rb``.
+  ``WorkPackage`` to apply Jira-key and provenance custom fields.
 * **Work-package batch wrapper** — ``batch_create_work_packages``
   is a thin entry point that hands a list of WP payloads to the
   ``performance_optimizer.batch_processor.process_batches`` helper,
@@ -68,6 +66,28 @@ _JSON_SUFFIX = ".json"
 # runner`` per batch. Override via ``J2O_SCRIPT_LOAD_MODE=runner`` if the
 # tmux console is unavailable.
 DEFAULT_SCRIPT_LOAD_MODE = "console"
+
+
+class LegacyJournalReplayError(QueryExecutionError):
+    """A caller requested legacy journal operations on work packages."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Legacy work-package journal replay is disabled. Use work_packages_skeleton "
+            "and work_packages_content for work packages and j2o-comments migrate for "
+            "protected comments. See docs/protected-comments.md."
+        )
+
+
+def reject_legacy_journal_operations(records: list[dict[str, Any]]) -> None:
+    """Reject the entire batch before copying data or writing a target record."""
+    for record in records:
+        if not isinstance(record, dict):
+            msg = "Work-package attributes must be a dict"
+            raise QueryExecutionError(msg)
+        operations = record.get("_rails_operations")
+        if operations is not None and operations != []:
+            raise LegacyJournalReplayError
 
 
 class OpenProjectBulkCreateService:
@@ -132,12 +152,13 @@ class OpenProjectBulkCreateService:
 
         """
         client = self._client
-        # Validate model name against allowlist to prevent injection
-        client._validate_model_name(model)
-
         if not isinstance(records, list):
             _msg = "records must be a list of dicts"
             raise QueryExecutionError(_msg)
+
+        if model == "WorkPackage":
+            reject_legacy_journal_operations(records)
+        client._validate_model_name(model)
 
         # Prepare local JSON payload
         temp_dir = Path(client.file_manager.data_dir) / "bulk_create"
@@ -153,24 +174,6 @@ class OpenProjectBulkCreateService:
         # Transfer JSON to container
         container_json = Path("/tmp") / local_json.name
         client.transfer_file_to_container(local_json, container_json)
-
-        # BUG #32 FIX: Load journal creation .rb file content as template for WorkPackage migrations
-        # This avoids Ruby scoping issues with the `load` statement
-        journal_creation_ruby = ""
-        if model == "WorkPackage":
-            local_journal_rb = Path(__file__).parent.parent / "ruby" / "create_work_package_journals.rb"
-            if local_journal_rb.exists():
-                try:
-                    with local_journal_rb.open("r", encoding="utf-8") as f:
-                        # Read the .rb file content and prepare it for inline insertion
-                        rb_content = f.read()
-                        # Remove the header comments (first 9 lines) to avoid duplication
-                        lines = rb_content.split("\n")
-                        # Keep everything after line 9 (the actual Ruby code)
-                        journal_creation_ruby = "\n".join(lines[9:])
-                except Exception as e:
-                    self._logger.warning(f"Failed to load journal creation template: {e}")
-                    journal_creation_ruby = ""
 
         # Result file path in container and local debug path.
         # Always ensure uniqueness to avoid collisions across batches.
@@ -246,18 +249,6 @@ class OpenProjectBulkCreateService:
             'puts "J2O bulk start: model=#{model_name} total=#{data.length} result=#{result_path}" if verbose\n'
             "begin; File.open(progress_file, 'a'){|f| f.write(\"START total=#{data.length}\\n\") }; rescue; end if progress_file\n"
             "data.each_with_index do |attrs, idx|\n"
-            "  # Debug: Inspect attrs hash for Bug #32\n"
-            "  if idx == 0 && model_name == 'WorkPackage'\n"
-            '    puts "[BUG32-DEBUG] attrs.class = #{attrs.class}"\n'
-            '    puts "[BUG32-DEBUG] attrs.keys.count = #{attrs.keys.count}"\n'
-            '    puts "[BUG32-DEBUG] attrs.keys = #{attrs.keys.inspect}"\n'
-            "    puts \"[BUG32-DEBUG] attrs['_rails_operations'] present? #{!attrs['_rails_operations'].nil?}\"\n"
-            '    puts "[BUG32-DEBUG] attrs[:_rails_operations] present? #{!attrs[:_rails_operations].nil?}"\n'
-            "    if attrs['_rails_operations']\n"
-            "      puts \"[BUG32-DEBUG] _rails_operations count = #{attrs['_rails_operations'].length}\"\n"
-            "    end\n"
-            "    STDOUT.flush\n"
-            "  end\n"
             "  begin\n"
             "    pref_attrs = nil\n"
             "    rec = model.new\n"
@@ -296,13 +287,12 @@ class OpenProjectBulkCreateService:
             "    # Extract and remove custom_fields, _rails_operations, and Jira keys from attrs before assign_attributes\n"
             "    # Jira keys are NOT valid WorkPackage attributes - would cause UnknownAttributeError\n"
             "    cf_data = nil\n"
-            "    rails_ops = nil\n"
             "    jira_id = nil\n"
             "    jira_key = nil\n"
             "    jira_issue_key = nil\n"
             "    begin\n"
             "      cf_data = attrs.delete('custom_fields') if attrs.key?('custom_fields')\n"
-            "      rails_ops = attrs.delete('_rails_operations') if attrs.key?('_rails_operations')\n"
+            "      attrs.delete('_rails_operations')\n"
             "      jira_id = attrs.delete('jira_id') if attrs.key?('jira_id')\n"
             "      jira_key = attrs.delete('jira_key') if attrs.key?('jira_key')\n"
             "      jira_issue_key = attrs.delete('jira_issue_key') if attrs.key?('jira_issue_key')\n"
@@ -374,13 +364,6 @@ class OpenProjectBulkCreateService:
             '          puts "J2O bulk item #{idx}: CF assignment error: #{e.class}: #{e.message}" if verbose\n'
             "        end\n"
             "      end\n"
-            "      # BUG #32 FIX: Journal creation logic loaded from template\n"
-            + (
-                "\n".join(f"      {line}" for line in journal_creation_ruby.split("\n"))
-                if journal_creation_ruby
-                else ""
-            )
-            + "\n"
             "      created << {'index' => idx, 'id' => rec.id}\n"
             '      puts "J2O bulk item #{idx}: saved id=#{rec.id}" if verbose\n'
             "    else\n"
@@ -692,6 +675,7 @@ class OpenProjectBulkCreateService:
         work_packages: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Create multiple work packages in batches for optimal performance."""
+        reject_legacy_journal_operations(work_packages)
         if not work_packages:
             return {"created": 0, "failed": 0, "results": []}
 
@@ -706,6 +690,7 @@ class OpenProjectBulkCreateService:
         **_kwargs: object,
     ) -> dict[str, Any]:
         """Create a batch of work packages using Rails."""
+        reject_legacy_journal_operations(work_packages)
         if not work_packages:
             return {"created": 0, "failed": 0, "results": []}
 

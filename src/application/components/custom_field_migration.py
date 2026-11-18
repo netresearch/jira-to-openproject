@@ -54,6 +54,28 @@ from src.models import ComponentResult, MigrationError
 # Rich console instance imported from base_migration
 
 
+_CREATE_FIELD = """
+field = nil
+CustomField.transaction do
+  field = CustomField.find_or_initialize_by(name: input_data.fetch('name'), type: input_data.fetch('type'))
+  if field.new_record?
+    field.assign_attributes(input_data.slice('field_format', 'is_required', 'is_for_all'))
+    if field.field_format == 'list'
+      input_data.fetch('possible_values').each { |value| field.custom_options.build(value: value) }
+    end
+    field.save!
+  end
+  if field.is_a?(WorkPackageCustomField) && field.is_for_all?
+    owners = field.respond_to?(:type_variants) ? TypeVariant.default_variant : Type.all
+    owners.each { |owner| owner.custom_fields << field unless owner.custom_fields.exists?(field.id) }
+  end
+end
+puts $j2o_start_marker
+puts JSON.generate({id: field.id, name: field.name})
+puts $j2o_end_marker
+"""
+
+
 @register_entity_types("custom_fields")
 class CustomFieldMigration(BaseMigration):
     """Handles the migration of custom fields from Jira to OpenProject.
@@ -155,69 +177,17 @@ class CustomFieldMigration(BaseMigration):
                 raise MigrationError(msg) from auth_err
 
             # Try to get all field options from ScriptRunner in one call if available
-            scriptrunner_data = {}
-            if self.jira_client.scriptrunner_enabled and self.jira_client.scriptrunner_custom_field_options_endpoint:
-                self.logger.info(
-                    "Fetching all custom field options via ScriptRunner...",
-                )
-                try:
-                    response = self.jira_client._make_request(
-                        self.jira_client.scriptrunner_custom_field_options_endpoint,
-                    )
-                    if response and response.status_code == 200:
-                        scriptrunner_data = response.json()
-                        self.logger.info(
-                            "Successfully fetched ScriptRunner data for %d fields",
-                            len(scriptrunner_data),
-                        )
-                except Exception as e:
-                    self.logger.warning(
-                        "Failed to fetch ScriptRunner data: %s. Will fall back to individual calls.",
-                        str(e),
-                    )
+            scriptrunner_data = self._load_script_runner_options()
 
             # Filter to only include custom fields
             custom_fields = []
             fields_needing_metadata = []
 
             for field in jira_fields:
-                if field.get("custom", False):
-                    custom_field_data = {
-                        "id": field.get("id"),
-                        "name": field.get("name"),
-                        "type": field.get("schema", {}).get("type", "unknown"),
-                        "custom_type": field.get("schema", {}).get("custom", "unknown"),
-                    }
-
-                    # Check if this field needs options (select/option/array types)
-                    field_id = field.get("id")
-                    if "schema" in field and field["schema"].get("type") in [
-                        "option",
-                        "array",
-                    ]:
-                        # First check ScriptRunner data
-                        if field_id in scriptrunner_data:
-                            sr_field = scriptrunner_data[field_id]
-                            if sr_field.get("options"):
-                                custom_field_data["allowed_values"] = sr_field["options"]
-                                self.logger.debug(
-                                    "Using ScriptRunner data for field %s: %d options",
-                                    field.get("name"),
-                                    len(sr_field["options"]),
-                                )
-                            else:
-                                # Field exists in ScriptRunner but has no options
-                                self.logger.debug(
-                                    "Field %s has no options in ScriptRunner data",
-                                    field.get("name"),
-                                )
-                        else:
-                            # Field not in ScriptRunner data, need to fetch individually
-                            fields_needing_metadata.append(
-                                (field_id, field.get("name"), custom_field_data),
-                            )
-
-                    custom_fields.append(custom_field_data)
+                if field.get("custom"):
+                    custom_fields.append(
+                        self._extract_field_definition(field, scriptrunner_data, fields_needing_metadata)
+                    )
 
             # New behavior: if ScriptRunner provided data, do not attempt createmeta discovery.
             # Warn and list fields that could not be resolved via ScriptRunner to avoid long scans.
@@ -324,7 +294,7 @@ class CustomFieldMigration(BaseMigration):
             OpenProject custom field format
 
         """
-        schema = jira_field.get("schema", {})
+        schema = self._field_schema(jira_field)
         jira_type = schema.get("type", "")
         jira_custom_type = schema.get("custom", "")
 
@@ -362,41 +332,21 @@ class CustomFieldMigration(BaseMigration):
             "default": "text",
         }
 
-        if jira_custom_type:
-            if (
-                "multiselect" in jira_custom_type.lower()
-                or "checkbox" in jira_custom_type.lower()
-                or "select" in jira_custom_type.lower()
-                or "radio" in jira_custom_type.lower()
-            ):
-                return "list"
-            if "date" in jira_custom_type.lower():
-                return "date"
-            if "number" in jira_custom_type.lower() or "float" in jira_custom_type.lower():
-                return "float"
-            if "integer" in jira_custom_type.lower():
-                return "int"
-            if "user" in jira_custom_type.lower():
-                return "user"
-            if (
-                "text" in jira_custom_type.lower()
-                or "string" in jira_custom_type.lower()
-                or "url" in jira_custom_type.lower()
-            ):
-                return "text"
-            if "boolean" in jira_custom_type.lower():
-                return "bool"
-
+        custom = str(jira_custom_type or "").lower()
+        formats = (
+            ("list", ("select", "checkbox", "radio")),
+            ("date", ("date",)),
+            ("float", ("number", "float")),
+            ("int", ("integer",)),
+            ("user", ("user",)),
+            ("text", ("text", "string", "url")),
+            ("bool", ("boolean",)),
+        )
+        for target, names in formats:
+            if any(name in custom for name in names):
+                return target
         if jira_type == "array":
-            items_type = schema.get("items", "")
-            if items_type == "string":
-                return "list"
-            if items_type == "user":
-                return "user"
-            if items_type == "date":
-                return "date"
-            return "list"
-
+            return {"user": "user", "date": "date"}.get(schema.get("items"), "list")
         return op_format_map.get(jira_type, op_format_map.get("default", "text"))
 
     def create_custom_field_mapping(self) -> dict[str, Any]:
@@ -423,69 +373,6 @@ class CustomFieldMigration(BaseMigration):
         for field in self.op_custom_fields:
             used_op_names.add(field.get("name", "").lower())
 
-        def process_field(
-            jira_field: dict[str, Any],
-            context: dict[str, Any],
-        ) -> str | None:
-            jira_id = jira_field.get("id")
-            jira_name = jira_field.get("name", "")
-            jira_name_lower = jira_name.lower()
-
-            op_field = op_fields_by_name.get(jira_name_lower)
-
-            if op_field:
-                mapping[jira_id] = {
-                    "jira_id": jira_id,
-                    "jira_name": jira_name,
-                    "jira_type": jira_field.get("schema", {}).get("type", ""),
-                    "jira_custom_type": jira_field.get("schema", {}).get("custom", ""),
-                    "openproject_id": op_field.get("id"),
-                    "openproject_name": op_field.get("name"),
-                    "openproject_type": op_field.get("field_format", "text"),
-                    "matched_by": "name",
-                }
-                return None
-            op_format = self.map_jira_field_to_openproject_format(jira_field)
-
-            # Handle duplicate names by appending Jira field ID
-            op_name = jira_name
-            if op_name.lower() in used_op_names:
-                # Extract numeric part from customfield_XXXXX
-                field_num = jira_id.replace("customfield_", "")
-                op_name = f"{jira_name} ({field_num})"
-                self.logger.warning(
-                    "Duplicate custom field name '%s' - using '%s' for Jira field %s",
-                    jira_name,
-                    op_name,
-                    jira_id,
-                )
-            used_op_names.add(op_name.lower())
-
-            mapping_entry = {
-                "jira_id": jira_id,
-                "jira_name": jira_name,
-                "jira_type": jira_field.get("schema", {}).get("type", ""),
-                "jira_custom_type": jira_field.get("schema", {}).get("custom", ""),
-                "openproject_id": None,
-                "openproject_name": op_name,
-                "openproject_type": op_format,
-                "matched_by": "create",
-            }
-
-            if op_format == "list" and "allowed_values" in jira_field:
-                allowed_values = jira_field.get("allowed_values", [])
-                if allowed_values:
-                    mapping_entry["possible_values"] = allowed_values
-                    field_info = f"{jira_name} (Format: {op_format}, Options: {len(allowed_values)})"
-                else:
-                    field_info = f"{jira_name} (Format: {op_format}, No options)"
-            else:
-                field_info = f"{jira_name} (Format: {op_format})"
-
-            mapping[jira_id] = mapping_entry
-
-            return field_info
-
         with ProgressTracker(
             description="Creating custom field mapping",
             total=len(self.jira_custom_fields),
@@ -495,7 +382,7 @@ class CustomFieldMigration(BaseMigration):
                 jira_name = jira_field.get("name", "")
                 tracker.update_description(f"Mapping custom field: {jira_name[:20]}")
 
-                field_info = process_field(jira_field, {})
+                field_info = self._map_single_field(jira_field, mapping, op_fields_by_name, used_op_names)
 
                 if field_info:
                     tracker.add_log_item(field_info)
@@ -535,107 +422,17 @@ class CustomFieldMigration(BaseMigration):
             dict: Result of the operation
 
         """
-        field_type = field_data.get("openproject_type", "string")
-        field_name = field_data.get(
-            "openproject_name",
-            field_data.get("jira_name", "Unnamed Field"),
-        )
-
-        field_name = field_name.replace('"', '\\"')
-
-        possible_values_ruby = "[]"
-        if field_type == "list":
-            if (
-                "possible_values" in field_data
-                and field_data["possible_values"]
-                and isinstance(field_data["possible_values"], list)
-            ):
-                values = field_data["possible_values"]
-                escaped_values = [v.replace('"', '\\"') if isinstance(v, str) else v for v in values]
-                values_str = ", ".join([f'"{v}"' for v in escaped_values])
-                possible_values_ruby = f"[{values_str}]"
-            else:
-                possible_values_ruby = '["Default option"]'
-                self.logger.warning(
-                    "Custom field '%s' is a list type but has no options. Adding a default option.",
-                    field_name,
-                )
-
-        # Header section with Python variable interpolation
-        header = f"""
-        begin
-          cf = CustomField.find_by(name: '{field_name}')
-          if cf
-            puts "Custom field '{field_name}' already exists. Skipping..."
-          else
-            puts "Creating custom field: '{field_name}'..."
-            cf = CustomField.new(
-              name: '{field_name}',
-              field_format: '{field_type}',
-              is_required: {"true" if field_data.get("is_required", False) else "false"},
-              is_for_all: {"true" if field_data.get("is_for_all", True) else "false"},
-              type: "{field_data.get("openproject_field_type", "WorkPackageCustomField")}",
-            )
-
-            # Set possible values for list type fields
-            if cf.field_format == 'list'
-              cf.possible_values = {possible_values_ruby}
-        """
-
-        # Main section without Python interpolation
-        main_section = """
-              if cf.possible_values.nil? || cf.possible_values.empty?
-                cf.possible_values = ['Default option'] # Ensure default option exists
-              end
-            end
-
-            if cf.save
-              puts "  Successfully created custom field '#{cf.name}' with ID: #{cf.id}"
-
-              # Make it available for all work package types
-              if cf.is_for_all?
-                puts "  Activating for all work package types..."
-                owners = cf.respond_to?(:type_variants) ? TypeVariant.default_variant : Type.all
-                owners.each do |owner|
-                  owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
-                end
-              end
-            else
-              puts "  Error creating custom field '#{cf.name}': #{cf.errors.full_messages.join(', ')}"
-            end
-          end
-        rescue => e
-          puts "  An unexpected error occurred while processing '#{e.message}'"
-        end
-        """
-
-        # Combine the sections
-        command = header + main_section
-
-        result = self.op_client.execute(command)
-
-        if result.get("status") == "error":
-            error_info = result.get("error", "Unknown error")
-            if "errors" in result:
-                error_info = f"Validation errors: {result['errors']}"
-            elif "validation_errors" in result:
-                error_info = f"Field validation failed: {result['validation_errors']}"
-
-            self.logger.error(
-                "Error creating custom field '%s': %s",
-                field_name,
-                error_info,
-            )
-
-            if isinstance(result.get("errors"), list) and any("Possible values" in err for err in result["errors"]):
-                self.logger.error(
-                    "Field '%s' requires possible values for list type fields",
-                    field_name,
-                )
-        elif result.get("status") == "success":
-            self.logger.info("Created custom field '%s' successfully", field_name)
-
-        return result
+        attributes = dict(field_data)
+        attributes.setdefault("jira_name", attributes.get("openproject_name", "Unnamed Field"))
+        attributes.setdefault("openproject_type", "string")
+        records, _ = self._custom_field_records([attributes])
+        if not records:
+            return {"status": "error", "error": "Custom field has no name"}
+        result = self.op_client.execute_script_with_data(_CREATE_FIELD, records[0])
+        field = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(field, dict) or not field.get("id"):
+            return {"status": "error", "error": f"Could not confirm custom field {attributes['jira_name']!r}"}
+        return {"status": "success", "id": field["id"], "name": field["name"]}
 
     def migrate_custom_fields_via_json(
         self,
@@ -656,37 +453,7 @@ class CustomFieldMigration(BaseMigration):
         )
 
         # Prepare sanitized records and meta for index mapping
-        records: list[dict[str, Any]] = []
-        meta: list[dict[str, Any]] = []
-        for field in fields_to_migrate:
-            jira_name = field.get("jira_name")
-            if not jira_name:
-                self.logger.warning("Skipping field without name: %s", field)
-                continue
-
-            # Use openproject_name (may be deduplicated) instead of jira_name
-            op_name = field.get("openproject_name", jira_name)
-            field_format = field.get("openproject_type", "text")
-            attrs: dict[str, Any] = {
-                "name": op_name,
-                "field_format": field_format,
-                "is_required": bool(field.get("is_required", False)),
-                "is_for_all": bool(field.get("is_for_all", True)),
-                "type": field.get("openproject_field_type", "WorkPackageCustomField"),
-            }
-            if field_format == "list":
-                possible_values = field.get("possible_values", [])
-                if not possible_values or not isinstance(possible_values, list):
-                    possible_values = ["Default option"]
-                attrs["possible_values"] = [str(v).strip() for v in possible_values]
-
-            records.append(attrs)
-            meta.append(
-                {
-                    "jira_id": field.get("jira_id"),
-                    "name": op_name,
-                },
-            )
+        records, meta = self._custom_field_records(fields_to_migrate)
 
         if not records:
             self.logger.info("No custom fields to create")
@@ -708,20 +475,7 @@ class CustomFieldMigration(BaseMigration):
             errors = result.get("errors", []) or []
 
             # Attempt to classify errors due to existing fields by name
-            existing: list[dict[str, Any]] = []
-            unresolved_errors: list[dict[str, Any]] = []
-            for err in errors:
-                idx = err.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(meta):
-                    name = meta[idx]["name"]
-                    try:
-                        found = self.op_client.find_record("CustomField", {"name": name})
-                        if isinstance(found, dict) and found.get("id"):
-                            existing.append({"name": name, "id": found.get("id")})
-                            continue
-                    except Exception:
-                        pass
-                unresolved_errors.append(err)
+            existing, unresolved_errors = self._classify_field_errors(errors, meta)
 
             if created:
                 self.logger.info("Created %d custom fields", len(created))
@@ -761,14 +515,7 @@ class CustomFieldMigration(BaseMigration):
         # Build name→op_id lookup from created and existing
         # Note: 'created' list from Ruby contains {'index': idx, 'id': op_id} - NOT 'name'
         # We must use 'meta' list to get the name by index
-        name_to_op_id: dict[str, int] = {}
-        for rec in created:
-            idx = rec.get("index")
-            op_id = rec.get("id")
-            if idx is not None and op_id and 0 <= idx < len(meta):
-                name = meta[idx].get("name")
-                if name:
-                    name_to_op_id[name] = int(op_id)
+        name_to_op_id = self._created_field_ids(created, meta)
         for rec in existing:
             if rec.get("id") and rec.get("name"):
                 name_to_op_id[rec["name"]] = int(rec["id"])
@@ -789,6 +536,171 @@ class CustomFieldMigration(BaseMigration):
             # Persist updated mapping
             config.mappings.set_mapping("custom_field", self.mapping)
             self.logger.info("Updated %d custom field mappings with OP IDs", updated_count)
+
+    def _load_script_runner_options(self):
+        scriptrunner_data = {}
+        if self.jira_client.scriptrunner_enabled and self.jira_client.scriptrunner_custom_field_options_endpoint:
+            self.logger.info(
+                "Fetching all custom field options via ScriptRunner...",
+            )
+            try:
+                response = self.jira_client._make_request(
+                    self.jira_client.scriptrunner_custom_field_options_endpoint,
+                )
+                if response and response.status_code == 200:
+                    scriptrunner_data = response.json()
+                    self.logger.info(
+                        "Successfully fetched ScriptRunner data for %d fields",
+                        len(scriptrunner_data),
+                    )
+            except Exception as e:
+                self.logger.warning(
+                    "Failed to fetch ScriptRunner data: %s. Options will be reported as unresolved.",
+                    str(e),
+                )
+        return scriptrunner_data
+
+    def _extract_field_definition(self, field, options, missing):
+        schema = field.get("schema") or {}
+        record = {
+            "id": field.get("id"),
+            "name": field.get("name"),
+            "schema": schema,
+            "type": schema.get("type", "unknown"),
+            "custom_type": schema.get("custom", "unknown"),
+        }
+        if record["type"] in ("option", "array"):
+            source = options.get(record["id"])
+            if source is None:
+                missing.append((record["id"], record["name"], record))
+            elif source.get("options"):
+                record["allowed_values"] = source["options"]
+        return record
+
+    def _field_schema(self, field):
+        return field.get("schema") or {"type": field.get("type", ""), "custom": field.get("custom_type", "")}
+
+    def _map_single_field(self, jira_field, mapping, op_fields_by_name, used_op_names):
+        jira_id = jira_field.get("id")
+        jira_name = jira_field.get("name", "")
+        jira_name_lower = jira_name.lower()
+
+        op_field = op_fields_by_name.get(jira_name_lower)
+
+        if op_field:
+            mapping[jira_id] = {
+                "jira_id": jira_id,
+                "jira_name": jira_name,
+                "jira_type": self._field_schema(jira_field).get("type", ""),
+                "jira_custom_type": self._field_schema(jira_field).get("custom", ""),
+                "openproject_id": op_field.get("id"),
+                "openproject_name": op_field.get("name"),
+                "openproject_type": op_field.get("field_format", "text"),
+                "matched_by": "name",
+            }
+            return None
+        op_format = self.map_jira_field_to_openproject_format(jira_field)
+
+        # Handle duplicate names by appending Jira field ID
+        op_name = jira_name
+        if op_name.lower() in used_op_names:
+            # Extract numeric part from customfield_XXXXX
+            field_num = jira_id.replace("customfield_", "")
+            op_name = f"{jira_name} ({field_num})"
+            self.logger.warning(
+                "Duplicate custom field name '%s' - using '%s' for Jira field %s",
+                jira_name,
+                op_name,
+                jira_id,
+            )
+        used_op_names.add(op_name.lower())
+
+        mapping_entry = {
+            "jira_id": jira_id,
+            "jira_name": jira_name,
+            "jira_type": self._field_schema(jira_field).get("type", ""),
+            "jira_custom_type": self._field_schema(jira_field).get("custom", ""),
+            "openproject_id": None,
+            "openproject_name": op_name,
+            "openproject_type": op_format,
+            "matched_by": "create",
+        }
+
+        if op_format == "list" and "allowed_values" in jira_field:
+            allowed_values = jira_field.get("allowed_values", [])
+            if allowed_values:
+                mapping_entry["possible_values"] = allowed_values
+                field_info = f"{jira_name} (Format: {op_format}, Options: {len(allowed_values)})"
+            else:
+                field_info = f"{jira_name} (Format: {op_format}, No options)"
+        else:
+            field_info = f"{jira_name} (Format: {op_format})"
+
+        mapping[jira_id] = mapping_entry
+
+        return field_info
+
+    def _custom_field_records(self, fields_to_migrate):
+        records: list[dict[str, Any]] = []
+        meta: list[dict[str, Any]] = []
+        for field in fields_to_migrate:
+            jira_name = field.get("jira_name")
+            if not jira_name:
+                self.logger.warning("Skipping field without name: %s", field)
+                continue
+
+            # Use openproject_name (may be deduplicated) instead of jira_name
+            op_name = field.get("openproject_name", jira_name)
+            field_format = field.get("openproject_type", "text")
+            attrs: dict[str, Any] = {
+                "name": op_name,
+                "field_format": field_format,
+                "is_required": bool(field.get("is_required", False)),
+                "is_for_all": bool(field.get("is_for_all", True)),
+                "type": field.get("openproject_field_type", "WorkPackageCustomField"),
+            }
+            if field_format == "list":
+                possible_values = field.get("possible_values", [])
+                if not possible_values or not isinstance(possible_values, list):
+                    possible_values = ["Default option"]
+                attrs["possible_values"] = [str(v).strip() for v in possible_values]
+
+            records.append(attrs)
+            meta.append(
+                {
+                    "jira_id": field.get("jira_id"),
+                    "name": op_name,
+                },
+            )
+        return records, meta
+
+    def _classify_field_errors(self, errors, meta):
+        existing: list[dict[str, Any]] = []
+        unresolved_errors: list[dict[str, Any]] = []
+        for err in errors:
+            idx = err.get("index")
+            if isinstance(idx, int) and 0 <= idx < len(meta):
+                name = meta[idx]["name"]
+                try:
+                    found = self.op_client.find_record("CustomField", {"name": name})
+                    if isinstance(found, dict) and found.get("id"):
+                        existing.append({"name": name, "id": found.get("id")})
+                        continue
+                except Exception:
+                    pass
+            unresolved_errors.append(err)
+        return existing, unresolved_errors
+
+    def _created_field_ids(self, created, meta):
+        name_to_op_id: dict[str, int] = {}
+        for rec in created:
+            idx = rec.get("index")
+            op_id = rec.get("id")
+            if idx is not None and op_id and 0 <= idx < len(meta):
+                name = meta[idx].get("name")
+                if name:
+                    name_to_op_id[name] = int(op_id)
+        return name_to_op_id
 
     def _record_custom_field_provenance(self) -> None:
         """Record provenance for custom fields in J2O Migration project."""

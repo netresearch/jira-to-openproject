@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.project_named_records import apply_work_package_updates, map_project_records, project_id
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -63,10 +64,7 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         # Production wp_map is keyed by str(jira_id) (numeric) outer with
         # the human-readable ``jira_key`` stored inside. Prefer the inner
         # ``jira_key``; fall back to the outer key for legacy/test layouts.
-        jira_keys: list[str] = []
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            jira_keys.append(str(inner_jira_key or outer_key))
+        jira_keys = [self._component_issue_key(key, entry) for key, entry in wp_map.items()]
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"by_project": {}})
 
@@ -93,99 +91,10 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
-        data = extracted.data or {}
-        by_project: dict[str, list[str]] = data.get("by_project", {}) if isinstance(data, dict) else {}
-        # Preserve cached issues from extract phase for reuse in load phase
-        cached_issues = data.get("issues", {}) if isinstance(data, dict) else {}
-        if not by_project:
-            return ComponentResult(success=True, created=0, data={"category_map": {}, "issues": cached_issues})
-
-        proj_map = self.mappings.get_mapping("project") or {}
-        op_project_ids: dict[str, int] = {}
-        for jira_key in by_project:
-            entry = proj_map.get(jira_key)
-            pid = None
-            if isinstance(entry, dict):
-                pid = entry.get("openproject_id")
-            elif isinstance(entry, int):
-                pid = entry
-            if pid:
-                try:
-                    op_project_ids[jira_key] = int(pid)
-                except Exception:
-                    continue
-
-        pids = sorted(set(op_project_ids.values()))
-        existing: list[dict[str, Any]] = []
-        if pids:
-            try:
-                query = f"Category.where(project_id: [{', '.join(str(x) for x in pids)}]).select(:id,:name,:project_id)"
-                res = self.op_client.execute_json_query(query)
-                if isinstance(res, list):
-                    existing = [r for r in res if isinstance(r, dict)]
-            except Exception:
-                logger.exception("Failed to list existing Categories")
-                existing = []
-
-        by_pid_name_to_id: dict[str, dict[str, int]] = {}
-        for r in existing:
-            try:
-                pid = int(r.get("project_id"))
-                name = str(r.get("name"))
-                cid = int(r.get("id"))
-                by_pid_name_to_id.setdefault(str(pid), {})[name] = cid
-            except Exception:
-                continue
-
-        to_create: list[dict[str, Any]] = []
-        for jproj, names in by_project.items():
-            pid = op_project_ids.get(jproj)
-            if not pid:
-                continue
-            existing_for = by_pid_name_to_id.get(str(pid), {})
-            for name in names:
-                if name not in existing_for:
-                    to_create.append({"name": name, "project_id": int(pid)})
-
-        created = 0
-        if to_create:
-            try:
-                res = self.op_client.bulk_create_records("Category", to_create)
-                created = int(res.get("created_count", 0)) if isinstance(res, dict) else len(to_create)
-            except Exception:
-                logger.exception("Failed to create Categories in bulk")
-
-            # Refresh map
-            try:
-                query = f"Category.where(project_id: [{', '.join(str(x) for x in pids)}]).select(:id,:name,:project_id)"
-                res2 = self.op_client.execute_json_query(query)
-                if isinstance(res2, list):
-                    by_pid_name_to_id.clear()
-                    for r in res2:
-                        try:
-                            pid = int(r.get("project_id"))
-                            name = str(r.get("name"))
-                            cid = int(r.get("id"))
-                            by_pid_name_to_id.setdefault(str(pid), {})[name] = cid
-                        except Exception:
-                            continue
-            except Exception:
-                logger.exception("Failed to refresh Category map after creation")
-
-        # Persist mapping
-        try:
-            self.mappings.set_mapping("category", by_pid_name_to_id)
-        except Exception:
-            logger.exception("Failed to persist category mapping")
-
-        return ComponentResult(
-            success=True,
-            created=created,
-            data={"category_map": by_pid_name_to_id, "issues": cached_issues},
-        )
+        return map_project_records(self, extracted, "Category")
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        category_map: dict[str, dict[str, int]] = (mapped.data or {}).get("category_map", {}) if mapped.data else {}
+        category_map: dict[str, dict[str, int]] = (mapped.data or {}).get("category_map", {})
         if not category_map:
             return ComponentResult(success=True, updated=0)
 
@@ -195,20 +104,16 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
         # Use cached issues from extract phase to avoid second Jira API call.
         # Cache keys match the ``jira_key`` form used during ``_extract``
         # (inner ``jira_key`` when present, outer key otherwise).
-        issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
+        issues: dict[str, Any] = (mapped.data or {}).get("issues", {})
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            fallback_keys: list[str] = []
-            for outer_key, raw_entry in wp_map.items():
-                inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-                fallback_keys.append(str(inner_jira_key or outer_key))
+            fallback_keys = [self._component_issue_key(key, entry) for key, entry in wp_map.items()]
             issues = self._merge_batch_issues(fallback_keys)
 
         updates: list[dict[str, Any]] = []
         failed = 0
         for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            jira_key = str(inner_jira_key or outer_key)
+            jira_key = self._component_issue_key(outer_key, raw_entry)
             try:
                 entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
             except ValueError:
@@ -223,51 +128,26 @@ class ComponentsMigration(BaseMigration):  # noqa: D101
             except Exception:
                 failed += 1
                 continue
-            if not fields.components:
-                continue
-            # Choose first component name deterministically
-            name = fields.components[0].name
-            if not name:
-                continue
+            assignment = self._category_assignment(jira_key, wp_id, fields, proj_map, category_map)
+            if assignment:
+                updates.append(assignment)
 
-            # ``project`` mapping uses an unrelated polymorphic shape
-            # (dict/int) that is not the wp_map polymorphism; phase 7
-            # targets ``wp_map`` only, so leave the ladder in place.
-            jproj = self._issue_project_key(jira_key)
-            proj_entry = proj_map.get(jproj)
-            op_pid: int | None = None
-            if isinstance(proj_entry, dict):
-                pid_val = proj_entry.get("openproject_id")
-                if pid_val is not None:
-                    try:
-                        op_pid = int(pid_val)
-                    except (
-                        TypeError,
-                        ValueError,
-                    ):
-                        op_pid = None
-            elif isinstance(proj_entry, int):
-                op_pid = proj_entry
-            if not op_pid:
-                continue
+        return apply_work_package_updates(self, updates, failed)
 
-            cat_id = category_map.get(str(op_pid), {}).get(str(name))
-            if not cat_id:
-                continue
-            updates.append({"id": wp_id, "category_id": int(cat_id)})
+    @staticmethod
+    def _component_issue_key(outer_key: str, entry: Any) -> str:
+        return str(entry.get("jira_key") or outer_key) if isinstance(entry, dict) else str(outer_key)
 
-        if not updates:
-            return ComponentResult(success=failed == 0, updated=0, failed=failed)
-
-        updated = 0
-        try:
-            res = self.op_client.batch_update_work_packages(updates)
-            updated = int(res.get("updated", 0)) if isinstance(res, dict) else len(updates)
-        except Exception:
-            logger.exception("Failed to batch update category_id on work packages")
-            failed += len(updates)
-
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+    def _category_assignment(
+        self, key: str, wp_id: int, fields: JiraIssueFields, projects: dict, categories: dict
+    ) -> dict | None:
+        if not fields.components or not fields.components[0].name:
+            return None
+        pid = project_id(projects.get(self._issue_project_key(key)))
+        if not pid:
+            return None
+        category_id = categories.get(str(pid), {}).get(str(fields.components[0].name))
+        return {"id": wp_id, "category_id": int(category_id)} if category_id else None
 
     def run(self) -> ComponentResult:
         """Execute component migration pipeline."""

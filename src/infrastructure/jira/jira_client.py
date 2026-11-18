@@ -10,8 +10,14 @@ caching, and parallel processing.
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
+import site
+import sys
 import time
 from collections.abc import Iterator, Mapping
+from contextlib import suppress
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from requests import Response
@@ -143,76 +149,47 @@ def _assert_json_response(response: Response, *, path: str) -> None:
     raise JiraServiceUnavailableError(msg)
 
 
+def _remove_local_jira_stub() -> None:
+    filename = getattr(sys.modules.get("jira"), "__file__", None)
+    if not filename:
+        return
+    local_stub = Path(__file__).resolve().parents[3] / "jira" / "__init__.py"
+    if Path(filename).resolve() == local_stub.resolve():
+        modules = [key for key in sys.modules if key == "jira" or key.startswith("jira.")]
+        for key in modules:
+            sys.modules.pop(key, None)
+
+
+def _jira_package_locations() -> list[Path]:
+    locations = []
+    with suppress(AttributeError, OSError):
+        locations.extend(Path(item) for item in site.getsitepackages())
+    with suppress(AttributeError, OSError):
+        location = site.getusersitepackages()
+        if location:
+            locations.append(Path(location))
+    return locations
+
+
 def _import_real_jira_module() -> Any:
-    """Import the real ``jira`` module even if a local test stub shadows it.
-
-    Extracted as a module-level helper so tests can patch it when they need
-    to inject a fake ``JIRA`` class.
-    """
+    """Prefer the installed SDK when the repository's test stub shadows its package."""
     try:
-        import importlib
-        import importlib.util
-        import site
-        import sys
-        from pathlib import Path as _Path
-
-        # If a shadow stub is loaded from this repo, purge it. The stub lives
-        # at <repo-root>/jira/__init__.py — locate that path relative to this
-        # source file rather than hard-coding an absolute developer path.
-        repo_root = _Path(__file__).resolve().parents[2]
-        local_stub_init = repo_root / "jira" / "__init__.py"
-        if "jira" in sys.modules:
-            mod = sys.modules["jira"]
-            mod_file = getattr(mod, "__file__", "") or ""
-            if mod_file:
-                try:
-                    is_local_stub = _Path(mod_file).resolve() == local_stub_init.resolve()
-                except OSError:
-                    is_local_stub = False
-                if is_local_stub:
-                    # Remove stub and any submodules to force a clean import
-                    stub_modules = [key for key in sys.modules if key == "jira" or key.startswith("jira.")]
-                    for key in stub_modules:
-                        sys.modules.pop(key, None)
-
-        # Prefer virtualenv site-packages path. site.getsitepackages() can
-        # raise AttributeError on bare/embedded interpreters; OSError covers
-        # the rare case where the path lookup itself fails.
-        candidates: list[_Path] = []
-        try:
-            candidates.extend(_Path(p) for p in site.getsitepackages())
-        except AttributeError, OSError:
-            pass
-        try:
-            usp = site.getusersitepackages()
-            if usp:
-                candidates.append(_Path(usp))
-        except AttributeError, OSError:
-            pass
-
-        for base in candidates:
-            jira_init = base / "jira" / "__init__.py"
-            if jira_init.exists():
-                # Load the real package under the canonical name 'jira'
-                spec = importlib.util.spec_from_file_location("jira", str(jira_init))
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    sys.modules["jira"] = mod  # ensure relative imports resolve to this package
-                    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
-                    if hasattr(mod, "JIRA"):
-                        return mod
-
-        # Fallback: regular import (may still hit stub if unresolved)
-        return importlib.import_module("jira")
+        _remove_local_jira_stub()
+        for base in _jira_package_locations():
+            path = base / "jira" / "__init__.py"
+            if not path.is_file():
+                continue
+            spec = importlib.util.spec_from_file_location("jira", str(path))
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["jira"] = module
+            spec.loader.exec_module(module)
+            if hasattr(module, "JIRA"):
+                return module
     except ImportError, AttributeError, OSError:
-        # ImportError / ModuleNotFoundError: jira package missing or corrupt.
-        # AttributeError: site module missing expected accessors.
-        # OSError: filesystem error walking site-packages.
-        # In every case, fall back to the standard import path; that either
-        # succeeds or raises ImportError, which the caller already expects.
-        import importlib
-
-        return importlib.import_module("jira")
+        logger.debug("Could not locate the installed Jira SDK; trying its normal import path", exc_info=True)
+    return importlib.import_module("jira")
 
 
 class JiraClient:
@@ -496,16 +473,7 @@ class JiraClient:
         """Thin delegator over ``self.fields.get_issue_property``."""
         return self.fields.get_issue_property(issue_key, property_key)
 
-    def _handle_response(self, response: Response) -> None:
-        """Check response for CAPTCHA challenge and raise appropriate exception if found.
-
-        Args:
-            response: The HTTP response to check
-
-        Raises:
-            JiraCaptchaError: If a CAPTCHA challenge is detected
-
-        """
+    def _check_captcha_header(self, response: Response) -> None:
         # Check for CAPTCHA challenge header
         if "X-Authentication-Denied-Reason" in response.headers:
             header_value = response.headers["X-Authentication-Denied-Reason"]
@@ -528,6 +496,17 @@ class JiraClient:
 
                 raise JiraCaptchaError(error_msg)
 
+    def _handle_response(self, response: Response) -> None:
+        """Check response for CAPTCHA challenge and raise appropriate exception if found.
+
+        Args:
+            response: The HTTP response to check
+
+        Raises:
+            JiraCaptchaError: If a CAPTCHA challenge is detected
+
+        """
+        self._check_captcha_header(response)
         # Check for other error responses
         if response.status_code >= HTTP_BAD_REQUEST_MIN:
             # If the body is HTML, the endpoint itself is unavailable (missing

@@ -9,7 +9,6 @@ and creates a JSON file with the custom field data.
 """
 
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -55,13 +54,11 @@ def parse_custom_fields_list(input_file: Path) -> list[dict[str, Any]]:
             continue
 
         # Parse the line with format: "id: name (field_format)"
-        match = re.match(r"(\d+): (.*) \((.*)\)", line)
-        if match:
-            field_id, field_name, field_format = match.groups()
-
-            custom_fields.append(
-                {"id": int(field_id), "name": field_name, "field_format": field_format},
-            )
+        field_id, delimiter, rest = line.partition(": ")
+        field_name, separator, format_text = rest.rpartition(" (")
+        field_format, closing, _ = format_text.rpartition(")")
+        if field_id.isdecimal() and delimiter and separator and closing:
+            custom_fields.append({"id": int(field_id), "name": field_name, "field_format": field_format})
 
     return custom_fields
 

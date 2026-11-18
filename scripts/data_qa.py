@@ -68,21 +68,17 @@ def iter_projects(requested: Iterable[str] | None, discovered: Iterable[str]) ->
     return [p for p in discovered_norm if p in requested_norm] or list(requested_norm)
 
 
-def summarize(data_dir: Path, projects: list[str] | None) -> None:
-    """Print QA summary for the requested projects."""
-    wp_mapping = load_json(data_dir / "work_package_mapping.json") or {}
-    jira_projects = load_json(data_dir / "jira_projects.json") or []
-    project_mapping = load_json(data_dir / "project_mapping.json") or {}
-    op_projects = load_json(data_dir / "openproject_projects.json") or []
-
-    wp_counts = collect_projects(wp_mapping) if isinstance(wp_mapping, dict) else {}
+def _jira_issue_counts(jira_projects):
     jira_counts = defaultdict(int)
     if isinstance(jira_projects, list):
         for project in jira_projects:
             key = project.get("key") if isinstance(project, dict) else None
             if key:
                 jira_counts[key.upper()] += project.get("issueCount", 0) or 0
+    return jira_counts
 
+
+def _index_project_modules(op_projects):
     modules_by_project_id: dict[int, list[str]] = {}
     if isinstance(op_projects, list):
         for entry in op_projects:
@@ -93,7 +89,10 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
             modules = entry.get("enabled_modules") or []
             if isinstance(modules, list):
                 modules_by_project_id[pid] = sorted(str(m) for m in modules)
+    return modules_by_project_id
 
+
+def _index_project_leads(project_mapping):
     lead_info: dict[str, dict[str, Any]] = {}
     if isinstance(project_mapping, dict):
         for key, entry in project_mapping.items():
@@ -104,7 +103,10 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
                 "lead_display": entry.get("jira_lead_display"),
                 "op_project_id": entry.get("openproject_id"),
             }
+    return lead_info
 
+
+def _start_date_counts(wp_mapping):
     start_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"with_start": 0, "total": 0})
     if isinstance(wp_mapping, dict):
         for record in wp_mapping.values():
@@ -117,6 +119,113 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
             start_stats[key_upper]["total"] += 1
             if record.get("start_date"):
                 start_stats[key_upper]["with_start"] += 1
+    return start_stats
+
+
+def _print_checkpoint_summary(data_dir: Path) -> None:
+    checkpoint_path = data_dir.parent / ".migration_checkpoints.db"
+    if checkpoint_path.exists():
+        try:
+            with sqlite3.connect(checkpoint_path) as conn:
+                total = conn.execute("SELECT COUNT(*) FROM migration_checkpoints").fetchone()[0]
+                completed = conn.execute(
+                    "SELECT COUNT(*) FROM migration_checkpoints WHERE status='completed'",
+                ).fetchone()[0]
+                latest = conn.execute(
+                    "SELECT MAX(updated_at) FROM migration_checkpoints WHERE updated_at IS NOT NULL",
+                ).fetchone()[0]
+            print("Checkpoint store summary:")
+            print(f"  • Entries: {total} (completed: {completed})")
+            if latest:
+                print(f"  • Last update: {latest}")
+            print()
+        except sqlite3.DatabaseError as exc:
+            print(f"⚠️  Failed to read checkpoint store {checkpoint_path}: {exc}")
+
+
+def _print_project_modules(info, modules_by_project_id, warnings):
+    op_project_id_raw = info.get("op_project_id")
+    try:
+        op_project_id = int(op_project_id_raw) if op_project_id_raw else None
+    except Exception:
+        op_project_id = None
+    modules_entry_found = bool(
+        op_project_id is not None and op_project_id in modules_by_project_id,
+    )
+    modules = modules_by_project_id.get(op_project_id, []) if modules_entry_found else []
+    if modules:
+        print(f"  • Enabled modules: {', '.join(modules)}")
+    elif op_project_id is not None:
+        warning = (
+            "OpenProject module snapshot missing; rerun 'uv run --active --no-cache "
+            "python -m src.main migrate --components projects' to refresh caches."
+        )
+        if modules_entry_found:
+            warning = (
+                "No enabled modules captured in snapshot; confirm project migration ran "
+                "and OpenProject modules are enabled."
+            )
+        warnings.append(warning)
+
+
+def _print_project_lead(info):
+    login = info.get("lead")
+    display = info.get("lead_display") or login
+    if display:
+        suffix = f" ({login})" if login and login != display else ""
+        print(f"  • Jira lead: {display}{suffix}")
+
+
+def _print_project_summary(project, *, wp_total, jira_total, info, modules_by_project_id, start_info, attachment_dir):
+    project_warnings: list[str] = []
+
+    print(f"Project {project}:")
+    if jira_total:
+        print(f"  • Jira issues (from cache): {jira_total}")
+    else:
+        print("  • Jira issues (from cache): <unknown>")
+    print(f"  • Migrated work packages: {wp_total}")
+
+    _print_project_lead(info)
+    _print_project_modules(info, modules_by_project_id, project_warnings)
+    total_start = start_info["total"]
+    if total_start:
+        with_start = start_info["with_start"]
+        pct = (with_start / total_start) * 100
+        print(f"  • Work packages with start date: {with_start}/{total_start} ({pct:.1f}%)")
+    else:
+        print("  • Work packages with start date: n/a")
+    if wp_total and start_info["with_start"] == 0:
+        print(
+            "  • Work packages lack start dates (likely no Jira transition ever entered an 'In Progress' category).",
+        )
+
+    if attachment_dir.exists():
+        project_files = list(attachment_dir.glob(f"{project}-*"))
+        if project_files:
+            print(f"  • Attachment files staged: {len(project_files)}")
+
+    for warning in project_warnings:
+        print(f"  ⚠️ {warning}")
+
+    print()
+
+
+def summarize(data_dir: Path, projects: list[str] | None) -> None:
+    """Print QA summary for the requested projects."""
+    wp_mapping = load_json(data_dir / "work_package_mapping.json") or {}
+    jira_projects = load_json(data_dir / "jira_projects.json") or []
+    project_mapping = load_json(data_dir / "project_mapping.json") or {}
+    op_projects = load_json(data_dir / "openproject_projects.json") or []
+
+    wp_counts = collect_projects(wp_mapping) if isinstance(wp_mapping, dict) else {}
+    jira_counts = _jira_issue_counts(jira_projects)
+
+    modules_by_project_id = _index_project_modules(op_projects)
+
+    lead_info = _index_project_leads(project_mapping)
+
+    start_stats = _start_date_counts(wp_mapping)
 
     attachment_dir = data_dir / "attachments"
     attachment_total = sum(1 for _ in attachment_dir.glob("**/*") if _.is_file()) if attachment_dir.exists() else 0
@@ -140,93 +249,18 @@ def summarize(data_dir: Path, projects: list[str] | None) -> None:
     print()
 
     for project in projects_to_show:
-        upper = project.upper()
-        wp_total = wp_counts.get(project, 0)
-        jira_total = jira_counts.get(project, 0)
-        info = lead_info.get(upper, {})
-        op_project_id_raw = info.get("op_project_id")
-        try:
-            op_project_id = int(op_project_id_raw) if op_project_id_raw else None
-        except Exception:
-            op_project_id = None
-        modules_entry_found = bool(
-            op_project_id is not None and op_project_id in modules_by_project_id,
+        key = project.upper()
+        _print_project_summary(
+            project,
+            wp_total=wp_counts.get(project, 0),
+            jira_total=jira_counts.get(project, 0),
+            info=lead_info.get(key, {}),
+            modules_by_project_id=modules_by_project_id,
+            start_info=start_stats.get(key, {"with_start": 0, "total": 0}),
+            attachment_dir=attachment_dir,
         )
-        modules = modules_by_project_id.get(op_project_id, []) if modules_entry_found else []
-        start_info = start_stats.get(upper, {"with_start": 0, "total": 0})
-        project_warnings: list[str] = []
 
-        print(f"Project {project}:")
-        if jira_total:
-            print(f"  • Jira issues (from cache): {jira_total}")
-        else:
-            print("  • Jira issues (from cache): <unknown>")
-        print(f"  • Migrated work packages: {wp_total}")
-
-        lead_display = info.get("lead_display") or info.get("lead")
-        if lead_display:
-            lead_login = info.get("lead")
-            if lead_login and lead_login != lead_display:
-                print(f"  • Jira lead: {lead_display} ({lead_login})")
-            else:
-                print(f"  • Jira lead: {lead_display}")
-        elif info.get("lead"):
-            print(f"  • Jira lead: {info['lead']}")
-
-        if modules:
-            print(f"  • Enabled modules: {', '.join(modules)}")
-        elif op_project_id is not None:
-            warning = (
-                "OpenProject module snapshot missing; rerun 'uv run --active --no-cache "
-                "python -m src.main migrate --components projects' to refresh caches."
-            )
-            if modules_entry_found:
-                warning = (
-                    "No enabled modules captured in snapshot; confirm project migration ran "
-                    "and OpenProject modules are enabled."
-                )
-            project_warnings.append(warning)
-
-        total_start = start_info["total"]
-        if total_start:
-            with_start = start_info["with_start"]
-            pct = (with_start / total_start) * 100
-            print(f"  • Work packages with start date: {with_start}/{total_start} ({pct:.1f}%)")
-        else:
-            print("  • Work packages with start date: n/a")
-        if wp_total and start_info["with_start"] == 0:
-            print(
-                "  • Work packages lack start dates (likely no Jira transition ever entered an 'In Progress' category).",
-            )
-
-        if attachment_dir.exists():
-            project_files = list(attachment_dir.glob(f"{project}-*"))
-            if project_files:
-                print(f"  • Attachment files staged: {len(project_files)}")
-
-        for warning in project_warnings:
-            print(f"  ⚠️ {warning}")
-
-        print()
-
-    checkpoint_path = data_dir.parent / ".migration_checkpoints.db"
-    if checkpoint_path.exists():
-        try:
-            with sqlite3.connect(checkpoint_path) as conn:
-                total = conn.execute("SELECT COUNT(*) FROM migration_checkpoints").fetchone()[0]
-                completed = conn.execute(
-                    "SELECT COUNT(*) FROM migration_checkpoints WHERE status='completed'",
-                ).fetchone()[0]
-                latest = conn.execute(
-                    "SELECT MAX(updated_at) FROM migration_checkpoints WHERE updated_at IS NOT NULL",
-                ).fetchone()[0]
-            print("Checkpoint store summary:")
-            print(f"  • Entries: {total} (completed: {completed})")
-            if latest:
-                print(f"  • Last update: {latest}")
-            print()
-        except sqlite3.DatabaseError as exc:
-            print(f"⚠️  Failed to read checkpoint store {checkpoint_path}: {exc}")
+    _print_checkpoint_summary(data_dir)
 
 
 def main() -> None:

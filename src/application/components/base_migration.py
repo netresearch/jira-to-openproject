@@ -14,9 +14,10 @@ from src import config
 from src.display import configure_logging
 from src.domain.repositories import MappingRepository
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 from src.infrastructure.persistence.mapping_repo import JsonFileMappingRepository
 from src.models import ComponentResult
+from src.models.mapping.work_package_entry import WorkPackageMappingEntry
 
 # Import dependencies
 from src.utils.change_aware_runner import ChangeAwareRunner
@@ -574,6 +575,39 @@ class BaseMigration:
         if isinstance(entry, int):
             return entry
         return None
+
+    @staticmethod
+    def _work_package_entry(key: str, raw: Any) -> WorkPackageMappingEntry | None:
+        """Read a legacy or current mapping row and skip missing or malformed entries."""
+        try:
+            return WorkPackageMappingEntry.from_legacy(key, raw)
+        except ValueError:
+            return None
+
+    def _write_work_package_custom_value(
+        self,
+        entry: WorkPackageMappingEntry,
+        cf_id: int,
+        text: str,
+        projects: set[int],
+        *,
+        return_project: bool = False,
+    ) -> bool:
+        """Update one work package value and optionally return its project for field enablement."""
+        wp_id = entry.openproject_id
+        if entry.openproject_project_id is not None:
+            projects.add(int(entry.openproject_project_id))
+        value = escape_ruby_single_quoted(text)
+        result = "wp.project_id" if return_project else "true"
+        script = (
+            f"wp = WorkPackage.find({int(wp_id)}); cf = CustomField.find({int(cf_id)}); "
+            f"cv = wp.custom_value_for(cf); if cv; cv.value = '{value}'; cv.save; else; "
+            f"wp.custom_field_values = {{ cf.id => '{value}' }}; end; wp.save!; {result}"
+        )
+        written = self.op_client.execute_query(script)
+        if return_project and type(written) is int and written > 0:
+            projects.add(written)
+        return bool(written)
 
     def _ensure_wp_custom_field(self, name: str, field_format: str = "text") -> int:
         """Ensure a WorkPackageCustomField exists, creating it if needed.

@@ -104,6 +104,17 @@ class TimeEntryMigration(BaseMigration):
         # build a typed :class:`WorkPackageMappingEntry` from the inner
         # ``jira_key`` so the rest of this file flows through validated
         # types without inverting that on-disk layout.
+        migrated = self._time_entry_targets(raw, allowed_projects)
+        logger.info(
+            "Loaded %d migrated work packages%s",
+            len(migrated),
+            f" for projects {allowed_projects}" if allowed_projects else "",
+        )
+        return migrated
+
+    @staticmethod
+    def _time_entry_targets(raw: dict[str, Any], allowed_projects: list[str]) -> list[dict[str, Any]]:
+        prefixes = tuple(f"{project}-" for project in allowed_projects)
         migrated: list[dict[str, Any]] = []
         for raw_entry in raw.values():
             inner_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
@@ -114,10 +125,8 @@ class TimeEntryMigration(BaseMigration):
             except ValueError:
                 continue
             jira_key = str(entry.jira_key)
-            if allowed_projects:
-                key_u = jira_key.upper()
-                if not any(key_u.startswith(f"{proj}-") for proj in allowed_projects):
-                    continue
+            if prefixes and not jira_key.upper().startswith(prefixes):
+                continue
             migrated.append(
                 {
                     "jira_key": jira_key,
@@ -128,12 +137,6 @@ class TimeEntryMigration(BaseMigration):
                     ),
                 },
             )
-
-        logger.info(
-            "Loaded %d migrated work packages%s",
-            len(migrated),
-            f" for projects {allowed_projects}" if allowed_projects else "",
-        )
 
         return migrated
 

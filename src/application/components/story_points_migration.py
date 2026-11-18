@@ -32,7 +32,7 @@ from typing import Any
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 
 STORY_POINTS_CF_NAME = "Story Points"
@@ -135,8 +135,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             return ComponentResult(success=False, failed=1)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
-        data = mapped.data or {}
-        text_by_key: dict[str, str] = data.get("sp_text", {}) if isinstance(data, dict) else {}
+        text_by_key: dict[str, str] = mapped.data.get("sp_text", {}) if isinstance(mapped.data, dict) else {}
 
         updated = 0
         failed = 0
@@ -147,14 +146,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         # layout: outer key is numeric jira_id, inner ``jira_key`` is the
         # human-readable form) so subsequent lookups work regardless of
         # which key shape the on-disk file uses.
-        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            key_for_legacy = str(inner_jira_key or outer_key)
-            try:
-                entries_by_jira_key[key_for_legacy] = WorkPackageMappingEntry.from_legacy(key_for_legacy, raw_entry)
-            except ValueError:
-                continue
+        entries_by_jira_key = self._entries_by_jira_key(wp_map)
 
         for jira_key, text in text_by_key.items():
             if text is None or text == "0":
@@ -162,19 +154,9 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             entry = entries_by_jira_key.get(jira_key)
             if entry is None:
                 continue
-            wp_id = int(entry.openproject_id)
-            # Track project for selective enablement
-            if entry.openproject_project_id is not None:
-                projects_with_values.add(int(entry.openproject_project_id))
             try:
-                val = escape_ruby_single_quoted(str(text))
-                set_script = (
-                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                    % (wp_id, cf_id, val, val)
-                )
-                ok = self.op_client.execute_query(set_script)
-                if ok:
+                result = self._write_work_package_custom_value(entry, cf_id, str(text), projects_with_values)
+                if result:
                     updated += 1
                 else:
                     failed += 1
@@ -191,3 +173,14 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
     def run(self) -> ComponentResult:
         """Run Story points migration."""
         return self._run_etl_pipeline("Story points")
+
+    def _entries_by_jira_key(self, wp_map: dict) -> dict[str, WorkPackageMappingEntry]:
+        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
+        for outer_key, raw_entry in wp_map.items():
+            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
+            key_for_legacy = str(inner_jira_key or outer_key)
+            entry = self._work_package_entry(key_for_legacy, raw_entry)
+            if entry is not None:
+                entries_by_jira_key[key_for_legacy] = entry
+
+        return entries_by_jira_key
