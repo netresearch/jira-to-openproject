@@ -528,9 +528,9 @@ per Jira sprint. Handles the entity types `agile_boards` and `sprints`.
 - Sprint → project version (name, goal → description, start/due date, open/closed
   status), persisted in the `sprint` mapping for `SprintEpicMigration`
 
-**Not** mapped to OpenProject's native boards or (since 17.3) native sprints —
-see [Entity Mapping §11](ENTITY_MAPPING.md#11-agile-migration) for the reasoning
-and the planned change.
+After the work-package import, the optional [native sprint runner](native-completed-sprints.md)
+creates planned, active and completed sprints, project-specific goals and work-package
+links on OpenProject 17.9. For native board snapshots see [Entity Mapping §11](ENTITY_MAPPING.md#11-agile-migration).
 
 **Dependencies**: ProjectMigration
 
