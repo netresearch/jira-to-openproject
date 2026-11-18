@@ -3,26 +3,19 @@
 
 """Migrate Jira filters and dashboards into OpenProject queries and wiki summaries.
 
-Phase 7e notes
---------------
-This migration does **not** consume the ``work_package`` mapping. The
-``project`` mapping is read only to resolve a fallback wiki project for
-dashboard imports — the values flow through a local
-:func:`_lookup_project_id` helper that already handles the dict-shape
-defensively. The Jira inputs (filters, dashboards, share permissions,
-gadgets) arrive as uniform REST dicts; there is no polymorphic ladder
-of the kind phase 7 retires. Modelling them as Pydantic types would be
-cosmetic at this site and is intentionally deferred. Behaviour
-preserved.
+The authenticated source catalogs identify candidate records. Only report content
+returned to an anonymous reader may appear in a shared target query or wiki.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.jira.jira_public_reporting import public_report
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 
@@ -60,40 +53,11 @@ class ReportingMigration(BaseMigration):
             msg = f"ReportingMigration does not support entity type: {entity_type}. Supported types: ['reporting']"
             raise ValueError(msg)
 
-        # Fetch filters (API call 1)
-        try:
-            filters = self.jira_client.get_filters()
-        except Exception as exc:
-            self.logger.exception("Failed to fetch Jira filters: %s", exc)
-            filters = []
-
-        # Fetch dashboards (API call 2)
-        try:
-            dashboards = self.jira_client.get_dashboards()
-        except Exception as exc:
-            self.logger.exception("Failed to fetch Jira dashboards: %s", exc)
-            dashboards = []
-
-        # Fetch detailed dashboard data (API call 3 per dashboard)
-        dashboard_details: list[dict[str, Any]] = []
-        for dashboard in dashboards:
-            dash_id = dashboard.get("id")
-            if dash_id is None:
-                continue
-            try:
-                detail = self.jira_client.get_dashboard_details(int(dash_id))
-            except Exception:
-                detail = dashboard
-            dashboard_details.append(detail)
-
-        # Return as list with single aggregated entity
-        return [
-            {
-                "filters": filters,
-                "dashboards": dashboard_details,
-                "total_count": len(filters) + len(dashboard_details),
-            },
-        ]
+        records = {}
+        for kind, listing in (("filter", self.jira_client.get_filters), ("dashboard", self.jira_client.get_dashboards)):
+            public, held = self._public_records(kind, listing())
+            records[kind + "s"] = public + [{"id": identifier} for identifier in held]
+        return [{**records, "total_count": len(records["filters"]) + len(records["dashboards"])}]
 
     def _extract(self) -> ComponentResult:
         """Fetch Jira filters and dashboards."""
@@ -126,154 +90,15 @@ class ReportingMigration(BaseMigration):
                 error=extracted.message or "extract phase returned no data",
             )
 
-        filters: list[dict[str, Any]] = extracted.data.get("filters", [])
-        dashboards: list[dict[str, Any]] = extracted.data.get("dashboards", [])
-
-        query_payloads: list[dict[str, Any]] = []
-        wiki_payloads: list[dict[str, Any]] = []
-        skipped_dashboards: list[dict[str, Any]] = []
-
-        explanation_lines = [
-            "_This page was generated automatically during the Jira→OpenProject migration to preserve the original dashboard metadata._",
-            "_It contains pointers back to the Jira dashboard so you can rebuild or replace it using OpenProject components._",
-            "",
-        ]
-
-        for filt in filters:
-            name = filt.get("name") or f"Filter {filt.get('id')}"
-            jql = filt.get("jql") or filt.get("query")
-            owner = filt.get("owner", {}) or {}
-            description_lines = [
-                f"Imported from Jira filter '{name}'",
-            ]
-            if jql:
-                description_lines.append(f"Original JQL:\n```\n{jql}\n```")
-            if owner:
-                owner_name = owner.get("displayName") or owner.get("name")
-                if owner_name:
-                    description_lines.append(f"Owner: {owner_name}")
-            if filt.get("viewUrl"):
-                description_lines.append(f"Source URL: {filt.get('viewUrl')}")
-            query_payloads.append(
-                {
-                    "name": f"[Jira Filter] {name}",
-                    "description": "\n\n".join(description_lines),
-                    "project_id": None,
-                    "is_public": True,
-                    "options": {},
-                },
-            )
-
-        # Determine fallback project for wiki content
-        fallback_project_id = None
-        preferred_project_key = (
-            str(config.openproject_config.get("reporting_wiki_project")).strip()
-            if config.openproject_config.get("reporting_wiki_project")
-            else ""
-        )
-
-        reporting_identifier = preferred_project_key or REPORTING_PROJECT_IDENTIFIER_DEFAULT
-        reporting_name = (
-            str(config.openproject_config.get("reporting_wiki_project_name")).strip()
-            if config.openproject_config.get("reporting_wiki_project_name")
-            else REPORTING_PROJECT_NAME_DEFAULT
-        )
-
-        try:
-            reporting_project_id = self.op_client.ensure_reporting_project(
-                reporting_identifier,
-                reporting_name,
-            )
-            fallback_project_id = reporting_project_id
-        except Exception:
-            self.logger.exception(
-                "Failed to ensure dedicated reporting project '%s'; dashboards without explicit share will be skipped",
-                reporting_identifier,
-            )
-            fallback_project_id = 0
-
-        def _lookup_project_id(project_key: str | None) -> int:
-            if not project_key:
-                return 0
-            entry = self.project_mapping.get(project_key)
-            if isinstance(entry, dict) and entry.get("openproject_id"):
-                try:
-                    return int(entry["openproject_id"])
-                except TypeError, ValueError:
-                    return 0
-            return 0
-
-        if preferred_project_key:
-            fallback_project_id = _lookup_project_id(preferred_project_key)
-            if not fallback_project_id:
-                self.logger.warning(
-                    "Configured reporting_wiki_project=%s but no mapping was found; falling back to first mapped project",
-                    preferred_project_key,
-                )
-
-        if not fallback_project_id and self.project_mapping:
-            first_entry = next(iter(self.project_mapping.values()))
-            if isinstance(first_entry, dict):
-                fallback_project_id = int(first_entry.get("openproject_id", 0) or 0)
-
-        if not fallback_project_id:
-            self.logger.warning(
-                "Unable to resolve a reporting wiki project; dashboards without explicit project will be skipped",
-            )
-
-        for dashboard in dashboards:
-            dash_name = dashboard.get("name") or f"Dashboard {dashboard.get('id')}"
-            share_permissions = dashboard.get("sharePermissions") or []
-            project_id = fallback_project_id
-
-            for perm in share_permissions:
-                proj = perm.get("project")
-                if isinstance(proj, dict):
-                    project_key = proj.get("key")
-                    pid = _lookup_project_id(project_key) if project_key else 0
-                    if pid:
-                        project_id = pid
-                        break
-
-            if not project_id:
-                skipped_dashboards.append(
-                    {
-                        "dashboard_id": dashboard.get("id"),
-                        "reason": "no_project_mapping",
-                    },
-                )
-                continue
-
-            gadgets = dashboard.get("gadgets") or dashboard.get("widgets") or []
-            gadget_lines = []
-            for gadget in gadgets:
-                title = gadget.get("title") or gadget.get("name") or "Gadget"
-                gadget_lines.append(f"- {title}")
-
-            content_lines = [
-                f"## Imported Jira Dashboard: {dash_name}",
-                "",
-                f"Source URL: {dashboard.get('viewUrl') or dashboard.get('self')}",
-            ]
-
-            content_lines = explanation_lines + content_lines
-            description = dashboard.get("description")
-            if description:
-                content_lines.extend(["", description])
-            if gadget_lines:
-                content_lines.extend(["", "### Gadgets", *gadget_lines])
-
-            wiki_payloads.append(
-                {
-                    "project_id": project_id,
-                    "title": f"Jira Dashboard - {dash_name}",
-                    "content": "\n".join(content_lines),
-                },
-            )
-
+        filters, held_filters = self._public_records("filter", extracted.data.get("filters", []))
+        dashboards, held_dashboards = self._public_records("dashboard", extracted.data.get("dashboards", []))
+        query_payloads, filter_pages = self._filter_payloads(filters)
+        wiki_payloads, skipped_dashboards = self._dashboard_payloads(dashboards, held_dashboards)
+        wiki_payloads = [*wiki_payloads, *filter_pages]
         mapped = {
             "queries": query_payloads,
             "wiki_pages": wiki_payloads,
+            "skipped_filters": held_filters,
             "skipped_dashboards": skipped_dashboards,
         }
 
@@ -283,10 +108,147 @@ class ReportingMigration(BaseMigration):
             total_count=len(query_payloads) + len(wiki_payloads),
             details={
                 "filters": len(query_payloads),
-                "dashboards": len(wiki_payloads),
+                "skipped_filters": len(held_filters),
+                "dashboards": len(wiki_payloads) - len(filter_pages),
+                "filter_pages": len(filter_pages),
                 "skipped_dashboards": len(skipped_dashboards),
             },
         )
+
+    def _filter_payloads(self, filters):
+        queries, pages = [], []
+        fallback = None
+        for row in filters:
+            jql = row.get("jql") or row.get("query") or ""
+            project_key = self._jql_project(jql)
+            project_id = self._mapped_project(project_key)
+            if project_id:
+                queries.append(
+                    {
+                        "name": f"Jira Filter {row['id']}",
+                        "project_id": project_id,
+                        "is_public": True,
+                        "options": {"include_subprojects": False, "filters": []},
+                    }
+                )
+            elif fallback is None:
+                fallback = self._reporting_project()
+            pages.append(
+                {
+                    "title": f"Jira Filter {row['id']}",
+                    "project_id": project_id or fallback,
+                    "content": self._filter_text(row),
+                }
+            )
+        return queries, pages
+
+    @staticmethod
+    def _jql_project(jql: str) -> str | None:
+        match = re.fullmatch(
+            r"""\s*project\s*=\s*("[A-Z][A-Z0-9_]*"|'[A-Z][A-Z0-9_]*'|[A-Z][A-Z0-9_]*)\s*""",
+            jql,
+            re.IGNORECASE | re.ASCII,
+        )
+        return match[1].strip("\"'").upper() if match else None
+
+    def _dashboard_payloads(self, dashboards, held):
+        pages = []
+        skipped = [{"dashboard_id": identifier, "reason": "not_public"} for identifier in held]
+        fallback = None
+        for dashboard in dashboards:
+            project_id = self._shared_project(dashboard)
+            if not project_id:
+                if fallback is None:
+                    fallback = self._reporting_project()
+                project_id = fallback
+            if project_id:
+                pages.append(self._wiki_payload(dashboard, project_id))
+            else:
+                skipped.append({"dashboard_id": dashboard["id"], "reason": "no_project_mapping"})
+        return pages, skipped
+
+    def _public_records(self, kind, catalog):
+        public = []
+        held = []
+        for row in catalog:
+            identifier = row.get("id")
+            record = public_report(self.jira_client.base_url, kind, identifier)
+            if record is None:
+                held.append(identifier)
+            else:
+                public.append(record)
+        return public, held
+
+    @staticmethod
+    def _filter_text(row: dict[str, Any]) -> str:
+        name = row.get("name") or f"Filter {row['id']}"
+        lines = [f"Imported from Jira filter '{name}'"]
+        jql = row.get("jql") or row.get("query")
+        if jql:
+            lines.append(f"Original JQL:\n```\n{jql}\n```")
+        owner = row.get("owner") or {}
+        owner_name = owner.get("displayName") or owner.get("name")
+        if owner_name:
+            lines.append(f"Owner: {owner_name}")
+        if row.get("viewUrl"):
+            lines.append(f"Source URL: {row['viewUrl']}")
+        return "\n\n".join(lines)
+
+    def _shared_project(self, row):
+        for permission in row.get("sharePermissions") or []:
+            project = permission.get("project") or {}
+            target = self._mapped_project(project.get("key"))
+            if target:
+                return target
+        return 0
+
+    def _mapped_project(self, key):
+        row = self.project_mapping.get(key) or {}
+        try:
+            return int(row.get("openproject_id") or 0)
+        except TypeError, ValueError:
+            return 0
+
+    def _reporting_project(self):
+        preferred = str(config.openproject_config.get("reporting_wiki_project") or "").strip()
+        mapped = self._mapped_project(preferred)
+        if mapped:
+            return mapped
+        name = config.openproject_config.get("reporting_wiki_project_name") or REPORTING_PROJECT_NAME_DEFAULT
+        return self.op_client.ensure_reporting_project(preferred or REPORTING_PROJECT_IDENTIFIER_DEFAULT, name)
+
+    @staticmethod
+    def _wiki_payload(dashboard: dict[str, Any], project_id: int) -> dict[str, Any]:
+        name = dashboard.get("name") or f"Dashboard {dashboard['id']}"
+        lines = [
+            f"## Imported Jira Dashboard: {name}",
+            "",
+            f"Source URL: {dashboard.get('viewUrl') or dashboard.get('self')}",
+        ]
+        if dashboard.get("description"):
+            lines.extend(["", dashboard["description"]])
+        gadgets = dashboard.get("gadgets") or dashboard.get("widgets") or []
+        if gadgets:
+            lines.extend(["", "### Gadgets"])
+            lines.extend(f"- {item.get('title') or item.get('name') or 'Gadget'}" for item in gadgets)
+        return {
+            "project_id": project_id,
+            "title": f"Jira Dashboard {dashboard['id']}",
+            "content": "\n".join(lines),
+        }
+
+    def _write_reports(self, reports, write):
+        updated = 0
+        for payload in reports:
+            try:
+                result = write(**payload)
+                if result.get("success"):
+                    updated += 1
+                else:
+                    self.logger.error("OpenProject rejected a reporting record")
+            except Exception:
+                self.logger.exception("Failed to save a reporting record")
+        return updated
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Create OpenProject queries and wiki pages."""
@@ -300,48 +262,9 @@ class ReportingMigration(BaseMigration):
         queries: list[dict[str, Any]] = mapped.data.get("queries", [])
         wiki_pages: list[dict[str, Any]] = mapped.data.get("wiki_pages", [])
 
-        updated = 0
-        failed = 0
-
-        for payload in queries:
-            try:
-                result = self.op_client.create_or_update_query(**payload)
-                if result.get("success"):
-                    updated += 1
-                else:
-                    failed += 1
-                    self.logger.error(
-                        "Query creation failed for '%s': %s",
-                        payload.get("name"),
-                        result.get("error") or result,
-                    )
-            except Exception as exc:
-                failed += 1
-                self.logger.exception(
-                    "Failed to create query for filter '%s': %s",
-                    payload.get("name"),
-                    exc,
-                )
-
-        for payload in wiki_pages:
-            try:
-                result = self.op_client.create_or_update_wiki_page(**payload)
-                if result.get("success"):
-                    updated += 1
-                else:
-                    failed += 1
-                    self.logger.error(
-                        "Wiki page creation failed for '%s': %s",
-                        payload.get("title"),
-                        result.get("error") or result,
-                    )
-            except Exception as exc:
-                failed += 1
-                self.logger.exception(
-                    "Failed to create wiki page '%s': %s",
-                    payload.get("title"),
-                    exc,
-                )
+        updated = self._write_reports(queries, self.op_client.create_or_update_query)
+        updated += self._write_reports(wiki_pages, self.op_client.create_or_update_wiki_page)
+        failed = len(queries) + len(wiki_pages) - updated
 
         return ComponentResult(
             success=failed == 0,
@@ -350,6 +273,8 @@ class ReportingMigration(BaseMigration):
             failed_count=failed,
             details={
                 "queries": len(queries),
+                "skipped_filters": mapped.data.get("skipped_filters", []),
+                "held_dashboard_ids": [r["dashboard_id"] for r in mapped.data.get("skipped_dashboards", [])],
                 "wiki_pages": len(wiki_pages),
                 "skipped_dashboards": len(mapped.data.get("skipped_dashboards", [])),
             },
@@ -367,7 +292,11 @@ class ReportingMigration(BaseMigration):
             )
             return extracted
 
-        mapped = self._map(extracted)
+        try:
+            mapped = self._map(extracted)
+        except Exception:
+            self.logger.exception("Could not verify the public reporting inventory")
+            return ComponentResult(success=False, message="Could not verify the public reporting inventory")
         if not mapped.success:
             self.logger.error(
                 "Reporting mapping failed: %s",

@@ -94,7 +94,7 @@ class OpenProjectContentService:
 JSON_DATA
 
         begin
-          project = input['project_id'] ? Project.find_by(id: input['project_id'].to_i) : nil
+          project = Project.find(input['project_id']) if input['project_id']
           # Pick an owning user — the previous version had a redundant
           # ``User.respond_to?(:admin)`` ternary that fell straight
           # through to an unconditional ``User.admin.first`` on the
@@ -110,6 +110,9 @@ JSON_DATA
             result = {{ success: false, error: 'no available user to own query' }}
           else
             query = Query.find_or_initialize_by(name: input['name'], project: project)
+            if query.persisted? && input['is_public'] && !query.public?
+              raise 'an existing private query uses this name'
+            end
             query.user ||= user
 
             # Apply the description if the model exposes one — older
@@ -147,7 +150,10 @@ JSON_DATA
               query.show_hierarchies = hierarchies
             end
 
-            if query.respond_to?(:include_subprojects=) && query.include_subprojects.nil?
+            subprojects = input.dig('options', 'include_subprojects')
+            if !subprojects.nil?
+              query.include_subprojects = subprojects
+            elsif query.respond_to?(:include_subprojects=) && query.include_subprojects.nil?
               query.include_subprojects = false
             end
 
