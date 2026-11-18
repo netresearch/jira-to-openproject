@@ -33,9 +33,10 @@ def test_partial_jira_fetch_preserves_previous_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(cache_jira_issues, "JiraClient", lambda: mock)
     assert cache_jira_issues.main() == 1
     assert json.loads(cache.read_text()) == {"previous": 1}
-    partial["TEST-2"] = {"key": "TEST-2"}
+    partial["TEST-2"] = {"key": "TEST-2", "fields": {"comment": {"comments": [{"body": "PRIVATE-TEST"}]}}}
     assert cache_jira_issues.main() == 0
-    assert json.loads(cache.read_text()) == {key: {"key": key} for key in partial}
+    assert json.loads(cache.read_text()) == {"TEST-1": {"key": "TEST-1"}, "TEST-2": {"key": "TEST-2", "fields": {}}}
+    assert "PRIVATE-TEST" not in cache.read_text()
 
 
 def test_json_export_preserves_destination_on_failure_and_rejects_link(tmp_path):

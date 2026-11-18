@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import logger
+from src.infrastructure.jira.comment_audience import issue_without_comments
 from src.infrastructure.jira.jira_client import JiraClient
 
 if __package__:
@@ -29,10 +30,9 @@ def _raw_issues(result):
         if not isinstance(batch, dict):
             continue
         for key, issue in batch.items():
-            if hasattr(issue, "raw"):
-                yield key, issue.raw
-            elif isinstance(issue, dict):
-                yield key, issue
+            raw = getattr(issue, "raw", issue)
+            if isinstance(raw, dict):
+                yield key, issue_without_comments(raw)
 
 
 def main() -> int:
