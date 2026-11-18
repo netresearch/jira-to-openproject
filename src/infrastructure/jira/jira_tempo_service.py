@@ -38,6 +38,7 @@ from src.infrastructure.jira.jira_client import (
     JiraResourceNotFoundError,
     JiraServiceUnavailableError,
     _assert_json_response,
+    http_status_from_error,
 )
 from src.utils.timezone import UTC
 
@@ -310,39 +311,34 @@ class JiraTempoService:
             JiraApiError: If the API request fails
 
         """
-        try:
-            path = "/rest/tempo-timesheets/3/work-attributes"
-            self._logger.info("Fetching Tempo work attributes")
+        paths = ("/rest/tempo-core/1/work-attribute", "/rest/tempo-timesheets/3/work-attributes")
+        for path in paths:
+            try:
+                response = self._client.jira._session.get(f"{self._client.base_url}{path}")
+                if response.status_code != HTTP_OK:
+                    self._client._handle_response(response)
+                    msg = f"Unexpected HTTP {response.status_code} for {path}"
+                    raise JiraApiError(msg)
+                _assert_json_response(response, path=path)
+                attributes = response.json()
+                if not isinstance(attributes, list) or not all(isinstance(attribute, dict) for attribute in attributes):
+                    msg = f"Unexpected work attribute catalogue from {path}"
+                    raise JiraApiError(msg)
+                return attributes
+            except JiraResourceNotFoundError:
+                continue
+            except Exception as exc:
+                status = http_status_from_error(exc)
+                if status == HTTP_NOT_FOUND:
+                    continue
+                if isinstance(exc, JiraServiceUnavailableError) and status == HTTP_OK:
+                    self._logger.warning("Tempo work attributes unavailable: %s", exc)
+                    return []
+                msg = f"Failed to retrieve Tempo work attributes: {exc!s}"
+                raise JiraApiError(msg) from exc
 
-            response = self._client.jira._session.get(
-                f"{self._client.base_url}{path}",
-            )
-
-            _assert_json_response(response, path=path)
-
-            if response.status_code != HTTP_OK:
-                msg = f"Failed to retrieve Tempo work attributes: HTTP {response.status_code}"
-                self._logger.error(msg)
-                raise JiraApiError(msg)
-
-            attributes = response.json()
-            self._logger.info(
-                "Successfully retrieved %s Tempo work attributes",
-                len(attributes),
-            )
-
-            return attributes
-
-        except JiraServiceUnavailableError as e:
-            self._logger.warning(
-                "Tempo work-attributes endpoint unavailable, skipping (Tempo Timesheets may not be installed). Details: %s",
-                e,
-            )
-            return []
-        except Exception as e:
-            error_msg = f"Failed to retrieve Tempo work attributes: {e!s}"
-            self._logger.exception(error_msg)
-            raise JiraApiError(error_msg) from e
+        self._logger.warning("Tempo work attribute endpoints unavailable")
+        return []
 
     def _project_worklog_page(
         self, project_key: str, offset: int, limit: int, date_from: str | None, date_to: str | None
