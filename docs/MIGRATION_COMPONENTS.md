@@ -504,9 +504,9 @@ Applies Jira sprint membership and Epic Links to already-migrated work packages.
 The sprint versions themselves are created by `AgileBoardMigration`.
 
 **Features**:
-- Epic Link → `parent_id` hierarchy on the child work package
+- Subtask parent or Epic Link → `parent_id` hierarchy on the child work package. A direct parent takes precedence.
 - Sprint → `version_id` on the work package, resolved via the `sprint` mapping
-  (first matching sprint only)
+  (first matching sprint only, for issues without a Jira fix version)
 - Sprint → "Sprint" text custom field, holding all sprint names comma-separated
 
 **Dependencies**: ProjectMigration, WorkPackageMigration, AgileBoardMigration
@@ -524,9 +524,7 @@ Creates one OpenProject saved query per Jira board and one OpenProject version
 per Jira sprint. Handles the entity types `agile_boards` and `sprints`.
 
 **Features**:
-- Board → public saved query named `[Board] <name>`; board type, original JQL and
-  column/status list go into the query **description** only — filters and columns
-  are left empty
+- Board → saved query named `[Board] <name>`, initially private. The agile snapshot records board metadata and the query uses project defaults.
 - Sprint → project version (name, goal → description, start/due date, open/closed
   status), persisted in the `sprint` mapping for `SprintEpicMigration`
 

@@ -39,7 +39,10 @@ A robust, modular migration toolset for transferring project management data fro
 ### Supported Targets
 
 - Jira Server/Data Center 9.x (validated on 9.11)
-- OpenProject 17.3+ (currently tested against 17.3)
+- OpenProject migration target: **17.9.7**. A focused database round trip covers board queries, sprint versions and fields, epic parents, provenance types and workflow transitions on 17.9.7 and 17.3.0. Full cutover rehearsal remains project-specific.
+
+To repeat this check against a disposable target with OpenProject sample data, run
+`J2O_TEST_OPENPROJECT_CONTAINER=<container> uv run pytest --live-docker tests/integration/test_openproject_agile_roundtrip.py`. The test runs its database writes in a rolled-back transaction.
 
 Earlier or later releases may work, but they are not part of the supported/tested matrix.
 

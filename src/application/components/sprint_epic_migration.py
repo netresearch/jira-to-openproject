@@ -1,397 +1,194 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Migrate Jira Sprint and Epic Link to OpenProject.
-
-Approach:
-- Epic Link: set parent-child hierarchy in OpenProject by assigning `parent_id`
-  on child WPs when the Epic issue exists in the mapping (first-class mapping).
-- Sprint: ensure CF "Sprint" (text) and store sprint name(s) as comma-separated
-  text (fallback when no native sprint entity is modeled in OP).
-
-Phase 7d notes
---------------
-Both ``Sprint`` and ``Epic Link`` are tenant-specific Jira custom fields
-exposed under instance-dependent attribute names (``customfield_10008``,
-``customfield_10020``, ``epicLink``, ``Sprints`` …). They are *not*
-modelled by :class:`JiraIssueFields`, so the boundary parse for these
-fields stays as defensive ``getattr``/dict probing — same rationale as
-``story_points_migration`` and ``customfields_generic_migration``. What
-this phase does change: the polymorphic ``wp_map`` (``dict | int``)
-ladder is normalised through
-:meth:`WorkPackageMappingEntry.from_legacy`. The
-``sprint`` mapping uses a separate dict-of-dict shape that is not the
-``wp_map`` polymorphism and is left as-is.
-"""
+"""Apply Jira sprint membership and epic parents to existing work packages."""
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
+from itertools import batched
 from typing import Any
 
-from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.config import logger
-from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 from src.models import ComponentResult, WorkPackageMappingEntry
 
 SPRINT_CF_NAME = "Sprint"
+_BATCH_SIZE = 100
+_GREENHOPPER = "com.pyxis.greenhopper.jira:"
+_LEGACY_SPRINT = re.compile(r"\.Sprint@[^[]+\[id=(\d+),.*?\bname=(.*?),(?:startDate|endDate|completeDate)=")
+
+
+def _field(value: Any, name: str) -> Any:
+    """Read one field from Jira's REST or SDK representation."""
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _sprint_references(value: Any) -> list[tuple[str, str]]:
+    """Keep the Jira sprint ID alongside its display name, including legacy Server values."""
+    references = []
+    for item in value if isinstance(value, list) else [value]:
+        if isinstance(item, str):
+            match = _LEGACY_SPRINT.search(item)
+            sprint_id, name = match.groups() if match else ("", item)
+        else:
+            sprint_id, name = str(_field(item, "id") or ""), _field(item, "name")
+        if isinstance(name, str) and name.strip():
+            references.append((sprint_id, name.strip()))
+    return references
 
 
 @register_entity_types("sprint_epic")
-class SprintEpicMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
-        super().__init__(jira_client=jira_client, op_client=op_client)
-
-    def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
-        """Get current entities for change detection.
-
-        SprintEpicMigration is a transformation-only component that operates on
-        already-migrated work packages. It doesn't fetch source data from Jira,
-        so this returns an empty list to indicate no changes to detect.
-
-        Args:
-            entity_type: Type of entities (should be "sprint_epic")
-
-        Returns:
-            Empty list (transformation-only, no source entities)
-
-        """
-        return []
-
-    @staticmethod
-    def _coerce_sprint_names(sprint_field_value: Any) -> list[str]:
-        """Best-effort extract sprint names from Jira field values.
-
-        Handles:
-        - list of objects with `name`
-        - list of strings
-        - single object with `name`
-        - single string
-        """
-        if sprint_field_value is None:
-            return []
-        out: list[str] = []
-        try:
-            if isinstance(sprint_field_value, list):
-                for item in sprint_field_value:
-                    if isinstance(item, str) and item.strip():
-                        out.append(item.strip())
-                    elif isinstance(item, dict):
-                        name = item.get("name")
-                        if isinstance(name, str) and name.strip():
-                            out.append(name.strip())
-                    else:
-                        name = getattr(item, "name", None)
-                        if isinstance(name, str) and name.strip():
-                            out.append(name.strip())
-            elif isinstance(sprint_field_value, str):
-                if sprint_field_value.strip():
-                    out.append(sprint_field_value.strip())
-            elif isinstance(sprint_field_value, dict):
-                name = sprint_field_value.get("name")
-                if isinstance(name, str) and name.strip():
-                    out.append(name.strip())
-            else:
-                name = getattr(sprint_field_value, "name", None)
-                if isinstance(name, str) and name.strip():
-                    out.append(name.strip())
-        except Exception:
-            return []
-        return out
-
-    @staticmethod
-    def _get_attr_ci(obj: Any, *names: str) -> Any:
-        """Get first attribute present on obj, case-insensitive among names."""
-        for n in names:
-            if hasattr(obj, n):
-                return getattr(obj, n)
-            # try common variations
-            for cand in (n, n.lower(), n.upper(), n.replace(" ", ""), n.replace(" ", "_").lower()):
-                if hasattr(obj, cand):
-                    return getattr(obj, cand)
-        # broad scan as last resort
-        try:
-            for attr in dir(obj):
-                la = attr.lower()
-                for n in names:
-                    ln = n.lower().replace(" ", "")
-                    if all(tok in la for tok in ln.split("_")):
-                        return getattr(obj, attr)
-        except Exception:
-            return None
-        return None
+class SprintEpicMigration(BaseMigration):
+    """Preserve epic hierarchy, sprint names and the sprint version fallback."""
 
     def _extract(self) -> ComponentResult:
-        """Extract Sprint text and Epic parent links keyed by Jira key."""
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        if not wp_map:
-            self.logger.info("No work package mapping present; skipping Sprint/Epic adjustments")
-            parent_links_count = 0
-            return ComponentResult(
-                success=True,
-                message="Skipped sprint/epic migration (work package mapping unavailable)",
-                details={
-                    "sprint_cf_updates": 0,
-                    "version_assignments": 0,
-                    "parent_links": parent_links_count,
-                    "cf_available": False,
-                },
-            )
-        # Production wp_map is keyed by str(jira_id) (numeric) outer with
-        # the human-readable ``jira_key`` stored inside. Prefer the inner
-        # ``jira_key``; fall back to the outer key for legacy/test layouts.
-        keys: list[str] = []
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            keys.append(str(inner_jira_key or outer_key))
+        mappings = self.mappings.get_mapping("work_package") or {}
+        keys = self._jira_keys_from_wp_map(mappings)
         if not keys:
-            return ComponentResult(success=True, data={"sprint": {}, "epic": []})
+            return ComponentResult(
+                success=False, failed=1, message="No mapped work packages. Run work_packages_skeleton first."
+            )
 
-        issues = self._merge_batch_issues(keys)
-
-        sprint_by_key: dict[str, list[str]] = {}
-        epic_links: list[tuple[str, str]] = []  # (child_key, epic_key)
-
-        for k, issue in issues.items():
-            try:
-                fields = getattr(issue, "fields", None)
-                if not fields:
+        # Jira Software exposes tenant-specific field IDs; their display names can be translated.
+        custom_fields = {(f.get("schema") or {}).get("custom"): f["id"] for f in self.jira_client.get_custom_fields()}
+        sprint_field = custom_fields.get(_GREENHOPPER + "gh-sprint", "sprint")
+        epic_field = custom_fields.get(_GREENHOPPER + "gh-epic-link", "epicLink")
+        records: dict[str, Any] = {}
+        missing = []
+        for batch in batched(keys, _BATCH_SIZE, strict=False):
+            issues = self._merge_batch_issues(list(batch))
+            for key in batch:
+                issue = issues.get(key)
+                fields = issue.get("fields", issue) if isinstance(issue, dict) else getattr(issue, "fields", None)
+                if fields is None:
+                    missing.append(key)
                     continue
-                # Sprint: look for common fields
-                sprint_val = None
-                for cand in ("sprint", "customfield_10020", "Sprints", "Sprint"):
-                    if hasattr(fields, cand):
-                        sprint_val = getattr(fields, cand)
-                        break
-                if sprint_val is None:
-                    # wide scan for attr containing 'sprint'
-                    sprint_val = self._get_attr_ci(fields, "sprint")
-                names = self._coerce_sprint_names(sprint_val)
-                if names:
-                    sprint_by_key[k] = names
-
-                # Epic Link: common field customfield_10008 or epicLink
-                epic_key = None
-                for cand in ("epicLink", "customfield_10008", "Epic Link"):
-                    if hasattr(fields, cand):
-                        epic_key = getattr(fields, cand)
-                        break
-                if epic_key is None:
-                    epic_key = self._get_attr_ci(fields, "epic_link", "epicLink")
-                if isinstance(epic_key, str) and epic_key.strip():
-                    epic_links.append((k, epic_key.strip()))
-            except Exception:
-                continue
-
-        return ComponentResult(success=True, data={"sprint": sprint_by_key, "epic": epic_links})
+                sprints = _sprint_references(_field(fields, sprint_field))
+                epic = _field(fields, epic_field)
+                parent = _field(_field(fields, "parent"), "key")
+                if sprints or epic or parent:
+                    records[key] = (sprints, parent, epic, bool(_field(fields, "fixVersions")))
+        return ComponentResult(success=True, data=records, details={"missing_issues": missing})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
-        data = extracted.data or {}
-        sprint_raw: dict[str, list[str]] = data.get("sprint", {}) if isinstance(data, dict) else {}
-        epic_pairs: list[tuple[str, str]] = data.get("epic", []) if isinstance(data, dict) else []
-
-        # Normalize sprint names (unique, sorted, joined)
-        sprint_text: dict[str, str] = {}
-        for key, names in sprint_raw.items():
-            uniq = sorted({n.strip() for n in names if n and isinstance(n, str)})
-            if uniq:
-                sprint_text[key] = ", ".join(uniq)
-
-        # Resolve epic links into child/parent OP IDs. Build a typed
-        # jira_key → entry index once so the inner-vs-outer key shape is
-        # handled in a single place.
         wp_map = self.mappings.get_mapping("work_package") or {}
-        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            jira_key_for_entry = str(inner_jira_key or outer_key)
+        entries = {}
+        invalid = []
+        for outer, raw in wp_map.items():
+            key = self._inner_jira_key(outer, raw)
             try:
-                entries_by_jira_key[jira_key_for_entry] = WorkPackageMappingEntry.from_legacy(
-                    jira_key_for_entry,
-                    raw_entry,
-                )
+                if key:
+                    entry = WorkPackageMappingEntry.from_legacy(key, raw)
+                    if entry.openproject_id > 0:
+                        entries[key] = entry
+                        continue
             except ValueError:
-                continue
+                pass
+            invalid.append(key or outer)
 
-        parent_links: list[dict[str, int]] = []
-        for child_key, epic_key in epic_pairs:
-            child_entry = entries_by_jira_key.get(child_key)
-            parent_entry = entries_by_jira_key.get(epic_key)
-            if child_entry is None or parent_entry is None:
-                continue
-            child_id = int(child_entry.openproject_id)
-            parent_id = int(parent_entry.openproject_id)
-            if child_id == parent_id:
-                continue
-            parent_links.append({"id": child_id, "parent_id": parent_id})
-
-        return ComponentResult(success=True, data={"sprint_text": sprint_text, "parent_links": parent_links})
-
-    def _load(self, mapped: ComponentResult) -> ComponentResult:
-        data = mapped.data or {}
-        sprint_text: dict[str, str] = data.get("sprint_text", {}) if isinstance(data, dict) else {}
-        parent_links: list[dict[str, int]] = data.get("parent_links", []) if isinstance(data, dict) else []
-
-        updated = 0
-        failed = 0
-
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
-        for outer_key, raw_entry in wp_map.items():
-            inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
-            jira_key_for_entry = str(inner_jira_key or outer_key)
-            try:
-                entries_by_jira_key[jira_key_for_entry] = WorkPackageMappingEntry.from_legacy(
-                    jira_key_for_entry,
-                    raw_entry,
-                )
-            except ValueError:
-                continue
-
-        # Apply parent links in batch chunks
-        try:
-            if parent_links:
-                res = self.op_client.batch_update_work_packages(parent_links)
-                if isinstance(res, dict):
-                    updated += int(res.get("updated", 0))
-                    failed += int(res.get("failed", 0))
-        except Exception:
-            logger.exception("Failed to apply parent links in batch")
-            failed += len(parent_links)
-
-        # Assign versions (sprints) when mappings exist. The ``sprint``
-        # mapping uses an unrelated dict-of-dict shape (not the wp_map
-        # polymorphism), so it is left as-is.
-        sprint_mapping = config.mappings.get_mapping("sprint") or {}
-        version_updates: list[dict[str, Any]] = []
-        for jira_key, text in sprint_text.items():
-            entry = entries_by_jira_key.get(jira_key)
-            if entry is None:
-                continue
-            sprint_names = [
-                item.strip() for item in str(text or "").split(",") if item and isinstance(item, str) and item.strip()
-            ]
-            version_entry = None
-            for candidate in sprint_names:
-                version_entry = sprint_mapping.get(candidate) or sprint_mapping.get(str(candidate))
-                if version_entry:
-                    break
-            if version_entry and version_entry.get("openproject_id"):
-                version_id = int(version_entry.get("openproject_id", 0) or 0)
-                if version_id <= 0:
-                    continue
-                version_updates.append(
-                    {
-                        "id": int(entry.openproject_id),
-                        "version_id": version_id,
-                    },
-                )
-
-        if version_updates:
-            try:
-                res = self.op_client.batch_update_work_packages(version_updates)
-                if isinstance(res, dict):
-                    updated += int(res.get("updated", 0))
-                    failed += int(res.get("failed", 0))
-            except Exception:
-                logger.exception("Failed to assign versions for sprint mapping")
-                failed += len(version_updates)
-
-        # Ensure Sprint CF and set values via minimal Rails per record
-        cf_id = 0
-        try:
-            cf_id = self._ensure_wp_custom_field(SPRINT_CF_NAME, "text")
-        except Exception:
-            logger.exception("Failed to ensure Sprint custom field")
-        if not cf_id:
-            self.logger.warning("Sprint custom field unavailable; skipping custom field hydration")
-            return ComponentResult(
-                success=failed == 0,
-                message="Sprint and epic metadata synchronised (custom field unavailable)",
-                updated=updated,
-                failed=failed,
-                details={
-                    "sprint_cf_updates": 0,
-                    "version_assignments": len(version_updates),
-                    "parent_links": len(parent_links),
-                    "cf_available": False,
-                },
-            )
-
-        projects_with_values: set[int] = set()
-        for jira_key, text in sprint_text.items():
-            entry = entries_by_jira_key.get(jira_key)
-            if entry is None:
-                continue
-            wp_id = int(entry.openproject_id)
-            # Track project for selective enablement
-            if entry.openproject_project_id is not None:
-                projects_with_values.add(int(entry.openproject_project_id))
-            try:
-                val = escape_ruby_single_quoted(str(text))
-                script = (
-                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                    % (wp_id, cf_id, val, val)
-                )
-                ok = self.op_client.execute_query(script)
-                if ok:
-                    updated += 1
+        versions = self.mappings.get_mapping("sprint") or {}
+        projects = self.mappings.get_mapping("project") or {}
+        parents, assignments, values = [], [], []
+        unresolved_epics: dict[str, str] = {}
+        unresolved_parents: dict[str, str] = {}
+        unresolved_sprints = []
+        for key, (sprints, direct_parent, epic, has_fix_version) in (extracted.data or {}).items():
+            if key not in entries:
+                continue  # reported in invalid_mappings
+            entry = entries[key]
+            wp_id = entry.openproject_id
+            parent_key = direct_parent or epic
+            if parent_key:
+                parent = entries.get(parent_key.strip()) if isinstance(parent_key, str) else None
+                if parent and parent.openproject_id != wp_id:
+                    parents.append({"id": wp_id, "parent_id": parent.openproject_id})
                 else:
-                    failed += 1
-            except Exception:
-                logger.exception("Failed to set Sprint CF for %s", jira_key)
-                failed += 1
-
-        # Enable CF only for projects that have values
-        if projects_with_values:
-            self._enable_cf_for_projects(cf_id, projects_with_values, cf_name=SPRINT_CF_NAME)
-
-        message = "Sprint and epic metadata synchronised"
+                    unresolved = unresolved_parents if direct_parent else unresolved_epics
+                    unresolved[key] = str(parent_key)
+            if not sprints:
+                continue
+            names = sorted({name for _, name in sprints})
+            values.append({"work_package_id": wp_id, "value": ", ".join(names)})
+            if has_fix_version:
+                continue  # Jira releases own version_id even on metadata-only reruns.
+            project = projects.get(self._issue_project_key(key))
+            project_id = entry.openproject_project_id or (
+                project.get("openproject_id") if isinstance(project, dict) else project
+            )
+            for sprint_id, name in sorted(sprints, key=lambda ref: ref[1]):
+                version = versions.get(sprint_id or name)
+                if not isinstance(version, dict) or not version.get("openproject_id"):
+                    continue
+                if project_id and version.get("project_id") and str(version["project_id"]) != str(project_id):
+                    continue
+                assignments.append({"id": wp_id, "version_id": int(version["openproject_id"])})
+                break
+            else:
+                unresolved_sprints.append(key)
         return ComponentResult(
-            success=failed == 0,
-            message=message,
-            updated=updated,
-            failed=failed,
+            success=True,
+            data={"parents": parents, "assignments": assignments, "values": values},
             details={
-                "sprint_cf_updates": len(sprint_text),
-                "version_assignments": len(version_updates),
-                "parent_links": len(parent_links),
-                "cf_available": True,
+                **extracted.details,
+                "invalid_mappings": invalid,
+                "unresolved_epics": unresolved_epics,
+                "unresolved_parents": unresolved_parents,
+                "unresolved_sprints": unresolved_sprints,
             },
         )
 
+    def _apply_batches(self, rows: list[dict], write: Callable, operation: str) -> tuple[int, int]:
+        """Count confirmed rows and treat every unacknowledged row as failed."""
+        updated = 0
+        for batch in batched(rows, _BATCH_SIZE, strict=False):
+            try:
+                result = write(list(batch))
+                count = result["updated"]
+                if type(count) is not int or not 0 <= count <= len(batch):
+                    self.logger.error("Invalid %s update count: %r", operation, count)
+                    continue
+                updated += count
+                if count != len(batch):
+                    self.logger.error("Partial %s batch: %s", operation, result)
+            except Exception:
+                self.logger.exception("Failed %s batch of %d", operation, len(batch))
+        return updated, len(rows) - updated
+
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
+        data = mapped.data or {}
+        details = dict(mapped.details)
+        failed = sum(len(value) for value in mapped.details.values())
+        updated = 0
+        for operation, rows in (("parent_links", data["parents"]), ("version_assignments", data["assignments"])):
+            count, errors = self._apply_batches(rows, self.op_client.batch_update_work_packages, operation)
+            details[operation] = count
+            updated += count
+            failed += errors
+
+        values = data["values"]
+        cf_id = 0
+        if values:
+            try:
+                cf_id = self._ensure_wp_custom_field(SPRINT_CF_NAME, "text")
+            except Exception:
+                self.logger.exception("Unable to prepare the Sprint field for %d work packages", len(values))
+        details["cf_available"] = bool(cf_id)
+        count = 0
+        if cf_id:
+            for row in values:
+                row["custom_field_id"] = cf_id
+            count, _ = self._apply_batches(values, self.op_client.bulk_set_wp_custom_field_values, "sprint fields")
+        details["sprint_cf_updates"] = count
+        failed += len(values) - count
+        return ComponentResult(
+            success=failed == 0,
+            message=f"Sprint and epic metadata: {updated + count} confirmed, {failed} unresolved or failed",
+            updated=updated + count,
+            failed=failed,
+            details=details,
+        )
+
     def run(self) -> ComponentResult:
-        """Execute the sprint/epic migration pipeline."""
-        self.logger.info("Starting sprint and epic migration adjustments")
-
-        extracted = self._extract()
-        if not extracted.success:
-            self.logger.error(
-                "Sprint/Epic extraction failed: %s",
-                extracted.message or extracted.error,
-            )
-            return extracted
-
-        mapped = self._map(extracted)
-        if not mapped.success:
-            self.logger.error(
-                "Sprint/Epic mapping failed: %s",
-                mapped.message or mapped.error,
-            )
-            return mapped
-
-        result = self._load(mapped)
-        if result.success:
-            self.logger.info(
-                "Sprint/Epic migration completed (updated=%s failed=%s)",
-                result.updated,
-                result.failed,
-            )
-        else:
-            self.logger.error(
-                "Sprint/Epic migration encountered failures (failed=%s)",
-                result.failed,
-            )
-        return result
+        """Run on each pass: memberships also depend on mappings from earlier components."""
+        return self._run_etl_pipeline("Sprint and epic")

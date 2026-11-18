@@ -47,7 +47,7 @@ class OpenProjectContentService:
         name: str,
         description: str | None = None,
         project_id: int | None = None,
-        is_public: bool = True,
+        is_public: bool | None = True,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create or update an OpenProject query (saved filter).
@@ -72,7 +72,7 @@ class OpenProjectContentService:
             "name": name,
             "description": description,
             "project_id": coerced_project_id,
-            "is_public": bool(is_public),
+            "is_public": is_public,
             "options": options or {},
         }
 
@@ -121,11 +121,13 @@ JSON_DATA
               query.description = description.to_s
             end
 
-            is_public = !!input['is_public']
-            if query.respond_to?(:public=)
-              query.public = is_public
-            elsif query.respond_to?(:write_attribute) && query.has_attribute?(:public)
-              query.write_attribute(:public, is_public)
+            if query.new_record? || !input['is_public'].nil?
+              is_public = !!input['is_public']
+              if query.respond_to?(:public=)
+                query.public = is_public
+              elsif query.has_attribute?(:public)
+                query.write_attribute(:public, is_public)
+              end
             end
 
             filters = input.dig('options', 'filters')

@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from src.application.components.agile_board_migration import AgileBoardMigration
+from src.utils.change_detector import ChangeDetector
 
 
 class DummyJira:
@@ -126,7 +127,7 @@ def test_agile_board_migration_skips_unmapped_project_boards_and_sprints(
 ) -> None:
     """A board / sprint whose projectKey isn't in project_mapping is skipped."""
     boards = [
-        {"id": 2, "name": "Lonely Board", "type": "kanban", "location": {"projectKey": "MISSING"}},
+        {"id": 2, "name": "Lonely Board", "type": "scrum", "location": {"projectKey": "MISSING"}},
     ]
     sprints = {2: [{"id": 99, "name": "Orphan Sprint", "state": "active"}]}
     op = DummyOp()
@@ -168,7 +169,7 @@ def test_agile_board_migration_closed_sprint_maps_to_closed_version(
 def test_agile_board_migration_handles_jira_failure_gracefully(
     _mock_mappings: None,
 ) -> None:
-    """If get_boards raises, _extract returns success with empty data (matches source)."""
+    """A Jira outage must be distinguishable from an empty inventory."""
 
     class BoomJira:
         def get_boards(self):
@@ -179,7 +180,28 @@ def test_agile_board_migration_handles_jira_failure_gracefully(
 
     extracted = mig._extract()
 
-    # Source swallows in _get_current_entities_for_type → returns []
-    # then _extract wraps that in a successful empty payload.
-    assert extracted.success is True
-    assert extracted.data == {"boards": [], "sprints": []}
+    assert not extracted.success
+    assert "jira down" in extracted.message
+
+
+def test_server_board_without_location_uses_projects_endpoint(_mock_mappings, monkeypatch, tmp_path):
+    jira = DummyJira(boards=[{"id": 1, "name": "Server Board", "type": "scrum"}])
+    monkeypatch.setattr(jira, "get_board_projects", lambda board: [{"key": "PROJ"}], raising=False)
+    op = DummyOp()
+    mig = AgileBoardMigration(jira_client=jira, op_client=op)
+    mig.change_detector = ChangeDetector(tmp_path)
+    result = mig.run_with_change_detection("agile_boards")
+    assert result.success
+    assert op.created_queries[0]["project_id"] == 11
+    assert op.created_queries[0]["is_public"] is None
+
+
+def test_ambiguous_board_projects_are_reported(_mock_mappings, monkeypatch):
+    jira = DummyJira(boards=[{"id": 1, "name": "Shared Board", "type": "scrum"}])
+    monkeypatch.setattr(jira, "get_board_projects", lambda board: [{"key": "A"}, {"key": "B"}], raising=False)
+    op = DummyOp()
+    result = AgileBoardMigration(jira_client=jira, op_client=op).run()
+    assert not result.success
+    assert result.details["unresolved_projects"][0]["board_id"] == 1
+    assert result.details["unresolved_projects"][0]["candidate_projects"] == ["A", "B"]
+    assert not op.created_queries

@@ -759,6 +759,10 @@ class JiraClient:
         """Thin delegator over ``self.agile.get_boards``."""
         return self.agile.get_boards()
 
+    def get_board_projects(self, board_id: int) -> list[dict[str, Any]]:
+        """Return projects covered by the board."""
+        return self.agile.get_board_projects(board_id)
+
     def get_board_configuration(self, board_id: int) -> dict[str, Any]:
         """Thin delegator over ``self.agile.get_board_configuration``."""
         return self.agile.get_board_configuration(board_id)

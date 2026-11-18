@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Dockerfile.test` now includes OCI labels and a `HEALTHCHECK`.
 - All Python dependencies upgraded to their latest compatible releases (see commit history and `uv.lock`).
 
+### Fixed
+- Restore sprint membership and epic parents during a cold full migration, preserve Jira fix versions and report unresolved assignments.
+- Support OpenProject 17.9 type variants for work-package fields, provenance and workflow transitions. Use the OpenProject version end-date attribute.
+
 ### Removed
 - Redundant `.github/workflows/container-test.yml` (its job moved into the new `ci.yml`).
 

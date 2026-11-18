@@ -24,7 +24,7 @@ This document provides a comprehensive mapping of how Jira entities are transfor
 | **Component** | Custom Field Value | `components` | On "Component" CF |
 | **Version** | Version | `versions` | Release tracking |
 | **Sprint** | Version | `agile_boards` + `sprint_epic` | Not OpenProject's native Sprint object — see [§11](#11-agile-migration) |
-| **Epic** | Work Package (Epic type) | `sprint_epic` | Hierarchy parent |
+| **Epic / subtask parent** | Work package parent | `sprint_epic` | A subtask keeps its immediate Jira parent. Other issues use Epic Link. |
 | **Label** | Tag | `labels` / `native_tags` | Categorization |
 | **Attachment** | Attachment | `attachments` | File transfer |
 | **Comment** | Journal Entry | `work_packages` | Activity history |
@@ -371,11 +371,11 @@ applies the sprint to the work packages:
 
 | Jira | OpenProject | Notes |
 |------|-------------|-------|
-| Issue's sprint | `work_package.version_id` | Only the **first** sprint that resolves via the `sprint` mapping |
+| Issue's sprint | `work_package.version_id` | First matching sprint in name order, only for issues without a Jira fix version |
 | Issue's sprint(s) | CF "Sprint" (text) | **All** names, de-duplicated, sorted, comma-separated |
 
 An issue that belonged to several sprints therefore keeps every sprint name in
-the "Sprint" custom field, but is assigned to only one version.
+the "Sprint" custom field. A Jira fix version takes precedence for the work package’s version.
 
 #### Jira Board → OpenProject Saved Query
 
@@ -386,13 +386,16 @@ name: "Scrum Board"          ──→  name: "[Board] Scrum Board"
 type / filter JQL / statuses ──→  description (plain text)
 —                            ──→  filters: []  (not derived)
 —                            ──→  columns: []  (not derived)
-—                            ──→  is_public: true
+—                            ──→  private on creation (sharing can be configured in OpenProject)
 ```
 
-The board type, its original JQL and its column/status list are recorded in the
-query description for reference only — they are **not** translated into query
-filters or column configuration. The resulting query lists the project's work
-packages with OpenProject's default filters.
+The migration records the board type, available JQL and column status IDs in the
+agile snapshot. On targets with a query description these also go into the
+description. OpenProject 17.9.7 has no query description column. The saved
+query uses the project's default filters. If Jira Server omits the board's
+location, the importer uses the board projects endpoint. Boards spanning
+multiple candidate projects appear in the component report for assignment.
+
 
 #### Why boards and sprints are not mapped 1:1
 
@@ -434,10 +437,10 @@ targets.
 The recommended migration sequence ensures dependencies are satisfied. The
 executable order is `DEFAULT_COMPONENT_SEQUENCE` in
 `src/application/components/registry.py`; where the two differ, the registry
-wins. Known divergence: the registry runs `agile_boards` and `sprint_epic`
-*before* `work_packages_skeleton`, so on a cold full run `sprint_epic` finds an
-empty `work_package` mapping and applies no version assignments, parent links or
-"Sprint" custom-field values.
+wins. The full profile creates sprint versions in `agile_boards` and assigns
+them in `sprint_epic` after work package content. The `metadata_refresh` profile
+expects work packages from an earlier run. Missing mappings and unconfirmed
+writes appear in the component result.
 
 ```
 1. FOUNDATION

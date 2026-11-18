@@ -111,7 +111,6 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     # === Agile: Workflows, Boards, Sprints ===
     "workflows",
     "agile_boards",
-    "sprint_epic",
     # === Phase 1: Work Package Skeletons (no content) ===
     "work_packages_skeleton",
     # === Phase 2: Attachments (creates mapping for URL conversion) ===
@@ -125,6 +124,7 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "attachment_recovery",
     # === Phase 3: Work Package Content (with resolved attachment URLs) ===
     "work_packages_content",
+    "sprint_epic",
     # Backfill assignee + provenance CFs on existing WPs (closes Bug A
     # for pre-#175 WPs and the under-populated CF warnings flagged by
     # the audit; idempotent — only sets fields where the OP value is
