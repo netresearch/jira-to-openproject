@@ -48,7 +48,7 @@ def _make_migration(tmp_path: Path) -> WorkPackageSkeletonMigration:
     instance = WorkPackageSkeletonMigration.__new__(WorkPackageSkeletonMigration)
     instance.logger = _logger_stub()
     instance.work_package_mapping = {}
-    instance.work_package_mapping_file = tmp_path / WorkPackageSkeletonMigration.WORK_PACKAGE_MAPPING_FILE
+    instance.work_package_mapping_file = tmp_path / WorkPackageSkeletonMigration.WORK_PACKAGE_MAPPING_FILENAME
     # Default: no save attempted. Tests that exercise the "save
     # failed" path explicitly set this to ``False``; tests that
     # exercise the "save succeeded" path set it to ``True``. Tests
