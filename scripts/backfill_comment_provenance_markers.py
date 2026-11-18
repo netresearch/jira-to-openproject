@@ -504,9 +504,19 @@ def run(
 # ---------------------------------------------------------------------------
 
 
+def _mapping_path(data_dir: Path, filename: str) -> Path:
+    """Read migration mappings from regular files in the selected local data directory."""
+    root = data_dir.resolve()
+    path = (root / filename).resolve()
+    if not path.is_relative_to(root) or (path.exists() and not path.is_file()):
+        msg = f"Invalid local mapping file: {filename}"
+        raise ValueError(msg)
+    return path
+
+
 def _load_wp_mapping(data_dir: Path, project_key: str) -> list[dict[str, Any]]:
     """Load work_package_mapping.json and filter to the given project key."""
-    mapping_path = data_dir / "work_package_mapping.json"
+    mapping_path = _mapping_path(data_dir, "work_package_mapping.json")
     if not mapping_path.exists():
         raise FileNotFoundError(f"Mapping file not found: {mapping_path}")
 
@@ -560,7 +570,7 @@ def _load_user_mapping(data_dir: Path) -> dict[str, int]:
     Later insertions do not overwrite earlier ones so the higher-priority probe
     fields win in the rare case two entries share a secondary field value.
     """
-    mapping_path = data_dir / "user_mapping.json"
+    mapping_path = _mapping_path(data_dir, "user_mapping.json")
     if not mapping_path.exists():
         return {}
 
@@ -641,16 +651,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         wp_mapping = _load_wp_mapping(data_dir, project_key)
-    except FileNotFoundError as exc:
-        logger.error("Cannot load work_package_mapping: %s", exc)
-        return 1
-    except Exception as exc:
-        logger.error("Failed to load work_package_mapping: %s", exc)
+        user_mapping = _load_user_mapping(data_dir)
+    except (OSError, ValueError, TypeError) as exc:
+        logger.error("Cannot load migration mappings: %s", exc)
         return 1
 
     logger.info("Loaded %d WP entries for project %s", len(wp_mapping), project_key)
 
-    user_mapping = _load_user_mapping(data_dir)
     logger.info("Loaded %d user mapping entries", len(user_mapping))
 
     from src.infrastructure.jira.jira_client import JiraClient  # noqa: PLC0415

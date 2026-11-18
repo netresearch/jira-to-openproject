@@ -23,7 +23,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -97,15 +97,6 @@ app = FastAPI(
 # 503 message.
 _DASHBOARD_DIR = Path(__file__).resolve().parent
 _DASHBOARD_TEMPLATE_PATH = _DASHBOARD_DIR / "templates" / "dashboard.html"
-_dashboard_html_cache: str | None = None
-
-
-def _load_dashboard_html() -> str:
-    """Read and cache the dashboard SPA shell on first use."""
-    global _dashboard_html_cache  # noqa: PLW0603 — module-level cache by design
-    if _dashboard_html_cache is None:
-        _dashboard_html_cache = _DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
-    return _dashboard_html_cache
 
 
 # Static assets directory may be absent in minimal runtime layouts; only
@@ -368,22 +359,13 @@ async def update_migration_progress() -> None:
             await asyncio.sleep(5)
 
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard() -> HTMLResponse:
-    """Serve the main dashboard page.
-
-    The template is a Vue.js SPA shell; `{{ ... }}` expressions inside it are
-    Vue-side interpolations, not Jinja, so we return the file verbatim to
-    avoid a Jinja ↔ Vue delimiter clash.
-    """
-    try:
-        return HTMLResponse(_load_dashboard_html())
-    except FileNotFoundError as exc:
+@app.get("/", response_class=HTMLResponse, responses={503: {"description": "Dashboard template unavailable"}})
+def dashboard() -> FileResponse:
+    """Serve the packaged Vue template as a static HTML file."""
+    if not _DASHBOARD_TEMPLATE_PATH.is_file():
         logger.error("Dashboard template missing at %s", _DASHBOARD_TEMPLATE_PATH)
-        raise HTTPException(
-            status_code=503,
-            detail=(f"Dashboard template not available in this install layout (expected {_DASHBOARD_TEMPLATE_PATH})."),
-        ) from exc
+        raise HTTPException(status_code=503, detail="Dashboard template not available in this installation.")
+    return FileResponse(_DASHBOARD_TEMPLATE_PATH, media_type="text/html")
 
 
 @app.websocket("/ws/progress")
