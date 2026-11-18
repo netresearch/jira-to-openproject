@@ -14,7 +14,8 @@ Part of the layered client architecture where:
 
 import json
 import re
-import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from shlex import quote
 
@@ -227,6 +228,23 @@ class DockerClient:
             msg = f"Failed to copy file to container: {e}"
             raise ValueError(msg) from e
 
+    @contextmanager
+    def _remote_transfer_file(self) -> Iterator[Path]:
+        """Allocate a private host directory for one transfer in either direction."""
+        output, _, status = self.ssh_client.execute_command("mktemp -d -t j2o-transfer.XXXXXXXXXX", check=True)
+        directory = Path(output.strip())
+        if status or not directory.is_absolute() or not directory.name.startswith("j2o-transfer."):
+            msg = "SSH host did not allocate a private transfer directory"
+            raise ValueError(msg)
+        path = directory / "payload"
+        try:
+            yield path
+        finally:
+            try:
+                self.ssh_client.execute_command(f"rm -f -- {quote(str(path))} && rmdir -- {quote(str(directory))}")
+            except Exception:
+                logger.exception("Failed to clean up private SSH transfer directory %s", directory)
+
     def copy_file_from_container(
         self,
         container_path: Path | str,
@@ -246,55 +264,16 @@ class DockerClient:
             raise FileNotFoundError(msg)
 
         try:
-            # Use a temporary file on the remote server for intermediate storage
-            temp_filename = f"docker_transfer_{uuid.uuid4().hex}.tmp"
-            remote_temp_path = f"/tmp/{temp_filename}"
-
-            # Step 1: Copy from container to temporary location on remote server
-            cmd = f"docker cp {quote(self.container_name)}:{quote(str(container_path))} {quote(remote_temp_path)}"
-
-            _stdout, stderr, returncode = self.ssh_client.execute_command(
-                cmd,
-                check=True,
-                timeout=self.command_timeout,
-            )
-
-            if returncode != 0:
-                logger.error("Failed to copy file from container: %s", stderr)
-                msg = f"Failed to copy file from container: {stderr}"
-                raise ValueError(msg)
-
-            # Step 2: Copy from remote server to actual local path
-            try:
-                # Ensure local directory exists
+            with self._remote_transfer_file() as remote_path:
+                command = (
+                    f"docker cp {quote(self.container_name)}:{quote(str(container_path))} {quote(str(remote_path))}"
+                )
+                _, stderr, status = self.ssh_client.execute_command(command, check=True, timeout=self.command_timeout)
+                if status:
+                    msg = f"Failed to copy file from container: {stderr}"
+                    raise ValueError(msg)
                 local_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Copy from remote to local
-                result_path = self.ssh_client.copy_file_from_remote(
-                    remote_temp_path,
-                    local_path,
-                )
-
-                logger.debug(
-                    "Successfully copied file from container: %s -> %s",
-                    container_path,
-                    local_path,
-                )
-
-                return result_path
-
-            finally:
-                # Step 3: Clean up temporary file on remote server
-                try:
-                    cleanup_cmd = f"rm -f {quote(remote_temp_path)}"
-                    self.ssh_client.execute_command(cleanup_cmd, check=False)
-                except Exception as cleanup_error:
-                    logger.warning(
-                        "Failed to clean up temporary file %s: %s",
-                        remote_temp_path,
-                        cleanup_error,
-                    )
-
+                return self.ssh_client.copy_file_from_remote(str(remote_path), local_path)
         except FileNotFoundError:
             # Re-raise file not found errors
             raise
@@ -543,10 +522,7 @@ class DockerClient:
         local_path = Path(local_path) if isinstance(local_path, str) else local_path
         container_path = Path(container_path) if isinstance(container_path, str) else container_path
 
-        # Use a temporary path on the remote server
-        remote_temp_path = Path(f"/tmp/{local_path.name}")
-
-        try:
+        with self._remote_transfer_file() as remote_temp_path:
             # Step 1: Transfer from local to remote server via SSH
             logger.debug(
                 "Copying file from local to remote: %s -> %s",
@@ -590,15 +566,3 @@ class DockerClient:
                 local_path,
                 container_path,
             )
-
-        finally:
-            # Clean up the temporary file on the remote server
-            try:
-                quoted_remote = quote(remote_temp_path.as_posix())
-                self.ssh_client.execute_command(f"rm -f {quoted_remote}")
-            except Exception:
-                # Non-critical error, just log it
-                logger.exception(
-                    "Failed to clean up temporary file: %s",
-                    remote_temp_path,
-                )

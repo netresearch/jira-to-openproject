@@ -108,7 +108,7 @@ class SSHClient:
     - Propagates standard subprocess exceptions for timeouts and process errors
     """
 
-    SSH_CONTROL_PATH = "/tmp/ssh-j2o-%r@%h:%p"
+    SSH_CONTROL_PATH = "~/.ssh/j2o-%C"
     SSH_CONTROL_PERSIST_SECONDS = "300"
 
     def __init__(

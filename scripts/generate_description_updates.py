@@ -9,9 +9,11 @@ Uses existing J2O infrastructure to fetch Jira descriptions and map to OpenProje
 import json
 import os
 import sys
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 # Add project root to path
-sys.path.insert(0, "/home/sme/p/j2o")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.infrastructure.jira.jira_client import JiraClient
 from src.utils.markdown_converter import MarkdownConverter
@@ -23,7 +25,10 @@ def main():
     print("=" * 60)
 
     # Load existing work package mapping
-    wp_mapping_file = "/home/sme/p/j2o/var/data/work_package_mapping.json"
+    from src import config
+
+    data_dir = Path(config.get_path("data"))
+    wp_mapping_file = data_dir / "work_package_mapping.json"
 
     print(f"\nLoading work package mapping from {wp_mapping_file}...")
     if not os.path.exists(wp_mapping_file):
@@ -129,17 +134,17 @@ def main():
     print(f"  Issues not in mapping: {issues_not_in_mapping}")
     print(f"  Updates to apply: {len(updates)}")
 
-    # Save to JSON file
-    output_file = "/home/sme/p/j2o/var/data/nrs_description_updates.json"
-    with open(output_file, "w") as f:
-        json.dump(updates, f, indent=2)
-    print(f"\nSaved updates to {output_file}")
-
-    # Also save to /tmp for the Ruby script
-    tmp_file = "/tmp/nrs_description_updates.json"
-    with open(tmp_file, "w") as f:
-        json.dump(updates, f, indent=2)
-    print(f"Copied to {tmp_file}")
+    # Publish one complete file in the configured migration data directory.
+    output_file = data_dir / "nrs_description_updates.json"
+    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=data_dir, delete=False) as staged:
+        staged_path = Path(staged.name)
+        try:
+            json.dump(updates, staged, indent=2)
+            staged.close()
+            staged_path.replace(output_file)
+        finally:
+            staged_path.unlink(missing_ok=True)
+    print(f"Saved updates to {output_file}")
 
     return 0
 
