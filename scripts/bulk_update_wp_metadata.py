@@ -78,6 +78,21 @@ def build_lookup_tables(data_dir: Path) -> dict[str, dict]:
     }
 
 
+def _mapped_metadata_fields(meta: dict, priority_mapping: dict, user_mapping: dict) -> dict:
+    fields = {}
+    priority = meta.get("priority")
+    if priority and priority in priority_mapping:
+        fields["priority_id"] = priority_mapping[priority]
+    for source, target in (("reporter", "author_id"), ("assignee", "assigned_to_id")):
+        name = meta.get(source)
+        if name and (user_id := user_mapping.get(name, {}).get("openproject_id")):
+            fields[target] = user_id
+    for source, target in (("created", "created_at"), ("updated", "updated_at")):
+        if timestamp := meta.get(source):
+            fields[target] = timestamp
+    return fields
+
+
 def prepare_update_batch(
     lookups: dict[str, dict],
     jira_keys: list[str],
@@ -104,31 +119,7 @@ def prepare_update_batch(
             "fields": {},
         }
 
-        # Priority
-        jira_priority = meta.get("priority")
-        if jira_priority and jira_priority in priority_mapping:
-            update["fields"]["priority_id"] = priority_mapping[jira_priority]
-
-        # Author (from Jira reporter)
-        jira_reporter = meta.get("reporter")
-        if jira_reporter and jira_reporter in user_mapping:
-            reporter_entry = user_mapping[jira_reporter]
-            if reporter_entry.get("openproject_id"):
-                update["fields"]["author_id"] = reporter_entry["openproject_id"]
-
-        # Assignee
-        jira_assignee = meta.get("assignee")
-        if jira_assignee and jira_assignee in user_mapping:
-            assignee_entry = user_mapping[jira_assignee]
-            if assignee_entry.get("openproject_id"):
-                update["fields"]["assigned_to_id"] = assignee_entry["openproject_id"]
-
-        # Timestamps
-        if meta.get("created"):
-            update["fields"]["created_at"] = meta["created"]
-        if meta.get("updated"):
-            update["fields"]["updated_at"] = meta["updated"]
-
+        update["fields"] = _mapped_metadata_fields(meta, priority_mapping, user_mapping)
         if update["fields"]:
             updates.append(update)
 
