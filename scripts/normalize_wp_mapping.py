@@ -146,9 +146,11 @@ def run(argv: list[str] | None = None) -> int:
     target) — those map to logged messages and a ``0`` exit so the
     script is safe to chain in user pipelines.
     """
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+    _normalize_mapping_file(_build_parser().parse_args(argv))
+    return 0
 
+
+def _normalize_mapping_file(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -159,23 +161,23 @@ def run(argv: list[str] | None = None) -> int:
 
     if not target.exists():
         logger.info("No mapping file at %s; nothing to normalise.", target)
-        return 0
+        return
 
     try:
         text = target.read_text(encoding="utf-8")
     except OSError as exc:
         logger.warning("Could not read %s: %s", target, exc)
-        return 0
+        return
 
     if not text.strip():
         logger.info("Mapping file %s is empty; nothing to normalise.", target)
-        return 0
+        return
 
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as exc:
         logger.warning("Mapping file %s is malformed JSON: %s", target, exc)
-        return 0
+        return
 
     if not isinstance(raw, dict):
         logger.warning(
@@ -183,7 +185,7 @@ def run(argv: list[str] | None = None) -> int:
             target,
             type(raw).__name__,
         )
-        return 0
+        return
 
     dict_count, int_count = _classify_legacy_shapes(raw)
     normalized, dropped = normalize_wp_mapping(raw)
@@ -205,13 +207,13 @@ def run(argv: list[str] | None = None) -> int:
             old_value = raw.get(key)
             if old_value != new_value:
                 print(f"would update {key}: {old_value!r} -> {new_value!r}")
-        return 0
+        return
 
     try:
         _atomic_write_json(target, normalized)
     except OSError as exc:
         logger.warning("Could not write normalised mapping to %s: %s", target, exc)
-        return 0
+        return
 
     logger.info(
         "Normalized %d input entries → %d kept (%d were already dict-shape, %d were int-shape, %d were dropped)",
@@ -221,7 +223,6 @@ def run(argv: list[str] | None = None) -> int:
         int_count,
         dropped,
     )
-    return 0
 
 
 def main() -> None:

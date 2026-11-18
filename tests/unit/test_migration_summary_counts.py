@@ -73,3 +73,19 @@ def test_extract_counts_final_fallback_sum() -> None:
     )
     sc, fc, tc = _extract_counts(result)
     assert (sc, fc, tc) == (4, 0, 4)
+
+
+def test_change_detection_failure_after_write_is_not_retried_via_legacy_run() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from src.migration import _run_component
+
+    tracked = Mock(side_effect=AttributeError("missing result attribute after write"))
+    legacy = Mock()
+    component = SimpleNamespace(run_with_change_detection=tracked, run=legacy)
+    result = _run_component("test_component", component)
+    assert result.success is False
+    assert result.errors == ["missing result attribute after write"]
+    tracked.assert_called_once()
+    legacy.assert_not_called()

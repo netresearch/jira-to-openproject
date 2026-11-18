@@ -29,7 +29,7 @@ class MockTime:
 
 def patch_time_sleep():
     """Patch time.sleep to do nothing for faster tests."""
-    return patch("time.sleep", lambda x: None)
+    return patch("time.sleep", return_value=None)
 
 
 def patch_time_module():

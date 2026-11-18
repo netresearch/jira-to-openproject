@@ -14,6 +14,8 @@ import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
+from tempfile import gettempdir
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -119,7 +121,7 @@ class HealthCheckClient:
         docker_client: DockerClient,
         container_name: str,
         *,
-        local_temp_path: str = "/tmp",
+        local_temp_path: str | None = None,
         thresholds: dict[str, int] | None = None,
     ) -> None:
         """Initialize the health check client.
@@ -135,7 +137,7 @@ class HealthCheckClient:
         self.ssh_client = ssh_client
         self.docker_client = docker_client
         self.container_name = container_name
-        self.local_temp_path = local_temp_path
+        self.local_temp_path = local_temp_path if local_temp_path is not None else gettempdir()
         self.thresholds = thresholds or {}
         self._baseline_snapshot: HealthSnapshot | None = None
 
@@ -442,13 +444,14 @@ class HealthCheckClient:
 
     def check_cleanup_capability(self) -> HealthStatus:
         """Test that cleanup mechanism works by creating and deleting a test file."""
-        test_file = f"/tmp/j2o_health_check_test_{int(time.time())}"
         try:
             # Create test file
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {shlex.quote(self.container_name)} touch {shlex.quote(test_file)}",
+                f"docker exec {shlex.quote(self.container_name)} env -u TMPDIR mktemp -t j2o-health.XXXXXXXXXX",
+                check=False,
             )
-            if rc != 0:
+            test_file = stdout.strip()
+            if rc != 0 or not Path(test_file).is_absolute() or not Path(test_file).name.startswith("j2o-health."):
                 return HealthStatus(
                     name="cleanup_capability",
                     healthy=False,
@@ -461,7 +464,8 @@ class HealthCheckClient:
 
             # Delete test file
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {shlex.quote(self.container_name)} rm -f {shlex.quote(test_file)}",
+                f"docker exec {shlex.quote(self.container_name)} rm -f -- {shlex.quote(test_file)}",
+                check=False,
             )
             if rc != 0:
                 return HealthStatus(
@@ -476,9 +480,10 @@ class HealthCheckClient:
 
             # Verify file is gone
             stdout, stderr, rc = self.ssh_client.execute_command(
-                f"docker exec {shlex.quote(self.container_name)} test -f {shlex.quote(test_file)} && echo exists || echo deleted",
+                f"docker exec {shlex.quote(self.container_name)} test ! -e {shlex.quote(test_file)}",
+                check=False,
             )
-            if "exists" in stdout:
+            if rc != 0:
                 return HealthStatus(
                     name="cleanup_capability",
                     healthy=False,
@@ -486,7 +491,11 @@ class HealthCheckClient:
                     threshold="success",
                     units="",
                     severity="ERROR",
-                    message="Test file still exists after deletion",
+                    message=(
+                        "Test file still exists after deletion"
+                        if rc == 1 and not stderr
+                        else f"Cannot verify cleanup (exit {rc}): {stderr}"
+                    ),
                 )
 
             return HealthStatus(
@@ -641,11 +650,7 @@ class HealthCheckClient:
 
         # Log all check results
         for name, check in snapshot.checks.items():
-            level = (
-                logging.ERROR
-                if check.severity == "ERROR"
-                else (logging.WARNING if check.severity == "WARNING" else logging.INFO)
-            )
+            level = {"ERROR": logging.ERROR, "WARNING": logging.WARNING}.get(check.severity, logging.INFO)
             logger.log(level, "Health check [%s]: %s", name, check.message)
             if not check.healthy:
                 prefix = "CRITICAL: " if check.severity == "ERROR" else "WARNING: "
@@ -664,6 +669,20 @@ class HealthCheckClient:
             logger.info("Pre-migration health checks PASSED")
 
         return True, issues
+
+    @staticmethod
+    def _trend_warnings(current: HealthSnapshot, previous: HealthSnapshot) -> list[str]:
+        warnings = []
+        disk_decrease = previous.container_disk_free_mb - current.container_disk_free_mb
+        file_increase = current.temp_file_count - previous.temp_file_count
+
+        if disk_decrease > 500:
+            warnings.append(f"Disk space decreased by {disk_decrease}MB since last check")
+
+        if file_increase > 100:
+            warnings.append(f"Temp file count increased by {file_increase} since last check")
+
+        return warnings
 
     def run_during_migration_check(
         self,
@@ -698,14 +717,7 @@ class HealthCheckClient:
 
         # Check for degradation trends
         if previous:
-            disk_decrease = previous.container_disk_free_mb - current.container_disk_free_mb
-            file_increase = current.temp_file_count - previous.temp_file_count
-
-            if disk_decrease > 500:
-                warnings.append(f"Disk space decreased by {disk_decrease}MB since last check")
-
-            if file_increase > 100:
-                warnings.append(f"Temp file count increased by {file_increase} since last check")
+            warnings.extend(self._trend_warnings(current, previous))
 
         # Update stored snapshot for next comparison
         self._baseline_snapshot = current

@@ -74,6 +74,47 @@ class JiraFieldService:
             self._logger.exception("Failed to fetch issue property: %s %s", issue_key, property_key)
             return None
 
+    def _createmeta_fields(self, project_key: str | None, issue_type: dict[str, Any]) -> dict[str, Any]:
+        client = self._client
+        issue_type_id = issue_type.get("id")
+        # Use the createmeta endpoint with expansion for fields (query params form)
+        # API shape (v2): /rest/api/2/issue/createmeta?
+        #   projectKeys=KEY&issuetypeIds=ID&expand=projects.issuetypes.fields
+        params = {
+            "projectKeys": project_key,
+            "issuetypeIds": issue_type_id,
+            "expand": "projects.issuetypes.fields",
+        }
+        path = "/rest/api/2/issue/createmeta"
+        self._logger.debug(
+            "Trying createmeta for project=%s issuetype=%s (%s)",
+            project_key,
+            issue_type_id,
+            issue_type.get("name"),
+        )
+
+        try:
+            meta_response = client._make_request(path, params=params)
+        except JiraApiError as e:
+            self._logger.debug("createmeta request failed: %s", e)
+            return {}
+
+        if not meta_response or meta_response.status_code != HTTP_OK:
+            return {}
+
+        meta_data = meta_response.json() or {}
+        projects_arr = meta_data.get("projects") or []
+        if not projects_arr:
+            return {}
+        issuetypes_arr = (projects_arr[0] or {}).get("issuetypes") or []
+        if not issuetypes_arr:
+            return {}
+        fields_map = (issuetypes_arr[0] or {}).get("fields") or {}
+        if not isinstance(fields_map, dict):
+            return {}
+
+        return fields_map
+
     def _get_field_metadata_via_createmeta(self, field_id: str) -> dict[str, Any]:
         """Get field metadata using the issue/createmeta endpoint.
 
@@ -113,47 +154,9 @@ class JiraFieldService:
             for project in projects:
                 project_key = project.get("key")
                 for issue_type in issue_types:
-                    issue_type_id = issue_type.get("id")
-
-                    # Use the createmeta endpoint with expansion for fields (query params form)
-                    # API shape (v2): /rest/api/2/issue/createmeta?
-                    #   projectKeys=KEY&issuetypeIds=ID&expand=projects.issuetypes.fields
-                    params = {
-                        "projectKeys": project_key,
-                        "issuetypeIds": issue_type_id,
-                        "expand": "projects.issuetypes.fields",
-                    }
-                    path = "/rest/api/2/issue/createmeta"
-                    self._logger.debug(
-                        "Trying createmeta for project=%s issuetype=%s (%s)",
-                        project_key,
-                        issue_type_id,
-                        issue_type.get("name"),
-                    )
-
-                    try:
-                        meta_response = client._make_request(path, params=params)
-                    except JiraApiError as e:
-                        self._logger.debug("createmeta request failed: %s", e)
-                        continue
-
-                    if not meta_response or meta_response.status_code != HTTP_OK:
-                        continue
-
-                    meta_data = meta_response.json() or {}
-                    projects_arr = meta_data.get("projects") or []
-                    if not projects_arr:
-                        continue
-                    issuetypes_arr = (projects_arr[0] or {}).get("issuetypes") or []
-                    if not issuetypes_arr:
-                        continue
-                    fields_map = (issuetypes_arr[0] or {}).get("fields") or {}
-                    if not isinstance(fields_map, dict):
-                        continue
-
+                    fields_map = self._createmeta_fields(project_key, issue_type)
                     # Cache all discovered fields
-                    for fid, fdef in fields_map.items():
-                        client.field_options_cache[fid] = fdef
+                    client.field_options_cache.update(fields_map)
 
                     # If this is the field we're looking for, return it immediately
                     if field_id in fields_map:

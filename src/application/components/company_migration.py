@@ -843,7 +843,6 @@ class CompanyMigration(BaseMigration):
               'error_count' => errors.size
             }}
 
-            File.write('/tmp/batch_result_{batch_index}.json', result.to_json)
             result
             """
 
@@ -894,6 +893,41 @@ class CompanyMigration(BaseMigration):
             results["warnings"].append("No company mapping available")
             return results
 
+        companies_to_update = self._mapped_company_metadata()
+        if not companies_to_update:
+            self.logger.warning("No companies with metadata to update")
+            return results
+
+        result_data = self._apply_customer_metadata(companies_to_update)
+        updated_companies = result_data["updated"]
+        errors = result_data["errors"]
+
+        # Update results
+        results["updated"] = len(updated_companies)
+        results["failed"] = len(errors)
+        if errors:
+            results["errors"] = [
+                f"{e.get('tempo_id', 'Unknown')}: {e.get('error', 'Unknown error')}" for e in errors[:10]
+            ]
+            if len(errors) > 10:
+                results["errors"].append(f"...and {len(errors) - 10} more errors")
+
+        # Log results
+        if results["updated"] > 0:
+            self.logger.success(
+                "Updated metadata for %d companies",
+                results["updated"],
+            )
+        if results["failed"] > 0:
+            self.logger.warning(
+                "Failed to update metadata for %d companies",
+                results["failed"],
+            )
+
+        return results
+
+    def _mapped_company_metadata(self) -> list[dict[str, Any]]:
+        """Build metadata only for Tempo companies matched to a destination project."""
         # Find all Tempo companies with OpenProject mapping
         companies_to_update = []
 
@@ -920,13 +954,12 @@ class CompanyMigration(BaseMigration):
             }
 
             # Contact information if available
-            if "lead" in tempo_company:
-                lead = tempo_company.get("lead")
-                if isinstance(lead, dict):
-                    metadata["lead_key"] = lead.get("key", "")
-                    metadata["lead_display_name"] = lead.get("displayName", "")
-                elif isinstance(lead, str):
-                    metadata["lead_key"] = lead
+            lead = tempo_company.get("lead")
+            if isinstance(lead, dict):
+                metadata["lead_key"] = lead.get("key", "")
+                metadata["lead_display_name"] = lead.get("displayName", "")
+            elif isinstance(lead, str):
+                metadata["lead_key"] = lead
 
             # Additional information from raw data if available
             for field in [
@@ -946,38 +979,14 @@ class CompanyMigration(BaseMigration):
 
             companies_to_update.append(metadata)
 
-        if not companies_to_update:
-            self.logger.warning("No companies with metadata to update")
-            return results
+        return companies_to_update
 
-        # Write data to a temp file
-        temp_file_path = Path(self.data_dir).joinpath("company_metadata.json")
-        with temp_file_path.open("w") as f:
-            json.dump(companies_to_update, f, indent=2)
-
-        # Transfer file to container
-        container_temp_path = Path("/tmp/company_metadata.json")
-        result_file_local = Path(self.data_dir).joinpath("company_metadata_result.json")
-
-        self.op_client.transfer_file_to_container(temp_file_path, container_temp_path)
-
-        # Prepare Ruby script to update metadata
-        self.logger.info(
-            "Updating metadata for %d companies...",
-            len(companies_to_update),
-        )
-
-        result_file_container = Path("/tmp/company_metadata_result.json")
-
-        # Ruby script to execute
+    def _apply_customer_metadata(self, companies: list[dict[str, Any]]) -> dict:
+        """Update projects and return the Rails runner's verified result."""
+        self.logger.info("Updating metadata for %d companies...", len(companies))
         ruby_script = """
-        metadata_file_path = '/tmp/company_metadata.json'
-        result_file_path = '/tmp/company_metadata_result.json'
-
         require 'json'
-
-        # Load the metadata from the JSON file
-        companies = JSON.parse(File.read(metadata_file_path))
+        companies = input_data
         puts "Loaded metadata for #{companies.size} companies"
 
         updated_companies = []
@@ -1183,7 +1192,7 @@ class CompanyMigration(BaseMigration):
           end
         end
 
-        # Write results to file
+        # Report row outcomes to the migration runner
         result = {
           'status' => 'success',
           'updated' => updated_companies,
@@ -1193,50 +1202,19 @@ class CompanyMigration(BaseMigration):
           'total' => companies.size
         }
 
-        File.write(result_file_path, result.to_json)
+        puts $j2o_start_marker
+        puts result.to_json
+        puts $j2o_end_marker
         """
-
-        # Execute the Ruby script using file-based method to avoid IOError
-        self.op_client.execute_json_query(ruby_script)
-
-        # Get the result data
-        updated_companies = []
-        errors = []
-
-        self.op_client.transfer_file_from_container(
-            result_file_container,
-            result_file_local,
-        )
-
-        with result_file_local.open("r") as f:
-            result_data = json.load(f)
-            if result_data.get("status") == "success":
-                updated_companies = result_data.get("updated", [])
-                errors = result_data.get("errors", [])
-
-        # Update results
-        results["updated"] = len(updated_companies)
-        results["failed"] = len(errors)
-        if errors:
-            results["errors"] = [
-                f"{e.get('tempo_id', 'Unknown')}: {e.get('error', 'Unknown error')}" for e in errors[:10]
-            ]
-            if len(errors) > 10:
-                results["errors"].append(f"...and {len(errors) - 10} more errors")
-
-        # Log results
-        if results["updated"] > 0:
-            self.logger.success(
-                "Updated metadata for %d companies",
-                results["updated"],
-            )
-        if results["failed"] > 0:
-            self.logger.warning(
-                "Failed to update metadata for %d companies",
-                results["failed"],
-            )
-
-        return results
+        response = self.op_client.execute_script_with_data(ruby_script, companies)
+        data = response.get("data") if isinstance(response, dict) and response.get("status") == "success" else None
+        if not isinstance(data, dict) or data.get("status") != "success":
+            msg = "OpenProject did not confirm the company metadata update"
+            raise MigrationError(msg)
+        if not isinstance(data.get("updated"), list) or not isinstance(data.get("errors"), list):
+            msg = "OpenProject returned incomplete company metadata results"
+            raise MigrationError(msg)
+        return data
 
     def _build_account_mapping(self) -> dict[str, Any]:
         """Build account_mapping from tempo_accounts.json.

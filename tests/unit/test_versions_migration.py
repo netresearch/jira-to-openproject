@@ -144,3 +144,24 @@ def test_versions_migration_load_with_numeric_outer_keys(monkeypatch: pytest.Mon
         f"Expected 2 WPs updated but got {ld.updated}. "
         "Likely cause: _load looked up issues with numeric outer key instead of jira_key."
     )
+
+
+def test_refresh_failure_retains_preexisting_project_version_ids():
+    from unittest.mock import MagicMock
+
+    from src.application.components.project_named_records import map_project_records
+    from src.models import ComponentResult
+
+    migration = MagicMock()
+    migration.mappings.get_mapping.return_value = {"AA": {"openproject_id": "4"}}
+    migration.op_client.execute_json_query.side_effect = [
+        [{"id": 11, "project_id": 4, "name": "One"}],
+        OSError("target unavailable"),
+    ]
+    migration.op_client.bulk_create_records.return_value = {"created_count": 1}
+    source = ComponentResult(success=True, data={"by_project": {"AA": ["One", "Two"]}, "issues": {"AA-1": {}}})
+    result = map_project_records(migration, source, "Version")
+    assert result.data == {"version_map": {"4": {"One": 11}}, "issues": {"AA-1": {}}}
+    assert result.created_types == 1
+    migration.op_client.bulk_create_records.assert_called_once_with("Version", [{"name": "Two", "project_id": 4}])
+    migration.mappings.set_mapping.assert_called_once_with("version", {"4": {"One": 11}})

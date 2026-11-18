@@ -11,11 +11,14 @@ in chunks, with support for parallel processing, error handling, and progress tr
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, BinaryIO, TypeVar
+
+import ijson
 
 from src import config
 from src.utils.config_validation import ConfigurationValidationError, SecurityValidator
@@ -464,6 +467,19 @@ class StreamingJSONProcessor:
         self.logger = configure_logging("INFO", None)
         self._shutdown_event = threading.Event()
 
+    def _objects(self, stream: BinaryIO) -> Iterator[Any]:
+        events = ijson.parse(stream, buf_size=self.chunk_size)
+        first = next(events)
+        match first[1]:
+            case "start_map":
+                prefix = ""
+            case "start_array":
+                prefix = "item"
+            case _:
+                msg = "Expected a JSON object or array"
+                raise ValueError(msg)
+        yield from ijson.items(chain((first,), events), prefix)
+
     def process_large_json_file(
         self,
         file_path: Path,
@@ -481,8 +497,6 @@ class StreamingJSONProcessor:
             Processing results
 
         """
-        import ijson  # Requires: pip install ijson
-
         self.logger.info(f"Starting streaming JSON processing: {file_path}")
         start_time = time.time()
 
@@ -492,32 +506,24 @@ class StreamingJSONProcessor:
         errors = []
 
         try:
-            with open(file_path, "rb") as file:
-                # Parse JSON objects incrementally
-                parser = ijson.parse(file)
-
-                for _prefix, event, value in parser:
+            with file_path.open("rb") as stream:
+                for index, item in enumerate(self._objects(stream), start=1):
                     if self._shutdown_event.is_set():
                         break
-
                     try:
-                        if event == "end_map":  # Complete JSON object
-                            result = processor_func(value)
-                            if result is not None:
-                                results.append(result)
-                            processed_count += 1
-
-                            if progress_callback and processed_count % 100 == 0:
-                                progress_callback(processed_count)
-
-                    except Exception as e:
+                        if not isinstance(item, dict):
+                            msg = "Expected a JSON object"
+                            raise ValueError(msg)
+                        result = processor_func(item)
+                        if result is not None:
+                            results.append(result)
+                        processed_count += 1
+                        if progress_callback and processed_count % 100 == 0:
+                            progress_callback(processed_count)
+                    except Exception as exc:
                         failed_count += 1
-                        errors.append(
-                            f"Processing error at item {processed_count}: {e}",
-                        )
-                        self.logger.warning(
-                            f"Failed to process item {processed_count}: {e}",
-                        )
+                        errors.append(f"Processing error at item {index}: {exc}")
+                        self.logger.warning("Failed to process item %d: %s", index, exc)
 
         except Exception as e:
             error_msg = f"File processing error: {e}"
@@ -527,7 +533,7 @@ class StreamingJSONProcessor:
         total_time = time.time() - start_time
 
         result_summary = {
-            "success": failed_count == 0,
+            "success": not errors and not self._shutdown_event.is_set(),
             "processed_count": processed_count,
             "failed_count": failed_count,
             "results": results,

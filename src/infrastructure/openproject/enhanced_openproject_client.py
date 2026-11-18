@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 import warnings
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import requests
@@ -224,9 +224,6 @@ class EnhancedOpenProjectClient(OpenProjectClient):
         results: dict[int, dict[str, Any] | None] = {}
         with ThreadPoolExecutor(max_workers=getattr(self, "parallel_workers", 8)) as ex:
             futures = [ex.submit(self._get_work_package_safe, wp_id) for wp_id in ids_list]
-            # Drain futures to surface exceptions early (orderless)
-            for _ in as_completed(futures):
-                pass
         # Associate deterministically in input order
         for idx, wp_id in enumerate(ids_list):
             try:
@@ -306,13 +303,7 @@ class EnhancedOpenProjectClient(OpenProjectClient):
 class _NoopSSHClient:
     """Test-time stub that satisfies the SSHClient interface without real I/O."""
 
-    def execute_command(
-        self,
-        command: str,
-        timeout: int | None = None,
-        check: bool = True,
-        retry: bool = True,
-    ) -> tuple[str, str, int]:
+    def execute_command(self, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
         return ("", "", 0)
 
 
@@ -321,21 +312,10 @@ class _NoopDockerClient:
 
     container_name = "noop"
 
-    def transfer_file_to_container(
-        self,
-        local_path: Any,
-        container_path: Any,
-    ) -> None:
+    def transfer_file_to_container(self, *args: Any, **kwargs: Any) -> None:
         return None
 
-    def execute_command(
-        self,
-        command: str,
-        user: str | None = None,
-        workdir: Any | None = None,
-        timeout: int | None = None,
-        env: dict[str, str] | None = None,
-    ) -> tuple[str, str, int]:
+    def execute_command(self, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
         return ("", "", 0)
 
 

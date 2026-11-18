@@ -97,6 +97,25 @@ class JiraAgileService:
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
+    def _sprint_page(self, url: str, params: dict[str, Any]) -> Any:
+        try:
+            response = self._client.jira._session.get(url, params=params)
+            response.raise_for_status()
+        except JiraApiError as exc:
+            if "doesn't support sprints" in str(exc):
+                return None
+            raise
+        except exceptions.HTTPError as exc:
+            response = exc.response
+            if (
+                response is not None
+                and response.status_code == HTTP_BAD_REQUEST_MIN
+                and "doesn't support sprints" in (response.text or "")
+            ):
+                return None
+            raise
+        return response.json() or {}
+
     def get_board_sprints(self, board_id: int) -> list[dict[str, Any]]:
         """Return sprints associated with a Jira Software board."""
         client = self._client
@@ -118,33 +137,10 @@ class JiraAgileService:
                     "maxResults": max_results,
                     "state": "future,active,closed",
                 }
-                try:
-                    response = client.jira._session.get(
-                        url,
-                        params=params,
-                    )
-                    response.raise_for_status()
-                except JiraApiError as exc:
-                    message = str(exc)
-                    if "doesn't support sprints" in message:
-                        self._logger.debug(
-                            "Board %s does not support sprints; skipping sprint extraction",
-                            board_id,
-                        )
-                        return []
-                    raise
-                except exceptions.HTTPError as exc:
-                    status = getattr(exc.response, "status_code", None)
-                    if status == HTTP_BAD_REQUEST_MIN and exc.response is not None:
-                        text = exc.response.text or ""
-                        if "doesn't support sprints" in text:
-                            self._logger.debug(
-                                "Board %s does not support sprints; skipping sprint extraction",
-                                board_id,
-                            )
-                            return []
-                    raise
-                payload = response.json()
+                payload = self._sprint_page(url, params)
+                if payload is None:
+                    self._logger.debug("Board %s does not support sprints; skipping sprint extraction", board_id)
+                    return []
                 values = payload.get("values") if isinstance(payload, dict) else None
                 batch = values if isinstance(values, list) else []
                 sprints.extend(batch)

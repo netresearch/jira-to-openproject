@@ -151,8 +151,7 @@ class JiraWorkflowService:
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from exc
 
-    def _get_workflow_schemes_per_project(self) -> list[dict[str, Any]]:
-        """Fallback that assembles workflow schemes via project endpoints."""
+    def _scheme_project_keys(self) -> list[str]:
         client = self._client
         project_keys: list[str] = []
         try:
@@ -168,8 +167,29 @@ class JiraWorkflowService:
             except Exception:
                 project_keys = []
 
+        return project_keys
+
+    @staticmethod
+    def _merge_project_scheme(schemes_by_id: dict[str, dict[str, Any]], scheme: dict[str, Any], key: str) -> None:
+        scheme_id = str(scheme.get("id") or scheme.get("name") or key)
+        existing = schemes_by_id.get(scheme_id)
+        if existing:
+            mappings = existing.setdefault("issueTypeMappings", {})
+            if isinstance(mappings, dict):
+                new_mappings = scheme.get("issueTypeMappings") or {}
+                if isinstance(new_mappings, dict):
+                    mappings.update(new_mappings)
+            existing.setdefault("projects", set()).add(key)
+        else:
+            entry = dict(scheme)
+            entry["projects"] = {key}
+            schemes_by_id[scheme_id] = entry
+
+    def _get_workflow_schemes_per_project(self) -> list[dict[str, Any]]:
+        """Fallback that assembles workflow schemes via project endpoints."""
+        client = self._client
         schemes_by_id: dict[str, dict[str, Any]] = {}
-        for key in project_keys:
+        for key in self._scheme_project_keys():
             if not key:
                 continue
             try:
@@ -186,19 +206,7 @@ class JiraWorkflowService:
             if not isinstance(scheme, dict):
                 continue
 
-            scheme_id = str(scheme.get("id") or scheme.get("name") or key)
-            existing = schemes_by_id.get(scheme_id)
-            if existing:
-                mappings = existing.setdefault("issueTypeMappings", {})
-                if isinstance(mappings, dict):
-                    new_mappings = scheme.get("issueTypeMappings") or {}
-                    if isinstance(new_mappings, dict):
-                        mappings.update(new_mappings)
-                existing.setdefault("projects", set()).add(key)
-            else:
-                entry = dict(scheme)
-                entry["projects"] = {key}
-                schemes_by_id[scheme_id] = entry
+            self._merge_project_scheme(schemes_by_id, scheme, key)
 
         for entry in schemes_by_id.values():
             projects = entry.get("projects")

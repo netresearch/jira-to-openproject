@@ -506,3 +506,15 @@ class TestSSHClient(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_readonly_home_disables_only_ssh_multiplexing(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".ssh").write_text("occupied", encoding="utf-8")
+    client = object.__new__(SSHClient)
+    client.connect_timeout = 5
+    client.key_file = "key.pem"
+
+    options = client._get_common_ssh_options()
+    assert "ControlPath=none" in options
+    assert options[-2:] == ["-i", "key.pem"]
