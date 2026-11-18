@@ -8,6 +8,7 @@ LABEL maintainer="Netresearch DTT GmbH <sebastian.mendel@netresearch.de>" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -40,8 +41,19 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 # source tree over /app at test time, so an /app/.venv would be hidden.
 # --inexact keeps the base image's own packages (pip) in place.
 COPY pyproject.toml uv.lock ./
+COPY scripts/locked_pyyaml_requirement.py /tmp/
+# PyYAML has no CPython 3.15 Linux wheel. Only this hash-locked dependency
+# may build from source. Install every other third-party package wheel-only.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    python /tmp/locked_pyyaml_requirement.py > /tmp/j2o-pyyaml.txt \
+    && UV_PROJECT_ENVIRONMENT=/tmp/j2o-builder uv sync --frozen --only-group image-build --no-build \
+    && python -m pip --python /tmp/j2o-builder/bin/python wheel --no-build-isolation --require-hashes \
+        --no-deps -r /tmp/j2o-pyyaml.txt --wheel-dir /tmp/j2o-pyyaml \
+    && uv pip install --python /usr/local/bin/python --no-build --no-deps /tmp/j2o-pyyaml/*.whl
+
 RUN UV_PROJECT_ENVIRONMENT=/usr/local \
-    uv sync --frozen --inexact --no-dev --extra dev --extra test --no-install-project
+    uv sync --frozen --inexact --no-build --no-install-package pyyaml \
+        --no-dev --extra dev --extra test --no-install-project
 
 # Keep test fixtures, package sources and tooling in their repository layout.
 COPY --parents --chown=appuser:appuser \
@@ -50,9 +62,9 @@ COPY --parents --chown=appuser:appuser \
     AGENTS.md README.md LICENSE Makefile compose.yml Dockerfile Dockerfile.test ./
 
 # Install the locked project and prepare writable runtime directories.
-RUN uv build --wheel --out-dir /tmp/j2o-dist . \
+RUN uv build --python /tmp/j2o-builder/bin/python --no-build-isolation --wheel --out-dir /tmp/j2o-dist . \
     && uv pip install --system --no-build --no-deps /tmp/j2o-dist/*.whl \
-    && rm -rf /tmp/j2o-dist \
+    && rm -rf /tmp/j2o-dist /tmp/j2o-builder /tmp/j2o-pyyaml \
     && mkdir -p /app/var/logs /app/var/data /app/var/run \
     && chown -R appuser:appuser /app/var
 
