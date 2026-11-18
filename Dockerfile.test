@@ -43,8 +43,11 @@ COPY pyproject.toml uv.lock ./
 RUN UV_PROJECT_ENVIRONMENT=/usr/local \
     uv sync --frozen --inexact --no-dev --extra dev --extra test --no-install-project
 
-# Source layer
-COPY --chown=appuser:appuser . .
+# Keep test fixtures, package sources and tooling in their repository layout.
+COPY --parents --chown=appuser:appuser \
+    src config jira scripts tests tools api-specs test-specs contrib docs examples \
+    .github/workflows .coveragerc .importlinter .env.example \
+    AGENTS.md README.md LICENSE Makefile compose.yml Dockerfile Dockerfile.test ./
 
 # Install the locked project and prepare writable runtime directories.
 RUN uv build --wheel --out-dir /tmp/j2o-dist . \
