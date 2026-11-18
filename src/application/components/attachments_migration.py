@@ -187,36 +187,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 atts = getattr(fields, "attachment", None)
                 if not isinstance(atts, list) or not atts:
                     continue
-                items: list[dict[str, Any]] = []
-                for a in atts:
-                    try:
-                        aid = getattr(a, "id", None)
-                        filename = getattr(a, "filename", None)
-                        size = getattr(a, "size", None)
-                        url = getattr(a, "content", None)
-                        # Without ``url`` we can't download — that's a
-                        # genuine skip. But ``filename`` may be empty
-                        # or the literal string ``"noname"`` for
-                        # rich-text-paste images / clipboard uploads;
-                        # those are still real attachments and we
-                        # must preserve them. Derive a stable name
-                        # from the Jira attachment id so the file
-                        # ends up under a unique key downstream and
-                        # the Rails LOWER(filename) idempotency check
-                        # doesn't collapse multiple ``noname``s into
-                        # one.
-                        if not url:
-                            self._loss_counters["extract_no_url"] += 1
-                            continue
-                        if not filename or not str(filename).strip() or str(filename).lower() == "noname":
-                            if aid is None:
-                                self._loss_counters["extract_no_id_no_filename"] += 1
-                                continue
-                            filename = f"jira-attachment-{aid}"
-                        items.append({"id": aid, "filename": filename, "size": size, "url": url})
-                    except Exception:
-                        self._loss_counters["extract_per_attachment_exception"] += 1
-                        continue
+                items = self._attachment_records(atts)
                 if items:
                     by_key[key] = items
             except Exception:
@@ -224,6 +195,40 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 continue
 
         return by_key
+
+    def _attachment_records(self, attachments: list) -> list[dict[str, Any]]:
+        """Keep attachments with a download URL and a recoverable filename."""
+        items = []
+        for attachment in attachments:
+            try:
+                aid = getattr(attachment, "id", None)
+                filename = getattr(attachment, "filename", None)
+                size = getattr(attachment, "size", None)
+                url = getattr(attachment, "content", None)
+                # Without ``url`` we can't download — that's a
+                # genuine skip. But ``filename`` may be empty
+                # or the literal string ``"noname"`` for
+                # rich-text-paste images / clipboard uploads;
+                # those are still real attachments and we
+                # must preserve them. Derive a stable name
+                # from the Jira attachment id so the file
+                # ends up under a unique key downstream and
+                # the Rails LOWER(filename) idempotency check
+                # doesn't collapse multiple ``noname``s into
+                # one.
+                if not url:
+                    self._loss_counters["extract_no_url"] += 1
+                    continue
+                if not filename or not str(filename).strip() or str(filename).lower() == "noname":
+                    if aid is None:
+                        self._loss_counters["extract_no_id_no_filename"] += 1
+                        continue
+                    filename = f"jira-attachment-{aid}"
+                items.append({"id": aid, "filename": filename, "size": size, "url": url})
+            except Exception:
+                self._loss_counters["extract_per_attachment_exception"] += 1
+                continue
+        return items
 
     def _extract(self) -> ComponentResult:
         """Collect attachments from Jira issues mapped to work packages.
@@ -280,74 +285,18 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         ``%252F`` / ``%252C`` to bypass Tomcat's literal-encoded-slash
         block. See :meth:`_double_encode_slashes`.
         """
-
-        def _fetch(target_url: str) -> None:
-            # Always wrap the response in a ``with`` block so the
-            # underlying connection is returned to the pool even on
-            # iteration errors mid-stream — without this, a partial
-            # read can leak the keep-alive socket. Per PR #217 review.
-            session = getattr(self.jira_client.jira, "_session", None)
-            if session is None:
-                import requests
-
-                logger.warning("Jira session not available, attempting unauthenticated download")
-                with requests.get(target_url, stream=True, timeout=60) as r:
-                    r.raise_for_status()
-                    _stream_to(r, dest_path)
-                return
-            with session.get(target_url, stream=True) as response:
-                response.raise_for_status()
-                _stream_to(response, dest_path)
-
-        def _stream_to(response: Any, target_path: Path) -> None:
-            # Stream-write into a tempfile + rename so a mid-stream
-            # error never leaves a truncated file behind for callers
-            # that only check ``local_path.exists()``. Per PR #217 review.
-            tmp_path = target_path.with_name(target_path.name + ".part")
-            try:
-                with tmp_path.open("wb") as f:
-                    for chunk in response.iter_content(chunk_size=65536):
-                        if chunk:
-                            f.write(chunk)
-                tmp_path.replace(target_path)
-            except Exception:
-                # Clean up the partial file on failure so the caller
-                # sees ``not local_path.exists()`` and counts it under
-                # ``map_download_failed`` instead of misinterpreting
-                # an N-byte fragment as a successful download.
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise
-
-        def _is_http_400(exc: Exception) -> bool:
-            # Prefer the structured status code over substring
-            # matching against ``str(exc)``: ``requests.HTTPError``
-            # carries the ``Response`` it was raised from, and
-            # ``response.status_code`` is the canonical signal. Fall
-            # through to substring match only for non-``HTTPError``
-            # cases (e.g. tests with custom exception classes that
-            # mirror the surface but don't carry ``response``).
-            response = getattr(exc, "response", None)
-            status = getattr(response, "status_code", None)
-            if isinstance(status, int):
-                return status == 400
-            err_text = str(exc)
-            return "400" in err_text or "Bad Request" in err_text
-
         try:
-            _fetch(url)
+            self._fetch_attachment(url, dest_path)
         except Exception as e:
             # Retry with double-encoded slashes/commas if Tomcat
             # rejected the URL with HTTP 400. At most one extra HTTP
             # call per genuinely-failing download.
             retried = False
-            if _is_http_400(e):
+            if self._is_http_400(e):
                 fallback = self._double_encode_slashes(url)
                 if fallback:
                     try:
-                        _fetch(fallback)
+                        self._fetch_attachment(fallback, dest_path)
                         retried = True
                     except Exception as e2:
                         logger.warning(
@@ -358,6 +307,63 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             if not retried:
                 logger.warning("Attachment download failed for %s: %s", url, e)
         return dest_path
+
+    def _fetch_attachment(self, target_url: str, dest_path: Path) -> None:
+        # Always wrap the response in a ``with`` block so the
+        # underlying connection is returned to the pool even on
+        # iteration errors mid-stream — without this, a partial
+        # read can leak the keep-alive socket. Per PR #217 review.
+        session = getattr(self.jira_client.jira, "_session", None)
+        if session is None:
+            import requests
+
+            logger.warning("Jira session not available, attempting unauthenticated download")
+            with requests.get(target_url, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                self._stream_to(r, dest_path)
+            return
+        with session.get(target_url, stream=True) as response:
+            response.raise_for_status()
+            self._stream_to(response, dest_path)
+
+    @staticmethod
+    def _stream_to(response: Any, target_path: Path) -> None:
+        # Stream-write into a tempfile + rename so a mid-stream
+        # error never leaves a truncated file behind for callers
+        # that only check ``local_path.exists()``. Per PR #217 review.
+        tmp_path = target_path.with_name(target_path.name + ".part")
+        try:
+            with tmp_path.open("wb") as f:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+            tmp_path.replace(target_path)
+        except Exception:
+            # Clean up the partial file on failure so the caller
+            # sees ``not local_path.exists()`` and counts it under
+            # ``map_download_failed`` instead of misinterpreting
+            # an N-byte fragment as a successful download.
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _is_http_400(exc: Exception) -> bool:
+        # Prefer the structured status code over substring
+        # matching against ``str(exc)``: ``requests.HTTPError``
+        # carries the ``Response`` it was raised from, and
+        # ``response.status_code`` is the canonical signal. Fall
+        # through to substring match only for non-``HTTPError``
+        # cases (e.g. tests with custom exception classes that
+        # mirror the surface but don't carry ``response``).
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status == 400
+        err_text = str(exc)
+        return "400" in err_text or "Bad Request" in err_text
 
     @staticmethod
     def _sha256_of(path: Path) -> str:
@@ -441,6 +447,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
 
         key_to_wp_id = self._wp_lookup_by_jira_key()
 
+        ops = self._attachment_operations(att_by_key, key_to_wp_id)
+        return ComponentResult(success=True, data={"ops": ops})
+
+    def _attachment_operations(self, att_by_key: dict, key_to_wp_id: dict) -> list[dict[str, Any]]:
+        """Prepare mapped attachments and count unmatched or invalid source rows."""
         ops: list[dict[str, Any]] = []
 
         for key, items in att_by_key.items():
@@ -462,7 +473,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     self._loss_counters["map_per_item_exception"] += 1
                     continue
 
-        return ComponentResult(success=True, data={"ops": ops})
+        return ops
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         ops: list[dict[str, Any]] = (mapped.data or {}).get("ops", []) if mapped.data else []
@@ -877,25 +888,7 @@ puts end_marker
         # Single normalisation source — see ``_wp_lookup_by_jira_key``.
         key_to_wp = self._wp_lookup_by_jira_key()
 
-        # Download attachments and prepare ops
-        ops: list[dict[str, Any]] = []
-
-        for key, items in att_by_key.items():
-            # Find work package ID from reverse lookup
-            wp_id = key_to_wp.get(key)
-            if not wp_id:
-                self._loss_counters["map_wp_unmapped"] += len(items)
-                continue
-
-            for item in items:
-                try:
-                    op = self._prepare_op_from_item(item=item, jira_key=key, work_package_id=int(wp_id))
-                    if op is None:
-                        continue
-                    ops.append(op)
-                except Exception:
-                    self._loss_counters["map_per_item_exception"] += 1
-                    continue
+        ops = self._attachment_operations(att_by_key, key_to_wp)
 
         if not ops:
             logger.info("_process_batch_end_to_end: no ops to load, returning early")
@@ -939,36 +932,7 @@ puts end_marker
         # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
         key_to_wp_id = self._wp_lookup_by_jira_key()
         if not key_to_wp_id:
-            # FAIL LOUD. Silent ``success=True`` here masks a 100%
-            # attachment loss (operator postmortem in PR #194). The
-            # mapping may be either *absent* (skeleton never ran /
-            # ``_save_mapping`` swallowed an error) or *present but
-            # unusable* (only legacy bare-int rows that
-            # ``_wp_lookup_by_jira_key`` skips). Distinguish both
-            # cases in the message so the operator knows whether to
-            # re-run skeleton or to back-fill ``jira_key`` on the
-            # legacy rows.
-            raw_wp_map = self.mappings.get_mapping("work_package") or {}
-            if raw_wp_map:
-                msg = (
-                    f"work_package mapping present ({len(raw_wp_map)} entries) but"
-                    " contains no usable rows (no entry has a recoverable Jira key"
-                    " — likely all legacy bare-int entries). Re-run"
-                    " work_packages_skeleton to refresh the mapping shape."
-                )
-            else:
-                msg = (
-                    "No work_package mapping available — attachments cannot be"
-                    " correlated to OP work packages. Run the work_packages_skeleton"
-                    " component first (or verify it persisted its mapping)."
-                )
-            self.logger.error(msg)
-            return ComponentResult(
-                success=False,
-                updated=0,
-                message=msg,
-                errors=["missing_work_package_mapping"],
-            )
+            return self._missing_work_package_mapping()
 
         by_project: dict[str, list[str]] = {}
         for jira_key in key_to_wp_id:
@@ -1037,6 +1001,39 @@ puts end_marker
                         original_max_kb,
                         target_max_kb,
                     )
+
+    def _missing_work_package_mapping(self) -> ComponentResult:
+        """Distinguish an absent mapping from one containing only unusable rows."""
+        # FAIL LOUD. Silent ``success=True`` here masks a 100%
+        # attachment loss (operator postmortem in PR #194). The
+        # mapping may be either *absent* (skeleton never ran /
+        # ``_save_mapping`` swallowed an error) or *present but
+        # unusable* (only legacy bare-int rows that
+        # ``_wp_lookup_by_jira_key`` skips). Distinguish both
+        # cases in the message so the operator knows whether to
+        # re-run skeleton or to back-fill ``jira_key`` on the
+        # legacy rows.
+        raw_wp_map = self.mappings.get_mapping("work_package") or {}
+        if raw_wp_map:
+            msg = (
+                f"work_package mapping present ({len(raw_wp_map)} entries) but"
+                " contains no usable rows (no entry has a recoverable Jira key"
+                " — likely all legacy bare-int entries). Re-run"
+                " work_packages_skeleton to refresh the mapping shape."
+            )
+        else:
+            msg = (
+                "No work_package mapping available — attachments cannot be"
+                " correlated to OP work packages. Run the work_packages_skeleton"
+                " component first (or verify it persisted its mapping)."
+            )
+        self.logger.error(msg)
+        return ComponentResult(
+            success=False,
+            updated=0,
+            message=msg,
+            errors=["missing_work_package_mapping"],
+        )
 
     def _run_per_project_loop(
         self,
