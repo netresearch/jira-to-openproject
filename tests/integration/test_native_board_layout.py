@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-import json
 
 import pytest
 
 from src.infrastructure.openproject.native_board_writer import save_layout
+from src.infrastructure.openproject.openproject_rails_runner_service import OpenProjectRailsRunnerService
 from tests.integration.test_openproject_agile_roundtrip import rails  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
 def test_private_native_board_layout_and_replay(rails):  # noqa: F811
     client, query = rails
     identifiers = query("""
-      root = Project.create!(name: 'Archive', identifier: 'board-snapshots', public: false, workspace_type: 'project')
+      Project.create!(name: 'Archive', identifier: 'board-snapshots', public: false, workspace_type: 'project')
       target = Project.create!(name: 'Target', identifier: 'snapshot-data', public: false, workspace_type: 'project')
       target.enabled_modules.find_or_create_by!(name: 'work_package_tracking')
       template = WorkPackage.first!
@@ -30,15 +30,12 @@ def test_private_native_board_layout_and_replay(rails):  # noqa: F811
       cards
     """)
 
-    def execute(script, payload, **kwargs):
-        # Exercise the same structured Ruby data and retain the transaction around this entire fixture.
-        script = script.partition("puts $j2o_start_marker")[0]
-        return {
-            "status": "success",
-            "data": query("input_data=JSON.parse(" + json.dumps(json.dumps(payload)) + ");" + script),
-        }
+    def execute(command, timeout=None):
+        query(command, timeout=timeout)
+        return ""
 
-    client.execute_script_with_data.side_effect = execute
+    client.rails_client.execute.side_effect = execute
+    client.execute_script_with_data.side_effect = OpenProjectRailsRunnerService(client).execute_script_with_data
     board = {
         "jira": "https://jira.invalid",
         "project": "APP",

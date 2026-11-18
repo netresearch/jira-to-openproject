@@ -436,10 +436,9 @@ OpenProject's Enterprise gating:
 A saved query works on every edition; a faithful board → board migration needs an
 Enterprise target for anything beyond a basic board.
 
-**Planned change** (agreed in [#260](https://github.com/netresearch/jira-to-openproject/issues/260#issuecomment-5100423937),
-not yet implemented): map sprints to native OpenProject sprints and boards to
-boards, keeping board → saved query as an optional fallback for Community
-targets.
+The optional native import above covers basic-board snapshots. Jira action
+semantics and native sprint handling in the main pipeline are tracked in
+[#260](https://github.com/netresearch/jira-to-openproject/issues/260#issuecomment-5100423937).
 
 **References**:
 - [OpenProject 17.3 release notes](https://www.openproject.org/docs/release-notes/17-3-0/) — sprints as independent objects
