@@ -655,13 +655,15 @@ class OpenProjectRailsRunnerService:
         return (
             f"# {provenance}\n"
             "require 'json'\n"
-            "begin; require 'fileutils'; rescue; end\n"
+            "require 'tempfile'\n"
             f"data = {ruby_json_expr}\n"
-            f"File.open('{ruby_path_literal}', 'w') do |f|\n"
+            f"destination = '{ruby_path_literal}'\n"
+            "Tempfile.create(['j2o-query-', '.json'], File.dirname(destination)) do |f|\n"
             "  f.write(JSON.generate(data))\n"
-            "  begin; f.flush; f.fsync; rescue; end\n"
+            "  f.flush\n"
+            "  f.fsync\n"
+            "  File.rename(f.path, destination)\n"
             "end\n"
-            f"begin; FileUtils.chmod(0644, '{ruby_path_literal}'); rescue; end\n"
         )
 
     def _stage_query_script(self, script: str, directory: Path) -> str:
