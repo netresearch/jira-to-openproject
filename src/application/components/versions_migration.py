@@ -92,15 +92,16 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         return map_project_records(self, extracted, "Version")
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        version_map: dict[str, dict[str, int]] = (mapped.data or {}).get("version_map", {}) if mapped.data else {}
-        if not version_map and not (mapped.data or {}).get("issues"):
+        data = mapped.data or {}
+        version_map: dict[str, dict[str, int]] = data.get("version_map", {})
+        issues: dict[str, Any] = data.get("issues", {})
+        if not version_map and not issues:
             return ComponentResult(success=True, updated=0)
 
         wp_map = self.mappings.get_mapping("work_package") or {}
         proj_map = self.mappings.get_mapping("project") or {}
 
         # Use cached issues from extract phase to avoid second Jira API call
-        issues: dict[str, Any] = (mapped.data or {}).get("issues", {}) if mapped.data else {}
         if not issues:
             logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
             jira_keys = self._jira_keys_from_wp_map(wp_map)
