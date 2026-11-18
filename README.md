@@ -134,16 +134,16 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 5. **Reset state**: restore snapshots or wipe the rehearsal OpenProject instance before the next run.
 6. **Production cutover**: swap `.env` to production credentials and rerun the migration without `--dry-run`.
 
+### Migrating projects in stages
+
+[Capture unresolved Jira issue links and epic references](docs/deferred-references.md) before retiring Jira. The operator can restore the encrypted snapshot and apply native links when both endpoints have been migrated.
+
 ### Metadata Validation Checklist
 
 - Run `uv run --active --no-cache python scripts/data_qa.py --projects <KEY>` after rehearsals. Investigate any `⚠️` warnings about missing project modules or zero start-date coverage—rerun `migrate --components projects`/`work_packages` to refresh caches when needed.
 - Jira start-date precedence is `customfield_18690` → `customfield_12590` → `customfield_11490` → `customfield_15082`; when they are empty we fall back to the first Jira status transition whose category is *In Progress*. Confirm Jira histories include that transition or relax expectations when the project never moved into that category.
 - Confirm project modules (`work_package_tracking`, `wiki`, `time_tracking`, `costs`, `calendar`, `news`) stay enabled post-migration; the project component now enables time tracking/costs for Tempo-linked projects and calendar/news when categories or project types are present, then persists provenance (`Jira Project Lead`, `Jira Project Category`, `Jira Project Type`, `Jira Project URL`, `Jira Project Avatar URL`).
 - If you need to rebuild the work-package fast-forward database (e.g., after a rehearsal restore or when corruption is detected) run `uv run python -m src.main migrate --reset-wp-checkpoints --components work_packages`.
-
-### Migrating projects in stages
-
-[Capture unresolved Jira issue links and epic references](docs/deferred-references.md) before retiring Jira. The operator can restore the encrypted snapshot and apply native links when both endpoints have been migrated.
 
 ### Watch a migration
 
