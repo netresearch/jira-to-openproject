@@ -58,6 +58,13 @@ class JiraAgileService:
 
     def get_board_issue_keys(self, board_id: int, project_key: str) -> list[str]:
         """Read just this project's issue keys from the board's permission-filtered membership."""
+        return [issue["key"] for issue in self._board_issues(board_id, project_key, ranked=False)]
+
+    def ranked_board_issues(self, board_id: int, project_key: str) -> list[dict]:
+        """Fetch visible issue identities and statuses in the board's own ordering."""
+        return self._board_issues(board_id, project_key, ranked=True)
+
+    def _board_issues(self, board_id: int, project_key: str, *, ranked: bool) -> list[dict]:
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", project_key, re.ASCII):
             msg = "Invalid Jira project key for board snapshot"
             raise ValueError(msg)
@@ -65,29 +72,33 @@ class JiraAgileService:
         if not client.jira:
             raise JiraConnectionError(CLIENT_NOT_INITIALIZED)
         url = f"{client.base_url}/rest/agile/1.0/board/{int(board_id)}/issue"
-        keys: list[str] = []
+        fields = "project,status" if ranked else "project"
+        ordering = "" if ranked else " ORDER BY id"
+        issues: list[dict] = []
+        keys: set[str] = set()
         total: int | None = None
-        while total is None or len(keys) < total:
+        while total is None or len(issues) < total:
             params = {
-                "jql": f'project = "{project_key}" ORDER BY id',
-                "fields": "project",
-                "startAt": len(keys),
+                "jql": f'project = "{project_key}"{ordering}',
+                "fields": fields,
+                "startAt": len(issues),
                 "maxResults": 50,
             }
             response = client.jira._session.get(url, params=params)
             response.raise_for_status()
             page = response.json()
-            if page["startAt"] != len(keys) or (total is not None and total != page["total"]):
+            if page["startAt"] != len(issues) or (total is not None and total != page["total"]):
                 msg = "Board membership changed while paging"
                 raise JiraApiError(msg)
             total = int(page["total"])
-            keys.extend(self._project_issue_key(issue, project_key) for issue in page["issues"])
+            keys.update(self._project_issue_key(issue, project_key) for issue in page["issues"])
+            issues.extend(page["issues"])
             if not page["issues"]:
                 break
-        if len(keys) != total or len(set(keys)) != len(keys):
+        if len(issues) != total or len(keys) != len(issues):
             msg = "Incomplete or duplicate Jira board issue keys"
             raise JiraApiError(msg)
-        return keys
+        return issues
 
     @staticmethod
     def _project_issue_key(issue: dict, project_key: str) -> str:

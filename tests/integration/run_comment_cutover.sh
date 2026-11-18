@@ -41,4 +41,5 @@ uv run --no-sync python -m pytest -o addopts='' -q \
     tests/integration/test_group_comment_cutover.py \
     tests/integration/test_protected_comment_cutover.py \
     tests/integration/test_openproject_agile_roundtrip.py \
+    tests/integration/test_native_board_layout.py \
     tests/integration/test_membership_file_roundtrip.py
