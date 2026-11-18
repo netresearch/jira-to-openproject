@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-# Apply one frozen Jira project's completed sprints on an OpenProject 17.9 target.
+# Apply one frozen Jira project's sprint catalogue on an OpenProject 17.9 target.
 class JiraCompletedSprints
   class ImportConflict < StandardError; end
 
   REGISTER = "J2O completed sprint origins"
   HISTORY = "Jira sprint membership history"
+  STATUSES = { "closed" => "completed", "active" => "active", "future" => "in_planning" }.freeze
   ATTRIBUTES = %w[id originBoardId name state startDate endDate activatedDate completeDate goal].freeze
 
   def initialize(manifest)
@@ -42,7 +43,7 @@ class JiraCompletedSprints
       if targets.values.uniq.size != targets.size || (stored && targets != stored.fetch("targets"))
         raise ImportConflict, "Ambiguous native sprint provenance"
       end
-      issues.each { |wid, ids| assign(wid, ids, catalogue, targets) }
+      issues.each { |wid, ids| assign(wid, ids, catalogue, targets, stored) }
       unless stored
         registry.update!(value: JSON.generate({ "source" => snapshot, "targets" => targets }))
       end
@@ -112,7 +113,7 @@ class JiraCompletedSprints
       unless keys.is_a?(Array) && keys.include?(@key) && (owned || referenced.include?(sid))
         raise ImportConflict, "Unknown or mixed board scope"
       end
-      if result.key?(sid) || row.fetch("state") != "closed" || row["goal"].present?
+      if result.key?(sid) || !STATUSES.key?(row.fetch("state"))
         raise ImportConflict, "Duplicate or unsupported sprint"
       end
       raise ImportConflict, "Sprint name missing" unless row.fetch("name").is_a?(String) && row["name"].present?
@@ -137,31 +138,64 @@ class JiraCompletedSprints
   end
 
   def instant(row, field)
-    value = row.fetch(field)
-    raise ImportConflict, "Expected an offset on each sprint timestamp" unless value.match?(/(?:Z|[+-][0-9]{2}:?[0-9]{2})\z/)
+    value = row[field]
+    unless value.is_a?(String) && value.match?(/(?:Z|[+-][0-9]{2}:?[0-9]{2})\z/)
+      raise ImportConflict, "Expected an offset on each sprint timestamp"
+    end
     Time.iso8601(value)
   end
 
-  def native_sprint(row, previous_id)
-    attributes = { name: row.fetch("name"), status: "completed", start_date: instant(row, "startDate").to_date,
-                   finish_date: instant(row, "endDate").to_date, started_at: instant(row, "activatedDate"),
-                   completed_at: instant(row, "completeDate") }
-    if previous_id
-      sprint = Sprint.where(project_id: @project.id, id: previous_id).sole
-      matches = attributes.all? { |key, value| sprint.public_send(key) == value }
-      raise ImportConflict, "Native sprint changed" unless matches && sprint.goals.empty?
-      return sprint
+  def sprint_attributes(row)
+    state = row.fetch("state")
+    if (state != "closed" && !row["completeDate"].nil?) || (state == "future" && !row["activatedDate"].nil?)
+      raise ImportConflict, "Sprint timestamps contradict its state"
     end
-    @changes += 1
-    Sprint.create!(**attributes, project: @project)
+    day = lambda do |field|
+      instant(row, field).to_date unless state == "future" && row[field].nil?
+    end
+    { name: row.fetch("name"), status: STATUSES.fetch(state),
+      start_date: day.call("startDate"), finish_date: day.call("endDate"),
+      started_at: state == "future" ? nil : instant(row, "activatedDate"),
+      completed_at: state == "closed" ? instant(row, "completeDate") : nil }
   end
 
-  def assign(wid, ids, catalogue, targets)
+  def sprint_goal(row)
+    goal = row["goal"]
+    return if goal.nil? || (goal.is_a?(String) && goal.blank?)
+    unless goal.is_a?(String) && goal == goal.strip && goal.size <= SprintGoal::TEXT_MAX_LENGTH
+      raise ImportConflict, "Sprint goal cannot be preserved exactly"
+    end
+    goal
+  end
+
+  def native_sprint(row, previous_id)
+    attributes = sprint_attributes(row)
+    goal = sprint_goal(row)
+    if previous_id
+      sprint = Sprint.where(project_id: @project.id, id: previous_id).sole
+    else
+      sprint = Sprint.create!(**attributes, project: @project)
+      @changes += 1
+      if goal
+        sprint.goals.create!(project: @project, text: goal)
+        @changes += 1
+      end
+    end
+    sprint.reload
+    expected_goals = goal ? [[@project.id, goal]] : []
+    matches = attributes.all? { |key, value| sprint.public_send(key) == value }
+    raise ImportConflict, "Native sprint changed" unless matches && sprint.goals.pluck(:project_id, :text) == expected_goals
+    sprint
+  end
+
+  def assign(wid, ids, catalogue, targets, stored)
     wp = @project.work_packages.lock.find(wid)
-    latest = ids.max_by { |id| [instant(catalogue.fetch(id), "completeDate"), id.to_i] }
+    open_ids = ids.reject { |id| catalogue.fetch(id).fetch("state") == "closed" }
+    raise ImportConflict, "Ambiguous open sprint memberships" if open_ids.size > 1
+    latest = open_ids.first || ids.max_by { |id| [instant(catalogue.fetch(id), "completeDate"), id.to_i] }
     sprint_id = targets.fetch(latest)
     return if wp.sprint_id == sprint_id
-    raise ImportConflict, "Existing native sprint assignment conflicts" if wp.sprint_id
+    raise ImportConflict, "Existing native sprint assignment conflicts" if stored || wp.sprint_id
     wp.update_columns(sprint_id: sprint_id)
     @changes += 1
   end

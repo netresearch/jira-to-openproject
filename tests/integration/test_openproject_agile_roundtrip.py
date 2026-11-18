@@ -566,7 +566,8 @@ def test_all_fix_versions_survive_native_readback_and_retry(rails):
     assert actual == ([first, second] if multiple else [first])
 
 
-def test_native_completed_sprints_preserve_versions_history_and_project_scope(rails):
+@pytest.fixture
+def native_sprint_projects(rails):
     _, query = rails
     source = Path(__file__).resolve().parents[2] / "src/ruby/import_completed_sprints.rb"
     query(source.read_text() + "\ntrue")
@@ -596,7 +597,16 @@ def test_native_completed_sprints_preserve_versions_history_and_project_scope(ra
       end
       true
     """)
-    fixture = query("$sprint_fixture")
+    return query, query("$sprint_fixture")
+
+
+def _run_sprints(query, manifest):
+    data = json.dumps(json.dumps(manifest))
+    return query(f"begin; JiraCompletedSprints.new(JSON.parse({data})).apply; rescue => e; e.message; end")
+
+
+def test_native_completed_sprints_preserve_versions_history_and_project_scope(native_sprint_projects):
+    query, fixture = native_sprint_projects
     stamp = "2026-01-02T00:15:00+02:00"
     sprints = [
         {
@@ -613,10 +623,6 @@ def test_native_completed_sprints_preserve_versions_history_and_project_scope(ra
         for sid in (1, 2)
     ]
 
-    def run(manifest):
-        data = json.dumps(json.dumps(manifest))
-        return query(f"begin; JiraCompletedSprints.new(JSON.parse({data})).apply; rescue => e; e.message; end")
-
     native_ids = []
     for i, (key, (pid, wid, vid)) in enumerate(zip(("EX", "FX"), fixture, strict=True)):
         manifest = {
@@ -627,9 +633,12 @@ def test_native_completed_sprints_preserve_versions_history_and_project_scope(ra
             "boardProjectKeys": {"3": ["EX", "FX"]},
             "sprints": sprints,
         }
-        assert run({**manifest, "issues": []}) == "Incomplete work-package membership export"
-        assert run({**manifest, "boardProjectKeys": {"3": ["OTHER"]}}) == "Unknown or mixed board scope"
-        assert run({**manifest, "sprints": [*sprints, {**sprints[0], "id": 3}]}) == "Unknown or mixed board scope"
+        assert _run_sprints(query, {**manifest, "issues": []}) == "Incomplete work-package membership export"
+        assert _run_sprints(query, {**manifest, "boardProjectKeys": {"3": ["OTHER"]}}) == "Unknown or mixed board scope"
+        assert (
+            _run_sprints(query, {**manifest, "sprints": [*sprints, {**sprints[0], "id": 3}]})
+            == "Unknown or mixed board scope"
+        )
         assert query(f"Sprint.where(project_id: {pid}).count") == 0
         conflict = query(f"""
           observed = nil
@@ -647,11 +656,11 @@ def test_native_completed_sprints_preserve_versions_history_and_project_scope(ra
           observed
         """)
         assert conflict == ["Existing native sprint assignment conflicts", 1, True]
-        assert run(manifest) == {"sprints": 2, "work_packages": 1, "memberships": 2, "changes": 3}
-        assert run(manifest)["changes"] == 0
+        assert _run_sprints(query, manifest) == {"sprints": 2, "work_packages": 1, "memberships": 2, "changes": 3}
+        assert _run_sprints(query, manifest)["changes"] == 0
         assert (
-            run({**manifest, "sprints": [{**sprints[0], "goal": "a goal"}, sprints[1]]})
-            == "Duplicate or unsupported sprint"
+            _run_sprints(query, {**manifest, "sprints": [{**sprints[0], "goal": "a goal"}, sprints[1]]})
+            == "Frozen sprint export changed"
         )
         result = query(f"""
           p=Project.find({pid}); w=WorkPackage.find({wid})
@@ -677,3 +686,74 @@ def test_native_completed_sprints_preserve_versions_history_and_project_scope(ra
         assert api[3] in {401, 403, 404}
         native_ids.append(current)
     assert len(set(native_ids)) == 2
+
+
+@pytest.mark.parametrize(
+    ("assigned", "active_dates"), [("future", {}), ("active", {"activatedDate": "2026-02-02T15:00:00Z"})]
+)
+def test_native_open_sprints_and_goal_roundtrip(native_sprint_projects, assigned, active_dates):
+    query, ((pid, wid, vid), _) = native_sprint_projects
+    dates = {"startDate": "2026-02-02T01:00:00+02:00", "endDate": "2026-02-13T15:00:00Z"}
+    active = {
+        "id": 2,
+        "originBoardId": 3,
+        "name": "Same",
+        "goal": "Überprüfung & rollout",
+        "state": assigned,
+        **(dates if assigned == "active" else {}),
+        **active_dates,
+    }
+    closed = {
+        "id": 1,
+        "originBoardId": 3,
+        "name": "Same",
+        "state": "closed",
+        "goal": "Shipped",
+        **dates,
+        "activatedDate": dates["startDate"],
+        "completeDate": dates["endDate"],
+    }
+    manifest = {
+        "jira": "https://jira.example.org",
+        "project": {"id": "80", "key": "EX"},
+        "targetProjectId": pid,
+        "boardProjectKeys": {"3": ["EX", "FX"]},
+        "sprints": [closed, active],
+        "issues": [{"id": "90", "key": "EX-1", "sprintIds": [2, 1]}],
+    }
+    for changes, message in [
+        ({"state": "invalid"}, "Duplicate or unsupported sprint"),
+        ({"completeDate": dates["endDate"]}, "Sprint timestamps contradict its state"),
+        ({"goal": "a" * 501}, "Sprint goal cannot be preserved exactly"),
+        ({"goal": " changed "}, "Sprint goal cannot be preserved exactly"),
+    ]:
+        assert _run_sprints(query, {**manifest, "sprints": [closed, {**active, **changes}]}) == message
+    ambiguous = {**manifest, "sprints": [{**active, "id": 1, "state": "future", "activatedDate": None}, active]}
+    assert _run_sprints(query, ambiguous) == "Ambiguous open sprint memberships"
+    assert query(f"Sprint.where(project_id: {pid}).count") == 0
+    assert _run_sprints(query, manifest) == {"sprints": 2, "work_packages": 1, "memberships": 2, "changes": 5}
+    assert _run_sprints(query, manifest)["changes"] == 0
+    observed = query(f"""
+        wp = WorkPackage.find({wid})
+        sprint = wp.sprint
+        project = wp.project
+        token = Token::API.create!(user: User.admin.first!)
+        headers = {{"HTTP_HOST" => "localhost", "HTTP_ACCEPT" => "application/hal+json",
+                   "HTTP_AUTHORIZATION" => ActionController::HttpAuthentication::Basic.encode_credentials("apikey", token.plain_value)}}
+        response = Rack::MockRequest.new(Rails.application).get("/api/v3/sprints/#{{sprint.id}}", headers)
+        data = JSON.parse(response.body)
+        User.current = User.admin.first!
+        widget = Backlogs::SprintReports::Widgets::Goal.new(sprint, project, current_user: User.current)
+        rendered = Nokogiri::HTML.fragment(ApplicationController.renderer.render(widget, layout: false)).text
+        [wp.version_id, response.status, data.dig("_links", "status", "href"), data["startDate"], data["finishDate"],
+         data["startedAt"] && Time.iso8601(data["startedAt"]).iso8601, data["completedAt"],
+         sprint.goal_text_for(project), rendered.include?(sprint.goal_text_for(project)),
+         Sprint.where(project: project, status: :completed).sole.goal_text_for(project)]
+    """)
+    status = "in_planning" if assigned == "future" else "active"
+    assert observed[:2] == [vid, 200]
+    assert observed[2].endswith(f":sprints:status:{status}")
+    assert observed[3:7] == (["2026-02-02", "2026-02-13", "2026-02-02T15:00:00Z", None] if active_dates else [None] * 4)
+    assert observed[7:] == [active["goal"], True, "Shipped"]
+    query(f'WorkPackage.find({wid}).sprint.goals.sole.update!(text: "Edited locally"); true')
+    assert _run_sprints(query, manifest) == "Native sprint changed"
