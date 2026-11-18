@@ -4,6 +4,7 @@
 """Exercise the shipped dashboard in Chromium with deterministic API responses."""
 
 import hashlib
+import itertools
 import json
 import os
 import shutil
@@ -11,37 +12,73 @@ import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
+from time import monotonic, sleep
 from urllib.parse import urlsplit
 
 import pytest
+import requests
+from websockets.sync.client import connect
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "src/dashboard"
 
 
-def dump_page(profile: Path, url: str) -> str:
+def dump_page(profile: Path, url: str, ready: str) -> str:
+    """Read the rendered document when the page reports its result, independently of Chrome shutdown."""
     chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
     if not chrome:
         pytest.skip("Chromium is required for this browser regression test")
     options = ["--no-sandbox"] if hasattr(os, "geteuid") and os.geteuid() == 0 else []
-    result = subprocess.run(
-        [
-            chrome,
-            "--headless",
-            *options,
-            "--disable-gpu",
-            "--disable-dev-shm-usage",
-            "--disable-background-networking",
-            "--virtual-time-budget=1000",
-            "--dump-dom",
-            f"--user-data-dir={profile}",
-            url,
-        ],
-        check=True,
-        capture_output=True,
-        timeout=25,
-        text=True,
-    )
-    return result.stdout.replace("&nbsp;", "\u00a0")
+    port_file = profile / "DevToolsActivePort"
+    port_file.unlink(missing_ok=True)
+    args = [
+        chrome,
+        "--headless",
+        *options,
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--disable-background-networking",
+        "--no-first-run",
+        "--remote-debugging-port=0",
+        f"--user-data-dir={profile}",
+        "about:blank",
+    ]
+    with subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as proc:
+        try:
+            deadline = monotonic() + 45
+            while not port_file.is_file():
+                if proc.poll() is not None or monotonic() >= deadline:
+                    pytest.fail("Chromium did not open its local debugging port")
+                sleep(0.05)
+            port = int(port_file.read_text().splitlines()[0])
+            pages = requests.get(f"http://127.0.0.1:{port}/json/list", timeout=5, allow_redirects=False)
+            pages.raise_for_status()
+            tab = next(p for p in pages.json() if p["type"] == "page")
+            with connect(tab["webSocketDebuggerUrl"], open_timeout=5, close_timeout=2) as socket:
+                sequence = itertools.count(1)
+
+                def call(method, **params):
+                    sequence_id = next(sequence)
+                    socket.send(json.dumps({"id": sequence_id, "method": method, "params": params}))
+                    while True:
+                        message = json.loads(socket.recv(timeout=5))
+                        if message.get("id") == sequence_id:
+                            assert "error" not in message, message
+                            return message["result"]
+
+                call("Page.navigate", url=url)
+                expression = f"({ready}) && document.documentElement.outerHTML"
+                while monotonic() < deadline:
+                    value = call("Runtime.evaluate", expression=expression, returnByValue=True)["result"].get("value")
+                    if isinstance(value, str) and value:
+                        socket.send(json.dumps({"id": next(sequence), "method": "Browser.close"}))
+                        return value.replace("&nbsp;", "\u00a0")
+                    sleep(0.05)
+                pytest.fail("Dashboard did not render its expected state")
+        finally:
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def test_published_values_and_system_memory_are_displayed(tmp_path: Path) -> None:
@@ -68,7 +105,7 @@ def test_published_values_and_system_memory_are_displayed(tmp_path: Path) -> Non
     shell = shell.replace('"/static/', '"' + (assets / "static").as_uri() + "/")
     page = tmp_path / "dashboard.html"
     page.write_text(shell.replace("</head>", harness + "</head>"), encoding="utf-8")
-    dom = dump_page(tmp_path / "profile", page.as_uri())
+    dom = dump_page(tmp_path / "profile", page.as_uri(), "document.querySelector('#comparison-rows tr')")
     assert '<dd id="system-ram">7.1\u00a0GiB</dd>' in dom
     assert '<dd id="pilot-ram">48\u00a0MiB</dd>' in dom
     assert '<dd id="system-cpu">—</dd>' in dom
@@ -145,9 +182,13 @@ def test_upgrade_with_previous_dashboard_in_browser_cache(tmp_path: Path) -> Non
         try:
             url = f"http://127.0.0.1:{server.server_port}/"
             profile = tmp_path / "profile"
-            assert 'data-old-script="yes"' in dump_page(profile, url)
+            assert 'data-old-script="yes"' in dump_page(profile, url, "document.body?.dataset.oldScript")
             upgraded.set()
-            refreshed = dump_page(profile, url)
+            refreshed = dump_page(
+                profile,
+                url,
+                "document.body?.dataset.currentStyles && !document.querySelector('#live-dashboard')?.hidden",
+            )
         finally:
             server.shutdown()
             worker.join()
@@ -177,7 +218,7 @@ def test_failed_initial_refresh_keeps_snapshot_and_warning_visible(tmp_path: Pat
     </script>"""
     page = tmp_path / "dashboard.html"
     page.write_text(shell.replace("</head>", harness + "</head>"), encoding="utf-8")
-    dom = dump_page(tmp_path / "profile", page.as_uri())
+    dom = dump_page(tmp_path / "profile", page.as_uri(), "document.body?.dataset.focusOutline")
     assert 'data-snapshot-visible="true"' in dom
     assert 'data-warning-visible="true"' in dom
     assert 'data-focus-outline="rgb(255, 255, 255)"' in dom
