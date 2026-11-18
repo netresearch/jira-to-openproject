@@ -26,6 +26,7 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from scripts.operator_files import open_operator_text, write_operator_text
 from src.display import configure_logging
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
@@ -37,7 +38,7 @@ def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         logger.error("File not found: %s", path)
         return {}
-    with open(path) as f:
+    with open_operator_text(path) as f:
         return json.load(f)
 
 
@@ -347,8 +348,7 @@ def main() -> None:
 
     # Save results
     results_path = args.data_dir / "bulk_update_results.json"
-    with open(results_path, "w") as f:
-        json.dump(result, f, indent=2, default=str)
+    write_operator_text(results_path, json.dumps(result, indent=2, default=str))
     logger.info("Results saved to: %s", results_path)
 
 
