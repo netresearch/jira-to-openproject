@@ -16,6 +16,7 @@ go through the ``jira`` SDK or the client's ``_make_request`` helper
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Any
 
 from src.infrastructure.jira.jira_client import (
@@ -25,6 +26,7 @@ from src.infrastructure.jira.jira_client import (
     JiraConnectionError,
     JiraResourceNotFoundError,
 )
+from src.infrastructure.jira.jira_issue_service import JiraIssueService
 
 
 class JiraFieldService:
@@ -46,33 +48,22 @@ class JiraFieldService:
 
         This supports add-ons like Simple Tasklists that store data in properties.
         """
-        client = self._client
-        if not client.jira:
-            msg = "Jira client is not initialized"
-            raise JiraConnectionError(msg)
+        from urllib.parse import quote
 
-        # The pre-extraction code referenced ``client.config`` and
-        # ``client._session``, neither of which exists on
-        # ``JiraClient`` — the method always returned ``None`` without
-        # ever making a request. Use ``client.base_url`` and route
-        # through the authenticated SDK session at ``client.jira._session``
-        # like the other Tempo / agile methods do.
+        path = f"/rest/api/2/issue/{quote(issue_key, safe='')}/properties/{quote(property_key, safe='')}"
         try:
-            from urllib.parse import quote
-
-            url = f"{client.base_url}/rest/api/2/issue/{quote(issue_key)}/properties/{quote(property_key)}"
-            resp = client.jira._session.get(url, timeout=15)
-            if resp.status_code == HTTP_OK:
-                data = resp.json()
-                # Property payload is wrapped — the actual value lives
-                # under the ``value`` key. Fall back to the whole dict
-                # if no ``value`` key for resilience.
-                if isinstance(data, dict):
-                    return data.get("value", data)  # type: ignore[return-value]
+            response = self._client._make_request(path, timeout=15)
+        except JiraResourceNotFoundError:
             return None
-        except Exception:
-            self._logger.exception("Failed to fetch issue property: %s %s", issue_key, property_key)
-            return None
+        except JiraApiError as exc:
+            if JiraIssueService._extract_http_status(exc) == HTTPStatus.NOT_FOUND:
+                return None
+            raise
+        data = response.json()
+        if not isinstance(data, dict):
+            msg = "Expected an object in the Jira issue property response."
+            raise JiraApiError(msg)
+        return data.get("value", data)
 
     def _createmeta_fields(self, project_key: str | None, issue_type: dict[str, Any]) -> dict[str, Any]:
         client = self._client

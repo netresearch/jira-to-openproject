@@ -18,11 +18,13 @@ through :class:`WorkPackageMappingEntry.from_legacy`.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
+from src.infrastructure.jira.description_tasks import description_tasks
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -69,9 +71,18 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
                 WorkPackageMappingEntry.from_legacy(k, raw_entry)
             except ValueError:
                 continue
-            prop = self.jira_client.get_issue_property(k, self.property_key)
-            if prop:
+            key = self._inner_jira_key(k, raw_entry)
+            if not key:
+                msg = "Cannot identify the Jira issue for a mapped work package."
+                raise ValueError(msg)
+            prop = self.jira_client.get_issue_property(key, self.property_key)
+            if prop is not None:
                 extracted[k] = prop
+            else:
+                issue = self.jira_client.jira.issue(key, fields="description", expand="renderedFields")
+                tasks = description_tasks(key, issue.raw)
+                if tasks:
+                    extracted[k] = [{**task, "title": self._literal_title(task["title"])} for task in tasks]
         return ComponentResult(success=True, data={"extracted": extracted})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
@@ -93,6 +104,13 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
             markdown_by_issue[jira_key] = "\n".join(self._checklist_row(t) for t in tasks)
 
         return ComponentResult(success=True, data={"markdown": markdown_by_issue})
+
+    @staticmethod
+    def _literal_title(title: str) -> str:
+        """Keep markup, mentions and line breaks in source labels inside one Markdown code span."""
+        title = title.replace("\r", " ").replace("\n", " ")
+        fence = "`" * (1 + max(map(len, re.findall(r"`+", title)), default=0))
+        return f"{fence} {title} {fence}"
 
     @staticmethod
     def _checklist_row(t: dict[str, Any]) -> str:

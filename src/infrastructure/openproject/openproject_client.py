@@ -1282,6 +1282,10 @@ class OpenProjectClient:
         """Thin delegator over ``self.wp_cf.bulk_set_wp_custom_field_values``."""
         return self.wp_cf.bulk_set_wp_custom_field_values(cf_values)
 
+    def set_checklist_section(self, work_package_id: int, markdown: str) -> bool:
+        """Write a checklist section while preserving the surrounding description."""
+        return self.wp_content.set_checklist_section(work_package_id, markdown)
+
     def upsert_work_package_description_section(
         self,
         work_package_id: int,

@@ -68,7 +68,7 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 | ReportingMigration | `reporting` | Stable | Yes | Filters/dashboards |
 | **Utilities** |
 | CategoryDefaultsMigration | `category_defaults` | Stable | Yes | Default values |
-| SimpleTasksMigration | `simple_tasks` | Experimental | No | Task items |
+| SimpleTasksMigration | `simpletasks` | Experimental | No | Task items |
 | WPDefaults | `wp_defaults` | Utility | N/A | Helper class |
 
 ---
@@ -902,16 +902,19 @@ Utility for work package default value application.
 
 ### SimpleTasksMigration
 
-**Location**: `src/migrations/simpletasks_migration.py`
+The `simpletasks` component reads the configured Simple Tasklists issue property. When the
+property is missing, it reads the Jira Data Center issue description and matches each task
+macro to its rendered checkbox by issue key and task ID. An inconsistent render stops the
+import before writing work packages.
 
-Handles simple task items from Jira.
+OpenProject stores the titles and completion states in a marked Markdown checklist in each
+work package description. Reruns update that section and preserve surrounding text. The
+description fallback covers inline description tasks only. Sidebar tasks, comment macros
+and tasks in other fields require their own source and audience checks.
 
-**Features**:
-- Task checklist items
-- Completion status
-- Task assignment
+**Implementation:** `src/application/components/simpletasks_migration.py`
 
-**Dependencies**: WorkPackageMigration
+**Depends on:** work package mappings
 
 ---
 
