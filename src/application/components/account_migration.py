@@ -233,6 +233,32 @@ class AccountMigration(BaseMigration):
         )
         return self.op_projects
 
+    @staticmethod
+    def _account_entry(
+        account: dict[str, Any], project: dict[str, Any], project_key: str | None, matched_by: str
+    ) -> dict[str, Any]:
+        customer = account.get("customer") or {}
+        category = account.get("category") or {}
+        parent = ((project.get("_links") or {}).get("parent") or {}).get("href")
+        return {
+            "tempo_id": account.get("id"),
+            "tempo_key": account.get("key"),
+            "tempo_name": account.get("name") or "",
+            "tempo_lead": (account.get("lead") or {}).get("username"),
+            "tempo_contact": (account.get("contact") or {}).get("username"),
+            "tempo_status": account.get("status"),
+            "tempo_customer_id": customer.get("id"),
+            "tempo_category": category.get("name"),
+            "tempo_category_type": (category.get("categorytype") or {}).get("name"),
+            "company_id": customer.get("id"),
+            "default_project_key": project_key,
+            "openproject_id": project.get("id"),
+            "openproject_identifier": project.get("identifier"),
+            "openproject_name": project.get("name"),
+            "parent_id": parent.rsplit("/", 1)[-1] if parent else None,
+            "matched_by": matched_by,
+        }
+
     def create_account_mapping(self) -> dict:
         """Create a mapping between Tempo accounts and OpenProject sub-projects.
 
@@ -251,80 +277,29 @@ class AccountMigration(BaseMigration):
         if not self.op_projects:
             self.extract_openproject_projects()
 
-        op_projects_by_name = {project.get("name", "").lower(): project for project in self.op_projects}
-
-        jira_project_mapping = self._load_from_json("jira_project_mapping.json", {})
-
+        by_name = {project.get("name", "").lower(): project for project in self.op_projects}
+        by_id = {str(project["id"]): project for project in self.op_projects if project.get("id") is not None}
+        jira_projects = self._load_from_json("jira_project_mapping.json", {})
         mapping = {}
-        for tempo_account in self.tempo_accounts:
-            tempo_id = tempo_account.get("id")
-            tempo_key = tempo_account.get("key")
-            tempo_name = tempo_account.get("name", "")
-            tempo_name_lower = tempo_name.lower()
-            company_id = tempo_account.get("customer", {}).get("id")
-            default_project = tempo_account.get("default_project", {})
-            default_project_key = default_project.get("key")
-
-            op_project = op_projects_by_name.get(tempo_name_lower)
-            match_method = "name" if op_project else "none"
-
-            if not op_project and default_project_key and default_project_key in jira_project_mapping:
-                op_project_id = jira_project_mapping[default_project_key].get(
-                    "openproject_id",
-                )
-                if op_project_id:
-                    op_project = next(
-                        (p for p in self.op_projects if str(p.get("id")) == str(op_project_id)),
-                        None,
-                    )
-                    match_method = "default_project"
-
-            if op_project:
-                mapping[tempo_id] = {
-                    "tempo_id": tempo_id,
-                    "tempo_key": tempo_key,
-                    "tempo_name": tempo_name,
-                    "tempo_lead": tempo_account.get("lead", {}).get("username"),
-                    "tempo_contact": tempo_account.get("contact", {}).get("username"),
-                    "tempo_status": tempo_account.get("status"),
-                    "tempo_customer_id": tempo_account.get("customer", {}).get("id"),
-                    "tempo_category": tempo_account.get("category", {}).get("name"),
-                    "tempo_category_type": tempo_account.get("category", {}).get("categorytype", {}).get("name"),
-                    "company_id": company_id,
-                    "default_project_key": default_project_key,
-                    "openproject_id": op_project.get("id"),
-                    "openproject_identifier": op_project.get("identifier"),
-                    "openproject_name": op_project.get("name"),
-                    "parent_id": (
-                        op_project.get("_links", {}).get("parent", {}).get("href", "").split("/")[-1]
-                        if op_project.get("_links", {}).get("parent", {}).get("href")
-                        else None
-                    ),
-                    "matched_by": match_method,
-                }
-            else:
-                mapping[tempo_id] = {
-                    "tempo_id": tempo_id,
-                    "tempo_key": tempo_key,
-                    "tempo_name": tempo_name,
-                    "tempo_lead": tempo_account.get("lead", {}).get("username"),
-                    "tempo_contact": tempo_account.get("contact", {}).get("username"),
-                    "tempo_status": tempo_account.get("status"),
-                    "tempo_customer_id": tempo_account.get("customer", {}).get("id"),
-                    "tempo_category": tempo_account.get("category", {}).get("name"),
-                    "tempo_category_type": tempo_account.get("category", {}).get("categorytype", {}).get("name"),
-                    "company_id": company_id,
-                    "default_project_key": default_project_key,
-                    "openproject_id": None,
-                    "openproject_identifier": None,
-                    "openproject_name": None,
-                    "parent_id": None,
-                    "matched_by": "none",
-                }
+        for account in self.tempo_accounts:
+            name = account.get("name") or ""
+            project_key = (account.get("default_project") or {}).get("key")
+            project = by_name.get(name.lower())
+            matched_by = "name"
+            if not project:
+                linked = jira_projects.get(project_key)
+                linked_id = linked.get("openproject_id") if isinstance(linked, dict) else linked
+                project = by_id.get(str(linked_id))
+                matched_by = "default_project" if project else "none"
+            mapping[account.get("id")] = self._account_entry(account, project or {}, project_key, matched_by)
 
         self.account_mapping = mapping
         self._save_to_json(mapping, Mappings.ACCOUNT_MAPPING_FILE)
 
+        self._log_account_matches(mapping)
+        return mapping
+
+    def _log_account_matches(self, mapping: dict[Any, dict[str, Any]]) -> None:
         total_accounts = len(mapping)
         matched_accounts = sum(1 for account in mapping.values() if account["matched_by"] != "none")
         name_matched = sum(1 for account in mapping.values() if account["matched_by"] == "name")
@@ -352,11 +327,9 @@ class AccountMigration(BaseMigration):
             )
 
         self.logger.info(
-            "Unmatched accounts: %d - these will be available in the custom field but not linked to projects",
+            "Unmatched accounts: %d retained in the account mapping without a linked project",
             total_accounts - matched_accounts,
         )
-
-        return mapping
 
     def create_account_custom_field(self) -> int:
         """Create a custom field in OpenProject for Tempo accounts.
@@ -368,78 +341,35 @@ class AccountMigration(BaseMigration):
             MigrationError: If custom field creation fails
 
         """
-        self.logger.info(
-            "Ensuring 'Tempo Account' custom field exists in OpenProject...",
-        )
-
-        # First, try robust file-based lookup
+        script = """
+        WorkPackageCustomField.transaction do
+          WorkPackageCustomField.connection.execute("SELECT pg_advisory_xact_lock(hashtext('j2o:tempo-account-field'))")
+          fields = WorkPackageCustomField.where("LOWER(TRIM(name)) = ?", "tempo account").lock.to_a
+          raise "Ambiguous Tempo Account work package custom field" if fields.size > 1
+          field = fields.first || WorkPackageCustomField.new(
+            name: "Tempo Account", field_format: "string", is_required: false, is_filter: true, searchable: true
+          )
+          field.is_for_all = true
+          field.save! if field.new_record? || field.changed?
+          owners = field.respond_to?(:type_variants) ? TypeVariant.default_variant : Type.all
+          owners.each do |owner|
+            owner.custom_fields << field unless owner.custom_fields.exists?(field.id)
+          end
+          { id: field.id }
+        end
+        """
         try:
-            existing_fields = self.op_client.get_custom_fields(force_refresh=True)
-            for cf in existing_fields:
-                if (cf.get("name") or "").strip().lower() == "tempo account":
-                    self.account_custom_field_id = int(cf.get("id"))
-                    self.logger.info(
-                        "Found existing Tempo Account custom field with ID %d",
-                        self.account_custom_field_id,
-                    )
-                    return self.account_custom_field_id
-            self.logger.info("Tempo Account custom field not found, will create it")
-        except Exception as e:
-            self.logger.warning("Error checking existing custom fields via file: %s", e)
-
-        # Try file-based Ruby script approach to avoid console parsing issues
-        self.logger.info("Creating Tempo Account custom field via Rails script...")
-
-        ruby_script = (
-            "cf = CustomField.find_by(name: 'Tempo Account'); "
-            "if cf.nil?; "
-            "cf = CustomField.new(name: 'Tempo Account', field_format: 'string', is_required: false, "
-            "searchable: true, is_filter: true, type: 'WorkPackageCustomField'); "
-            "cf.save!; end; cf.id"
-        )
-
-        try:
-            output = self.op_client.execute_query(ruby_script, timeout=45)
-            # Normalize output to int if possible
-            cf_id: int | None = None
-            if isinstance(output, int):
-                cf_id = output
-            elif isinstance(output, str):
-                out = output.strip()
-                # Some consoles echo with prefix/suffix; extract trailing digits
-                import re as _re
-
-                m = _re.search(r"(\d+)$", out)
-                if m:
-                    cf_id = int(m.group(1))
-
-            # If still unknown, re-scan custom fields via file-based method
-            if cf_id is None:
-                fields_after = self.op_client.get_custom_fields(force_refresh=True)
-                for cf in fields_after:
-                    if (cf.get("name") or "").strip().lower() == "tempo account":
-                        cf_id = int(cf.get("id"))
-                        break
-
-            if not cf_id:
-                msg = "Failed to determine Tempo Account custom field ID"
-                raise MigrationError(msg)
-            self.account_custom_field_id = cf_id
-        except Exception as e:
-            msg = f"Failed to create or retrieve Tempo Account custom field: {e}"
-            raise MigrationError(msg) from e
-        # Field created or found
-
-        # At this point we have a field ID
-        self.logger.info(
-            "Tempo Account custom field ID: %d",
-            self.account_custom_field_id,
-        )
-
-        # Associate with all work package types
-        self.associate_field_with_work_package_types(self.account_custom_field_id)
-
-        return self.account_custom_field_id
+            result = self.op_client.execute_json_query(script)
+        except Exception as exc:
+            msg = "Failed to provision the Tempo Account work package custom field"
+            raise MigrationError(msg) from exc
+        field_id = result.get("id") if isinstance(result, dict) else None
+        if type(field_id) is not int or field_id <= 0:
+            msg = "OpenProject returned no valid Tempo Account custom field ID"
+            raise MigrationError(msg)
+        self.account_custom_field_id = field_id
+        self.logger.info("Enabled Tempo Account field %d for all work package types", field_id)
+        return field_id
 
     def restore_mapping_from_openproject(self) -> dict[str, Any]:
         """Restore account mapping from OpenProject provenance data alone.
@@ -536,12 +466,10 @@ class AccountMigration(BaseMigration):
             total = analysis.get("total_accounts", 0)
             unmatched = analysis.get("unmatched_accounts", 0)
 
-            # Unmatched accounts are added to the custom field as selectable values
-            # but not linked to specific projects. Treat as warning, not failure.
             warnings: list[str] = []
             if unmatched > 0:
                 warnings.append(
-                    f"{unmatched} accounts not matched to projects; they remain selectable via the custom field",
+                    f"{unmatched} accounts retained in the account mapping without a matching project",
                 )
 
             details = {
@@ -553,7 +481,7 @@ class AccountMigration(BaseMigration):
 
             return ComponentResult(
                 success=True,
-                message="Accounts processed; unmatched accounts available in custom field",
+                message="Accounts processed and unmatched accounts retained in the mapping",
                 details=details,
                 data=analysis,
                 warnings=warnings,
