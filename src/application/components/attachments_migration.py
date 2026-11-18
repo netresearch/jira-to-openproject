@@ -44,6 +44,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.config import logger
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 
@@ -468,7 +469,12 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         if not ops:
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
-        # Copy files to container and build data payload for Rails script
+        with private_container_directory(self.op_client.docker_client) as directory:
+            container_ops = self._transfer_attachments(ops, directory)
+            return self._attach_files(container_ops)
+
+    def _transfer_attachments(self, ops: list[dict[str, Any]], directory: Path) -> list[dict[str, Any]]:
+        """Stage attachment bytes under unique names, keeping display names in the payload."""
         logger.info("_load: transferring %d files to container", len(ops))
         container_ops: list[dict[str, Any]] = []
         for idx, op in enumerate(ops):
@@ -484,9 +490,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 wp_id = int(op["work_package_id"])  # type: ignore[arg-type]
                 jira_key = str(op["jira_key"])
                 filename = str(op["filename"])
-                digest = str(op["digest"])
-                # Place in /tmp with digest prefix to avoid collisions
-                container_path = f"/tmp/j2o_att_{digest[:12]}_{os.path.basename(filename)}"
+                container_path = directory / f"{idx}-{Path(filename).name}"
                 try:
                     logger.info("_load: transferring file %d/%d: %s", idx + 1, len(ops), filename)
                     self.op_client.transfer_file_to_container(local_path, container_path)
@@ -500,13 +504,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         "work_package_id": wp_id,
                         "jira_key": jira_key,
                         "filename": filename,
-                        "container_path": container_path,
+                        "container_path": container_path.as_posix(),
                     },
                 )
             except Exception:
                 self._loss_counters["load_per_op_exception"] += 1
                 continue
 
+        return container_ops
+
+    def _attach_files(self, container_ops: list[dict[str, Any]]) -> ComponentResult:
+        """Apply the staged files to OpenProject before the staging directory is removed."""
         if not container_ops:
             return ComponentResult(success=True, updated=0, data={"attachment_mapping": {}})
 
@@ -599,97 +607,31 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         updated = 0
         failed = 0
         attachment_mapping: dict[str, dict[str, int]] = {}
-        logger.info("_load: all %d files transferred, executing Rails script with %d ops", len(ops), len(container_ops))
+        logger.info("_load: executing Rails script with %d staged attachments", len(container_ops))
         try:
             envelope = self.op_client.execute_script_with_data(ruby_runner, container_ops)
             logger.info("_load: Rails script completed")
-            # ``execute_script_with_data`` returns an envelope:
-            # ``{status, message, data, output}``. The actual results
-            # live under ``data`` (the parsed JSON the Ruby script
-            # printed between the markers). The pre-fix code read
-            # ``res.get("results")`` directly on the envelope and
-            # always saw an empty list — silently returning
-            # ``updated=0, failed=0`` regardless of what Rails did.
-            # Same envelope-bug class PR #201 caught for
-            # ``wp_metadata_backfill``.
-            if isinstance(envelope, dict):
-                if envelope.get("status") != "success":
-                    logger.warning(
-                        "_load: Rails returned status=%r message=%r — counting batch as failed",
-                        envelope.get("status"),
-                        envelope.get("message"),
-                    )
-                    failed = len(container_ops)
-                    self._loss_counters["load_rails_status_not_success"] += len(container_ops)
-                else:
-                    data = envelope.get("data")
-                    # Defensive type validation. A malformed Rails
-                    # response shouldn't crash on ``len()``/iteration,
-                    # but it ALSO shouldn't silently report a green
-                    # batch — count the whole batch as failed and
-                    # surface a named bucket so the operator can tell
-                    # this from a normal per-op error. Per PR #211/#223
-                    # review.
-                    if not isinstance(data, dict):
-                        logger.warning(
-                            "_load: Rails returned non-dict ``data`` (%r) — counting batch as failed",
-                            type(data).__name__,
-                        )
-                        failed = len(container_ops)
-                        self._loss_counters["load_rails_malformed_data"] += len(container_ops)
-                        return ComponentResult(
-                            success=False,
-                            updated=updated,
-                            failed=failed,
-                            data={"attachment_mapping": attachment_mapping},
-                        )
-                    raw_results = data.get("results")
-                    raw_errors = data.get("errors")
-                    if not isinstance(raw_results, list) or not isinstance(raw_errors, list):
-                        logger.warning(
-                            "_load: Rails ``results``/``errors`` shape unexpected"
-                            " (results=%r, errors=%r) — counting batch as failed",
-                            type(raw_results).__name__,
-                            type(raw_errors).__name__,
-                        )
-                        failed = len(container_ops)
-                        self._loss_counters["load_rails_malformed_data"] += len(container_ops)
-                        return ComponentResult(
-                            success=False,
-                            updated=updated,
-                            failed=failed,
-                            data={"attachment_mapping": attachment_mapping},
-                        )
-                    results = raw_results
-                    errors = raw_errors
-                    # Build attachment mapping: {jira_key: {filename: attachment_id}}
-                    for r in results:
-                        if not isinstance(r, dict):
-                            continue
-                        jira_key = r.get("jira_key")
-                        filename = r.get("filename")
-                        att_id = r.get("attachment_id")
-                        if jira_key and filename and att_id:
-                            if jira_key not in attachment_mapping:
-                                attachment_mapping[jira_key] = {}
-                            attachment_mapping[jira_key][filename] = int(att_id)
-                            if not r.get("existed"):
-                                updated += 1
-                    failed = len(errors)
-                    if errors:
-                        self._loss_counters["load_rails_per_op_error"] += len(errors)
-                        # Surface the first few error objects so future
-                        # runs can diagnose why Rails rejected an
-                        # attach. Without this the counter alone
-                        # gives no clue what failed; the live re-run
-                        # on NRS reported 39 errors with no text.
-                        sample = errors[:5]
-                        logger.warning(
-                            "_load: Rails returned %d per-op errors (sample of %d): %s",
-                            len(errors),
-                            len(sample),
-                            sample,
-                        )
+            rows = self._attachment_rows(envelope, len(container_ops))
+            if rows is None:
+                return ComponentResult(
+                    success=False, updated=0, failed=len(container_ops), data={"attachment_mapping": {}}
+                )
+            results, errors = rows
+            for result in results:
+                if not isinstance(result, dict):
+                    continue
+                jira_key = result.get("jira_key")
+                filename = result.get("filename")
+                attachment_id = result.get("attachment_id")
+                if jira_key and filename and attachment_id:
+                    attachment_mapping.setdefault(jira_key, {})[filename] = int(attachment_id)
+                    if not result.get("existed"):
+                        updated += 1
+            failed = len(errors)
+            if errors:
+                self._loss_counters["load_rails_per_op_error"] += failed
+                sample = errors[:5]
+                logger.warning("_load: Rails returned %d per-op errors (sample of %d): %s", failed, len(sample), sample)
         except Exception:
             logger.exception("Rails attach operation failed")
             failed = len(container_ops)
@@ -701,6 +643,19 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             failed=failed,
             data={"attachment_mapping": attachment_mapping},
         )
+
+    def _attachment_rows(self, envelope: Any, count: int) -> tuple[list, list] | None:
+        """Validate the Rails runner envelope before treating the batch as complete."""
+        if not isinstance(envelope, dict) or envelope.get("status") != "success":
+            logger.warning("_load: Rails did not return a successful attachment response")
+            self._loss_counters["load_rails_status_not_success"] += count
+            return None
+        data = envelope.get("data")
+        if isinstance(data, dict) and isinstance(data.get("results"), list) and isinstance(data.get("errors"), list):
+            return data["results"], data["errors"]
+        logger.warning("_load: Rails attachment results or errors have an unexpected format")
+        self._loss_counters["load_rails_malformed_data"] += count
+        return None
 
     @staticmethod
     def disambiguate_duplicate_filenames_in_group(
