@@ -25,6 +25,9 @@ from src.type_definitions import (
     SectionName,
 )
 
+_LOCAL_ENV_FILE = ".env.local"
+
+
 # Set up basic logging for configuration loading phase
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 config_logger = logging.getLogger("config_loader")
@@ -45,9 +48,6 @@ def is_test_environment() -> bool:
 
     # Check for our custom test mode flag (set by test fixtures)
     return os.environ.get("J2O_TEST_MODE", "").lower() in ("true", "1", "yes")
-
-
-LOCAL_ENV_FILE = ".env.local"
 
 
 class ConfigLoader:
@@ -104,8 +104,8 @@ class ConfigLoader:
 
             # In test mode, load both .env.local and .env.test
             # with test having higher precedence
-            if Path(LOCAL_ENV_FILE).exists():
-                load_dotenv(LOCAL_ENV_FILE, override=True)
+            if Path(_LOCAL_ENV_FILE).exists():
+                load_dotenv(_LOCAL_ENV_FILE, override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
             # Always load .env.test in test mode
@@ -121,8 +121,8 @@ class ConfigLoader:
             config_logger.debug("Running in development/production environment")
 
             # In non-test mode, only load .env.local if it exists
-            if Path(LOCAL_ENV_FILE).exists():
-                load_dotenv(LOCAL_ENV_FILE, override=True)
+            if Path(_LOCAL_ENV_FILE).exists():
+                load_dotenv(_LOCAL_ENV_FILE, override=True)
                 config_logger.debug("Loaded local overrides from .env.local")
 
     def _load_yaml_config(self, config_file_path: Path) -> Config:
