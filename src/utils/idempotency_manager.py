@@ -120,7 +120,7 @@ class IdempotencyKeyManager:
     """
 
     # Default TTL for idempotency keys (24 hours)
-    DEFAULT_TTL = 86400  # 24 * 60 * 60 seconds
+    DEFAULT_TTL_SECONDS = 86400  # 24 * 60 * 60 seconds
 
     # Lua script for atomic get-and-set operations
     LUA_GET_SET_SCRIPT = """
@@ -144,7 +144,7 @@ class IdempotencyKeyManager:
         self,
         redis_url: str | None = None,
         fallback_cache_size: int = 1000,
-        default_ttl: int = DEFAULT_TTL,
+        default_ttl: int = DEFAULT_TTL_SECONDS,
         key_prefix: str = "idempotency:",
         *,
         redis_ssl: bool = False,
@@ -373,24 +373,8 @@ class IdempotencyKeyManager:
             logger.warning("Failed to cache in memory: %s", e)
             return False
 
-    def atomic_get_or_set(
-        self,
-        idempotency_key: str,
-        result_or_func: object,
-        ttl: int | None = None,
-    ) -> IdempotencyResult:
-        """Atomically get existing result or set new one."""
-        cache_key = f"{self.key_prefix}{idempotency_key}"
-        ttl = ttl or self.default_ttl
-
-        # Validate TTL to prevent Redis errors
-        if not isinstance(ttl, int) or ttl <= 0 or ttl > MAX_TTL_SECONDS:
-            logger.warning("Invalid TTL value: %s, using default", ttl)
-            ttl = self.default_ttl
-
-        is_callable = callable(result_or_func)
-
-        # First, fast-path read from Redis without executing the function
+    def _read_before_lock(self, cache_key: str) -> IdempotencyResult | None:
+        """Read and validate a Redis entry before taking the process lock."""
         if self._redis_available and self._redis_client:
             try:
                 cached_data = self._redis_client.get(cache_key)
@@ -411,6 +395,27 @@ class IdempotencyKeyManager:
                 with self._lock:
                     self._metrics["redis_errors"] += 1
 
+        return None
+
+    def atomic_get_or_set(
+        self,
+        idempotency_key: str,
+        result_or_func: object,
+        ttl: int | None = None,
+    ) -> IdempotencyResult:
+        """Atomically get existing result or set new one."""
+        cache_key = f"{self.key_prefix}{idempotency_key}"
+        ttl = ttl or self.default_ttl
+
+        # Validate TTL to prevent Redis errors
+        if not isinstance(ttl, int) or ttl <= 0 or ttl > MAX_TTL_SECONDS:
+            logger.warning("Invalid TTL value: %s, using default", ttl)
+            ttl = self.default_ttl
+
+        existing = self._read_before_lock(cache_key)
+        if existing is not None:
+            return existing
+
         # Compute under process lock to ensure single execution across threads
         with self._lock:
             # Double-check cache using unified helper (handles redis+memory)
@@ -419,7 +424,7 @@ class IdempotencyKeyManager:
                 return existing
 
             # Execute function if callable, otherwise use provided result
-            result = result_or_func() if is_callable else result_or_func
+            result = result_or_func() if callable(result_or_func) else result_or_func
 
             # Try to store in Redis first; fallback to memory cache
             try:
