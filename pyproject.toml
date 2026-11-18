@@ -22,6 +22,9 @@ dependencies = [
     # Jira API
     "jira>=3.10.5",
 
+    # Incremental reading of large JSON exports
+    "ijson>=3.6.0",
+
     # Data validation
     "pydantic>=2.14.3",
 
