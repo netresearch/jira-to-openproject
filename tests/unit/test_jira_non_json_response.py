@@ -423,7 +423,8 @@ class TestRoleDetailPath:
 
 class TestTempoWorkAttributeCatalog:
     core = "https://jira.local/rest/tempo-core/1/work-attribute"
-    legacy = "https://jira.local/rest/tempo-timesheets/3/work-attributes"
+    legacy = "https://jira.local/rest/tempo-timesheets/3/worklog-attributes"
+    previous = "https://jira.local/rest/tempo-timesheets/3/work-attributes"
 
     @staticmethod
     def attributes_response() -> MagicMock:
@@ -476,8 +477,19 @@ class TestTempoWorkAttributeCatalog:
             client.get_tempo_work_attributes()
         assert client.jira._session.get.call_count == (2 if missing_core else 1)
 
-    def test_both_endpoints_missing_is_optional(self, tempo_client):
+    def test_historical_configured_path_still_works(self, tempo_client):
+        client, _ = tempo_client
+        missing = _resp(status_code=404, body="{}")
+        client.jira._session.get.side_effect = [missing, missing, self.attributes_response()]
+        assert client.get_tempo_work_attributes() == [{"id": 1}]
+        assert [call.args[0] for call in client.jira._session.get.call_args_list] == [
+            self.core,
+            self.legacy,
+            self.previous,
+        ]
+
+    def test_all_endpoints_missing_is_optional(self, tempo_client):
         client, _ = tempo_client
         client.jira._session.get.return_value = _resp(content_type="application/json", body="{}", status_code=404)
         assert client.get_tempo_work_attributes() == []
-        assert client.jira._session.get.call_count == 2
+        assert client.jira._session.get.call_count == 3

@@ -311,7 +311,11 @@ class JiraTempoService:
             JiraApiError: If the API request fails
 
         """
-        paths = ("/rest/tempo-core/1/work-attribute", "/rest/tempo-timesheets/3/work-attributes")
+        paths = (
+            "/rest/tempo-core/1/work-attribute",
+            "/rest/tempo-timesheets/3/worklog-attributes",
+            "/rest/tempo-timesheets/3/work-attributes",
+        )
         for path in paths:
             try:
                 response = self._client.jira._session.get(f"{self._client.base_url}{path}")
