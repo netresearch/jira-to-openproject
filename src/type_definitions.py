@@ -7,7 +7,7 @@ This module contains data classes and type definitions used throughout
 the migration process.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, make_dataclass
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -40,13 +40,15 @@ class OpenProjectWorkPackageType:
     updated_at: str | None = None
 
 
-@dataclass(slots=True)
-class JiraStatus:
-    """Represents a Jira status."""
-
-    id: str
-    name: str
-    statusCategory: dict[str, str] | None = None
+# Dataclass fields mirror the Jira response keys for direct construction and
+# round trips with dataclasses.asdict, including Jira's mixed-case category key.
+JiraStatus = make_dataclass(
+    "JiraStatus",
+    [("id", str), ("name", str), ("statusCategory", dict[str, str] | None, field(default=None))],
+    slots=True,
+    module=__name__,
+    namespace={"__doc__": "The Jira status payload as returned by the API."},
+)
 
 
 @dataclass(slots=True)
