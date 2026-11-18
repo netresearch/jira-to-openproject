@@ -408,13 +408,15 @@ class IssueTransformer:
         }
 
         # BUG #32 FIX (REGRESSION #3): Skip unmapped fields to prevent invalid Journal::WorkPackageJournal attributes
-        if field not in field_mappings:
+        if not field or field not in field_mappings:
             return None
 
         op_field = field_mappings[field]
 
         old = self._journal_value(field, item.get("from"), item.get("fromString"))
         new = self._journal_value(field, item.get("to"), item.get("toString"))
+        if field in ("issuetype", "status", "Fix Version", "timeestimate", "timeoriginalestimate"):
+            self.logger.info("Mapped Jira %s change to %s: %r -> %r", field, op_field, old, new)
         if old == new:
             return None
         return {op_field: [old, new]}
