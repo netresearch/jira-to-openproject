@@ -53,6 +53,13 @@ class DummyOp:
         # dummy. Tests can override before calling ``run()``.
         self.attachment_max_kb: int = 5120
 
+    @property
+    def docker_client(self):
+        return self
+
+    def execute_command(self, command: str):
+        return ("/tmp/j2o-stage.0123456789", "", 0) if "mktemp -d " in command else ("", "", 0)
+
     def transfer_file_to_container(self, local_path: Path, container_path: str):
         self.transfers.append((local_path, container_path))
 
@@ -367,7 +374,7 @@ def test_load_rails_script_includes_update_columns_filename_guard():
 
     from src.application.components.attachments_migration import AttachmentsMigration as _AM
 
-    src = inspect.getsource(_AM._load)
+    src = inspect.getsource(_AM._attach_files)
     assert "att.update_columns(filename: fname)" in src, (
         "Rails script must include the byte-exact filename guard "
         "(att.update_columns) to prevent OP's silent filename"
@@ -804,3 +811,9 @@ def test_prepare_op_uses_attachment_id_to_disambiguate_local_path(tmp_path: Path
     # Each path carries the source id as a prefix.
     assert "/100_" in op_a["local_path"], op_a["local_path"]
     assert "/200_" in op_b["local_path"], op_b["local_path"]
+
+
+def test_absent_rails_envelope_marks_batch_incomplete():
+    migration = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
+    assert migration._attachment_rows(None, 3) is None
+    assert migration._loss_counters["load_rails_status_not_success"] == 3

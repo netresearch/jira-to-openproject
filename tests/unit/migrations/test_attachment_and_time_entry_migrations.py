@@ -51,6 +51,7 @@ def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapp
 
     jira_client = MagicMock()
     op_client = MagicMock()
+    op_client.docker_client.execute_command.return_value = ("/tmp/j2o-stage.0123456789", "", 0)
     # ``execute_script_with_data`` returns the runner envelope:
     # ``{status, message, data, output}``. The pre-fix flat shape
     # masked the envelope-parsing bug closed in the recent
@@ -98,6 +99,7 @@ def test_attachments_migration_transfers_files(tmp_path, monkeypatch, dummy_mapp
     payload = execute_args[1]
     assert len(payload) == 1
     assert payload[0]["filename"] == "foo.txt"
+    assert Path(payload[0]["container_path"]) == Path("/tmp/j2o-stage.0123456789/0-foo.txt")
 
 
 def test_attachment_provenance_updates_metadata(tmp_path, monkeypatch, dummy_mapping_data):
