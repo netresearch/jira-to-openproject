@@ -36,3 +36,18 @@ def test_partial_jira_fetch_preserves_previous_cache(tmp_path, monkeypatch):
     partial["TEST-2"] = {"key": "TEST-2"}
     assert cache_jira_issues.main() == 0
     assert json.loads(cache.read_text()) == {key: {"key": key} for key in partial}
+
+
+def test_json_export_preserves_destination_on_failure_and_rejects_link(tmp_path):
+    from scripts.export_json_file import write_json_export
+
+    target = tmp_path / "original.json"
+    target.write_text("original")
+    link = tmp_path / "export.json"
+    link.symlink_to(target)
+    with pytest.raises(ValueError, match="regular export"):
+        write_json_export(link, {})
+    with pytest.raises(TypeError):
+        write_json_export(target, object())
+    assert target.read_text() == "original"
+    assert set(tmp_path.iterdir()) == {link, target}

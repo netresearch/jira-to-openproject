@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 # Add project root to path
@@ -16,6 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
+
+if __package__:
+    from .export_json_file import write_json_export
+else:
+    from export_json_file import write_json_export
 
 
 def _raw_issues(result):
@@ -84,14 +88,7 @@ def main() -> int:
 
     # Save cache
     logger.info("Saving %d issues to %s", len(all_issues), cache_file)
-    with tempfile.NamedTemporaryFile(mode="w", dir=data_dir, delete=False, encoding="utf-8") as output:
-        staged = Path(output.name)
-        try:
-            json.dump(all_issues, output)
-            output.close()
-            staged.replace(cache_file)
-        finally:
-            staged.unlink(missing_ok=True)
+    write_json_export(cache_file, all_issues, indent=None)
 
     logger.info("Done! Cached %d issues", len(all_issues))
     return 0

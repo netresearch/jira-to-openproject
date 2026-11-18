@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+if __package__:
+    from .export_json_file import write_json_export
+else:
+    from export_json_file import write_json_export
+
 
 def run_command_in_tmux(session_name: str, command: str) -> bool:
     """Submit one literal Ruby command to the selected Rails console."""
@@ -69,8 +74,7 @@ def get_complete_custom_fields(
         fields = _read_fields(capture_tmux_output(session_name), token)
         if fields is not None:
             if output_file:
-                Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-                Path(output_file).write_text(json.dumps(fields, indent=2), encoding="utf-8")
+                write_json_export(Path(output_file), fields)
             print(f"Found {len(fields)} custom fields")
             for field in fields[:5]:
                 print(f"- {field['name']} (ID: {field['id']}, Type: {field['field_format']})")

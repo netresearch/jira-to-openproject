@@ -12,6 +12,11 @@ import json
 import sys
 from pathlib import Path
 
+if __package__:
+    from .export_json_file import write_json_export
+else:
+    from export_json_file import write_json_export
+
 
 def extract_json(input_file: Path, output_file: Path) -> bool:
     """Extract JSON from raw tmux output.
@@ -68,8 +73,7 @@ def extract_json(input_file: Path, output_file: Path) -> bool:
     except json.JSONDecodeError as exc:
         print(f"Error parsing JSON: {exc}")
         return False
-    with output_file.open("w") as output:
-        json.dump(data, output, indent=2)
+    write_json_export(output_file, data)
     print(f"Saved {len(data)} records to {output_file}")
     _print_fields(data)
     return True
