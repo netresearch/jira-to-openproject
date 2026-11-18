@@ -98,8 +98,10 @@ def test_batch_create_time_entries_file_based(tmp_path: Path) -> None:
     assert isinstance(result, dict)
     assert result.get("created") == 1
     assert result.get("failed") == 0
-    assert result.get("results") and result["results"][0]["success"] is True
+    assert result.get("results")
+    assert result["results"][0]["success"] is True
 
     # Verify our runner script included logged_by assignment
     rails = client.rails_client  # type: ignore[attr-defined]
-    assert hasattr(rails, "last_script") and "logged_by_id" in rails.last_script
+    assert hasattr(rails, "last_script")
+    assert "logged_by_id" in rails.last_script

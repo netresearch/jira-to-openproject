@@ -173,7 +173,7 @@ class ConfigLoader:
                         "POSTGRES_PASSWORD_FILE points outside standard secret directories",
                     )
                 postgres_password = secret_path.read_text().strip()
-            except (OSError, PermissionError, FileNotFoundError) as e:
+            except OSError as e:
                 # Log only exception class name, not the file path
                 config_logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
 
@@ -189,7 +189,7 @@ class ConfigLoader:
                     config_logger.debug(
                         "Successfully loaded PostgreSQL password from Docker secret",
                     )
-                except (OSError, PermissionError) as e:
+                except OSError as e:
                     config_logger.warning(
                         "Failed to read Docker secret: %s",
                         e.__class__.__name__,

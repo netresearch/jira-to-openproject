@@ -228,3 +228,7 @@ auth_keys
 
 # Serena MCP memories (session-specific)
 .serena/ 
+
+# Personal keys and private state for Jira comment cutover
+*.agekey
+/private/

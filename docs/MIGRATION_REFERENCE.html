@@ -37,8 +37,8 @@
             box-sizing: border-box;
         }
 
-        html {
-            scroll-behavior: smooth;
+        @media (prefers-reduced-motion: no-preference) {
+            html { scroll-behavior: smooth; }
         }
 
         body {
@@ -105,8 +105,7 @@
         .logo-icon {
             width: 48px;
             height: 48px;
-            background: rgba(255, 255, 255, 0.2);
-            backdrop-filter: blur(8px);
+            background: #195660;
             border: 1px solid rgba(255, 255, 255, 0.3);
             border-radius: 12px;
             display: flex;
@@ -138,20 +137,19 @@
         .search-box input {
             width: 100%;
             padding: 0.75rem 1rem 0.75rem 2.75rem;
-            background: rgba(255, 255, 255, 0.15);
-            backdrop-filter: blur(8px);
+            background: #fff;
             border: 1px solid rgba(255, 255, 255, 0.3);
             border-radius: 8px;
-            color: white;
+            color: #29343b;
             font-family: 'Lora', serif;
             font-size: 0.9375rem;
-            transition: all 0.2s;
+            transition: border-color 0.2s, background-color 0.2s;
         }
 
         .search-box input:focus {
             outline: none;
             border-color: var(--orange);
-            background: rgba(255, 255, 255, 0.25);
+            background: #fff;
         }
 
         /* Links - Netresearch: turquoise default, orange hover */
@@ -166,7 +164,7 @@
         }
 
         .search-box input::placeholder {
-            color: rgba(255, 255, 255, 0.6);
+            color: #59656a;
         }
 
         .search-box::before {
@@ -229,7 +227,7 @@
             text-decoration: none;
             border-radius: 6px;
             font-size: 0.9375rem;
-            transition: all 0.15s;
+            transition: color 0.15s, background-color 0.15s;
         }
 
         .nav-link:hover {
@@ -308,13 +306,16 @@
             border: 1px solid var(--border-subtle);
             border-radius: 12px;
             padding: 1.5rem;
-            transition: all 0.2s;
             box-shadow: 0 2px 8px var(--card-shadow);
+        }
+
+        @media (prefers-reduced-motion: no-preference) {
+            .card { transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s; }
+            .card:hover { transform: translateY(-2px); }
         }
 
         .card:hover {
             border-color: var(--turquoise);
-            transform: translateY(-2px);
             box-shadow: 0 8px 25px var(--card-shadow);
         }
 
@@ -335,7 +336,7 @@
             font-size: 1.125rem;
         }
 
-        .card-icon.orange { background: rgba(255, 77, 0, 0.1); color: var(--orange); }
+        .card-icon.orange { background: #ffede5; color: #943900; }
         .card-icon.blue { background: rgba(47, 153, 164, 0.1); color: var(--turquoise); }
         .card-icon.green { background: rgba(40, 167, 69, 0.1); color: var(--success); }
 
@@ -428,15 +429,17 @@
             padding: 1rem 1.25rem;
             background: var(--light-bg);
             cursor: pointer;
-            transition: all 0.15s;
+            transition: background-color 0.15s;
             user-select: none;
         }
+
+        .accordion-header::-webkit-details-marker { display: none; }
 
         .accordion-header:hover {
             background: var(--light-gray);
         }
 
-        .accordion-header.active {
+        .accordion[open] > .accordion-header {
             border-bottom: 1px solid var(--border-subtle);
             background: white;
         }
@@ -451,10 +454,13 @@
             background: var(--light-gray);
             color: var(--mid-gray);
             font-size: 0.75rem;
-            transition: transform 0.2s;
         }
 
-        .accordion-header.active .accordion-toggle {
+        @media (prefers-reduced-motion: no-preference) {
+            .accordion-toggle { transition: transform 0.2s; }
+        }
+
+        .accordion[open] > .accordion-header .accordion-toggle {
             transform: rotate(90deg);
             background: var(--turquoise);
             color: white;
@@ -484,13 +490,8 @@
         }
 
         .accordion-content {
-            display: none;
             padding: 1.25rem;
             background: white;
-        }
-
-        .accordion-content.active {
-            display: block;
         }
 
         /* Tables */
@@ -551,12 +552,12 @@
             color: var(--text-muted);
         }
 
-        .type-badge.string { background: rgba(47, 153, 164, 0.12); color: var(--turquoise); }
-        .type-badge.int { background: rgba(40, 167, 69, 0.12); color: #198754; }
-        .type-badge.date { background: rgba(255, 77, 0, 0.1); color: var(--orange); }
+        .type-badge.string { background: #e5f2f3; color: #215c63; }
+        .type-badge.int { background: #e5f4e8; color: #1a683d; }
+        .type-badge.date { background: #ffede5; color: #943900; }
         .type-badge.user { background: rgba(88, 89, 97, 0.12); color: var(--anthracite); }
         .type-badge.list { background: rgba(255, 193, 7, 0.15); color: #cc9a06; }
-        .type-badge.bool { background: rgba(47, 153, 164, 0.12); color: var(--turquoise); }
+        .type-badge.bool { background: #e5f2f3; color: #215c63; }
 
         /* Code blocks */
         code {
@@ -752,7 +753,6 @@
         }
 
         /* Utility classes */
-        .hidden { display: none !important; }
         .highlight { background: rgba(47, 153, 164, 0.15); }
     </style>
 </head>
@@ -768,7 +768,7 @@
                     </div>
                 </div>
                 <div class="search-box">
-                    <input type="text" id="search" placeholder="Search fields, entities...">
+                    <input type="search" id="search" aria-label="Search fields and entities" placeholder="Search fields, entities...">
                 </div>
             </div>
         </div>
@@ -1211,15 +1211,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Core user attributes and transformations</span>
                             </div>
                             <span class="accordion-badge">12 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -1307,17 +1307,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Matching Strategy</h4>
                                 <span>Priority order for existing user matching</span>
                             </div>
                             <span class="accordion-badge">4 methods</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ol style="padding-left: 1.25rem; color: var(--mid-gray);">
                                 <li style="margin-bottom: 0.5rem;"><strong style="color: var(--orange);">Provenance Key Match</strong> — <code>j2o_user_key</code> custom field (strongest)</li>
@@ -1326,7 +1326,7 @@
                                 <li><strong style="color: var(--mid-gray);">Email Match</strong> — OP <code>mail</code> matches Jira <code>emailAddress</code></li>
                             </ol>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Groups Section -->
@@ -1351,16 +1351,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Group to group transformation</span>
                             </div>
                             <span class="accordion-badge">4 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -1405,17 +1405,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Limitations</h4>
                                 <span>Known constraints for group migration</span>
                             </div>
                             <span class="accordion-badge">3 items</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Group permissions not migrated</strong> — Jira group permissions don't map directly to OP roles</li>
@@ -1423,7 +1423,7 @@
                                 <li><strong>LDAP/AD groups</strong> — External directory groups sync separately from J2O</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Companies Section -->
@@ -1448,16 +1448,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Customer to project transformation</span>
                             </div>
                             <span class="accordion-badge">6 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -1516,7 +1516,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Accounts Section -->
@@ -1541,15 +1541,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Account to custom field transformation</span>
                             </div>
                             <span class="accordion-badge">8 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -1620,7 +1620,7 @@
                                 is_for_all: true, Searchable: true, Filterable: true
                             </p>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Projects Section -->
@@ -1645,15 +1645,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Project attributes and custom fields</span>
                             </div>
                             <span class="accordion-badge">11 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -1748,17 +1748,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Module Enablement</h4>
                                 <span>OpenProject modules enabled based on project characteristics</span>
                             </div>
                             <span class="accordion-badge">adaptive</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -1797,7 +1797,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Custom Fields Section -->
@@ -1810,16 +1810,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Type Conversion Table</h4>
                                 <span>Jira schema type → OpenProject format</span>
                             </div>
                             <span class="accordion-badge">26 types</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -1946,7 +1946,7 @@
                                 <strong>Fallback:</strong> If no type match found, defaults to <span class="type-badge string">text</span>
                             </p>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Issue Types Section -->
@@ -1959,16 +1959,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Default Type Mappings</h4>
                                 <span>Predefined Jira → OpenProject type translations</span>
                             </div>
                             <span class="accordion-badge">16 types</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -2066,7 +2066,7 @@
                                 <strong>Matching strategy:</strong> 1) Exact name match → 2) Default mapping table → 3) Create new type with same name
                             </p>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Statuses Section -->
@@ -2079,15 +2079,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Status Category Mapping</h4>
                                 <span>Jira category → OpenProject is_closed flag</span>
                             </div>
                             <span class="accordion-badge">3 categories</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -2122,7 +2122,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Priorities Section -->
@@ -2147,16 +2147,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Priority to IssuePriority transformation</span>
                             </div>
                             <span class="accordion-badge">5 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -2208,17 +2208,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Common Priority Mappings</h4>
                                 <span>Standard Jira priorities and colors</span>
                             </div>
                             <span class="accordion-badge">5 priorities</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -2259,7 +2259,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Resolutions Section -->
@@ -2284,16 +2284,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Resolution to custom field transformation</span>
                             </div>
                             <span class="accordion-badge">3 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -2331,17 +2331,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Notes</h4>
                                 <span>Implementation details</span>
                             </div>
                             <span class="accordion-badge">info</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Custom field type:</strong> List (select) — allows dropdown selection</li>
@@ -2350,7 +2350,7 @@
                                 <li><strong>No native equivalent:</strong> OP doesn't have a built-in resolution concept; uses custom field workaround</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Workflows Section -->
@@ -2375,16 +2375,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>What IS Migrated</h4>
                                 <span>Workflow elements that transfer</span>
                             </div>
                             <span class="accordion-badge success">migrated</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -2414,17 +2414,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>What is NOT Migrated</h4>
                                 <span>Workflow elements requiring manual setup</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -2470,7 +2470,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Security Levels Section -->
@@ -2495,16 +2495,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Security level to custom field</span>
                             </div>
                             <span class="accordion-badge">2 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -2535,17 +2535,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Limitations</h4>
                                 <span>Why security levels don't fully migrate</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--warning); color: var(--anthracite);">partial</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>No issue-level visibility in OP:</strong> OpenProject uses project-level permissions, not per-issue security</li>
@@ -2554,7 +2554,7 @@
                                 <li><strong>Workaround:</strong> Create separate private projects for sensitive issues, or use OP Enterprise features</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Work Packages Section -->
@@ -2579,16 +2579,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Core Field Mappings</h4>
                                 <span>Issue attributes to work package fields</span>
                             </div>
                             <span class="accordion-badge">16 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -2714,17 +2714,17 @@
                                 1) customfield_18690 → 2) customfield_12590 → 3) customfield_11490 → 4) customfield_15082 → 5) First "In Progress" transition
                             </p>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Content Transformations</h4>
                                 <span>Description and comment formatting changes</span>
                             </div>
                             <span class="accordion-badge">4 transforms</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -2760,7 +2760,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Relations Section -->
@@ -2773,16 +2773,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Link Type Mappings</h4>
                                 <span>Jira link types to OpenProject relation types</span>
                             </div>
                             <span class="accordion-badge">7 types</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -2840,7 +2840,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Time Entries Section -->
@@ -2865,15 +2865,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Worklog to time entry transformation</span>
                             </div>
                             <span class="accordion-badge">7 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -2933,7 +2933,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Sprints Section -->
@@ -2958,15 +2958,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Sprint to version transformation</span>
                             </div>
                             <span class="accordion-badge">6 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -3026,7 +3026,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Epics Section -->
@@ -3051,15 +3051,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Epic Link Detection</h4>
                                 <span>Field search priority for epic relationship</span>
                             </div>
                             <span class="accordion-badge">4 methods</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ol style="padding-left: 1.25rem; color: var(--mid-gray);">
                                 <li style="margin-bottom: 0.5rem;"><code style="color: var(--orange);">fields.epicLink</code> — Primary field</li>
@@ -3071,7 +3071,7 @@
                                 <strong>Result:</strong> Child WP <code>parent_id</code> = Epic WP <code>id</code> (resolved via work_package_mapping)
                             </p>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Attachments Section -->
@@ -3084,15 +3084,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Attachment metadata preservation</span>
                             </div>
                             <span class="accordion-badge">7 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -3159,17 +3159,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Inline Reference Conversion</h4>
                                 <span>Post-processing for embedded images and files</span>
                             </div>
                             <span class="accordion-badge">inline_refs</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <p style="color: var(--text-muted); margin-bottom: 1rem;">
                                 After attachments are uploaded, inline references in work package descriptions and comments are rewritten:
@@ -3212,7 +3212,7 @@
                                 and rewrite URLs in both WP descriptions and journal (comment) notes.
                             </p>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Comments Section -->
@@ -3237,15 +3237,15 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Comment to journal transformation</span>
                             </div>
                             <span class="accordion-badge">4 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -3291,7 +3291,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Issue History Section -->
@@ -3316,16 +3316,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Changes Tracked</h4>
                                 <span>What history is preserved</span>
                             </div>
                             <span class="accordion-badge">10 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -3390,17 +3390,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Audit Trail Migration</h4>
                                 <span>Timestamp and author preservation</span>
                             </div>
                             <span class="accordion-badge">3 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -3431,7 +3431,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Labels / Tags Section -->
@@ -3456,16 +3456,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Migration Strategies</h4>
                                 <span>Two approaches available</span>
                             </div>
                             <span class="accordion-badge">2 strategies</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -3493,17 +3493,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Label to tag transformation</span>
                             </div>
                             <span class="accordion-badge">3 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -3538,7 +3538,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Components Section -->
@@ -3563,16 +3563,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Component to custom field transformation</span>
                             </div>
                             <span class="accordion-badge">4 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -3612,17 +3612,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Notes</h4>
                                 <span>Implementation details</span>
                             </div>
                             <span class="accordion-badge">info</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>No native Components in OP:</strong> OpenProject doesn't have a built-in component concept</li>
@@ -3631,7 +3631,7 @@
                                 <li><strong>Alternative:</strong> Some users prefer using OP Categories instead</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Versions Section -->
@@ -3656,16 +3656,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Version Object Mappings</h4>
                                 <span>Version entity transformation</span>
                             </div>
                             <span class="accordion-badge">5 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -3711,17 +3711,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Issue-Version Links</h4>
                                 <span>How versions are assigned to work packages</span>
                             </div>
                             <span class="accordion-badge">2 fields</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -3747,7 +3747,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Watchers Section -->
@@ -3772,16 +3772,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Watcher transformation</span>
                             </div>
                             <span class="accordion-badge">3 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -3815,17 +3815,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Notes</h4>
                                 <span>Implementation details</span>
                             </div>
                             <span class="accordion-badge">info</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Permission required:</strong> User must have "watch" permission in project</li>
@@ -3833,7 +3833,7 @@
                                 <li><strong>Self-watching:</strong> Reporter automatically watches their own issues</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Votes Section -->
@@ -3858,16 +3858,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>What's Migrated</h4>
                                 <span>Vote data preservation</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--warning); color: var(--anthracite);">partial</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -3892,17 +3892,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Limitations</h4>
                                 <span>Why votes don't fully migrate</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">limited</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>No native voting in OP:</strong> OpenProject doesn't support issue voting</li>
@@ -3910,7 +3910,7 @@
                                 <li><strong>Use case:</strong> Historical reference only; consider alternative prioritization methods</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Remote Links Section -->
@@ -3935,16 +3935,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Remote link transformation</span>
                             </div>
                             <span class="accordion-badge">4 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -3984,7 +3984,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Estimates Section -->
@@ -4009,16 +4009,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Estimate transformation</span>
                             </div>
                             <span class="accordion-badge">3 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -4052,7 +4052,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Story Points Section -->
@@ -4077,16 +4077,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Field Mappings</h4>
                                 <span>Story points transformation</span>
                             </div>
                             <span class="accordion-badge">2 fields</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -4114,17 +4114,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Notes</h4>
                                 <span>Implementation details</span>
                             </div>
                             <span class="accordion-badge">info</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>No native Story Points in OP:</strong> Uses custom field workaround</li>
@@ -4132,7 +4132,7 @@
                                 <li><strong>Auto-detection:</strong> Jira story points field ID detected automatically or configurable</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Agile Boards Section -->
@@ -4157,16 +4157,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>What IS Migrated</h4>
                                 <span>Board elements that transfer</span>
                             </div>
                             <span class="accordion-badge success">migrated</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -4196,17 +4196,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>What is NOT Migrated</h4>
                                 <span>Board elements requiring manual setup</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
@@ -4252,7 +4252,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- ========================== -->
@@ -4281,16 +4281,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Migration Details</h4>
                                 <span>How tasklist items are converted</span>
                             </div>
                             <span class="accordion-badge">simpletasks</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <p style="color: var(--text-muted); margin-bottom: 1rem;">
                                 The <strong>Simple Tasklists</strong> Jira add-on stores lightweight inline tasks (not Jira subtasks).
                                 The <code>SimpleTasksMigration</code> converts these to Markdown checklists:
@@ -4332,17 +4332,17 @@
                                 <strong>Location:</strong> Checklist is appended to the WP description in a marked section "## Tasklist".
                             </p>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Limitations</h4>
                                 <span>Features not preserved</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--warning); color: var(--anthracite);">partial</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Interactivity:</strong> OP checklists are not interactive (can't click to complete)</li>
@@ -4351,7 +4351,7 @@
                                 <li style="margin-bottom: 0.5rem;"><strong>History:</strong> Task completion history not preserved</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Tempo Timesheets Section -->
@@ -4376,16 +4376,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Tempo Accounts</h4>
                                 <span>Account structure migration</span>
                             </div>
                             <span class="accordion-badge">tempo_accounts</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <p style="color: var(--text-muted); margin-bottom: 1rem;">
                                 Tempo Accounts are migrated as Custom Fields on Work Packages:
                             </p>
@@ -4423,17 +4423,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Tempo Worklogs</h4>
                                 <span>Extended worklog fields</span>
                             </div>
                             <span class="accordion-badge">time_entries</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <p style="color: var(--text-muted); margin-bottom: 1rem;">
                                 Tempo-specific worklog attributes are mapped to Time Entry custom fields:
@@ -4467,17 +4467,17 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Not Migrated</h4>
                                 <span>Tempo features without OP equivalent</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">limited</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Tempo Teams:</strong> Team structures not migrated</li>
@@ -4487,7 +4487,7 @@
                                 <li style="margin-bottom: 0.5rem;"><strong>Billing reports:</strong> Invoice generation features</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- ========================== -->
@@ -4504,16 +4504,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Summary Table</h4>
                                 <span>All unmigrated components at a glance</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">15 items</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <div class="table-wrapper">
                                 <table>
                                     <thead>
@@ -4619,7 +4619,7 @@
                                 </table>
                             </div>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Dashboards Section -->
@@ -4632,16 +4632,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>ReportingMigration (Partial)</h4>
                                 <span>Dashboards documented in wiki pages</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--warning);">partial</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <p style="color: var(--text-muted); margin-bottom: 1rem;">
                                 The <code>ReportingMigration</code> creates wiki pages documenting dashboard configurations:
                             </p>
@@ -4655,17 +4655,17 @@
                                 <strong>Location:</strong> Wiki pages created in "j2o-reporting" project alongside filter documentation.
                             </p>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Limitations</h4>
                                 <span>Widgets cannot be recreated automatically</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">blocked</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Different widget systems:</strong> Jira uses gadgets, OP uses built-in widgets</li>
@@ -4674,17 +4674,17 @@
                                 <li style="margin-bottom: 0.5rem;"><strong>Third-party gadgets:</strong> Marketplace gadgets have no OP equivalent</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Workaround</h4>
                                 <span>How to recreate in OpenProject</span>
                             </div>
                             <span class="accordion-badge">alternative</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ol style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;">Review wiki pages in j2o-reporting project for dashboard configs</li>
@@ -4694,7 +4694,7 @@
                                 <li>Consider <strong>external BI tools</strong> (Metabase, Grafana) connected to OP API</li>
                             </ol>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Filters Section -->
@@ -4707,16 +4707,16 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>ReportingMigration (Partial)</h4>
                                 <span>Filters documented in wiki pages</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--warning);">partial</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <p style="color: var(--text-muted); margin-bottom: 1rem;">
                                 The <code>ReportingMigration</code> component creates a special project with wiki documentation of Jira filters:
                             </p>
@@ -4747,17 +4747,17 @@
                                 <strong>Project:</strong> Creates "j2o-reporting" (or custom name) with wiki pages documenting all filters and dashboards for reference.
                             </p>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Limitations</h4>
                                 <span>JQL cannot be executed in OpenProject</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">blocked</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>JQL syntax:</strong> Jira Query Language has no OP equivalent</li>
@@ -4766,17 +4766,17 @@
                                 <li style="margin-bottom: 0.5rem;"><strong>Operators:</strong> Some JQL operators not available in OP</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Workaround</h4>
                                 <span>Recreating filters in OpenProject</span>
                             </div>
                             <span class="accordion-badge">alternative</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ol style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;">Review wiki pages in j2o-reporting project</li>
@@ -4785,7 +4785,7 @@
                                 <li>For complex filters, use OP API with custom scripts</li>
                             </ol>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Schemes Section -->
@@ -4798,33 +4798,33 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Permission Schemes</h4>
                                 <span>Why not migrated</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Different model:</strong> Jira uses scheme-based, OP uses role-based permissions</li>
                                 <li style="margin-bottom: 0.5rem;"><strong>Granularity:</strong> Jira has finer-grained permissions</li>
                                 <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Map Jira project roles to OP roles, configure permissions per role in Admin</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Notification Schemes</h4>
                                 <span>Why not migrated</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>User-controlled:</strong> OP notifications are user-preference based</li>
@@ -4832,17 +4832,17 @@
                                 <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Document Jira schemes, provide guidance to users</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Screen / Field Configuration Schemes</h4>
                                 <span>Why not migrated</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>No screen customization:</strong> OP has fixed form layouts</li>
@@ -4850,7 +4850,7 @@
                                 <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Configure CF visibility in Admin → Custom Fields → Types</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
                 </section>
 
                 <!-- Automation Section -->
@@ -4863,33 +4863,33 @@
                         </div>
                     </div>
 
-                    <div class="accordion">
-                        <div class="accordion-header active" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion" open>
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Jira Automation Rules</h4>
                                 <span>Why not migrated</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">not migrated</span>
-                        </div>
-                        <div class="accordion-content active">
+                        </summary>
+                        <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Platform-specific:</strong> Jira Automation is a proprietary feature</li>
                                 <li style="margin-bottom: 0.5rem;"><strong>No equivalent:</strong> OP has limited built-in automation</li>
                                 <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Use OP API with external automation tools (Zapier, n8n, custom scripts)</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>ScriptRunner Scripts</h4>
                                 <span>Why not migrated</span>
                             </div>
                             <span class="accordion-badge" style="background: var(--danger);">not applicable</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ul style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;"><strong>Jira-specific:</strong> ScriptRunner is a Jira marketplace app</li>
@@ -4897,17 +4897,17 @@
                                 <li style="margin-bottom: 0.5rem;"><strong>Workaround:</strong> Rewrite logic using OP API or OP plugins</li>
                             </ul>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="accordion">
-                        <div class="accordion-header" onclick="toggleAccordion(this)">
-                            <div class="accordion-toggle">▶</div>
+                    <details class="accordion">
+                        <summary class="accordion-header">
+                            <span class="accordion-toggle" aria-hidden="true">▶</span>
                             <div class="accordion-title">
                                 <h4>Webhooks</h4>
                                 <span>How to recreate</span>
                             </div>
                             <span class="accordion-badge">manual setup</span>
-                        </div>
+                        </summary>
                         <div class="accordion-content">
                             <ol style="padding-left: 1.25rem; color: var(--text-muted);">
                                 <li style="margin-bottom: 0.5rem;">Document existing Jira webhooks and their endpoints</li>
@@ -4916,7 +4916,7 @@
                                 <li>Update receiving systems to handle OP event format</li>
                             </ol>
                         </div>
-                    </div>
+                    </details>
                 </section>
             </div>
         </main>
@@ -4932,13 +4932,6 @@
     </footer>
 
     <script>
-        // Accordion toggle
-        function toggleAccordion(header) {
-            const content = header.nextElementSibling;
-            header.classList.toggle('active');
-            content.classList.toggle('active');
-        }
-
         // Search functionality
         const searchInput = document.getElementById('search');
         searchInput.addEventListener('input', function(e) {
@@ -4988,7 +4981,7 @@
                 const targetId = link.getAttribute('href').slice(1);
                 const target = document.getElementById(targetId);
                 if (target) {
-                    target.scrollIntoView({ behavior: 'smooth' });
+                    target.scrollIntoView();
                 }
             });
         });

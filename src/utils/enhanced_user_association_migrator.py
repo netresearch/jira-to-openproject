@@ -547,7 +547,7 @@ class EnhancedUserAssociationMigrator:
                 with user_mapping_file.open() as f:
                     return json.load(f)
             return {}
-        except (OSError, json.JSONDecodeError, ValueError, TypeError) as e:
+        except (OSError, ValueError, TypeError) as e:
             self.logger.warning(
                 "Failed to load user mapping due to file/JSON error: %s",
                 e,
@@ -621,7 +621,7 @@ class EnhancedUserAssociationMigrator:
             else:
                 # Create enhanced mappings from basic user mapping
                 self._create_enhanced_mappings()
-        except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
+        except (OSError, ValueError, KeyError, TypeError) as e:
             self.logger.warning(
                 "Failed to load enhanced user mappings due to file/data error: %s",
                 e,
@@ -755,16 +755,9 @@ class EnhancedUserAssociationMigrator:
         try:
             # Tests patch get_user directly; use it here for compatibility
             return self.op_client.get_user(user_id)
-        except (requests.RequestException, ValueError, KeyError, AttributeError, Exception) as e:
+        except Exception as e:
             self.logger.debug(
                 "Failed to get OpenProject user info for %s due to API/data error: %s",
-                user_id,
-                e,
-            )
-            return None
-        except requests.ConnectionError as e:
-            self.logger.debug(
-                "Connection error getting OpenProject user info for %s: %s",
                 user_id,
                 e,
             )
@@ -800,13 +793,11 @@ class EnhancedUserAssociationMigrator:
                     fallback_users["migration"] = user["id"]
                     break
 
-        except (requests.RequestException, ValueError, KeyError, AttributeError, Exception) as e:
+        except Exception as e:
             self.logger.warning(
                 "Failed to identify fallback users due to API/data error: %s",
                 e,
             )
-        except requests.ConnectionError as e:
-            self.logger.warning("Connection error identifying fallback users: %s", e)
 
         return fallback_users
 
@@ -2144,7 +2135,7 @@ class EnhancedUserAssociationMigrator:
 
             try:
                 self._save_enhanced_mappings()
-            except (OSError, json.JSONDecodeError, ValueError) as e:
+            except (OSError, ValueError) as e:
                 self.logger.exception(
                     "Failed to save error mapping for %s: %s",
                     username,
@@ -2284,7 +2275,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except OSError, json.JSONDecodeError, ValueError:
+        except OSError, ValueError:
             self.logger.exception(
                 "Failed to save after skip fallback for %s",
                 username,
@@ -2357,7 +2348,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except OSError, json.JSONDecodeError, ValueError:
+        except OSError, ValueError:
             self.logger.exception(
                 "Failed to save after assign_admin fallback for %s",
                 username,
@@ -2420,7 +2411,7 @@ class EnhancedUserAssociationMigrator:
 
         try:
             self._save_enhanced_mappings()
-        except OSError, json.JSONDecodeError, ValueError:
+        except OSError, ValueError:
             self.logger.exception(
                 "Failed to save after create_placeholder fallback for %s",
                 username,
@@ -2807,7 +2798,7 @@ class EnhancedUserAssociationMigrator:
                 "Saved enhanced user mappings to %s",
                 enhanced_mapping_file,
             )
-        except (OSError, json.JSONDecodeError, ValueError) as e:
+        except (OSError, ValueError) as e:
             self.logger.exception(
                 "Failed to save enhanced user mappings due to file/JSON error: %s",
                 e,
@@ -2872,7 +2863,7 @@ class EnhancedUserAssociationMigrator:
                 self.fallback_strategy,
             )
 
-        except (OSError, json.JSONDecodeError, ValueError, KeyError) as e:
+        except (OSError, ValueError, KeyError) as e:
             self.logger.warning(
                 "Failed to load staleness configuration due to file/data error: %s",
                 e,

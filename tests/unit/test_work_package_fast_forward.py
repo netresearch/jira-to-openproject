@@ -56,7 +56,8 @@ def test_build_key_exclusion_clause_limits_payload():
 def test_parse_datetime_handles_diverse_inputs():
     """Verify _parse_datetime normalizes various timestamp formats to UTC."""
     iso_with_z = WorkPackageMigration._parse_datetime("2024-01-02T03:04:05Z")
-    assert iso_with_z is not None and iso_with_z.tzinfo == UTC
+    assert iso_with_z is not None
+    assert iso_with_z.tzinfo == UTC
 
     iso_with_offset = WorkPackageMigration._parse_datetime("2024-01-02T04:04:05+01:00")
     assert iso_with_offset is not None
@@ -65,7 +66,8 @@ def test_parse_datetime_handles_diverse_inputs():
     assert iso_with_offset.hour == 3
 
     date_without_tz = WorkPackageMigration._parse_datetime("2024-01-02 03:04")
-    assert date_without_tz is not None and date_without_tz.tzinfo == UTC
+    assert date_without_tz is not None
+    assert date_without_tz.tzinfo == UTC
 
     assert WorkPackageMigration._parse_datetime("not-a-date") is None
     assert WorkPackageMigration._parse_datetime(None) is None

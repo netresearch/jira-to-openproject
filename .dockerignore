@@ -13,3 +13,11 @@ dist/
 var/
 *.log
 *.egg-info/
+
+# Runtime credentials, personal comment keys, and cutover state stay off image layers.
+.env
+.env.*
+!.env.example
+*.agekey
+**/*.agekey
+private/

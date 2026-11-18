@@ -1,7 +1,7 @@
-# syntax=docker/dockerfile:1.29
+# syntax=docker/dockerfile:1
 
 # ===== Stage 1: build =====
-FROM python:3.15.2-slim AS build
+FROM python:3-slim AS build
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -22,8 +22,8 @@ RUN apt-get update \
         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv from its pinned release image (no unlocked pip resolution)
-COPY --from=ghcr.io/astral-sh/uv:0.13.9 /uv /uvx /usr/local/bin/
+# Upstream publishes a rolling binary image and has no major-only uv:0 tag.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Resolve + install dependencies into /opt/venv. The venv lives outside /app
 # so compose's bind mount of the source tree over /app does not hide it.
@@ -37,7 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
 
 # ===== Stage 2: runtime =====
-FROM python:3.15.2-slim AS runtime
+FROM python:3-slim AS runtime
 
 LABEL maintainer="Netresearch DTT GmbH <sebastian.mendel@netresearch.de>" \
       org.opencontainers.image.title="jira-to-openproject" \
@@ -58,11 +58,11 @@ RUN apt-get update \
         git \
         openssh-client \
         tmux \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 appuser
 # docker.io intentionally omitted - uses SSH-based remote Docker client
 # See src/infrastructure/openproject/docker_client.py for remote Docker operations via SSH
 
-RUN useradd -m -u 1000 appuser
 
 # Copy the venv and the sources from the build stage. The project is
 # installed editable, so the venv imports it from /app: the copied sources

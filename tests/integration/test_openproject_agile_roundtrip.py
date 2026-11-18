@@ -28,7 +28,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_docker]
 
 
 @pytest.fixture
-def rails(tmp_path):
+def rails(tmp_path, request):
     container = os.getenv("J2O_TEST_OPENPROJECT_CONTAINER")
     if not container:
         pytest.skip("Set J2O_TEST_OPENPROJECT_CONTAINER to a seeded disposable target")
@@ -37,7 +37,7 @@ def rails(tmp_path):
     runner = """
       $stdout.sync = true
       User.current = User.admin.first!
-      ActiveRecord::Base.transaction do
+      session = lambda do
         STDIN.each_line do |line|
           begin
             result = eval(JSON.parse(line), binding)
@@ -46,11 +46,38 @@ def rails(tmp_path):
             puts "J2O_RESULT " + JSON.generate({error: e.full_message})
           end
         end
-        raise ActiveRecord::Rollback
+      end
+      if ENV["J2O_COMMITTED_FIXTURE"] == "1"
+        session.call
+      else
+        ActiveRecord::Base.transaction { session.call; raise ActiveRecord::Rollback }
       end
     """
+    command = ["timeout", "180", "bundle", "exec", "rails", "runner", runner]
+    if getattr(request, "param", None) == "committed_archive":
+        # File storage is finalized after COMMIT. Use a new database AND asset
+        # directory so real HTTP uploads can finish without changing the seed.
+        command = [
+            "bash",
+            "-c",
+            """
+            set -euo pipefail
+            scratch=$(mktemp -d)
+            db=j2o_test_$(ruby -rsecurerandom -e 'print SecureRandom.hex(10)')
+            source_url=$DATABASE_URL
+            createdb --maintenance-db="$source_url" "$db"
+            trap 'dropdb --if-exists --force --maintenance-db="$source_url" "$db"; rm -rf -- "$scratch"' EXIT
+            export DATABASE_URL=$(ruby -ruri -e 'u=URI(ENV.fetch("DATABASE_URL")); u.path="/"+ARGV.fetch(0); print u' "$db")
+            pg_dump -Fc --no-owner "$source_url" | pg_restore --no-owner --exit-on-error -d "$DATABASE_URL"
+            export OPENPROJECT_ATTACHMENTS__STORAGE__PATH=$scratch
+            export J2O_COMMITTED_FIXTURE=1
+            "$@"
+        """,
+            "j2o-test",
+            *command,
+        ]
     with subprocess.Popen(
-        ["docker", "exec", "-i", container, "timeout", "180", "bundle", "exec", "rails", "runner", runner],
+        ["docker", "exec", "-i", "-e", "J2O_COMMITTED_FIXTURE=0", container, *command],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -158,7 +185,8 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
     migration = SprintEpicMigration(jira_client=jira, op_client=client)
     for _ in range(2):
         result = migration.run()
-        assert result.success and result.updated == 4, result
+        assert result.success, result
+        assert result.updated == 4, result
         assert query(f"WorkPackage.find({subtask_id}).parent_id") == child_id
         assert query(f"""
           wp = WorkPackage.find({child_id})
@@ -232,7 +260,8 @@ def test_work_package_content_roundtrip(rails):
     ]
     for _ in range(2):
         result = service.batch_update_work_packages(updates)
-        assert result["updated"] == 1 and result["failed"] == 0, result
+        assert result["updated"] == 1, result
+        assert result["failed"] == 0, result
         assert values(text_id) == ["übernommen"]
         assert values(user_id) == [str(seed["author_id"])]
         assert query(f"WorkPackage.find({wp_id}).description") == "Beschreibung ä"
@@ -311,7 +340,8 @@ def test_comment_readers_on_private_work_package(rails, monkeypatch):
         for attempt in range(2):
             collected = migration._collect_content_for_issue(issue, wp_id)
             result = migration._bulk_process_collected_content([collected])
-            assert result["comments_held"] == 7 and result["comments_migrated"] == int(attempt == 0), result
+            assert result["comments_held"] == 7, result
+            assert result["comments_migrated"] == int(attempt == 0), result
 
     observations = query(f"""
       ($audience_tokens + [[nil, nil]]).map do |id, token|
@@ -329,9 +359,11 @@ def test_comment_readers_on_private_work_package(rails, monkeypatch):
         if i < 4:
             assert identity_matches, (i, status)
         if i < 3:
-            assert status == 200 and source[0]["body"] in body, (i, status)
+            assert status == 200, (i, status)
+            assert source[0]["body"] in body, (i, status)
         else:
-            assert status in (401, 403, 404) and source[0]["body"] not in body, (i, status)
+            assert status in (401, 403, 404), (i, status)
+            assert source[0]["body"] not in body, (i, status)
         assert all(row["body"] not in body for row in source[1:])
     # A higher-level view or a later permission grant cannot reveal an absent body.
     persisted = query(f"Journal.where(journable: WorkPackage.find({wp_id})).pluck(:notes)")
