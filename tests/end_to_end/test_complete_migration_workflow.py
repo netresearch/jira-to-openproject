@@ -1308,8 +1308,7 @@ class TestCompleteMigrationWorkflow:
             mappings.set_mapping("issue_type_id", {"1": 1})
             mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
 
-            def migrate_users(*, entity_type):
-                assert entity_type == "users"
+            def migrate_users(**_kwargs):
                 mappings.set_mapping("user", {"reader": {"openproject_id": 7}})
                 order.append("users")
                 return ComponentResult(success=True)
@@ -1319,8 +1318,7 @@ class TestCompleteMigrationWorkflow:
                 order.append("projects")
                 return [True, 42, "Order fixture", "order"]
 
-            def migrate_work_packages(*, entity_type):
-                assert entity_type == "work_packages"
+            def migrate_work_packages(**_kwargs):
                 project = mappings.get_mapping("project")["ORDER"]
                 assert project["openproject_id"] == 42
                 assert project["openproject_identifier"] == "order"
