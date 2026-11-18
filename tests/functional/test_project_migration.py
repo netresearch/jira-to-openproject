@@ -20,6 +20,7 @@ from src.application.components.project_migration import (
     PROJECT_URL_CF_NAME,
     ProjectMigration,
 )
+from src.infrastructure.exceptions import QueryExecutionError
 
 
 class TestProjectMigration(unittest.TestCase):
@@ -330,11 +331,8 @@ class TestProjectMigration(unittest.TestCase):
                 # Get the actual query that was executed
                 call_args = mock_op_instance.execute_query_to_json_file.call_args[0][0]
 
-                # Verify the malicious content is properly escaped in %q{} literal
-                # The identifier should be sanitized (closing braces escaped) and wrapped in %q{}
-                sanitized = malicious_id.replace("}", "\\}")
-                expected_pattern = f"Project.find_by(identifier: %q{{{sanitized}}})"
-                assert expected_pattern in call_args
+                assert json.loads(call_args.splitlines()[1]) == malicious_id
+                assert "Project.find_by(identifier: identifier)" in call_args
 
                 # Reset mock for next iteration
                 mock_op_instance.reset_mock()
@@ -426,10 +424,8 @@ class TestProjectMigration(unittest.TestCase):
                 mock_op_instance.execute_query_to_json_file.assert_called()
                 call_args = mock_op_instance.execute_query_to_json_file.call_args[0][0]
 
-                # The identifier should be properly escaped (only closing braces need escaping)
-                sanitized = identifier.replace("}", "\\}")
-                expected_pattern = f"Project.find_by(identifier: %q{{{sanitized}}})"
-                assert expected_pattern in call_args
+                assert json.loads(call_args.splitlines()[1]) == identifier
+                assert "Project.find_by(identifier: identifier)" in call_args
 
                 # Reset mock for next iteration
                 mock_op_instance.reset_mock()
@@ -447,43 +443,19 @@ class TestProjectMigration(unittest.TestCase):
 
         migration = ProjectMigration(mock_jira_instance, mock_op_instance)
 
-        # Test various failure scenarios
-        test_cases = [
-            # Rails console exception
-            Exception("Rails console connection failed"),
-            # Timeout exception
-            TimeoutError("Query timed out"),
-            # Invalid response format
-            "invalid_json_response",
-            # Empty response
-            [],
-            # Malformed response
-            [True],  # Missing required fields
-        ]
+        mock_op_instance.execute_query_to_json_file.side_effect = TimeoutError("Query timed out")
+        with pytest.raises(QueryExecutionError, match="Rails query failed"):
+            migration._get_existing_project_details("test-project")
 
-        for exception_or_response in test_cases:
-            with self.subTest(scenario=type(exception_or_response).__name__):
-                if isinstance(exception_or_response, Exception):
-                    # Mock exception being raised
-                    mock_op_instance.execute_query_to_json_file.side_effect = exception_or_response
-
-                    # Should re-raise the exception
-                    with pytest.raises(Exception) as cm:
-                        migration._get_existing_project_details("test-project")
-
-                    assert "Rails query failed" in str(cm.value)
-                else:
-                    # Mock invalid response format
-                    mock_op_instance.execute_query_to_json_file.return_value = exception_or_response
-                    mock_op_instance.execute_query_to_json_file.side_effect = None
-
-                    # Should return None for invalid response
-                    result = migration._get_existing_project_details("test-project")
-                    assert result is None
-
-                # Reset mock for next iteration
-                mock_op_instance.reset_mock()
-                mock_op_instance.execute_query_to_json_file.side_effect = None
+        mock_op_instance.execute_query_to_json_file.reset_mock()
+        mock_op_instance.execute_query_to_json_file.side_effect = None
+        for invalid in (None, [], [True], [True, 1, "Other", "wrong-project"], [True, False, "Test", "test-project"]):
+            with self.subTest(response=invalid):
+                mock_op_instance.execute_query_to_json_file.return_value = invalid
+                with pytest.raises(QueryExecutionError, match="unconfirmed project identity"):
+                    migration._create_or_find_project({"identifier": "test-project"})
+                mock_op_instance.execute_query_to_json_file.assert_called_once()
+            mock_op_instance.execute_query_to_json_file.reset_mock()
 
     @patch("src.infrastructure.jira.jira_client.JiraClient")
     @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
@@ -514,7 +486,7 @@ class TestProjectMigration(unittest.TestCase):
         # Verify query was executed with empty identifier properly escaped
         mock_op_instance.execute_query_to_json_file.assert_called()
         call_args = mock_op_instance.execute_query_to_json_file.call_args[0][0]
-        assert "Project.find_by(identifier: %q{})" in call_args
+        assert json.loads(call_args.splitlines()[1]) == ""
 
 
 # Define testing steps for project migration validation
