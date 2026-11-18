@@ -13,9 +13,11 @@ This script demonstrates the layered client architecture with proper dependency 
 Run this script with appropriate configuration to see how the components work together.
 """
 
-import os
+import shlex
+import tempfile
 import traceback
-from zipfile import Path
+from contextlib import ExitStack
+from pathlib import Path
 
 # Import after path is set
 from src import config
@@ -23,8 +25,6 @@ from src.infrastructure.openproject.docker_client import DockerClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.rails_console_client import RailsConsoleClient
 from src.infrastructure.openproject.ssh_client import SSHClient
-
-_REMOTE_TEST_PATH = "/tmp/test_transfer.txt"
 
 
 def demo_each_client_independently() -> None:
@@ -36,7 +36,6 @@ def demo_each_client_independently() -> None:
     # Load configuration
     ssh_host = config.openproject_config.get("server")
     ssh_user = config.openproject_config.get("user")
-    config.openproject_config.get("key_file")
     container_name = config.openproject_config.get("container")
     tmux_session = config.openproject_config.get("tmux_session_name", "rails_console")
 
@@ -45,8 +44,8 @@ def demo_each_client_independently() -> None:
     ssh_client = SSHClient(host=ssh_host, user=ssh_user, retry_count=3)
 
     # Execute a simple command
-    result = ssh_client.execute_command("echo 'Hello from SSH Client'")
-    print(f"SSH Command Result: {result.get('stdout', '')}")
+    stdout, _, _ = ssh_client.execute_command("echo 'Hello from SSH Client'")
+    print(f"SSH Command Result: {stdout.strip()}")
 
     # Check if a file exists on the remote server
     remote_file_exists = ssh_client.check_remote_file_exists("/etc/hosts")
@@ -61,8 +60,8 @@ def demo_each_client_independently() -> None:
     )  # Inject the SSHClient
 
     # Execute a command in the container
-    result = docker_client.execute_command("echo 'Hello from Docker Client'")
-    print(f"Docker Command Result: {result.get('stdout', '')}")
+    stdout, _, _ = docker_client.execute_command("echo 'Hello from Docker Client'")
+    print(f"Docker Command Result: {stdout.strip()}")
 
     # Check if a file exists in the container
     container_file_exists = docker_client.check_file_exists_in_container(
@@ -100,14 +99,14 @@ def demo_orchestrated_workflow() -> None:
 
     # Execute a query to count projects
     result = client.execute_query("Project.count")
-    print(f"Project count: {result.get('output')}")
+    print(f"Project count: {result}")
 
     # Alternative using built-in method
     project_count = client.count_records("Project")
     print(f"Project count (using count_records): {project_count}")
 
     # Execute a more complex query
-    result = client.execute_query(
+    result = client.execute_json_query(
         """
     # Get statistics about work packages
     stats = {
@@ -119,10 +118,17 @@ def demo_orchestrated_workflow() -> None:
     """,
     )
 
-    if result.get("status") == "success":
-        print(f"Work Package Statistics: {result.get('output')}")
-    else:
-        print(f"Query failed: {result.get('error')}")
+    print(f"Work Package Statistics: {result}")
+
+
+def _temporary_transfer_file(execute, stack: ExitStack) -> Path:
+    directory, stderr, status = execute("mktemp -d")
+    root = Path(directory.strip())
+    if status != 0 or not root.is_absolute() or root == Path("/"):
+        raise RuntimeError(f"Could not allocate temporary directory: {stderr}")
+    target = root / "transfer.txt"
+    stack.callback(execute, f"rm -f -- {shlex.quote(str(target))} && rmdir -- {shlex.quote(str(root))}")
+    return target
 
 
 def demo_file_transfer() -> None:
@@ -131,48 +137,18 @@ def demo_file_transfer() -> None:
     print("DEMONSTRATING FILE TRANSFER")
     print("=" * 80)
 
-    # Create a test file locally
-    with Path(_REMOTE_TEST_PATH).open("w") as f:
-        f.write("This is a test file for demonstrating the file transfer workflow.")
-
-    # Create clients for file transfer
-    ssh_host = config.openproject_config.get("server")
-    ssh_user = config.openproject_config.get("user")
-    config.openproject_config.get("key_file")
-    container_name = config.openproject_config.get("container")
-
-    # 1. Create the SSHClient (Foundation Layer)
-    ssh_client = SSHClient(host=ssh_host, user=ssh_user, retry_count=3)
-
-    # 2. Create DockerClient with injected SSHClient
-    docker_client = DockerClient(container_name=container_name, ssh_client=ssh_client)
-
-    # 3. Transfer to remote host via SSHClient
-    print("Transferring file to remote host...")
-    result = ssh_client.copy_file_to_remote(
-        _REMOTE_TEST_PATH,
-        _REMOTE_TEST_PATH,
+    ssh_client = SSHClient(
+        host=config.openproject_config.get("server"), user=config.openproject_config.get("user"), retry_count=3
     )
-    print(f"SSH transfer result: {result.get('status')}")
-
-    # 4. Transfer from remote host to container via DockerClient
-    print("Transferring file to container...")
-    result = docker_client.copy_file_to_container(
-        _REMOTE_TEST_PATH,
-        _REMOTE_TEST_PATH,
-    )
-    print(f"Docker transfer result: {result.get('status')}")
-
-    # 5. Verify file in container
-    print("Verifying file in container...")
-    exists = docker_client.check_file_exists_in_container(_REMOTE_TEST_PATH)
-    print(f"File exists in container: {exists}")
-
-    # Clean up
-    print("Cleaning up...")
-    ssh_client.execute_command("rm /tmp/test_transfer.txt")
-    docker_client.execute_command("rm /tmp/test_transfer.txt")
-    os.remove(_REMOTE_TEST_PATH)
+    docker_client = DockerClient(container_name=config.openproject_config.get("container"), ssh_client=ssh_client)
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as cleanup:
+        local_file = Path(directory) / "transfer.txt"
+        local_file.write_text("File transfer demonstration.", encoding="utf-8")
+        remote_file = _temporary_transfer_file(ssh_client.execute_command, cleanup)
+        container_file = _temporary_transfer_file(docker_client.execute_command, cleanup)
+        ssh_client.copy_file_to_remote(local_file, remote_file)
+        docker_client.copy_file_to_container(remote_file, container_file)
+        print(f"File exists in container: {docker_client.check_file_exists_in_container(container_file)}")
 
 
 def main() -> None:
