@@ -318,17 +318,7 @@ class JiraTempoService:
         )
         for path in paths:
             try:
-                response = self._client.jira._session.get(f"{self._client.base_url}{path}")
-                if response.status_code != HTTP_OK:
-                    self._client._handle_response(response)
-                    msg = f"Unexpected HTTP {response.status_code} for {path}"
-                    raise JiraApiError(msg)
-                _assert_json_response(response, path=path)
-                attributes = response.json()
-                if not isinstance(attributes, list) or not all(isinstance(attribute, dict) for attribute in attributes):
-                    msg = f"Unexpected work attribute catalogue from {path}"
-                    raise JiraApiError(msg)
-                return attributes
+                return self._work_attribute_catalogue(path)
             except JiraResourceNotFoundError:
                 continue
             except Exception as exc:
@@ -343,6 +333,19 @@ class JiraTempoService:
 
         self._logger.warning("Tempo work attribute endpoints unavailable")
         return []
+
+    def _work_attribute_catalogue(self, path: str) -> list[dict[str, Any]]:
+        response = self._client.jira._session.get(f"{self._client.base_url}{path}")
+        if response.status_code != HTTP_OK:
+            self._client._handle_response(response)
+            msg = f"Unexpected HTTP {response.status_code} for {path}"
+            raise JiraApiError(msg)
+        _assert_json_response(response, path=path)
+        attributes = response.json()
+        if not isinstance(attributes, list) or not all(isinstance(attribute, dict) for attribute in attributes):
+            msg = f"Unexpected work attribute catalogue from {path}"
+            raise JiraApiError(msg)
+        return attributes
 
     def _project_worklog_page(
         self, project_key: str, offset: int, limit: int, date_from: str | None, date_to: str | None
