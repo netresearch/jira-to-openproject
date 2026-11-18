@@ -198,6 +198,7 @@ class OpenProjectProjectSetupService:
                 "existing = 0\n"
                 "errors = []\n"
                 "seen = {}\n"
+                "variant_ids = TypeVariant.default_variant.pluck(:type_id, :id).to_h if Workflow.column_names.include?('type_variant_id')\n"
                 "transitions.each do |row|\n"
                 "  type_id = row['type_id'].to_i\n"
                 "  from_id = row['from_status_id'].to_i\n"
@@ -208,11 +209,17 @@ class OpenProjectProjectSetupService:
                 "  seen[key] = true\n"
                 "  role_ids.each do |role_id|\n"
                 "    begin\n"
-                "      wf = Workflow.find_by(type_id: type_id, role_id: role_id, old_status_id: from_id, new_status_id: to_id)\n"
+                "      attrs = { role_id: role_id, old_status_id: from_id, new_status_id: to_id }\n"
+                "      if variant_ids\n"
+                "        attrs[:type_variant_id] = variant_ids.fetch(type_id)\n"
+                "      else\n"
+                "        attrs[:type_id] = type_id\n"
+                "      end\n"
+                "      wf = Workflow.find_by(attrs)\n"
                 "      if wf\n"
                 "        existing += 1\n"
                 "      else\n"
-                "        Workflow.create!(type_id: type_id, role_id: role_id, old_status_id: from_id, new_status_id: to_id)\n"
+                "        Workflow.create!(attrs)\n"
                 "        created += 1\n"
                 "      end\n"
                 "    rescue => e\n"
@@ -298,7 +305,7 @@ JSON_DATA
               attrs = {{ name: input['name'], sharing: input['sharing'] || 'none' }}
               attrs[:description] = input['description'] if input['description']
               attrs[:start_date] = input['start_date'] if input['start_date']
-              attrs[:due_date] = input['due_date'] if input['due_date']
+              attrs[:effective_date] = input['due_date'] if input['due_date']
               attrs[:status] = input['status'] if input['status']
               version.assign_attributes(attrs)
 

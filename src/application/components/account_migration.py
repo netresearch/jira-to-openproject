@@ -870,9 +870,9 @@ class AccountMigration(BaseMigration):
             cf = CustomField.find({validated_field_id})
             cf.is_for_all = true
             cf.save!
-            Type.all.each do |type|
-              type.custom_fields << cf unless type.custom_fields.include?(cf)
-              type.save!
+            owners = cf.respond_to?(:type_variants) ? TypeVariant.default_variant : Type.all
+            owners.each do |owner|
+              owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
             end
             puts %q{{SUCCESS}}
             """
