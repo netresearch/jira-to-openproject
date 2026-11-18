@@ -135,7 +135,7 @@ class TestEnhancedAuditTrailMigrator:
     @patch("src.utils.enhanced_audit_trail_migrator.config")
     def migrator_with_mocks(self, mock_config, mock_clients, temp_data_dir):
         """Create migrator instance with mocked dependencies."""
-        mock_config.logger = Mock()
+        mock_config.get_path.return_value = temp_data_dir
 
         jira_client, op_client = mock_clients
 
@@ -550,7 +550,14 @@ class TestEnhancedAuditTrailMigrator:
         def history(items, **extra):
             return {"id": "4711", "created": "2020-01-01T00:00:00Z", "author": None, "items": items, **extra}
 
-        cached = [history(mixed), history([{"field": "summary", "toString": sentinel}], jsdPublic=False)]
+        cached = [
+            history(mixed),
+            history([{"field": "summary", "toString": sentinel}], jsdPublic=False),
+            history(
+                [{"field": "summary", "toString": sentinel}],
+                historyMetadata={"extraData": {"restrictedTo": ["internal"]}},
+            ),
+        ]
         issue = SimpleNamespace(
             key="TEST-1",
             changelog=SimpleNamespace(
@@ -700,6 +707,32 @@ class TestEnhancedAuditTrailMigrator:
 
         assert saved_results["total_issues_processed"] == 5
         assert saved_results["rails_execution_success"] is True
+
+    def test_results_are_written_only_to_this_migration_directory(
+        self, migrator_with_mocks, temp_data_dir, tmp_path, monkeypatch
+    ) -> None:
+        other_data = tmp_path / "pytest-other" / "run" / "test_separate_run0" / "data"
+        other_data.mkdir(parents=True)
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_reports.py::test_separate_run (call)")
+        assert migrator_with_mocks.save_migration_results()
+        assert (temp_data_dir / "migration_data" / "audit_trail_migration_results.json").is_file()
+        assert list(other_data.iterdir()) == []
+
+    def test_history_uses_cloud_account_id_and_persisted_mapping_records(
+        self, migrator_with_mocks, sample_jira_issue
+    ) -> None:
+        migration = migrator_with_mocks
+        author = sample_jira_issue.changelog.histories[0].author
+        author.name = None
+        author.accountId = "cloud:123"
+        migration.user_mapping = {"cloud:123": {"openproject_id": "27"}, "another": 28}
+        entries = migration.extract_changelog_from_issue(sample_jira_issue)
+        assert entries[0]["author"]["accountId"] == "cloud:123"
+        events = migration.transform_changelog_to_audit_events(entries[:1], "TEST-1", 72)
+        assert events
+        assert all(event["user_id"] == 27 for event in events)
+        assert migration.migration_results["user_attribution_failures"] == 0
 
     def test_save_migration_results_io_error(self, migrator_with_mocks) -> None:
         """Test saving migration results with IO error."""
