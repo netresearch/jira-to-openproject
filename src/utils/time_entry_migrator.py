@@ -400,8 +400,6 @@ class TimeEntryMigrator:
         )
 
     def _migrate_individual_entries(self, entries, batch_size, existing_keys, summary, heartbeat_sec):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         try:
             concurrency = int(os.environ.get("J2O_TIME_ENTRY_CONCURRENCY", "8"))
         except ValueError:
@@ -415,28 +413,30 @@ class TimeEntryMigrator:
             summary["skipped_details"].extend(
                 {"entry": None, "reason": "duplicate_external_key"} for _ in range(duplicates)
             )
-            if concurrency > 1:
-                with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                    pending = [executor.submit(self._create_time_entry, entry, parallel=True) for entry in batch]
-                    for future in as_completed(pending):
-                        try:
-                            outcome = future.result()
-                        except Exception as exc:
-                            outcome = ("failed", None, str(exc))
-                        self._record_entry_outcome(summary, outcome, parallel=True)
-                        processed += 1
-                        last_heartbeat = self._log_entry_progress(
-                            summary, processed, len(entries), last_heartbeat, heartbeat_sec
-                        )
-            else:
-                for entry in batch:
-                    outcome = self._create_time_entry(entry, parallel=False)
-                    self._record_entry_outcome(summary, outcome, parallel=False, entry=entry)
-                    if outcome[0] != "skipped":
-                        processed += 1
-                        last_heartbeat = self._log_entry_progress(
-                            summary, processed, len(entries), last_heartbeat, heartbeat_sec
-                        )
+            for entry, outcome in self._batch_outcomes(batch, concurrency):
+                parallel = concurrency > 1
+                self._record_entry_outcome(summary, outcome, parallel=parallel, entry=entry)
+                if parallel or outcome[0] != "skipped":
+                    processed += 1
+                    last_heartbeat = self._log_entry_progress(
+                        summary, processed, len(entries), last_heartbeat, heartbeat_sec
+                    )
+
+    def _batch_outcomes(self, batch, concurrency):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if concurrency <= 1:
+            for entry in batch:
+                yield entry, self._create_time_entry(entry, parallel=False)
+            return
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            pending = [executor.submit(self._create_time_entry, entry, parallel=True) for entry in batch]
+            for future in as_completed(pending):
+                try:
+                    outcome = future.result()
+                except Exception as exc:
+                    outcome = ("failed", None, str(exc))
+                yield None, outcome
 
     def _create_time_entry(self, entry, *, parallel):
         valid, reason = self._validate_time_entry_with_reason(entry)
@@ -481,22 +481,23 @@ class TimeEntryMigrator:
 
     def _load_fast_forward_cutoff(self):
         # Compute cutoff from existing OP entries if enabled
-        if self._ff_enabled:
-            try:
-                # Gather recent entries and compute max created/updated
-                recent = self.op_client.get_time_entries(limit=2000)
-                best: datetime | None = None
-                for te in recent:
-                    probe = te.get("updated_at") if self._ff_field == "updated" else te.get("created_at")
-                    ts = self._parse_ts(str(probe) if probe is not None else None)
-                    if ts and (best is None or ts > best):
-                        best = ts
-                self._ff_cutoff = best
-                if best:
-                    self.logger.info("Fast-forward enabled: cutoff=%s field=%s", best.isoformat(), self._ff_field)
-            except Exception as e:
-                self.logger.warning("Failed to compute fast-forward cutoff: %s", e)
-                self._ff_cutoff = None
+        if not self._ff_enabled:
+            return
+        try:
+            # Gather recent entries and compute max created/updated
+            recent = self.op_client.get_time_entries(limit=2000)
+            best: datetime | None = None
+            for te in recent:
+                probe = te.get("updated_at") if self._ff_field == "updated" else te.get("created_at")
+                ts = self._parse_ts(str(probe) if probe is not None else None)
+                if ts and (best is None or ts > best):
+                    best = ts
+            self._ff_cutoff = best
+            if best:
+                self.logger.info("Fast-forward enabled: cutoff=%s field=%s", best.isoformat(), self._ff_field)
+        except Exception as e:
+            self.logger.warning("Failed to compute fast-forward cutoff: %s", e)
+            self._ff_cutoff = None
 
     def _load_mappings(self) -> None:
         """Load existing mappings from migration data files."""
