@@ -48,6 +48,10 @@ def _reported_total(page: list[Issue], known_total: int | None) -> int | None:
     return total if isinstance(total, int) and total > len(page) else known_total
 
 
+def _reached_limit(offset: int, limit: int | None) -> bool:
+    return limit is not None and offset >= limit
+
+
 def iter_issue_pages(
     project_key: str,
     fetch_page: Callable[[int, int], list[Issue]],
@@ -58,7 +62,9 @@ def iter_issue_pages(
     offset = 0
     known_total = None
     previous_keys: set[str] = set()
-    while limit is None or offset < limit:
+    if _reached_limit(0, limit):
+        return
+    while True:
         size = page_size if limit is None else min(page_size, limit - offset)
         context = f"Jira project {project_key} at startAt={offset}"
         page = _fetch_issue_page(fetch_page, offset, size, context)
@@ -72,10 +78,10 @@ def iter_issue_pages(
         count = len(page) if limit is None else min(len(page), limit - offset)
         yield from islice(page, count)
         offset += count
-        if limit is not None and offset >= limit:
+        if _reached_limit(offset, limit):
             return
         if getattr(page, "isLast", False) is True:
             _check_reported_total("final", known_total, offset, context)
             return
-        if known_total is not None and offset >= known_total:
+        if _reached_limit(offset, known_total):
             return
