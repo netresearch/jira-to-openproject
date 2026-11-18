@@ -132,6 +132,8 @@ J2O_DATA
                     owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
                     CustomFieldsProject.find_or_create_by!(custom_field: cf, project_id: wp.project_id) unless cf.is_for_all?
                   end
+                  # Rails runners may reuse an earlier request-local field list for this project and type.
+                  WorkPackage.preload_available_custom_fields([wp])
                   enabled.add(key)
                 end
                 wp.with_lock do

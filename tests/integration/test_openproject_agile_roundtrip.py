@@ -289,14 +289,19 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
     for _ in range(2):
         result = migration.run()
         assert result.success, result
-        assert result.updated == 4, result
+        assert result.updated == 5, result
         assert query(f"WorkPackage.find({subtask_id}).parent_id") == child_id
         assert query(f"""
           wp = WorkPackage.find({child_id})
           cf = WorkPackageCustomField.find_by!(name: 'Sprint')
-          [wp.parent_id, wp.version_id, wp.available_custom_fields.exists?(cf.id),
+          [wp.parent_id, wp.version_id, wp.available_custom_fields.any? {{ |f| f.id == cf.id }},
            CustomValue.where(customized: wp, custom_field: cf).pluck(:value)]
         """) == [parent_id, version["openproject_id"], True, ["J2O test sprint"]]
+        assert query(f"""
+          wp = WorkPackage.find({child_id})
+          history = WorkPackageCustomField.find_by!(name: "Jira sprint membership history")
+          [wp.available_custom_fields.any? {{ |f| f.id == history.id }}, JSON.parse(wp.custom_values.find_by!(custom_field: history).value)]
+        """) == [True, [{"id": "42", "name": "J2O test sprint"}]]
 
     type_id = provenance_ids["type"]
     role_id, from_id, to_id = query("[ProjectRole.first!.id, *Status.order(:id).limit(2).ids]")

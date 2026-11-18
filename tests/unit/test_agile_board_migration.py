@@ -223,3 +223,14 @@ def test_next_run_sees_sprint_edit_during_load(_mock_mappings, monkeypatch, tmp_
     for _ in range(3):
         assert mig.run_with_change_detection("agile_boards").success
     assert [v["description"] for v in op.created_versions] == ["First goal", "Edited during load"]
+
+
+def test_filtered_board_does_not_claim_the_origin_boards_sprint(_mock_mappings):
+    boards = [{"id": n, "name": f"Board {n}", "type": "scrum", "location": {"projectKey": "PROJ"}} for n in (10, 20)]
+    sprint = {"id": 8, "name": "Sprint, eight", "originBoardId": "20", "state": "closed"}
+    op = DummyOp()
+    mig = AgileBoardMigration(DummyJira(boards=boards, sprints_by_board={10: [sprint], 20: [sprint]}), op)
+    extracted = mig._extract()
+    assert [(row["id"], row["board_id"]) for row in extracted.data["sprints"]] == [(8, 20)]
+    assert mig._load(mig._map(extracted)).success
+    assert len(op.created_versions) == 1

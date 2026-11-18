@@ -372,16 +372,16 @@ state: "closed"              ──→  status: "closed" (any other state → "o
 ```
 
 The version itself is created by `agile_boards` (`AgileBoardMigration`), which
-also writes the `sprint` mapping. `sprint_epic` (`SprintEpicMigration`) then
+also writes the `sprint` mapping. When Jira supplies an origin board ID, the importer creates the sprint version from that board. A sprint may also appear on other boards through their filters. `sprint_epic` (`SprintEpicMigration`) then
 applies the sprint to the work packages:
 
 | Jira | OpenProject | Notes |
 |------|-------------|-------|
 | Issue's sprint | `work_package.version_id` | First matching sprint in name order, only for issues without a Jira fix version |
 | Issue's sprint(s) | CF "Sprint" (text) | **All** names, de-duplicated, sorted, comma-separated |
+| Sprint references on the issue | CF "Jira sprint membership history" (text) | JSON list of source IDs and names in Jira order. Older name-only references have a null ID. |
 
-An issue that belonged to several sprints therefore keeps every sprint name in
-the "Sprint" custom field. A Jira fix version takes precedence for the work package’s version.
+The membership history distinguishes equally named sprints and preserves references to sprints from other boards. A Jira fix version takes precedence for the work package’s version.
 
 #### Jira Board → OpenProject Saved Query
 

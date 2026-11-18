@@ -1,6 +1,7 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -60,16 +61,19 @@ def test_real_field_ids_and_confirmed_writes(migration):
     mig, _ = migration
     result = mig.run_with_change_detection("sprint_epic")
     assert result.success, result
-    assert result.updated == 3
+    assert result.updated == 4
     assert [call.args[0] for call in mig.op_client.batch_update_work_packages.call_args_list] == [
         [{"id": 20, "parent_id": 10}],
         [{"id": 20, "version_id": 9}],
     ]
-    mig.op_client.bulk_set_wp_custom_field_values.assert_called_once_with(
-        [
-            {"work_package_id": 20, "custom_field_id": 101, "value": "Closed, sprint, Next sprint"},
-        ]
-    )
+    fields = mig.op_client.bulk_set_wp_custom_field_values.call_args_list
+    assert fields[0].args[0] == [
+        {"work_package_id": 20, "custom_field_id": 101, "value": "Closed, sprint, Next sprint"}
+    ]
+    assert json.loads(fields[1].args[0][0]["value"]) == [
+        {"id": "42", "name": "Closed, sprint"},
+        {"id": "43", "name": "Next sprint"},
+    ]
 
 
 def test_missing_issue_parent_and_unconfirmed_writes(migration):
@@ -80,7 +84,7 @@ def test_missing_issue_parent_and_unconfirmed_writes(migration):
     mig.op_client.bulk_set_wp_custom_field_values.side_effect = lambda rows: {}
     result = mig.run()
     assert not result.success
-    assert result.failed == 4
+    assert result.failed == 5
     assert result.updated == 0
     assert (
         result.details["parent_links"]
@@ -109,7 +113,7 @@ def test_unavailable_field_and_missing_version(migration):
     result = mig.run()
     assert not result.success
     assert result.updated == 1
-    assert result.failed == 2
+    assert result.failed == 3
     assert "DEMO-2" in result.details["unresolved_sprints"]
     assert result.details["sprint_cf_updates"] == 0
 
@@ -134,8 +138,8 @@ def test_serialized_server_sprint_and_sdk_epic(migration):
         )
     )
     result = mig.run()
-    assert result.updated == 3
-    assert mig.op_client.bulk_set_wp_custom_field_values.call_args.args[0][0]["value"] == "Closed, sprint"
+    assert result.updated == 4
+    assert mig.op_client.bulk_set_wp_custom_field_values.call_args_list[0].args[0][0]["value"] == "Closed, sprint"
 
 
 def test_subtask_keeps_immediate_parent_instead_of_inherited_epic(migration):
@@ -167,8 +171,22 @@ def test_recovers_missing_work_package_mapping_from_project_origin_keys(migratio
     ]
     result = mig.run()
     assert result.success
-    assert result.updated == 3
+    assert result.updated == 4
     assert not mappings["work_package"]  # A key-only recovery cannot replace the shared Jira ID mapping.
     mig.op_client.get_project_wp_cf_snapshot.assert_called_once_with(4)
     mig.op_client.get_project_wp_cf_snapshot.return_value.append({"id": 11, "jira_issue_key": "DEMO-1"})
     assert not mig.run().success
+
+
+def test_same_named_sprints_without_versions_keep_both_ids(migration):
+    mig, mappings = migration
+    mappings["sprint"].clear()
+    fields = mig.jira_client.batch_get_issues.return_value["DEMO-2"]["fields"]
+    fields["fixVersions"] = [{"id": 75}]
+    fields["customfield_123"] = [{"name": "Sprint, one", "id": 21}, {"name": "Sprint, one", "id": 22}]
+    result = mig.run()
+    assert result.success
+    assert result.details["version_assignments"] == 0
+    assert result.details["sprint_history_updates"] == 1
+    history = mig.op_client.bulk_set_wp_custom_field_values.call_args.args[0][0]["value"]
+    assert json.loads(history) == [{"id": "21", "name": "Sprint, one"}, {"id": "22", "name": "Sprint, one"}]
