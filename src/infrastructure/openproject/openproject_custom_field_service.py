@@ -47,6 +47,7 @@ from typing import Any
 
 from src.domain import provenance_fields
 from src.infrastructure.exceptions import QueryExecutionError, RecordNotFoundError
+from src.infrastructure.openproject.batch_records import index_batch_rows
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
@@ -492,14 +493,7 @@ class OpenProjectCustomFieldService:
                     batch_operation,
                     f"Batch fetch custom fields by name {batch_names[:2]}{'...' if len(batch_names) > 2 else ''}",
                 )
-                if batch_results:
-                    if isinstance(batch_results, dict):
-                        batch_results = [batch_results]
-                    for record in batch_results:
-                        if isinstance(record, dict) and "name" in record:
-                            name = record["name"]
-                            if name in batch_names:
-                                results[name] = record
+                results.update(index_batch_rows(batch_results, batch_names, "name"))
 
             except Exception as e:
                 self._logger.warning(

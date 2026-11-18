@@ -16,6 +16,8 @@ maps is deferred.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from src import config
@@ -23,6 +25,54 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
+
+
+@dataclass
+class _WorkflowMapping:
+    issue_type: str
+    workflow: str
+    type_id: int
+    statuses_by_id: dict
+    statuses_by_name: dict
+
+    def _status(self, jira_id: str, name: str, skipped: list[dict]) -> int:
+        entry = self.statuses_by_id.get(jira_id) or self.statuses_by_name.get(name.lower())
+        if entry:
+            return int(entry.get("openproject_id", 0) or 0)
+        skipped.append(
+            {
+                "reason": "missing_status_mapping",
+                "issue_type": self.issue_type,
+                "workflow": self.workflow,
+                "status_id": jira_id,
+            }
+        )
+        return 0
+
+    def rows(self, transition: dict, skipped: list[dict]) -> Iterator[tuple[tuple[int, int, int], dict]]:
+        """Map each incoming status of one transition to its target status."""
+        target = transition.get("to") or {}
+        to_id = self._status(str(target.get("id") or "").strip(), str(target.get("name", "")), skipped)
+        if to_id <= 0:
+            return
+        sources = transition.get("from")
+        if isinstance(sources, str):
+            sources = [sources]
+        if not isinstance(sources, list):
+            return
+        for source in sources:
+            from_id = self._status(str(source), str(transition.get("name", "")), skipped)
+            if from_id > 0:
+                yield (
+                    (self.type_id, from_id, to_id),
+                    {
+                        "type_id": self.type_id,
+                        "from_status_id": from_id,
+                        "to_status_id": to_id,
+                        "jira_issue_type": self.issue_type,
+                        "jira_workflow": self.workflow,
+                    },
+                )
 
 
 @register_entity_types("workflows")
@@ -79,43 +129,10 @@ class WorkflowMigration(BaseMigration):
             self.logger.exception("Failed to extract OpenProject roles: %s", exc)
             roles = []
 
-        issue_type_by_id = {
-            str(item.get("id")): item.get("name") for item in issue_types if item.get("id") and item.get("name")
-        }
-
-        issue_type_to_workflow: dict[str, str] = {}
-        workflow_names: set[str] = set()
-        for scheme in schemes:
-            mappings = scheme.get("issueTypeMappings") or scheme.get("mappings") or {}
-            if isinstance(mappings, dict):
-                for issue_type_id, workflow_name in mappings.items():
-                    jira_name = issue_type_by_id.get(str(issue_type_id))
-                    if jira_name and isinstance(workflow_name, str) and workflow_name:
-                        issue_type_to_workflow[jira_name] = workflow_name
-                        workflow_names.add(workflow_name)
-            default_workflow = scheme.get("defaultWorkflow")
-            if isinstance(default_workflow, str) and default_workflow and not issue_type_to_workflow:
-                # Fallback: apply default workflow to every known issue type if no explicit mappings
-                for name in issue_type_by_id.values():
-                    if name not in issue_type_to_workflow:
-                        issue_type_to_workflow[name] = default_workflow
-                        workflow_names.add(default_workflow)
+        issue_type_to_workflow, workflow_names = self._workflows_by_type(issue_types, schemes)
 
         # Fetch transitions and statuses for each workflow (API calls 4 & 5 per workflow)
-        workflow_transitions: dict[str, list[dict[str, Any]]] = {}
-        workflow_statuses: dict[str, list[dict[str, Any]]] = {}
-        for workflow_name in workflow_names:
-            try:
-                transitions = self.jira_client.get_workflow_transitions(workflow_name)
-            except Exception:
-                transitions = []
-            workflow_transitions[workflow_name] = transitions
-
-            try:
-                statuses = self.jira_client.get_workflow_statuses(workflow_name)
-            except Exception:
-                statuses = []
-            workflow_statuses[workflow_name] = statuses if isinstance(statuses, list) else []
+        workflow_transitions, workflow_statuses = self._workflow_definitions(workflow_names)
 
         # Return aggregated data structure
         return [
@@ -174,15 +191,7 @@ class WorkflowMigration(BaseMigration):
             if isinstance(entry, dict) and entry.get("jira_name")
         }
 
-        desired_role_names = config.migration_config.get(
-            "workflow_roles",
-            ["Project admin", "Project member"],
-        )
-        role_ids = [
-            int(role["id"]) for role in roles if int(role.get("id", 0)) > 0 and role.get("name") in desired_role_names
-        ]
-        if not role_ids:
-            role_ids = [int(role["id"]) for role in roles if int(role.get("id", 0)) > 0]
+        role_ids = self._workflow_roles(roles)
 
         dedup_transitions: dict[tuple[int, int, int], dict[str, Any]] = {}
         skipped: list[dict[str, Any]] = []
@@ -208,65 +217,10 @@ class WorkflowMigration(BaseMigration):
                 )
                 continue
 
+            mapping = _WorkflowMapping(issue_type_name, workflow_name, type_id, status_by_id, status_by_name)
             for transition in workflow_transitions.get(workflow_name, []):
-                to_block = transition.get("to") or {}
-                to_status_id = str(to_block.get("id") or "").strip()
-                to_entry = status_by_id.get(to_status_id) or status_by_name.get(
-                    str(to_block.get("name", "")).lower(),
-                )
-                if not to_entry:
-                    skipped.append(
-                        {
-                            "reason": "missing_status_mapping",
-                            "issue_type": issue_type_name,
-                            "workflow": workflow_name,
-                            "status_id": to_status_id,
-                        },
-                    )
-                    continue
-
-                op_to = int(to_entry.get("openproject_id", 0) or 0)
-                if op_to <= 0:
-                    continue
-
-                from_status_ids = transition.get("from")
-                if isinstance(from_status_ids, str):
-                    from_status_list = [from_status_ids]
-                elif isinstance(from_status_ids, list):
-                    from_status_list = from_status_ids
-                else:
-                    from_status_list = []
-
-                for from_status_id in from_status_list:
-                    from_entry = status_by_id.get(str(from_status_id)) or status_by_name.get(
-                        str(transition.get("name", "")).lower(),
-                    )
-                    if not from_entry:
-                        skipped.append(
-                            {
-                                "reason": "missing_status_mapping",
-                                "issue_type": issue_type_name,
-                                "workflow": workflow_name,
-                                "status_id": str(from_status_id),
-                            },
-                        )
-                        continue
-
-                    op_from = int(from_entry.get("openproject_id", 0) or 0)
-                    if op_from <= 0:
-                        continue
-
-                    key = (type_id, op_from, op_to)
-                    dedup_transitions.setdefault(
-                        key,
-                        {
-                            "type_id": type_id,
-                            "from_status_id": op_from,
-                            "to_status_id": op_to,
-                            "jira_issue_type": issue_type_name,
-                            "jira_workflow": workflow_name,
-                        },
-                    )
+                for key, row in mapping.rows(transition, skipped):
+                    dedup_transitions.setdefault(key, row)
 
         mapped = {
             "transitions": list(dedup_transitions.values()),
@@ -357,3 +311,64 @@ class WorkflowMigration(BaseMigration):
                 result.details.get("errors", 0),
             )
         return result
+
+    @staticmethod
+    def _workflows_by_type(issue_types: list, schemes: list) -> tuple[dict[str, str], set[str]]:
+        """Resolve scheme mappings and the default workflow for known issue types."""
+        issue_type_by_id = {
+            str(item.get("id")): item.get("name") for item in issue_types if item.get("id") and item.get("name")
+        }
+
+        issue_type_to_workflow: dict[str, str] = {}
+        workflow_names: set[str] = set()
+        for scheme in schemes:
+            for name, workflow in WorkflowMigration._explicit_workflows(scheme, issue_type_by_id):
+                issue_type_to_workflow[name] = workflow
+                workflow_names.add(workflow)
+            default = scheme.get("defaultWorkflow")
+            if isinstance(default, str) and default and not issue_type_to_workflow:
+                issue_type_to_workflow.update(dict.fromkeys(issue_type_by_id.values(), default))
+                if issue_type_to_workflow:
+                    workflow_names.add(default)
+        return issue_type_to_workflow, workflow_names
+
+    def _workflow_definitions(self, workflow_names: set[str]) -> tuple[dict, dict]:
+        """Read transitions and statuses independently for each source workflow."""
+        workflow_transitions: dict[str, list[dict[str, Any]]] = {}
+        workflow_statuses: dict[str, list[dict[str, Any]]] = {}
+        for workflow_name in workflow_names:
+            try:
+                transitions = self.jira_client.get_workflow_transitions(workflow_name)
+            except Exception:
+                transitions = []
+            workflow_transitions[workflow_name] = transitions
+
+            try:
+                statuses = self.jira_client.get_workflow_statuses(workflow_name)
+            except Exception:
+                statuses = []
+            workflow_statuses[workflow_name] = statuses if isinstance(statuses, list) else []
+        return workflow_transitions, workflow_statuses
+
+    @staticmethod
+    def _workflow_roles(roles: list[dict]) -> list[int]:
+        """Select configured target roles, with the existing all-role fallback."""
+        desired_role_names = config.migration_config.get(
+            "workflow_roles",
+            ["Project admin", "Project member"],
+        )
+        role_ids = [
+            int(role["id"]) for role in roles if int(role.get("id", 0)) > 0 and role.get("name") in desired_role_names
+        ]
+        if not role_ids:
+            role_ids = [int(role["id"]) for role in roles if int(role.get("id", 0)) > 0]
+        return role_ids
+
+    @staticmethod
+    def _explicit_workflows(scheme: dict, issue_type_by_id: dict) -> Iterator[tuple[str, str]]:
+        mappings = scheme.get("issueTypeMappings") or scheme.get("mappings") or {}
+        if isinstance(mappings, dict):
+            for type_id, workflow in mappings.items():
+                name = issue_type_by_id.get(str(type_id))
+                if name and isinstance(workflow, str) and workflow:
+                    yield name, workflow

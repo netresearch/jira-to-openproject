@@ -151,7 +151,7 @@ class ConfigLoader:
                     logger.debug(
                         "Successfully loaded PostgreSQL password from Docker secret",
                     )
-                except (OSError, PermissionError) as e:
+                except OSError as e:
                     logger.warning(
                         "Failed to read Docker secret: %s",
                         e.__class__.__name__,

@@ -37,6 +37,19 @@ from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 
+_WRITE_VALUE = """
+wp = WorkPackage.find(input_data.fetch('wp_id'))
+field = WorkPackageCustomField.find(input_data.fetch('field_id'))
+wp.with_lock do
+  cv = wp.custom_values.find_or_initialize_by(custom_field_id: field.id)
+  cv.value = input_data.fetch('value')
+  cv.save!
+end
+puts $j2o_start_marker
+puts JSON.generate(true)
+puts $j2o_end_marker
+"""
+
 
 @register_entity_types("customfields_generic")
 class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
@@ -84,11 +97,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
         # entries by their human key so the lookup below works for both the
         # production (numeric-ID) and legacy/test (human-key) mapping shapes
         # instead of silently skipping every issue (#260).
-        entry_by_jira_key: dict[str, Any] = {}
-        for outer_key, raw in wp_map.items():
-            inner_key = self._inner_jira_key(outer_key, raw)
-            if inner_key is not None:
-                entry_by_jira_key[inner_key] = raw
+        entry_by_jira_key = self._index_by_jira_key(wp_map)
 
         values_by_wp: dict[int, list[tuple[str, str, str]]] = {}
         wp_to_project: dict[int, int] = {}  # Track project ID for each WP
@@ -113,35 +122,38 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
             if entry.openproject_project_id is not None:
                 wp_to_project[wp_id] = int(entry.openproject_project_id)
 
-            # Iterate over fields attributes beginning with customfield_
-            for attr in dir(fields):
-                if not attr.startswith("customfield_"):
-                    continue
-                cf_id = attr
-                cf_value = getattr(fields, attr, None)
-                if cf_value in (None, "", [], {}):
-                    continue
-
-                # Map to OP CF name/type using mapping; fallback to using Jira ID as name
-                map_entry = cf_mapping.get(cf_id, {}) if isinstance(cf_mapping, dict) else {}
-                # The content pass writes mapped values in their native format.
-                # Reapplying a flattened label here would overwrite that value.
-                if isinstance(map_entry, int) or (map_entry or {}).get("openproject_id"):
-                    continue
-                map_entry = map_entry or {}
-                op_name = map_entry.get("openproject_name") or map_entry.get("jira_name") or cf_id
-                op_type = map_entry.get("openproject_type", "text")
-
-                norm_value = self._to_string_value(cf_value)
-                if not norm_value:
-                    continue
-                values_by_wp.setdefault(wp_id, []).append((op_name, op_type, norm_value))
+            specs = self._unmapped_values(fields, cf_mapping)
+            if specs:
+                values_by_wp[wp_id] = specs
 
         return ComponentResult(success=True, data={"values_by_wp": values_by_wp, "wp_to_project": wp_to_project})
 
-    def _load(self, mapped: ComponentResult) -> ComponentResult:
-        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+    def _index_by_jira_key(self, wp_map):
+        entry_by_jira_key: dict[str, Any] = {}
+        for outer_key, raw in wp_map.items():
+            inner_key = self._inner_jira_key(outer_key, raw)
+            if inner_key is not None:
+                entry_by_jira_key[inner_key] = raw
+        return entry_by_jira_key
 
+    def _unmapped_values(self, fields, cf_mapping):
+        values = []
+        for attr in dir(fields):
+            if not attr.startswith("customfield_"):
+                continue
+            value = getattr(fields, attr, None)
+            mapping = cf_mapping.get(attr) or {}
+            if isinstance(mapping, int) or mapping.get("openproject_id"):
+                continue  # The content pass writes this field in its native format.
+            if value in (None, "", [], {}):
+                continue
+            normalized = self._to_string_value(value)
+            if normalized:
+                name = mapping.get("openproject_name") or mapping.get("jira_name") or attr
+                values.append((name, mapping.get("openproject_type", "text"), normalized))
+        return values
+
+    def _load(self, mapped: ComponentResult) -> ComponentResult:
         values_by_wp: dict[int, list[tuple[str, str, str]]] = (mapped.data or {}).get("values_by_wp", {})  # type: ignore[assignment]
         wp_to_project: dict[int, int] = (mapped.data or {}).get("wp_to_project", {})  # type: ignore[assignment]
         if not values_by_wp:
@@ -156,38 +168,44 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
         for wp_id, cf_specs in values_by_wp.items():
             project_id = wp_to_project.get(wp_id)
             # Deduplicate CF names for this WP
-            seen: set[str] = set()
-            for name, field_format, value in cf_specs:
-                if name in seen:
-                    continue
-                seen.add(name)
-                try:
-                    cf_id = self._ensure_wp_custom_field(name, field_format or "text")
-                    # Track project for selective enablement
-                    if project_id:
-                        cf_to_projects.setdefault(cf_id, set()).add(project_id)
-                    # Write the actual normalized Jira value extracted in ``_extract``
-                    # (#260: previously a literal 'set' placeholder was written,
-                    # discarding the real value).
-                    escaped_value = escape_ruby_single_quoted(value)
-                    set_script = (
-                        "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                        "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save!; "
-                        "else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                        % (wp_id, cf_id, escaped_value, escaped_value)
-                    )
-                    ok = self.op_client.execute_query(set_script)
-                    if ok:
-                        updated += 1
-                except Exception:
-                    logger.exception("Failed to apply CF '%s' for WP %s", name, wp_id)
-                    failed += 1
+            applied, rejected = self._apply_work_package_fields(cf_specs, project_id, cf_to_projects, wp_id)
+            updated += applied
+            failed += rejected
 
         # Enable CFs only for projects that have values
         for cf_id, project_ids in cf_to_projects.items():
             self._enable_cf_for_projects(cf_id, project_ids)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
+    def _apply_work_package_fields(self, cf_specs, project_id, cf_to_projects, wp_id):
+        updated = failed = 0
+        # Deduplicate CF names for this WP
+        seen: set[str] = set()
+        for name, field_format, value in cf_specs:
+            if name in seen:
+                continue
+            seen.add(name)
+            try:
+                cf_id = self._ensure_wp_custom_field(name, field_format or "text")
+                # Track project for selective enablement
+                if project_id:
+                    cf_to_projects.setdefault(cf_id, set()).add(project_id)
+                self._set_value(wp_id, cf_id, value)
+                updated += 1
+            except Exception:
+                logger.exception("Failed to apply CF '%s' for WP %s", name, wp_id)
+                failed += 1
+        return updated, failed
+
+    def _set_value(self, work_package_id, field_id, value):
+        result = self.op_client.execute_script_with_data(
+            _WRITE_VALUE,
+            {"wp_id": work_package_id, "field_id": field_id, "value": value},
+        )
+        if result.get("data") is not True:
+            msg = "OpenProject did not confirm the custom field value"
+            raise ValueError(msg)
 
     def run(self) -> ComponentResult:
         """Run Custom fields (generic) migration."""

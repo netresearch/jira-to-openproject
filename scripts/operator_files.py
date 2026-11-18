@@ -19,7 +19,7 @@ def _selected_file(path: Path) -> Path:
     directory = path.parent.resolve()
     candidate = directory / path.name
     if candidate.is_symlink() or not candidate.resolve().is_relative_to(directory):
-        msg = "The selected file must be inside the specified directory"
+        msg = "Expected a regular export or input file in the selected directory"
         raise ValueError(msg)
     return candidate
 

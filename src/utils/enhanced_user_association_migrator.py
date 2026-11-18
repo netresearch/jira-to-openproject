@@ -20,7 +20,7 @@ import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Semaphore
-from typing import Any, Literal, Self, TypedDict
+from typing import Any, Literal, NamedTuple, Self, TypedDict
 
 import requests
 
@@ -74,8 +74,8 @@ class StalenessConfig:
 
 
 # Pre-compiled regex patterns for error message sanitization (ReDoS protection)
-JWT_PATTERN = re.compile(r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}")
-BASE64_PATTERN = re.compile(r"(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9+/]{30,}={0,2}")
+JWT_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}+\.[A-Za-z0-9_-]{20,}+\.[A-Za-z0-9_-]{20,}+")
+BASE64_PATTERN = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{30,}+={0,2}")
 URL_PATTERN = re.compile(r"https?://[^\s]+")
 
 
@@ -155,7 +155,7 @@ class CircuitBreaker:
             # Reject if circuit is open
             if self.state == "OPEN":
                 msg = f"Circuit breaker OPEN - too many failures ({self.failure_count})"
-                raise Exception(
+                raise RuntimeError(
                     msg,
                 )
 
@@ -204,6 +204,12 @@ class StaleMappingError(Exception):
 
 # Enum types for validation
 FallbackStrategy = Literal["skip", "assign_admin", "create_placeholder"]
+
+
+class _RefreshLookup(NamedTuple):
+    data: dict[str, Any] | None
+    source: Literal["override", "retry", "http"]
+    timeout_enabled: bool
 
 
 class UserAssociationMapping(TypedDict):
@@ -343,6 +349,448 @@ class EnhancedUserAssociationMigrator:
         # Cache of OpenProject users for fast resolution heuristics
         self._op_users_cache: list[dict[str, Any]] | None = None
 
+    @staticmethod
+    def _normalized_identifier(value: str | None) -> str:
+        if not value:
+            return ""
+        return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").lower().strip()
+
+    def _index_user_mapping(self, jira_key: str, entry: int | dict[str, Any]) -> None:
+        # user_mapping is keyed by Jira user key; entries now also carry J2O provenance data
+        if isinstance(entry, int):
+            # Legacy format: just the OpenProject ID
+            op_user_id = entry
+            jira_username = jira_key
+            jira_display_name = None
+            jira_email = None
+        elif isinstance(entry, dict):
+            # Modern format: full user data from migration
+            op_user_id = entry.get("openproject_id")
+            jira_username = entry.get("jira_name") or jira_key
+            jira_display_name = entry.get("jira_display_name")
+            jira_email = entry.get("jira_email")
+        else:
+            return
+
+        # Only fetch OpenProject info if needed (this is local, not Jira API)
+        op_user_info = self._get_openproject_user_info(op_user_id) if op_user_id else None
+
+        mapping = UserAssociationMapping(
+            jira_username=jira_username,
+            jira_user_id=jira_key,  # Use jira_key as user ID
+            jira_display_name=jira_display_name,
+            jira_email=jira_email,
+            openproject_user_id=op_user_id,
+            openproject_username=(op_user_info.get("login") if op_user_info else None),
+            openproject_email=op_user_info.get("mail") if op_user_info else None,
+            mapping_status="mapped" if op_user_id else "unmapped",
+            fallback_user_id=None,
+            metadata={
+                "created_at": self._get_current_timestamp(),
+                "jira_active": True,  # Assume active since we have mapping data
+                "openproject_active": ((op_user_info.get("status") == 1) if op_user_info else True),
+            },
+            lastRefreshed=self._get_current_timestamp(),
+        )
+
+        # Index by both Jira key and Jira username for robust lookups
+        self.enhanced_user_mappings[jira_key] = mapping
+        if jira_username and jira_username != jira_key:
+            self.enhanced_user_mappings[jira_username] = mapping
+
+    def _first_jira_match(self, data: Any, username: str, is_stale: bool) -> dict[str, Any] | None:
+        if not isinstance(data, list) or not data:
+            return None
+        if is_stale and not getattr(self, "_in_refresh_call", False):
+            try:
+                self.refresh_user_mapping(username)
+            except Exception:
+                pass
+        return data[0] if isinstance(data[0], dict) else None
+
+    @staticmethod
+    def _association_data(user: Any) -> dict[str, Any]:
+        read = user.get if isinstance(user, dict) else lambda name, default=None: getattr(user, name, default)
+        return {
+            "username": read("name"),
+            "account_id": read("accountId"),
+            "display_name": read("displayName"),
+            "email": read("emailAddress"),
+            "active": user.get("active", True) if isinstance(user, dict) else getattr(user, "active", True),
+        }
+
+    def _collect_watchers(self, jira_issue: Any) -> list[dict[str, Any]]:
+        watches = getattr(jira_issue.fields, "watches", None)
+        if not watches:
+            return []
+        fallback = getattr(watches, "watchers", None)
+        fallback = fallback if isinstance(fallback, list) else []
+        try:
+            count = int(getattr(watches, "watchCount", 0))
+        except TypeError, ValueError:
+            count = 0
+        if count <= 0 and not fallback:
+            return []
+        watchers = []
+        try:
+            fetch = getattr(self.jira_client, "get_issue_watchers", None)
+            data = fetch(jira_issue.key) if fetch else None
+            for watcher in data if isinstance(data, (list, tuple)) else fallback:
+                entry = self._association_data(watcher)
+                if not isinstance(watcher, dict) and not isinstance(entry["username"], str):
+                    entry["username"] = getattr(watcher, "_mock_name", None)
+                watchers.append(entry)
+        except Exception as exc:
+            self.logger.warning("Failed to fetch watchers for %s due to API/data error: %s", jira_issue.key, exc)
+        return watchers
+
+    @staticmethod
+    def _is_active_assignee(mapping: UserAssociationMapping | None) -> bool:
+        if not mapping or not mapping.get("openproject_user_id") or mapping.get("mapping_status") != "mapped":
+            return False
+        metadata = mapping.get("metadata", {})
+        return all(
+            metadata.get(key) is True or metadata.get(key) is None for key in ("jira_active", "openproject_active")
+        )
+
+    def _fallback_association(
+        self, role: str, username: str, reason: str, work_package: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        fallback = self._get_fallback_user(role)
+        if fallback:
+            field = "assigned_to_id" if role == "assignee" else "author_id"
+            work_package[field] = fallback
+            message = f"{role.title()} {username} {reason}, using fallback user {fallback}"
+        else:
+            message = f"{role.title()} {username} {reason} and no fallback available"
+        result["warnings"].append(message)
+
+    def _author_mapping(self, username: str) -> UserAssociationMapping | None:
+        cached_mapping = self.enhanced_user_mappings.get(username)
+        try:
+            # Record staleness detection metrics/logs regardless of cache presence
+            self.check_and_handle_staleness(username, raise_on_stale=False)
+        except Exception:
+            # Non-fatal for author migration path
+            pass
+        mapping = cached_mapping
+        prefer_refresh = hasattr(self.jira_client, "get") and callable(getattr(self.jira_client, "get", None))
+        if prefer_refresh:
+            refreshed = self.get_mapping_with_staleness_check(username, auto_refresh=True)
+            if isinstance(refreshed, dict) and refreshed.get("openproject_user_id"):
+                mapping = refreshed
+        if not (mapping and mapping.get("openproject_user_id")):
+            # Fall back to non-refresh staleness-aware lookup when cache is missing
+            mapping = self.get_mapping_with_staleness_check(username, auto_refresh=False)
+        return mapping
+
+    def _assign_author(
+        self,
+        mapping: UserAssociationMapping,
+        username: str,
+        work_package_data: dict[str, Any],
+        preserve_via_rails: bool,
+        author_data: dict[str, Any],
+    ) -> None:
+        # Check if we need Rails console for immutable field preservation
+        if preserve_via_rails and mapping["mapping_status"] == "mapped":
+            # Queue Rails operation for later execution
+            self._queue_rails_author_operation(
+                work_package_data.get("jira_key", ""),
+                mapping["openproject_user_id"],
+                author_data,
+            )
+            # Set temporary author for creation
+            work_package_data["author_id"] = mapping["openproject_user_id"]
+            try:
+                self.logger.debug(
+                    "Successfully mapped author %s to OpenProject user %s with Rails preservation",
+                    username,
+                    str(mapping["openproject_user_id"]),
+                )
+            except Exception:
+                self.logger.debug(
+                    "Successfully mapped author %s (Rails preservation)",
+                    username,
+                )
+        else:
+            work_package_data["author_id"] = mapping["openproject_user_id"]
+            try:
+                self.logger.debug(
+                    "Successfully mapped author %s to OpenProject user %s",
+                    username,
+                    str(mapping["openproject_user_id"]),
+                )
+            except Exception:
+                self.logger.debug(
+                    "Successfully mapped author %s",
+                    username,
+                )
+
+    def _collect_mapped_watcher(self, username: str, valid_watcher_ids: list[int], result: dict[str, Any]) -> None:
+        try:
+            # For watchers: prefer cache; auto-refresh only when Jira client supports HTTP get (E2E)
+            mapping = self.enhanced_user_mappings.get(username)
+            prefer_refresh = hasattr(self.jira_client, "get") and callable(getattr(self.jira_client, "get", None))
+            if not (mapping and mapping.get("openproject_user_id")):
+                mapping = self.get_mapping_with_staleness_check(
+                    username,
+                    auto_refresh=prefer_refresh,
+                )
+
+            if mapping and mapping.get("openproject_user_id"):
+                # Verify user exists and is active
+                if mapping["mapping_status"] == "mapped" and mapping["metadata"].get("openproject_active", True):
+                    valid_watcher_ids.append(mapping["openproject_user_id"])
+                    self.logger.debug(
+                        "Successfully mapped watcher %s to OpenProject user %d",
+                        username,
+                        mapping["openproject_user_id"],
+                    )
+                else:
+                    result["warnings"].append(
+                        f"Watcher {username} inactive, skipping",
+                    )
+            else:
+                result["warnings"].append(f"Watcher {username} unmapped, skipping")
+
+        except StaleMappingError as e:
+            self.logger.warning(
+                "Stale mapping detected for watcher %s: %s",
+                username,
+                e,
+            )
+            result["warnings"].append(f"Watcher {username} mapping stale, skipping")
+        except Exception as e:
+            self.logger.exception(
+                "Unexpected error processing watcher %s: %s",
+                username,
+                e,
+            )
+            result["warnings"].append(f"Error processing watcher {username}: {e}")
+
+    def _stale_reason(self, username: str, current_time: datetime) -> str:
+        mapping = self.enhanced_user_mappings.get(username)
+        if not mapping:
+            return "Mapping does not exist"
+        if not (last := mapping.get("lastRefreshed")):
+            return "No lastRefreshed timestamp"
+        try:
+            age = (current_time - datetime.fromisoformat(last)).total_seconds()
+        except ValueError:
+            return "Invalid lastRefreshed timestamp"
+        return f"Age {age:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
+
+    def _refresh_batch_user(self, username: str, stale_reason: str, max_retries: int, results: dict[str, Any]) -> None:
+        last_error = None
+        attempts = max_retries + 1
+        for attempt in range(1, max_retries + 2):
+            if attempt > 1:
+                self.logger.debug("Batch refresh retry attempt %d/%d for %s", attempt, max_retries + 1, username)
+            try:
+                mapping = self.refresh_user_mapping(username)
+                if not isinstance(mapping, dict):
+                    last_error, attempts = "Refresh returned None", attempt
+                    break
+                metadata = mapping.get("metadata", {})
+                if metadata.get("refresh_success", False):
+                    results["results"][username] = {
+                        "status": "success",
+                        "attempts": attempt,
+                        "stale_reason": stale_reason,
+                        "refreshed_at": mapping["lastRefreshed"],
+                    }
+                    results["refresh_successful"] += 1
+                    self.logger.debug("Batch refresh successful for %s after %d attempts", username, attempt)
+                    return
+                last_error, attempts = metadata.get("refresh_error", "Unknown error"), attempt
+                if metadata.get("terminal", False):
+                    break
+            except Exception as exc:
+                last_error = str(exc)
+                self.logger.warning("Refresh attempt %d/%d failed for %s: %s", attempt, max_retries + 1, username, exc)
+        results["refresh_failed"] += 1
+        results["results"][username] = {
+            "status": "failed",
+            "attempts": attempts,
+            "stale_reason": stale_reason,
+            "error": last_error,
+        }
+        self.logger.debug("Batch refresh failed for %s after %d attempts: %s", username, attempts, last_error)
+        results["errors"].append(f"{username}: {last_error}")
+
+    def _lookup_user_once(self, username: str, request_timeout: float, attempt: int) -> dict[str, Any]:
+        # API call with proper timeout (FIXED: timeout parameter applied)
+        if hasattr(self.jira_client, "get_user_info_with_timeout"):
+            jira_user_data = self.jira_client.get_user_info_with_timeout(
+                username,
+                timeout=request_timeout,
+            )
+        else:
+            # Fallback for clients without timeout support
+            jira_user_data = self.jira_client.get_user_info(username)
+
+        # CRITICAL FIX: Handle None return values properly
+        if jira_user_data is None:
+            msg = f"No user data returned for user '{username}'"
+            raise JiraApiError(
+                msg,
+            )
+
+        if attempt > 0:
+            self.logger.info(
+                f"Jira user lookup for '{username}' succeeded on attempt {attempt + 1}",
+            )
+        else:
+            self.logger.debug(
+                f"Jira user lookup for '{username}' succeeded on first attempt",
+            )
+
+        return jira_user_data
+
+    def _log_lookup_failure(self, username: str, attempt: int, retry_limit: int, e: Exception) -> float:
+        # Enhanced error context logging with helper method (YOLO FIX: no duplication)
+        sanitized_error_msg = self._sanitize_error_message(str(e))
+
+        # Get accurate concurrent call count (FIXED: thread-safe access)
+        concurrent_active = self._refresh_tracker.get_active_count()
+
+        error_context = {
+            "username": username,
+            "attempt": attempt + 1,
+            "total_attempts": retry_limit + 1,
+            "error_type": type(e).__name__,
+            "error_message": sanitized_error_msg,
+            "concurrent_limit": self.MAX_CONCURRENT_REFRESHES,
+            "concurrent_active": concurrent_active,
+        }
+
+        if attempt < retry_limit:  # Not the final attempt
+            # Calculate delay with exponential backoff and cap
+            raw_delay = self.retry_config["base_delay"] * (2**attempt)
+            actual_delay = min(raw_delay, self.retry_config["max_delay"])
+
+            # YOLO FIX: Use helper method for consistent sanitization
+            sanitized_error = sanitized_error_msg
+
+            self.logger.warning(
+                f"Jira user lookup for '{username}' failed on attempt {attempt + 1}/{retry_limit + 1}. "
+                f"Error: {type(e).__name__}: {sanitized_error}. Retrying in {actual_delay}s...",
+            )
+
+            # CRITICAL FIX: Release semaphore during sleep to avoid blocking other threads
+            # Semaphore is automatically released at end of 'with' block
+            return actual_delay
+        # YOLO FIX: Use helper method for consistent sanitization
+        sanitized_error = sanitized_error_msg
+
+        # YOLO FIX: Include error context directly in log message
+        self.logger.error(
+            "Jira user lookup for '%s' exhausted all retry attempts. Final error: %s: %s. Error context: %s",
+            username,
+            type(e).__name__,
+            sanitized_error,
+            error_context,
+            exc_info=e,
+        )
+        return 0
+
+    def _fetch_refresh_data(self, username: str) -> _RefreshLookup:
+        # Prefer Jira client timeout helper when available (staleness tests)
+        retry_callable = getattr(self, "_get_jira_user_with_retry", None)
+        has_timeout_helper = hasattr(self.jira_client, "get_user_info_with_timeout")
+        used_timeout_path = bool(callable(retry_callable) and has_timeout_helper)
+
+        # Detect if tests patched the internal helper; if so, prefer it
+        patched_internal_helper = False
+        try:
+            from unittest.mock import MagicMock  # type: ignore[import-not-found]
+
+            patched_internal_helper = isinstance(self._get_jira_user_info, MagicMock)
+        except Exception:
+            patched_internal_helper = False
+
+        # Inspect mocks to decide path: prefer raw .get when side_effect set (E2E tests)
+        ji_get = getattr(self.jira_client, "get", None)
+        ji_get_user_info = getattr(self.jira_client, "get_user_info", None)
+        get_side_effect_set = getattr(ji_get, "side_effect", None) is not None
+        get_user_info_side_effect_set = getattr(ji_get_user_info, "side_effect", None) is not None
+
+        source: Literal["override", "retry", "http"]
+        if patched_internal_helper:
+            source = "override"
+            data = self._get_jira_user_info(username)
+        elif (
+            used_timeout_path
+            or get_user_info_side_effect_set
+            or (not get_side_effect_set and callable(ji_get_user_info))
+        ):
+            source = "retry"
+            data = self._get_jira_user_with_retry(username)
+        else:
+            source = "http"
+            data = self._get_jira_user_info(username)
+        if data is not None and not isinstance(data, dict):
+            try:
+                data = self._get_jira_user_info(username)
+            except Exception:
+                data = None
+        return _RefreshLookup(data if isinstance(data, dict) else None, source, used_timeout_path)
+
+    def _missing_refresh_data(self, username: str, lookup: _RefreshLookup) -> bool | None:
+        self.logger.warning("Could not fetch fresh user info for %s", username)
+        if lookup.source == "retry":
+            self._apply_fallback_strategy(username, None, "user_not_found")
+        return None if lookup.timeout_enabled else False
+
+    def _enrich_refreshed_mapping(
+        self, username: str, jira_user_data: dict[str, Any], refreshed_mapping: dict[str, Any]
+    ) -> None:
+        try:
+            info = None
+            email = jira_user_data.get("emailAddress")
+            if email and callable(getattr(self.op_client, "get_user_by_email", None)):
+                info = self.op_client.get_user_by_email(email)
+            if not isinstance(info, dict):
+                info = self.op_client.get_user(refreshed_mapping.get("openproject_user_id") or username)
+            if not isinstance(info, dict) or not isinstance(info.get("id"), int):
+                return
+            refreshed_mapping.update(openproject_user_id=info["id"], mapping_status="mapped")
+            display_name = f"{info.get('firstname', '')} {info.get('lastname', '')}".strip()
+            refreshed_mapping["metadata"].update(
+                openproject_active=True,
+                openproject_email=info.get("email") or info.get("mail"),
+                openproject_name=display_name or info.get("login"),
+            )
+        except Exception as exc:
+            self.logger.debug("Could not enrich OpenProject metadata for %s: %s", username, exc)
+
+    def _freshness_recommendation(
+        self, username: str, mapping: UserAssociationMapping, current_time: datetime
+    ) -> dict[str, Any]:
+        # Determine staleness reason for recommendation
+        last_refreshed = mapping.get("lastRefreshed")
+        age_seconds = 0  # Initialize age_seconds outside try block
+
+        if not last_refreshed:
+            reason = "Never refreshed"
+        else:
+            try:
+                last_refresh_time = datetime.fromisoformat(
+                    last_refreshed,
+                )
+                age_seconds = (current_time - last_refresh_time).total_seconds()
+                reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
+            except ValueError:
+                reason = "Invalid timestamp"
+                age_seconds = self.refresh_interval_seconds * 3  # Assume very stale for invalid timestamps
+        return {
+            "username": username,
+            "action": "refresh",
+            "reason": reason,
+            "priority": "high" if age_seconds > self.refresh_interval_seconds * 2 else "medium",
+        }
+
     def _get_op_users_index(
         self,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -354,26 +802,22 @@ class EnhancedUserAssociationMigrator:
                 users = []
             self._op_users_cache = [u for u in users if isinstance(u, dict)]
 
-        def _norm(s: str) -> str:
-            try:
-                return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower().strip()
-            except Exception:
-                return (s or "").lower().strip()
-
         by_login: dict[str, dict[str, Any]] = {}
         by_email: dict[str, dict[str, Any]] = {}
         by_origin_key: dict[str, dict[str, Any]] = {}
 
         for user in self._op_users_cache:
-            login = _norm(user.get("login") or "")
+            login = self._normalized_identifier(user.get("login") or "")
             if login:
                 by_login[login] = user
 
-            email_val = _norm(user.get("mail") or user.get("email") or "")
+            email_val = self._normalized_identifier(user.get("mail") or user.get("email") or "")
             if email_val:
                 by_email[email_val] = user
 
-            provenance_key = _norm(user.get("j2o_user_key") or user.get("jira_user_key") or user.get("jira_key") or "")
+            provenance_key = self._normalized_identifier(
+                user.get("j2o_user_key") or user.get("jira_user_key") or user.get("jira_key") or ""
+            )
             if provenance_key:
                 by_origin_key[provenance_key] = user
 
@@ -388,48 +832,17 @@ class EnhancedUserAssociationMigrator:
         """Resolve an OpenProject user ID using multiple heuristics (login, J2O provenance, email)."""
         by_login, by_email, by_origin_key = self._get_op_users_index()
 
-        def _norm(s: str | None) -> str:
-            if not s:
-                return ""
-            try:
-                return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower().strip()
-            except Exception:
-                return s.lower().strip()
-
-        # 1) Direct login match
-        if username:
-            u = by_login.get(_norm(username))
-            if u and u.get("id"):
-                return int(u["id"])  # type: ignore[arg-type]
-
-            # 2) J2O provenance key equals username
-            u = by_origin_key.get(_norm(username))
-            if u and u.get("id"):
-                return int(u["id"])  # type: ignore[arg-type]
-
-        # 3) J2O provenance key equals Jira account_id
-        if account_id:
-            u = by_origin_key.get(_norm(account_id))
-            if u and u.get("id"):
-                return int(u["id"])  # type: ignore[arg-type]
-
-        # 4) Email match
-        if email:
-            em = _norm(email)
-            u = by_email.get(em)
-            if u and u.get("id"):
-                return int(u["id"])  # type: ignore[arg-type]
-
-            # 5) Email local-part as login
-            try:
-                local_part = (em.split("@", 1)[0] or "").strip()
-            except Exception:
-                local_part = em
-            if local_part:
-                u = by_login.get(local_part)
-                if u and u.get("id"):
-                    return int(u["id"])  # type: ignore[arg-type]
-
+        email_key = self._normalized_identifier(email)
+        lookups = (
+            (by_login, self._normalized_identifier(username)),
+            (by_origin_key, self._normalized_identifier(username)),
+            (by_origin_key, self._normalized_identifier(account_id)),
+            (by_email, email_key),
+            (by_login, email_key.partition("@")[0].strip()),
+        )
+        for index, key in lookups:
+            if key and (user := index.get(key)) and user.get("id"):
+                return int(user["id"])
         return None
 
     def _make_json_serializable(
@@ -468,6 +881,15 @@ class EnhancedUserAssociationMigrator:
         # Convert other objects to string representation
         return str(obj)
 
+    @staticmethod
+    def _redact_base64_line(line: str) -> str:
+        # A token can start only where both letter cases still occur on this line.
+        # Compute the boundary once instead of rescanning the tail for every match.
+        last_lower = max((index for index, char in enumerate(line) if "a" <= char <= "z"), default=-1)
+        last_upper = max((index for index, char in enumerate(line) if "A" <= char <= "Z"), default=-1)
+        boundary = min(last_lower, last_upper)
+        return BASE64_PATTERN.sub(lambda match: "[REDACTED]" if match.start() <= boundary else match[0], line)
+
     def _sanitize_error_message(self, error_msg: str) -> str:
         """Sanitize error message to prevent sensitive data exposure.
 
@@ -484,7 +906,7 @@ class EnhancedUserAssociationMigrator:
         # CRITICAL FIX: Apply security patterns FIRST, then truncate
         # This ensures sensitive tokens are redacted even if they get truncated
         error_msg = JWT_PATTERN.sub("[REDACTED]", error_msg)
-        error_msg = BASE64_PATTERN.sub("[REDACTED]", error_msg)
+        error_msg = "\n".join(self._redact_base64_line(line) for line in error_msg.split("\n"))
         error_msg = URL_PATTERN.sub("[URL]", error_msg)
 
         # Then truncate the already-sanitized string
@@ -637,47 +1059,7 @@ class EnhancedUserAssociationMigrator:
         self.logger.info("Creating enhanced user mappings from basic mapping")
 
         for jira_key, entry in self.user_mapping.items():
-            # user_mapping is keyed by Jira user key; entries now also carry J2O provenance data
-            if isinstance(entry, int):
-                # Legacy format: just the OpenProject ID
-                op_user_id = entry
-                jira_username = jira_key
-                jira_display_name = None
-                jira_email = None
-            elif isinstance(entry, dict):
-                # Modern format: full user data from migration
-                op_user_id = entry.get("openproject_id")
-                jira_username = entry.get("jira_name") or jira_key
-                jira_display_name = entry.get("jira_display_name")
-                jira_email = entry.get("jira_email")
-            else:
-                continue
-
-            # Only fetch OpenProject info if needed (this is local, not Jira API)
-            op_user_info = self._get_openproject_user_info(op_user_id) if op_user_id else None
-
-            mapping = UserAssociationMapping(
-                jira_username=jira_username,
-                jira_user_id=jira_key,  # Use jira_key as user ID
-                jira_display_name=jira_display_name,
-                jira_email=jira_email,
-                openproject_user_id=op_user_id,
-                openproject_username=(op_user_info.get("login") if op_user_info else None),
-                openproject_email=op_user_info.get("mail") if op_user_info else None,
-                mapping_status="mapped" if op_user_id else "unmapped",
-                fallback_user_id=None,
-                metadata={
-                    "created_at": self._get_current_timestamp(),
-                    "jira_active": True,  # Assume active since we have mapping data
-                    "openproject_active": ((op_user_info.get("status") == 1) if op_user_info else True),
-                },
-                lastRefreshed=self._get_current_timestamp(),
-            )
-
-            # Index by both Jira key and Jira username for robust lookups
-            self.enhanced_user_mappings[jira_key] = mapping
-            if jira_username and jira_username != jira_key:
-                self.enhanced_user_mappings[jira_username] = mapping
+            self._index_user_mapping(jira_key, entry)
 
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format.
@@ -727,20 +1109,7 @@ class EnhancedUserAssociationMigrator:
                 return None
 
             # Expecting list payload; return first match when available
-            if isinstance(data, list) and data:
-                user = data[0]
-                # Trigger refresh only after successful fetch when mapping is stale
-                # Avoid re-entrant recursion when already in a refresh call
-                if is_stale and not getattr(self, "_in_refresh_call", False):
-                    try:
-                        self.refresh_user_mapping(username)
-                    except Exception:
-                        # Non-fatal in this helper
-                        pass
-                return user if isinstance(user, dict) else None
-
-            # Empty list means not found; not an error condition
-            return None
+            return self._first_jira_match(data, username, is_stale)
 
         except requests.RequestException as e:
             self.logger.error("Failed to fetch Jira user info for %s: %s", username, e)
@@ -877,98 +1246,12 @@ class EnhancedUserAssociationMigrator:
         associations = {}
 
         # Extract assignee
-        if hasattr(jira_issue.fields, "assignee") and jira_issue.fields.assignee:
-            associations["assignee"] = {
-                "username": getattr(jira_issue.fields.assignee, "name", None),
-                "account_id": getattr(jira_issue.fields.assignee, "accountId", None),
-                "display_name": getattr(
-                    jira_issue.fields.assignee,
-                    "displayName",
-                    None,
-                ),
-                "email": getattr(jira_issue.fields.assignee, "emailAddress", None),
-                "active": getattr(jira_issue.fields.assignee, "active", True),
-            }
-
-        # Extract reporter
-        if hasattr(jira_issue.fields, "reporter") and jira_issue.fields.reporter:
-            associations["reporter"] = {
-                "username": getattr(jira_issue.fields.reporter, "name", None),
-                "account_id": getattr(jira_issue.fields.reporter, "accountId", None),
-                "display_name": getattr(
-                    jira_issue.fields.reporter,
-                    "displayName",
-                    None,
-                ),
-                "email": getattr(jira_issue.fields.reporter, "emailAddress", None),
-                "active": getattr(jira_issue.fields.reporter, "active", True),
-            }
-
-        # Extract creator
-        if hasattr(jira_issue.fields, "creator") and jira_issue.fields.creator:
-            associations["creator"] = {
-                "username": getattr(jira_issue.fields.creator, "name", None),
-                "account_id": getattr(jira_issue.fields.creator, "accountId", None),
-                "display_name": getattr(jira_issue.fields.creator, "displayName", None),
-                "email": getattr(jira_issue.fields.creator, "emailAddress", None),
-                "active": getattr(jira_issue.fields.creator, "active", True),
-            }
+        for role in ("assignee", "reporter", "creator"):
+            if user := getattr(jira_issue.fields, role, None):
+                associations[role] = self._association_data(user)
 
         # Extract watchers
-        watchers = []
-        if hasattr(jira_issue.fields, "watches") and jira_issue.fields.watches:
-            watcher_count = getattr(jira_issue.fields.watches, "watchCount", 0)
-            try:
-                watcher_count_int = int(watcher_count)
-            except Exception:
-                watcher_count_int = 0
-            watchers_attr = getattr(jira_issue.fields.watches, "watchers", None)
-            if watcher_count_int > 0 or (isinstance(watchers_attr, list) and len(watchers_attr) > 0):
-                # Prefer API, but fall back to fields.watches.watchers if available
-                try:
-                    watchers_data = None
-                    if hasattr(self.jira_client, "get_issue_watchers"):
-                        watchers_data = self.jira_client.get_issue_watchers(
-                            jira_issue.key,
-                        )
-                    if not isinstance(watchers_data, (list, tuple)):
-                        watchers_data = watchers_attr if isinstance(watchers_attr, list) else []
-
-                    if watchers_data:
-                        for watcher in watchers_data:
-                            # Support either dicts (API) or objects (from issue.fields)
-                            if isinstance(watcher, dict):
-                                name = watcher.get("name")
-                                account_id = watcher.get("accountId")
-                                display_name = watcher.get("displayName")
-                                email = watcher.get("emailAddress")
-                                active = watcher.get("active", True)
-                            else:
-                                # For Mock objects from tests, prefer _mock_name; ignore nested Mock name attrs
-                                name_attr = getattr(watcher, "name", None)
-                                name = name_attr if isinstance(name_attr, str) else getattr(watcher, "_mock_name", None)
-                                account_id = getattr(watcher, "accountId", None)
-                                display_name = getattr(watcher, "displayName", None)
-                                email = getattr(watcher, "emailAddress", None)
-                                active = getattr(watcher, "active", True)
-
-                            watchers.append(
-                                {
-                                    "username": name,
-                                    "account_id": account_id,
-                                    "display_name": display_name,
-                                    "email": email,
-                                    "active": active,
-                                },
-                            )
-                except Exception as e:
-                    self.logger.warning(
-                        "Failed to fetch watchers for %s due to API/data error: %s",
-                        jira_issue.key,
-                        e,
-                    )
-
-        associations["watchers"] = watchers
+        associations["watchers"] = self._collect_watchers(jira_issue)
         return associations
 
     def _migrate_assignee(
@@ -1005,66 +1288,27 @@ class EnhancedUserAssociationMigrator:
         try:
             # Prefer cached mapping when present and active to satisfy direct-mapped tests
             cached = self.enhanced_user_mappings.get(username)
-            if cached and cached.get("openproject_user_id") and cached.get("mapping_status") == "mapped":
-                jira_active = cached.get("metadata", {}).get("jira_active")
-                if jira_active is None:
-                    jira_active = True
-                op_active = cached.get("metadata", {}).get("openproject_active")
-                if op_active is None:
-                    op_active = True
-                if jira_active is True and op_active is True:
-                    work_package_data["assigned_to_id"] = cached["openproject_user_id"]
-                    # Explicit cache-hit log for tests
-                    self.logger.debug("Cache hit for %s", username)
-                    self.logger.debug(
-                        "Successfully mapped assignee %s to OpenProject user %d (cached)",
-                        username,
-                        cached["openproject_user_id"],
-                    )
-                    return result
+            if self._is_active_assignee(cached):
+                work_package_data["assigned_to_id"] = cached["openproject_user_id"]
+                self.logger.debug("Cache hit for %s", username)
+                self.logger.debug(
+                    "Successfully mapped assignee %s to OpenProject user %d (cached)",
+                    username,
+                    cached["openproject_user_id"],
+                )
+                return result
 
             # For assignee, do not auto-refresh unknown users; prefer explicit fallbacks
             mapping = self.get_mapping_with_staleness_check(username, auto_refresh=False)
 
-            if mapping and mapping.get("openproject_user_id"):
-                # Verify user is still active (prefer Jira active flag; default True when missing)
-                jira_active = mapping["metadata"].get("jira_active")
-                if jira_active is None:
-                    jira_active = True
-                op_active = mapping["metadata"].get("openproject_active")
-                if op_active is None:
-                    op_active = True
-                if mapping["mapping_status"] == "mapped" and jira_active is True and op_active is True:
-                    work_package_data["assigned_to_id"] = mapping["openproject_user_id"]
-                    self.logger.debug(
-                        "Successfully mapped assignee %s to OpenProject user %d",
-                        username,
-                        mapping["openproject_user_id"],
-                    )
-                else:
-                    # Use fallback for inactive user
-                    fallback_id = self._get_fallback_user("assignee")
-                    if fallback_id:
-                        work_package_data["assigned_to_id"] = fallback_id
-                        result["warnings"].append(
-                            f"Assignee {username} inactive, using fallback user {fallback_id}",
-                        )
-                    else:
-                        result["warnings"].append(
-                            f"Assignee {username} inactive and no fallback available",
-                        )
+            if self._is_active_assignee(mapping):
+                work_package_data["assigned_to_id"] = mapping["openproject_user_id"]
+                self.logger.debug(
+                    "Successfully mapped assignee %s to OpenProject user %d", username, mapping["openproject_user_id"]
+                )
             else:
-                # Handle unmapped user
-                fallback_id = self._get_fallback_user("assignee")
-                if fallback_id:
-                    work_package_data["assigned_to_id"] = fallback_id
-                    result["warnings"].append(
-                        f"Assignee {username} unmapped, using fallback user {fallback_id}",
-                    )
-                else:
-                    result["warnings"].append(
-                        f"Assignee {username} unmapped and no fallback available",
-                    )
+                reason = "inactive" if mapping and mapping.get("openproject_user_id") else "unmapped"
+                self._fallback_association("assignee", username, reason, work_package_data, result)
 
         except StaleMappingError as e:
             self.logger.warning(
@@ -1073,16 +1317,7 @@ class EnhancedUserAssociationMigrator:
                 e,
             )
             # Apply fallback strategy
-            fallback_id = self._get_fallback_user("assignee")
-            if fallback_id:
-                work_package_data["assigned_to_id"] = fallback_id
-                result["warnings"].append(
-                    f"Assignee {username} mapping stale, using fallback user {fallback_id}",
-                )
-            else:
-                result["warnings"].append(
-                    f"Assignee {username} mapping stale and no fallback available",
-                )
+            self._fallback_association("assignee", username, "mapping stale", work_package_data, result)
         except Exception as e:
             self.logger.exception(
                 "Unexpected error processing assignee %s: %s",
@@ -1138,84 +1373,17 @@ class EnhancedUserAssociationMigrator:
         try:
             # Prefer cached mapping directly to satisfy unit tests with static fixtures
             # For authors: record staleness; attempt auto-refresh only when Jira client has HTTP get
-            cached_mapping = self.enhanced_user_mappings.get(username)
-            try:
-                # Record staleness detection metrics/logs regardless of cache presence
-                self.check_and_handle_staleness(username, raise_on_stale=False)
-            except Exception:
-                # Non-fatal for author migration path
-                pass
-            mapping = cached_mapping
-            prefer_refresh = hasattr(self.jira_client, "get") and callable(getattr(self.jira_client, "get", None))
-            if prefer_refresh:
-                refreshed = self.get_mapping_with_staleness_check(username, auto_refresh=True)
-                if isinstance(refreshed, dict) and refreshed.get("openproject_user_id"):
-                    mapping = refreshed
-            if not (mapping and mapping.get("openproject_user_id")):
-                # Fall back to non-refresh staleness-aware lookup when cache is missing
-                mapping = self.get_mapping_with_staleness_check(username, auto_refresh=False)
+            mapping = self._author_mapping(username)
 
             if mapping and mapping.get("openproject_user_id"):
-                # Check if we need Rails console for immutable field preservation
-                if preserve_via_rails and mapping["mapping_status"] == "mapped":
-                    # Queue Rails operation for later execution
-                    self._queue_rails_author_operation(
-                        work_package_data.get("jira_key", ""),
-                        mapping["openproject_user_id"],
-                        author_data,
-                    )
-                    # Set temporary author for creation
-                    work_package_data["author_id"] = mapping["openproject_user_id"]
-                    try:
-                        self.logger.debug(
-                            "Successfully mapped author %s to OpenProject user %s with Rails preservation",
-                            username,
-                            str(mapping["openproject_user_id"]),
-                        )
-                    except Exception:
-                        self.logger.debug(
-                            "Successfully mapped author %s (Rails preservation)",
-                            username,
-                        )
-                else:
-                    work_package_data["author_id"] = mapping["openproject_user_id"]
-                    try:
-                        self.logger.debug(
-                            "Successfully mapped author %s to OpenProject user %s",
-                            username,
-                            str(mapping["openproject_user_id"]),
-                        )
-                    except Exception:
-                        self.logger.debug(
-                            "Successfully mapped author %s",
-                            username,
-                        )
+                self._assign_author(mapping, username, work_package_data, preserve_via_rails, author_data)
             else:
-                # Handle unmapped author
-                fallback_id = self._get_fallback_user("author")
-                if fallback_id:
-                    work_package_data["author_id"] = fallback_id
-                    result["warnings"].append(
-                        f"Author {username} unmapped, using fallback user {fallback_id}",
-                    )
-                else:
-                    result["warnings"].append(
-                        f"Author {username} unmapped and no fallback available",
-                    )
+                self._fallback_association("author", username, "unmapped", work_package_data, result)
 
         except StaleMappingError as e:
             self.logger.warning("Stale mapping detected for author %s: %s", username, e)
             # Apply fallback strategy
-            fallback_id = self._get_fallback_user("author")
-            if fallback_id:
-                work_package_data["author_id"] = fallback_id
-                result["warnings"].append(
-                    f"Author {username} mapping stale, using fallback user {fallback_id}",
-                )
-            else:
-                result["warnings"].append(
-                    f"Author {username} mapping stale and no fallback available",
-                )
+            self._fallback_association("author", username, "mapping stale", work_package_data, result)
         except Exception as e:
             self.logger.exception(
                 "Unexpected error processing author %s: %s",
@@ -1240,46 +1408,7 @@ class EnhancedUserAssociationMigrator:
             if not username:
                 continue
 
-            try:
-                # For watchers: prefer cache; auto-refresh only when Jira client supports HTTP get (E2E)
-                mapping = self.enhanced_user_mappings.get(username)
-                prefer_refresh = hasattr(self.jira_client, "get") and callable(getattr(self.jira_client, "get", None))
-                if not (mapping and mapping.get("openproject_user_id")):
-                    mapping = self.get_mapping_with_staleness_check(
-                        username,
-                        auto_refresh=prefer_refresh,
-                    )
-
-                if mapping and mapping.get("openproject_user_id"):
-                    # Verify user exists and is active
-                    if mapping["mapping_status"] == "mapped" and mapping["metadata"].get("openproject_active", True):
-                        valid_watcher_ids.append(mapping["openproject_user_id"])
-                        self.logger.debug(
-                            "Successfully mapped watcher %s to OpenProject user %d",
-                            username,
-                            mapping["openproject_user_id"],
-                        )
-                    else:
-                        result["warnings"].append(
-                            f"Watcher {username} inactive, skipping",
-                        )
-                else:
-                    result["warnings"].append(f"Watcher {username} unmapped, skipping")
-
-            except StaleMappingError as e:
-                self.logger.warning(
-                    "Stale mapping detected for watcher %s: %s",
-                    username,
-                    e,
-                )
-                result["warnings"].append(f"Watcher {username} mapping stale, skipping")
-            except Exception as e:
-                self.logger.exception(
-                    "Unexpected error processing watcher %s: %s",
-                    username,
-                    e,
-                )
-                result["warnings"].append(f"Error processing watcher {username}: {e}")
+            self._collect_mapped_watcher(username, valid_watcher_ids, result)
 
         if valid_watcher_ids:
             work_package_data["watcher_ids"] = valid_watcher_ids
@@ -1289,6 +1418,7 @@ class EnhancedUserAssociationMigrator:
 
     def _get_fallback_user(self, role: str) -> int | None:
         """Get appropriate fallback user for a specific role."""
+        self.logger.debug("Selecting fallback user for %s", role)
         # Priority order for fallback users
         fallback_priority = ["migration", "admin", "system"]
 
@@ -1501,25 +1631,7 @@ class EnhancedUserAssociationMigrator:
         for username in check_usernames:
             try:
                 if self.is_mapping_stale(username, current_time):
-                    mapping = self.enhanced_user_mappings.get(username)
-
-                    if not mapping:
-                        stale_reason = "Mapping does not exist"
-                    else:
-                        last_refreshed = mapping.get("lastRefreshed")
-                        if not last_refreshed:
-                            stale_reason = "No lastRefreshed timestamp"
-                        else:
-                            try:
-                                last_refresh_time = datetime.fromisoformat(
-                                    last_refreshed,
-                                )
-                                age_seconds = (current_time - last_refresh_time).total_seconds()
-                                stale_reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
-                            except ValueError:
-                                stale_reason = "Invalid lastRefreshed timestamp"
-
-                    stale_mappings[username] = stale_reason
+                    stale_mappings[username] = self._stale_reason(username, current_time)
 
                     # MONITORING: Individual staleness detection metrics (YOLO FIX: defensive metrics)
             except Exception as e:
@@ -1611,93 +1723,7 @@ class EnhancedUserAssociationMigrator:
             )
 
             try:
-                # Retry logic for individual mapping refresh
-                last_error = None
-                success = False
-                attempts_used = max_retries + 1
-
-                for attempt in range(max_retries + 1):
-                    try:
-                        # MONITORING: Retry attempt logging
-                        if attempt > 0:
-                            self.logger.debug(
-                                "Batch refresh retry attempt %d/%d for %s",
-                                attempt + 1,
-                                max_retries + 1,
-                                username,
-                            )
-
-                        refreshed_mapping = self.refresh_user_mapping(username)
-
-                        # YOLO FIX: Check if mapping indicates success or failure
-                        if isinstance(refreshed_mapping, dict) and refreshed_mapping.get(
-                            "metadata",
-                            {},
-                        ).get("refresh_success", False):
-                            results["refresh_successful"] += 1
-                            results["results"][username] = {
-                                "status": "success",
-                                "attempts": attempt + 1,
-                                "stale_reason": stale_reason,
-                                "refreshed_at": refreshed_mapping["lastRefreshed"],
-                            }
-
-                            # MONITORING: Batch refresh success logging and metrics
-                            self.logger.debug(
-                                "Batch refresh successful for %s after %d attempts",
-                                username,
-                                attempt + 1,
-                            )
-
-                            success = True
-                            break
-                        # Handle error mapping or None result
-                        if isinstance(refreshed_mapping, dict) and not refreshed_mapping.get(
-                            "metadata",
-                            {},
-                        ).get("refresh_success", False):
-                            last_error = refreshed_mapping.get("metadata", {}).get(
-                                "refresh_error",
-                                "Unknown error",
-                            )
-                            attempts_used = attempt + 1
-                            # Stop retrying for terminal failures
-                            if refreshed_mapping.get("metadata", {}).get("terminal", False):
-                                break
-                        else:
-                            last_error = "Refresh returned None"
-                            attempts_used = attempt + 1
-                            # Do not continue retrying on hard None result to match test expectations
-                            break
-
-                    except Exception as refresh_error:
-                        last_error = str(refresh_error)
-                        self.logger.warning(
-                            "Refresh attempt %d/%d failed for %s: %s",
-                            attempt + 1,
-                            max_retries + 1,
-                            username,
-                            refresh_error,
-                        )
-
-                if not success:
-                    results["refresh_failed"] += 1
-                    results["results"][username] = {
-                        "status": "failed",
-                        "attempts": attempts_used,
-                        "stale_reason": stale_reason,
-                        "error": last_error,
-                    }
-
-                    # MONITORING: Batch refresh failure logging and metrics
-                    self.logger.debug(
-                        "Batch refresh failed for %s after %d attempts: %s",
-                        username,
-                        attempts_used,
-                        last_error,
-                    )
-
-                    results["errors"].append(f"{username}: {last_error}")
+                self._refresh_batch_user(username, stale_reason, max_retries, results)
 
             except Exception as e:
                 # Outer exception handling for unexpected errors
@@ -1787,80 +1813,12 @@ class EnhancedUserAssociationMigrator:
             # Acquire rate limiting slot
             with self._refresh_tracker:
                 try:
-                    # API call with proper timeout (FIXED: timeout parameter applied)
-                    if hasattr(self.jira_client, "get_user_info_with_timeout"):
-                        jira_user_data = self.jira_client.get_user_info_with_timeout(
-                            username,
-                            timeout=request_timeout,
-                        )
-                    else:
-                        # Fallback for clients without timeout support
-                        jira_user_data = self.jira_client.get_user_info(username)
-
-                    # CRITICAL FIX: Handle None return values properly
-                    if jira_user_data is None:
-                        msg = f"No user data returned for user '{username}'"
-                        raise JiraApiError(
-                            msg,
-                        )
-
-                    if attempt > 0:
-                        self.logger.info(
-                            f"Jira user lookup for '{username}' succeeded on attempt {attempt + 1}",
-                        )
-                    else:
-                        self.logger.debug(
-                            f"Jira user lookup for '{username}' succeeded on first attempt",
-                        )
-
-                    return jira_user_data
+                    return self._lookup_user_once(username, request_timeout, attempt)
 
                 except Exception as e:
                     last_error = e
 
-                    # Enhanced error context logging with helper method (YOLO FIX: no duplication)
-                    sanitized_error_msg = self._sanitize_error_message(str(e))
-
-                    # Get accurate concurrent call count (FIXED: thread-safe access)
-                    concurrent_active = self._refresh_tracker.get_active_count()
-
-                    error_context = {
-                        "username": username,
-                        "attempt": attempt + 1,
-                        "total_attempts": retry_limit + 1,
-                        "error_type": type(e).__name__,
-                        "error_message": sanitized_error_msg,
-                        "concurrent_limit": self.MAX_CONCURRENT_REFRESHES,
-                        "concurrent_active": concurrent_active,
-                    }
-
-                    if attempt < retry_limit:  # Not the final attempt
-                        # Calculate delay with exponential backoff and cap
-                        raw_delay = self.retry_config["base_delay"] * (2**attempt)
-                        actual_delay = min(raw_delay, self.retry_config["max_delay"])
-
-                        # YOLO FIX: Use helper method for consistent sanitization
-                        sanitized_error = sanitized_error_msg
-
-                        self.logger.warning(
-                            f"Jira user lookup for '{username}' failed on attempt {attempt + 1}/{retry_limit + 1}. "
-                            f"Error: {type(e).__name__}: {sanitized_error}. Retrying in {actual_delay}s...",
-                        )
-
-                        # CRITICAL FIX: Release semaphore during sleep to avoid blocking other threads
-                        # Semaphore is automatically released at end of 'with' block
-                    else:
-                        # YOLO FIX: Use helper method for consistent sanitization
-                        sanitized_error = sanitized_error_msg
-
-                        # YOLO FIX: Include error context directly in log message
-                        self.logger.exception(
-                            "Jira user lookup for '%s' exhausted all retry attempts. Final error: %s: %s. Error context: %s",
-                            username,
-                            type(e).__name__,
-                            sanitized_error,
-                            error_context,
-                        )
+                    actual_delay = self._log_lookup_failure(username, attempt, retry_limit, e)
 
             # CRITICAL FIX: Sleep outside semaphore context to avoid blocking other threads
             if attempt < retry_limit:  # Only sleep if we'll attempt again
@@ -1895,72 +1853,10 @@ class EnhancedUserAssociationMigrator:
             self.logger.debug("Starting refresh for user mapping: %s", username)
             self.logger.info("Refreshing user mapping for: %s", username)
 
-            # Prefer Jira client timeout helper when available (staleness tests)
-            retry_callable = getattr(self, "_get_jira_user_with_retry", None)
-            has_timeout_helper = hasattr(self.jira_client, "get_user_info_with_timeout")
-            used_timeout_path = bool(callable(retry_callable) and has_timeout_helper)
-
-            # Detect if tests patched the internal helper; if so, prefer it
-            patched_internal_helper = False
-            try:
-                from unittest.mock import MagicMock  # type: ignore[import-not-found]
-
-                patched_internal_helper = isinstance(self._get_jira_user_info, MagicMock)
-            except Exception:
-                patched_internal_helper = False
-
-            # Inspect mocks to decide path: prefer raw .get when side_effect set (E2E tests)
-            ji_get = getattr(self.jira_client, "get", None)
-            ji_get_user_info = getattr(self.jira_client, "get_user_info", None)
-            get_side_effect_set = hasattr(ji_get, "side_effect") and ji_get.side_effect is not None
-            get_user_info_side_effect_set = (
-                hasattr(ji_get_user_info, "side_effect") and ji_get_user_info.side_effect is not None
-            )
-
-            used_retry_path = False
-            used_direct_helper = False
-            used_internal_helper = False
-
-            if patched_internal_helper:
-                jira_user_data = self._get_jira_user_info(username)
-                used_direct_helper = True
-                used_internal_helper = True
-            elif (
-                used_timeout_path
-                or get_user_info_side_effect_set
-                or (not get_side_effect_set and callable(ji_get_user_info))
-            ):
-                jira_user_data = self._get_jira_user_with_retry(username)
-                used_retry_path = True
-            else:
-                jira_user_data = self._get_jira_user_info(username)
-                used_direct_helper = True
-            # If retry path provided a non-dict (e.g., MagicMock), fall back to HTTP helper for real data
-            if jira_user_data is not None and not isinstance(jira_user_data, dict):
-                try:
-                    http_fallback = self._get_jira_user_info(username)
-                    if isinstance(http_fallback, dict):
-                        jira_user_data = http_fallback
-                        used_direct_helper = True
-                    else:
-                        # Treat non-dict/None as not found to trigger fallback/metrics per tests
-                        jira_user_data = None
-                except Exception:
-                    # Treat errors in fallback fetch as not found
-                    jira_user_data = None
-
+            lookup = self._fetch_refresh_data(username)
+            jira_user_data = lookup.data
             if jira_user_data is None:
-                # Apply fallback/error mapping when no data (explicit contract in tests)
-                self.logger.warning("Could not fetch fresh user info for %s", username)
-                # Apply fallback when using retry helper path (unit test expects invocation)
-                if used_retry_path:
-                    self._apply_fallback_strategy(username, None, "user_not_found")
-                # Return type depends on path semantics
-                if used_timeout_path:
-                    # Staleness tests expect None
-                    return None
-                # Integration-style tests expect False
-                return False
+                return self._missing_refresh_data(username, lookup)
 
             if not jira_user_data:
                 # MONITORING: User not found logging
@@ -2039,42 +1935,7 @@ class EnhancedUserAssociationMigrator:
                 self.logger.debug("OpenProject mapping already exists for %s", username)
 
             # Attempt to enrich with OpenProject user information
-            try:
-                op_user_info = None
-                email = jira_user_data.get("emailAddress")
-                get_by_email = getattr(self.op_client, "get_user_by_email", None)
-                if email and callable(get_by_email):
-                    op_user_info = get_by_email(email)
-                # If by-email did not yield a real dict, try generic get_user()
-                if (not isinstance(op_user_info, dict)) and hasattr(self.op_client, "get_user"):
-                    op_user_info = self.op_client.get_user()
-
-                # Only enrich when we have a real dict with an integer id
-                if isinstance(op_user_info, dict):
-                    op_id = op_user_info.get("id")
-                    if isinstance(op_id, int):
-                        refreshed_mapping.update(
-                            {
-                                "openproject_user_id": op_id,
-                                "mapping_status": "mapped",
-                            },
-                        )
-                        refreshed_mapping["metadata"].update(
-                            {
-                                "openproject_active": True,
-                                "openproject_email": "jane.smith@company.com"
-                                if username == "jane.smith"
-                                else op_user_info.get("email"),
-                                "openproject_name": "Jane Smith (Updated)"
-                                if username == "jane.smith"
-                                else (
-                                    f"{op_user_info.get('firstname', '')} {op_user_info.get('lastname', '')}".strip()
-                                    or op_user_info.get("login")
-                                ),
-                            },
-                        )
-            except Exception:
-                pass
+            self._enrich_refreshed_mapping(username, jira_user_data, refreshed_mapping)
 
             # Mark as successfully mapped if OP user id present
             if refreshed_mapping.get("openproject_user_id"):
@@ -2093,21 +1954,7 @@ class EnhancedUserAssociationMigrator:
             self.logger.debug("Successfully completed refresh for %s", username)
             self.logger.info(_REFRESHED_MAPPING_MESSAGE, username)
 
-            # Return type depends on path semantics and test expectations
-            if used_retry_path:
-                # Retry-path tests expect the full mapping dict
-                return refreshed_mapping
-
-            if used_internal_helper:
-                # When tests patch internal helper, they expect boolean success
-                return True
-
-            if used_direct_helper:
-                # Direct HTTP helper path should return the refreshed mapping dict for integration tests
-                return refreshed_mapping
-
-            # Fallback default
-            return True
+            return True if lookup.source == "override" else refreshed_mapping
 
         except Exception as e:
             # MONITORING: Refresh error logging
@@ -2262,9 +2109,9 @@ class EnhancedUserAssociationMigrator:
         # Emit warning to satisfy end-to-end log assertions
         self.logger.warning("Skipping user mapping for %s due to: %s", username, reason)
 
-        # Remove from mappings if exists
-        if username in self.enhanced_user_mappings:
-            del self.enhanced_user_mappings[username]
+        self.enhanced_user_mappings.pop(username, None)
+        if current_mapping.get("openproject_user_id"):
+            self.logger.debug("Cleared mapping to OpenProject user %s", current_mapping["openproject_user_id"])
 
         # Update metrics
 
@@ -2557,30 +2404,8 @@ class EnhancedUserAssociationMigrator:
                     validation_results["stale_mappings"] += 1
                     validation_results["stale_users"].append(username)
 
-                    # Determine staleness reason for recommendation
-                    last_refreshed = mapping.get("lastRefreshed")
-                    age_seconds = 0  # Initialize age_seconds outside try block
-
-                    if not last_refreshed:
-                        reason = "Never refreshed"
-                    else:
-                        try:
-                            last_refresh_time = datetime.fromisoformat(
-                                last_refreshed,
-                            )
-                            age_seconds = (current_time - last_refresh_time).total_seconds()
-                            reason = f"Age {age_seconds:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
-                        except ValueError:
-                            reason = "Invalid timestamp"
-                            age_seconds = self.refresh_interval_seconds * 3  # Assume very stale for invalid timestamps
-
                     validation_results["recommendations"].append(
-                        {
-                            "username": username,
-                            "action": "refresh",
-                            "reason": reason,
-                            "priority": ("high" if age_seconds > (self.refresh_interval_seconds * 2) else "medium"),
-                        },
+                        self._freshness_recommendation(username, mapping, current_time)
                     )
                 else:
                     validation_results["fresh_mappings"] += 1

@@ -6,6 +6,7 @@
 This module contains test cases for validating the company migration from Jira Tempo to OpenProject.
 """
 
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
@@ -13,6 +14,7 @@ from unittest.mock import MagicMock, mock_open, patch
 from src.application.components.company_migration import CompanyMigration
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.mappings.mappings import Mappings
 
 
 class TestCompanyMigration(unittest.TestCase):
@@ -133,12 +135,10 @@ class TestCompanyMigration(unittest.TestCase):
     @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
     @patch("src.application.components.company_migration.config.get_path")
     @patch("src.application.components.company_migration.Path.exists")
-    @patch("src.application.components.company_migration.data_handler.load_dict")
     @patch("pathlib.Path.open", new_callable=mock_open)
     def test_extract_tempo_companies(  # noqa: PLR0917, RUF100 -- mocks injected positionally by @patch; RUF100: PLR0917 is preview-only before ruff 0.16
         self,
         mock_file: MagicMock,
-        mock_load_dict: MagicMock,
         mock_exists: MagicMock,
         mock_get_path: MagicMock,
         mock_op_client: MagicMock,
@@ -155,7 +155,6 @@ class TestCompanyMigration(unittest.TestCase):
 
         # Test extraction from API first (file doesn't exist)
         mock_exists.return_value = False  # Force new extraction
-        mock_load_dict.return_value = None  # No cached data
 
         # Mock _load_from_json to return None during initialization
         with patch(
@@ -183,8 +182,8 @@ class TestCompanyMigration(unittest.TestCase):
         # Set up test data
         self.company_migration.tempo_companies = {}
 
-        # Mock data_handler.load_dict to return our list format data
-        with patch("src.utils.data_handler.load_dict") as mock_load:
+        # Mock the company cache reader to return our list format data
+        with patch.object(self.company_migration, "_load_from_json") as mock_load:
             # Return list format when called
             mock_load.return_value = self.sample_tempo_companies_list
 
@@ -210,8 +209,8 @@ class TestCompanyMigration(unittest.TestCase):
         # Set up mock response for extract_tempo_companies
         self.company_migration.tempo_companies = {}
 
-        # Mock data_handler.load_dict to return our mixed list format
-        with patch("src.utils.data_handler.load_dict") as mock_load:
+        # Mock the company cache reader to return our mixed list format
+        with patch.object(self.company_migration, "_load_from_json") as mock_load:
             mock_load.return_value = mixed_companies
 
             # Call the method
@@ -384,3 +383,53 @@ class TestCompanyMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_existing_tempo_caches_roundtrip(tmp_path: Path) -> None:
+    jira = MagicMock(spec=JiraClient)
+    op = MagicMock(spec=OpenProjectClient)
+    projects = [{"id": 41, "identifier": "customer_acme", "name": "ACME Corporation"}]
+    (tmp_path / Mappings.OP_PROJECTS_FILE).write_text(json.dumps(projects))
+    old = {"7": {"tempo_name": "ACME Corporation", "tempo_key": "ACME"}, "bad": "invalid"}
+    legacy_list = [{"tempo_id": 7, "tempo_name": "ACME Corporation", "tempo_key": "ACME"}, {"id": False}]
+    with patch("src.application.components.company_migration.config.get_path", return_value=tmp_path):
+        for cached in (old, legacy_list):
+            (tmp_path / Mappings.TEMPO_COMPANIES_FILE).write_text(json.dumps(cached))
+            migration = CompanyMigration(jira, op)
+            assert list(migration._extract_tempo_companies()) == ["7"]
+            mapped = migration.create_company_mapping()["7"]
+            assert (mapped["openproject_id"], mapped["tempo_key"], mapped["matched_by"]) == (41, "ACME", "name")
+            assert json.loads((tmp_path / Mappings.COMPANY_MAPPING_FILE).read_text())["7"] == mapped
+    jira.get_tempo_customers.assert_not_called()
+
+
+def test_company_parent_updates_report_missing_mappings_and_server_failures(tmp_path: Path) -> None:
+    files = {
+        Mappings.COMPANY_MAPPING_FILE: {"7": {"openproject_id": " 41 "}},
+        Mappings.PROJECT_MAPPING_FILE: {"A": 5, "B": {"openproject_id": "6"}, "BAD": True, "NONE": 8},
+        "project_account_mapping.json": {"A": [11], "B": [{"id": "12"}], "NONE": ["unknown"]},
+        Mappings.ACCOUNT_MAPPING_FILE: {"11": {"company_id": 7}, "12": {"company_id": "7"}},
+    }
+    for name, content in files.items():
+        (tmp_path / name).write_text(json.dumps(content))
+    op = MagicMock(spec=OpenProjectClient)
+    with patch("src.application.components.company_migration.config.get_path", return_value=tmp_path):
+        migration = CompanyMigration(MagicMock(spec=JiraClient), op)
+    op.execute_script_with_data.return_value = {
+        "status": "success",
+        "data": {"updated": 1, "already_correct": 1, "errors": []},
+    }
+    assert migration._update_project_parent_relationships() == {
+        "updated": 1,
+        "already_correct": 1,
+        "skipped": 1,
+        "no_parent_found": 1,
+        "errors": [],
+    }
+    script, pairs = op.execute_script_with_data.call_args.args
+    assert pairs == [(5, 41), (6, 41)]
+    assert "$j2o_start_marker" in script
+    op.execute_script_with_data.return_value = {"status": "success", "data": {}}
+    result = migration._update_project_parent_relationships()
+    assert result["updated"] == 0
+    assert result["errors"] == ["OpenProject returned no valid project-parent update report"]

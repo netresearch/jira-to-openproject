@@ -75,3 +75,15 @@ def test_estimates_migration_end_to_end():
     assert ld.success is True
     # Should update PRJ-1 and PRJ-2; PRJ-3 has no estimates
     assert ld.updated == 2
+
+
+def test_estimates_include_numeric_jira_ids_and_partial_updates():
+    migration = EstimatesMigration(jira_client=DummyJira(), op_client=DummyOp())
+    mapping = migration.mappings.get_mapping("work_package")
+    mapping["801"] = {"jira_key": "PRJ-1", **mapping.pop("PRJ-1")}
+    mapped = migration._map(migration._extract())
+    assert {"id": 2001, "estimated_hours": 2.0, "remaining_hours": 1.0} in mapped.data["updates"]
+    migration.op_client.batch_update_work_packages = lambda updates: {"updated": 1, "failed": 1}
+    result = migration._load(mapped)
+    assert not result.success
+    assert result.failed == 1

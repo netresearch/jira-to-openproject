@@ -584,8 +584,19 @@ class BaseMigration:
         except ValueError:
             return None
 
-    def _write_work_package_custom_value(self, wp_id: int, cf_id: int, text: str, *, return_project: bool) -> Any:
+    def _write_work_package_custom_value(
+        self,
+        entry: WorkPackageMappingEntry,
+        cf_id: int,
+        text: str,
+        projects: set[int],
+        *,
+        return_project: bool = False,
+    ) -> bool:
         """Update one work package value and optionally return its project for field enablement."""
+        wp_id = entry.openproject_id
+        if entry.openproject_project_id is not None:
+            projects.add(int(entry.openproject_project_id))
         value = escape_ruby_single_quoted(text)
         result = "wp.project_id" if return_project else "true"
         script = (
@@ -593,7 +604,10 @@ class BaseMigration:
             f"cv = wp.custom_value_for(cf); if cv; cv.value = '{value}'; cv.save; else; "
             f"wp.custom_field_values = {{ cf.id => '{value}' }}; end; wp.save!; {result}"
         )
-        return self.op_client.execute_query(script)
+        written = self.op_client.execute_query(script)
+        if return_project and type(written) is int and written > 0:
+            projects.add(written)
+        return bool(written)
 
     def _ensure_wp_custom_field(self, name: str, field_format: str = "text") -> int:
         """Ensure a WorkPackageCustomField exists, creating it if needed.
@@ -660,7 +674,7 @@ class BaseMigration:
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Load phase - override in subclass."""
-        msg = f"{self.__class__.__name__} must implement _load()"
+        msg = f"{self.__class__.__name__} must implement _load() for its {mapped.total_count} mapped records"
         raise NotImplementedError(msg)
 
     def run(self) -> ComponentResult:

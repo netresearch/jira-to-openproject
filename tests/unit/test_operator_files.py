@@ -30,3 +30,19 @@ def test_selected_input_and_output_reject_redirects(tmp_path):
     with pytest.raises(ValueError):
         write_operator_text(alias, "changed")
     assert original.read_text(encoding="utf-8") == "existing"
+
+
+def test_incomplete_metadata_batch_leaves_saved_progress_intact(tmp_path, monkeypatch):
+    from scripts import cache_jira_metadata
+
+    cache = tmp_path / "metadata.json"
+    write_operator_text(cache, '{"ABC-1": {"priority": "High"}}')
+    write_operator_json(
+        tmp_path / "work_package_mapping.json",
+        {"1": {"jira_key": "ABC-1"}, "2": {"jira_key": "ABC-2"}},
+    )
+    monkeypatch.setattr(cache_jira_metadata, "JiraClient", object)
+    monkeypatch.setattr(cache_jira_metadata, "fetch_metadata_batch", lambda client, keys: {})
+    with pytest.raises(ValueError, match="incomplete"):
+        cache_jira_metadata.cache_all_jira_metadata(tmp_path, cache)
+    assert read_operator_text(cache) == '{"ABC-1": {"priority": "High"}}'

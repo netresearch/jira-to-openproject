@@ -349,13 +349,8 @@ def test_run_extra_in_op_is_reported_but_does_not_fail(
     assert result.details["extra_total"] == 1
 
 
-def test_op_envelope_error_status_is_logged_and_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Rails ``status="error"`` → batch skipped, run continues.
-
-    Pin: the recovery uses ``envelope['data']`` (NOT top-level
-    keys), and a non-success status doesn't crash the run — same
-    envelope-bug class PR #201 caught for wp_metadata_backfill.
-    """
+def test_target_inventory_failure_blocks_upload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed lookup must never be treated as an empty work package."""
 
     class _ErrOp:
         def __init__(self) -> None:
@@ -381,10 +376,7 @@ def test_op_envelope_error_status_is_logged_and_skipped(monkeypatch: pytest.Monk
         return None
 
     def _spy_process(self, keys):
-        # Rails error skipped the OP-side fetch → component sees OP
-        # as empty for that WP → file appears missing → delegation
-        # fires.
-        return (1, 0, {})
+        pytest.fail("Recovery attempted to upload without a target inventory")
 
     from src.application.components import attachments_migration as am_mod
 
@@ -392,14 +384,8 @@ def test_op_envelope_error_status_is_logged_and_skipped(monkeypatch: pytest.Monk
     monkeypatch.setattr(am_mod.AttachmentsMigration, "_process_batch_end_to_end", _spy_process)
 
     result = mig.run()
-    # Run completes (no crash).
-    assert isinstance(result.message, str)
-    # OP fetch was attempted twice — initial (sees nothing because
-    # the error envelope drops the data payload) AND the
-    # post-recover recompute (also sees an error envelope, so
-    # still_missing remains positive). Pin the exact contract per
-    # PR #206 review.
-    assert op.calls >= 2
+    assert not result.success
+    assert op.calls == 1
 
 
 # --- filename-fidelity false positives (added 2026-05-07) ---

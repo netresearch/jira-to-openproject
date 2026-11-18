@@ -427,62 +427,7 @@ class RailsConsoleClient:
 
         end_with_comment = script_end_comment_out
 
-        # Build provenance header for every console execution
-        _SKIP_FILES = (
-            "/src/infrastructure/openproject/openproject_client.py",
-            "/src/infrastructure/openproject/rails_console_client.py",
-            "/src/infrastructure/openproject/docker_client.py",
-            "/src/infrastructure/openproject/ssh_client.py",
-        )
-
-        def _provenance_hint() -> str:
-            try:
-                import sys
-
-                path = None
-                func = None
-                # Walk frames with sys._getframe (O(1) per frame, no source loading)
-                frame = sys._getframe(2)
-                for _ in range(48):
-                    if frame is None:
-                        break
-                    filename = frame.f_code.co_filename
-                    if "/src/" in filename and not any(skip in filename for skip in _SKIP_FILES):
-                        path = filename.split("/src/")[-1]
-                        func = frame.f_code.co_name
-                        break
-                    frame = frame.f_back
-                parts: list[str] = ["j2o:"]
-                if path:
-                    parts.append(
-                        path.replace("migrations/", "migration/")
-                        .replace("clients/", "client/")
-                        .replace("_migration.py", "")
-                        .replace(".py", ""),
-                    )
-                else:
-                    parts.append("rails/console")
-                if func:
-                    parts.append(f"func={func}")
-                ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-                parts.append(f"ts={ts}")
-                try:
-                    parts.append(f"pid={os.getpid()}")
-                except Exception:
-                    pass
-                proj = None
-                try:
-                    if config and getattr(config, "jira_config", None):
-                        proj = (config.jira_config or {}).get("project_filter")
-                except Exception:
-                    proj = None
-                if proj:
-                    parts.append(f"project={proj}")
-                return "# " + " ".join(parts)
-            except Exception:
-                return "# j2o: rails/console"
-
-        header_comment = _provenance_hint() + "\n"
+        header_comment = self._console_provenance() + "\n"
 
         if suppress_output:
             body = script_template % (
@@ -538,204 +483,106 @@ class RailsConsoleClient:
         if suppress_output:
             return ""
 
-        # Robust, line-anchored marker parsing to avoid false positives from echoed source lines
-        all_lines = tmux_output.split("\n")
-        start_line_index = -1
-        for idx, line in enumerate(all_lines):
-            stripped = line.strip()
-            if start_marker_out in stripped:
-                start_line_index = idx
+        return self._command_result(
+            tmux_output, start_marker_out, end_marker_out, error_marker_out, script_end_comment_out
+        )
+
+    @staticmethod
+    def _console_provenance() -> str:
+        import sys
+
+        ignored = ("openproject_client.py", "rails_console_client.py", "docker_client.py", "ssh_client.py")
+        component = "rails/console"
+        frame = sys._getframe(1)
+        for _ in range(48):
+            if frame is None:
                 break
-        if start_line_index == -1:
-            # If start marker is missing, attempt a tolerant recovery:
-            # 1) Detect obvious Ruby failures first
-            severe_output = tmux_output
-            if (
-                "SystemStackError" in severe_output
-                or _RUBY_STACK_OVERFLOW in severe_output
-                or _RUBY_ERROR_PREFIX in severe_output
-                or _RUBY_FULL_MESSAGE_MARKER in severe_output
-            ):
-                snippet = self._extract_error_summary(severe_output)
-                msg = f"Ruby console reported error with no markers: {snippet}"
-                raise RubyError(msg)
-
-            # 2) Recapture a larger pane slice to find markers
-            try:
-                tmux = self._tmux_path
-                recapture = subprocess.run(
-                    [tmux, "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                rec_output = recapture.stdout
-                rec_lines = rec_output.split("\n")
-                new_start = -1
-                new_end = -1
-                for i, ln in enumerate(rec_lines):
-                    s = ln.strip()
-                    if start_marker_out in s:
-                        new_start = i
-                        break
-                if new_start != -1:
-                    for j in range(new_start + 1, len(rec_lines)):
-                        s = rec_lines[j].strip()
-                        if end_marker_out in s:
-                            new_end = j
-                            break
-                if new_start != -1 and new_end != -1:
-                    return filter_console_output_lines(rec_lines[new_start + 1 : new_end])
-
-                # 3) If start marker still missing, but we have end marker and the script-echo comment,
-                #    extract output between the echoed script end and the end marker as a fallback.
-                rec_end = -1
-                for j in range(len(rec_lines)):
-                    if end_marker_out in rec_lines[j]:
-                        rec_end = j
-                        break
-                rec_script_echo = -1
-                if script_end_comment_out:
-                    for j in range(len(rec_lines) - 1, -1, -1):
-                        if script_end_comment_out in rec_lines[j]:
-                            rec_script_echo = j
-                            break
-                if rec_script_echo != -1 and rec_end != -1 and rec_end > rec_script_echo:
-                    candidate = filter_console_output_lines(rec_lines[rec_script_echo + 1 : rec_end])
-                    if candidate:
-                        return candidate
-            except Exception:
-                # Fall through to strict error below
-                pass
-
-            # 4) Strict failure when no safe fallback was possible
-            msg = f"Start marker '{start_marker_out}' not found in output"
-            raise CommandExecutionError(msg)
-
-        end_line_index = -1
-        for idx in range(start_line_index + 1, len(all_lines)):
-            stripped = all_lines[idx].strip()
-            if end_marker_out in stripped:
-                end_line_index = idx
+            path = frame.f_code.co_filename
+            if "/src/" in path and not path.endswith(ignored):
+                name = path.split("/src/")[-1].replace("migrations/", "migration/").replace("clients/", "client/")
+                component = f"{name.removesuffix('.py').removesuffix('_migration')} func={frame.f_code.co_name}"
                 break
-        if end_line_index == -1:
-            # One more try: recapture a larger slice in case the marker landed after our first capture
-            try:
-                tmux = self._tmux_path
-                recapture = subprocess.run(
-                    [tmux, "capture-pane", "-p", "-S", "-1000", "-t", self._get_target()],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                rec_output = recapture.stdout
-                rec_lines = rec_output.split("\n")
-                new_start = -1
-                new_end = -1
-                for idx, line in enumerate(rec_lines):
-                    s = line.strip()
-                    if start_marker_out in s:
-                        new_start = idx
-                        break
-                if new_start != -1:
-                    for idx in range(new_start + 1, len(rec_lines)):
-                        s = rec_lines[idx].strip()
-                        if end_marker_out in s:
-                            new_end = idx
-                            break
-                if new_start != -1 and new_end != -1:
-                    # Use recaptured range
-                    return filter_console_output_lines(rec_lines[new_start + 1 : new_end])
-            except Exception:
-                # Fall through to existing error handling
-                pass
-
-            logger.error("End marker '%s' not found in output", end_marker_out)
-            # First, detect obvious Ruby failures even when end marker is missing
-            severe_output = tmux_output
-            if (
-                "SystemStackError" in severe_output
-                or _RUBY_STACK_OVERFLOW in severe_output
-                or _RUBY_ERROR_PREFIX in severe_output
-                or _RUBY_FULL_MESSAGE_MARKER in severe_output
-            ):
-                snippet = self._extract_error_summary(severe_output)
-                msg = f"Ruby console reported error before end marker: {snippet}"
-                raise RubyError(msg)
-            console_state = self._get_console_state(tmux_output[-50:])
-            if console_state["ready"]:
-                logger.error(
-                    "Console appears ready despite missing end marker - attempting to extract output",
-                )
-                candidate = filter_console_output_lines(all_lines[start_line_index + 1 :])
-                if candidate:
-                    logger.info(
-                        "Extracted %s lines of output despite missing end marker",
-                        candidate.count("\n") + 1,
-                    )
-                    return candidate
-                msg = f"End marker '{end_marker_out}' not found in output and no clear output could be extracted"
-                raise CommandExecutionError(msg)
-            msg = f"End marker '{end_marker_out}' not found in output"
-            raise CommandExecutionError(msg)
-
-        between_lines = all_lines[start_line_index + 1 : end_line_index]
-        # If Ruby printed our error marker, prefer it over other patterns
-        if any((ln.strip() == error_marker_out) or (ln.strip().endswith(error_marker_out)) for ln in between_lines):
-            logger.error("Error marker found in output, indicating a Ruby error")
-            error_message = "Ruby error detected"
-            for ln in between_lines:
-                if _RUBY_ERROR_PREFIX in ln:
-                    error_message = ln.strip()
-                    break
-            raise RubyError(error_message)
-
-        # Build command output from lines strictly between markers, excluding any marker lines
-        command_output = filter_console_output_lines(between_lines)
-
-        error_patterns = [
-            "SyntaxError:",
-            "NameError:",
-            "NoMethodError:",
-            "ArgumentError:",
-            "TypeError:",
-            "RuntimeError:",
-        ]
-
-        for pattern in error_patterns:
-            if pattern in command_output:
-                logger.warning("Ruby error pattern '%s' detected in output", pattern)
-                for line in command_output.split("\n"):
-                    if pattern in line:
-                        raise RubyError(line.strip())
-
-        # Find script echo end (comment) to delimit where echoed code stops
-        script_echo_end_index = -1
-        for idx in range(len(all_lines) - 1, -1, -1):
-            if script_end_comment_out in all_lines[idx]:
-                script_echo_end_index = idx
-                break
-
-        # Defensive: detect Ruby errors when end marker may be missing (e.g., SystemStackError in IRB)
+            frame = frame.f_back
         try:
-            scan_start = max(end_line_index, script_echo_end_index)
-            trailing_segment_lines = all_lines[scan_start + 1 :]
-            trailing_output = "\n".join(trailing_segment_lines)
-            if (
-                "SystemStackError" in trailing_output
-                or _RUBY_FULL_MESSAGE_MARKER in trailing_output
-                or _RUBY_STACK_OVERFLOW in trailing_output
-            ):
-                snippet = self._extract_error_summary(trailing_output)
-                msg = f"Ruby console reported error after end marker: {snippet}"
-                raise RubyError(msg)
-        except RubyError:
-            raise
+            project = (getattr(config, "jira_config", None) or {}).get("project_filter")
         except Exception:
-            # If detection itself fails, ignore and continue
-            pass
+            project = None
+        project_hint = f" project={project}" if project else ""
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return f"# j2o: {component} ts={timestamp} pid={os.getpid()}{project_hint}"
 
-        return command_output
+    def _capture_pane(self, target: str, lines: int) -> str:
+        return subprocess.run(
+            [self._tmux_path, "capture-pane", "-p", "-S", f"-{lines}", "-t", target],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    @staticmethod
+    def _output_marker(lines: list[str], marker: str, start: int = 0) -> int:
+        # Lines echoed by IRB contain the Ruby string literal, including its closing quote.
+        return next((i for i in range(start, len(lines)) if lines[i].strip().endswith(marker)), -1)
+
+    def _check_ruby_failure(self, output: str, where: str, *, include_ruby_error: bool = True) -> None:
+        fatal = ("SystemStackError", _RUBY_STACK_OVERFLOW, _RUBY_FULL_MESSAGE_MARKER)
+        if any(term in output for term in fatal) or (include_ruby_error and _RUBY_ERROR_PREFIX in output):
+            msg = f"Ruby console reported error {where}: {self._extract_error_summary(output)}"
+            raise RubyError(msg)
+
+    def _command_result(self, output: str, start: str, end: str, error: str, echo: str) -> str:
+        lines = output.split("\n")
+        left = self._output_marker(lines, start)
+        right = self._output_marker(lines, end, left + 1)
+        if left < 0:
+            self._check_ruby_failure(output, "with no markers")
+        if left < 0 or right < 0:
+            recovered = self._recapture_result(start, end, error, echo, recover_echo=left < 0)
+            if recovered is not None:
+                return recovered
+        if left < 0:
+            msg = f"Start marker '{start}' not found in output"
+            raise CommandExecutionError(msg)
+        if right < 0:
+            self._check_ruby_failure(output, "before end marker")
+            if self._get_console_state(output[-50:])["ready"]:
+                candidate = filter_console_output_lines(lines[left + 1 :])
+                if candidate:
+                    return candidate
+            msg = f"End marker '{end}' not found in output"
+            raise CommandExecutionError(msg)
+        return self._marked_result(lines, left, right, error, echo)
+
+    def _recapture_result(self, start: str, end: str, error: str, echo: str, *, recover_echo: bool) -> str | None:
+        try:
+            lines = self._capture_pane(self._get_target(), 1000).split("\n")
+        except Exception:
+            logger.debug("Could not recapture Rails console", exc_info=True)
+            return None
+        left = self._output_marker(lines, start)
+        right = self._output_marker(lines, end, left + 1)
+        if left >= 0 and right >= 0:
+            return self._marked_result(lines, left, right, error, echo)
+        if recover_echo and right >= 0:
+            left = next((i for i in reversed(range(right)) if echo in lines[i]), -1)
+            if left >= 0:
+                return self._marked_result(lines, left, right, error, echo) or None
+        return None
+
+    def _marked_result(self, lines: list[str], left: int, right: int, error: str, echo: str) -> str:
+        body = lines[left + 1 : right]
+        if self._output_marker(body, error) >= 0:
+            msg = next((line.strip() for line in body if _RUBY_ERROR_PREFIX in line), "Ruby error detected")
+            raise RubyError(msg)
+        output = filter_console_output_lines(body)
+        errors = ("SyntaxError:", "NameError:", "NoMethodError:", "ArgumentError:", "TypeError:", "RuntimeError:")
+        for line in output.splitlines():
+            if any(pattern in line for pattern in errors):
+                raise RubyError(line.strip())
+        echo_end = next((i for i in reversed(range(len(lines))) if echo in lines[i]), -1)
+        trailing = "\n".join(lines[max(right, echo_end) + 1 :])
+        self._check_ruby_failure(trailing, "after end marker", include_ruby_error=False)
+        return output
 
     def _get_console_state(self, output: str) -> dict[str, Any]:
         """Check if the Rails console is ready for input by looking for the prompt.
@@ -811,31 +658,16 @@ class RailsConsoleClient:
 
         while time.time() - start_time < timeout:
             try:
-                tmux = self._tmux_path
-                capture = subprocess.run(
-                    [tmux, "capture-pane", "-p", "-S", "-500", "-t", target],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                current_output = capture.stdout
+                current_output = self._capture_pane(target, 500)
 
                 # Detect fatal console errors early (prefer fatal over marker)
                 if self._has_fatal_console_error(current_output):
                     logger.error("Fatal console error detected while waiting for marker")
                     return False, current_output
 
-                if marker is not None:
-                    # Normalize output by removing newlines to handle markers split
-                    # by terminal width wrapping in tmux pane capture
-                    normalized_output = current_output.replace("\n", "").replace("\r", "")
-                    if marker in normalized_output:
-                        logger.debug("Marker found after %.2fs", time.time() - start_time)
-                        return True, current_output
-
-                console_state = self._get_console_state(current_output)
-                if console_state["ready"] and time.time() - start_time > 3:
-                    logger.debug("Console ready but marker not found yet")
+                normalized = current_output.replace("\n", "").replace("\r", "")
+                if marker is not None and marker in normalized:
+                    return True, current_output
 
                 time.sleep(poll_interval)
                 poll_interval = min(poll_interval * 1.5, max_interval)
@@ -927,6 +759,25 @@ class RailsConsoleClient:
         logger.error("Console not ready after %ss", timeout)
         return False
 
+    def _wait_for_script_completion(self, target: str, marker: str, end: str | None, timeout: int) -> None:
+        found, baseline = self._wait_for_console_output(target, marker, timeout)
+        if not found:
+            if self._has_fatal_console_error(baseline):
+                msg = f"Rails console crashed before script-end echo: {self._extract_error_summary(baseline)}"
+                raise CommandExecutionError(msg)
+            msg = "Script end echo not observed in console output"
+            raise CommandExecutionError(msg)
+        current = baseline
+        deadline = time.monotonic() + max(2, min(timeout, 10))
+        while time.monotonic() < deadline:
+            current = self._capture_pane(target, 200)
+            if current != baseline:
+                break
+            time.sleep(0.1)
+        if end and not any(end in line for line in current.splitlines()[-200:]):
+            msg = "End marker not found in tail after post-script output"
+            raise CommandExecutionError(msg)
+
     def _send_command_to_tmux(
         self,
         command: str,
@@ -980,41 +831,7 @@ class RailsConsoleClient:
 
             # State-machine: first observe script-end echo, then require post-script output to contain EXEC_END
             if script_end_marker:
-                found_script_end, pane_output = self._wait_for_console_output(
-                    target,
-                    script_end_marker,
-                    timeout,
-                )
-                if not found_script_end:
-                    if self._has_fatal_console_error(pane_output):
-                        snippet = self._extract_error_summary(pane_output)
-                        msg = f"Rails console crashed before script-end echo: {snippet}"
-                        raise ConsoleNotReadyError(msg)
-                    msg = "Script end echo not observed in console output"
-                    raise CommandExecutionError(msg)
-
-                # Wait for any new output beyond script-end echo
-                baseline = pane_output
-                start_wait = time.time()
-                while time.time() - start_wait < max(2, min(timeout, 10)):
-                    tmux = self._tmux_path
-                    cap = subprocess.run(
-                        [tmux, "capture-pane", "-p", "-S", "-200", "-t", target],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    cur = cap.stdout
-                    if cur != baseline:
-                        break
-                    time.sleep(0.1)
-
-                # Inspect only the tail window for the end marker
-                tail_lines = cur.strip().split("\n")[-200:]
-                if wait_for_line and not any(wait_for_line in ln for ln in tail_lines):
-                    # No further output with EXEC_END → error (nothing should print after EXEC_END)
-                    msg = "End marker not found in tail after post-script output"
-                    raise CommandExecutionError(msg)
+                self._wait_for_script_completion(target, script_end_marker, wait_for_line, timeout)
 
             # Now ensure prompt is ready before final capture
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)

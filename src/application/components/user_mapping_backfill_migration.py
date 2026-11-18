@@ -47,6 +47,7 @@ clobber operator-set entries on an alternate identifier.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,31 @@ from src.infrastructure.exceptions import RecordNotFoundError
 from src.infrastructure.jira.jira_client import JiraClient, JiraResourceNotFoundError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
+
+
+@dataclass
+class _BackfillReport:
+    added: list[dict[str, Any]] = field(default_factory=list)
+    already_mapped: list[str] = field(default_factory=list)
+    not_found_in_jira: list[str] = field(default_factory=list)
+    not_found_in_op: list[dict[str, Any]] = field(default_factory=list)
+    jira_api_errors: int = 0
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        with path.open() as stream:
+            return json.load(stream)
+    except OSError, json.JSONDecodeError:
+        return None
+
+
+def _unmapped_names(component: Any) -> set[str]:
+    details = component.get("details") if isinstance(component, dict) else None
+    names = details.get("unmapped_users") if isinstance(details, dict) else None
+    if not isinstance(names, list):
+        return set()
+    return {name.strip() for name in names if isinstance(name, str) and name.strip()}
 
 
 @register_entity_types("user_mapping_backfill")
@@ -85,28 +111,14 @@ class UserMappingBackfillMigration(BaseMigration):
         negligible.
         """
         out: set[str] = set()
-        if not results_dir.exists():
-            return out
         for path in sorted(results_dir.glob("migration_results_*.json")):
-            try:
-                with path.open() as f:
-                    d = json.load(f)
-            except OSError, json.JSONDecodeError:
+            data = _read_json(path)
+            if not isinstance(data, dict):
                 continue
-            comps = d.get("components") or d.get("component_results") or {}
-            if not isinstance(comps, dict):
-                continue
-            for comp in comps.values():
-                if not isinstance(comp, dict):
-                    continue
-                details = comp.get("details") or {}
-                if not isinstance(details, dict):
-                    continue
-                names = details.get("unmapped_users") or []
-                if isinstance(names, list):
-                    for name in names:
-                        if isinstance(name, str) and name.strip():
-                            out.add(name.strip())
+            components = data.get("components") or data.get("component_results")
+            if isinstance(components, dict):
+                for component in components.values():
+                    out.update(_unmapped_names(component))
         return out
 
     @staticmethod
@@ -127,33 +139,10 @@ class UserMappingBackfillMigration(BaseMigration):
         identifier the issue carries).
         """
         out: set[str] = set()
-        candidates: list[Path] = []
-        unified = data_dir / "jira_issues_cache.json"
-        if unified.exists():
-            candidates.append(unified)
-        for hit in data_dir.glob("jira_issues_*.json"):
-            if hit.name == "jira_issues_cache.json":
-                continue
-            candidates.append(hit)
-        if not candidates:
-            return out
-
-        for path in candidates:
-            try:
-                with path.open() as f:
-                    raw = json.load(f)
-            except OSError, json.JSONDecodeError:
-                continue
-            # Iterate the parsed object directly — materialising
-            # ``list(raw.values())`` would copy every issue dict in
-            # memory on large per-project dumps (4082 NRS issues ≈
-            # tens of MB). Streaming over the underlying iterable
-            # halves peak memory.
-            if isinstance(raw, dict):
-                for issue in raw.values():
-                    _harvest_users_from_issue(issue, out)
-            elif isinstance(raw, list):
-                for issue in raw:
+        for path in data_dir.glob("jira_issues_*.json"):
+            raw = _read_json(path)
+            if isinstance(raw, (list, dict)):
+                for issue in raw.values() if isinstance(raw, dict) else raw:
                     _harvest_users_from_issue(issue, out)
         return out
 
@@ -182,7 +171,7 @@ class UserMappingBackfillMigration(BaseMigration):
         of crashing the run. Per PR #207 review.
         """
         seen_ids: set[int] = set()
-        manual_op_id: int | None = None
+        manual_ids: set[int] = set()
         for k in cand_keys:
             rec = user_map.get(k)
             if rec is None:
@@ -196,16 +185,15 @@ class UserMappingBackfillMigration(BaseMigration):
                 continue
             seen_ids.add(op_id)
             if isinstance(rec, dict) and rec.get("matched_by") == "manual":
-                manual_op_id = op_id
+                manual_ids.add(op_id)
 
         if not seen_ids:
             return None, False
         if len(seen_ids) == 1:
             return next(iter(seen_ids)), False
-        # Multiple distinct ids → conflict. If one is operator-set,
-        # honour the "manual target wins" contract and use it.
-        if manual_op_id is not None:
-            return manual_op_id, False
+        # A unique manual target takes precedence over inferred aliases.
+        if len(manual_ids) == 1:
+            return next(iter(manual_ids)), False
         return None, True
 
     def _candidate_keys(self, jira_user: dict[str, Any]) -> list[str]:
@@ -274,6 +262,122 @@ class UserMappingBackfillMigration(BaseMigration):
             "matched_by": "user_mapping_backfill",
         }
 
+    def _backfill_user(self, name: str, user_map: dict[str, Any], report: _BackfillReport) -> None:
+        try:
+            jira_user = self.jira_client.get_user_info(name)
+        except JiraResourceNotFoundError:
+            jira_user = None
+        except Exception as exc:
+            # Any other JiraError (auth, rate-limit, connection)
+            # is an outage, not a missing user. Log + count;
+            # don't pretend the user doesn't exist.
+            self.logger.warning(
+                "Jira API error looking up %r: %s — counted under jira_api_errors",
+                name,
+                exc,
+            )
+            report.jira_api_errors += 1
+            return
+        if not isinstance(jira_user, dict):
+            report.not_found_in_jira.append(name)
+            return
+
+        self._resolve_identity(name, jira_user, user_map, report)
+
+    def _resolve_identity(
+        self, name: str, jira_user: dict[str, Any], user_map: dict[str, Any], report: _BackfillReport
+    ) -> None:
+        cand_keys = self._candidate_keys(jira_user)
+        if name not in cand_keys:
+            cand_keys.insert(0, name)
+
+        existing_op_id, conflict = self._resolve_existing_op_id(user_map, cand_keys)
+        if conflict:
+            report.not_found_in_op.append(
+                {
+                    "jira_name": name,
+                    "reason": "alias_op_id_conflict",
+                    "details": "multiple cand_keys map to different OP users; refusing to silently pick one",
+                },
+            )
+            return
+
+        if existing_op_id is not None:
+            self._add_missing_aliases(name, jira_user, existing_op_id, cand_keys, user_map, report=report)
+            return
+        self._match_new_identity(name, jira_user, cand_keys, user_map, report)
+
+    @staticmethod
+    def _add_missing_aliases(
+        name: str,
+        jira_user: dict[str, Any],
+        existing_op_id: int,
+        cand_keys: list[str],
+        user_map: dict[str, Any],
+        *,
+        report: _BackfillReport,
+    ) -> None:
+        missing_keys = [k for k in cand_keys if k not in user_map]
+        if not missing_keys:
+            report.already_mapped.append(name)
+            return
+        # Emit a thin alias entry that points at the same OP
+        # user under each missing identifier. ``matched_by``
+        # marks these as alias-only writes so an audit can
+        # tell them apart from primary backfills.
+        alias_entry: dict[str, Any] = {
+            "openproject_id": existing_op_id,
+            "jira_name": jira_user.get("name"),
+            "jira_email": jira_user.get("emailAddress"),
+            "jira_display_name": jira_user.get("displayName"),
+            "jira_key": jira_user.get("key"),
+            "matched_by": "user_mapping_backfill_alias",
+        }
+        for k in missing_keys:
+            user_map[k] = alias_entry
+        report.added.append(
+            {
+                "name": name,
+                "openproject_id": existing_op_id,
+                "alias_for_existing": True,
+                "added_keys": missing_keys,
+            },
+        )
+
+    def _match_new_identity(
+        self,
+        name: str,
+        jira_user: dict[str, Any],
+        cand_keys: list[str],
+        user_map: dict[str, Any],
+        report: _BackfillReport,
+    ) -> None:
+        op_user = self._find_op_user(jira_user)
+        if op_user is None:
+            report.not_found_in_op.append(
+                {
+                    "jira_name": name,
+                    "jira_email": jira_user.get("emailAddress"),
+                    "jira_display": jira_user.get("displayName"),
+                    "active": jira_user.get("active"),
+                },
+            )
+            return
+
+        entry = self._build_entry(op_user, jira_user)
+        if entry is None:
+            report.not_found_in_op.append(
+                {
+                    "jira_name": name,
+                    "reason": "op_user_id_missing_or_non_integer",
+                },
+            )
+            return
+        for k in cand_keys:
+            if k not in user_map:
+                user_map[k] = entry
+        report.added.append({"name": name, "openproject_id": entry["openproject_id"]})
+
     def run(self) -> ComponentResult:  # type: ignore[override]
         self.logger.info("Starting user_mapping backfill")
 
@@ -312,210 +416,56 @@ class UserMappingBackfillMigration(BaseMigration):
                 },
             )
 
-        # Filter out identities already reachable by any probe key in
-        # the existing mapping. We don't know yet which identifier
-        # form each name takes (login vs accountId vs email), so the
-        # cheap path is "is this string already a key?". A second
-        # check after the Jira lookup catches the case where Jira
-        # reports an alternate identifier we already have.
-        unresolved: list[str] = []
-        already_mapped: list[str] = []
+        report = _BackfillReport()
+        unresolved = []
         for name in sorted(all_names):
             if name in user_map:
-                already_mapped.append(name)
+                report.already_mapped.append(name)
             else:
                 unresolved.append(name)
-
-        added: list[dict[str, Any]] = []
-        not_found_in_jira: list[str] = []
-        not_found_in_op: list[dict[str, Any]] = []
-        # Tracks Jira API failures distinct from "user doesn't exist"
-        # (auth, network, rate limit). Misclassifying an outage as
-        # missing users would cause silent data loss on the next
-        # consumer (PR #205 review).
-        jira_api_errors = 0
-
         for name in unresolved:
-            try:
-                jira_user = self.jira_client.get_user_info(name)
-            except JiraResourceNotFoundError:
-                # Genuine 404 — record under not_found_in_jira.
-                jira_user = None
-            except Exception as exc:
-                # Any other JiraError (auth, rate-limit, connection)
-                # is an outage, not a missing user. Log + count;
-                # don't pretend the user doesn't exist.
-                self.logger.warning(
-                    "Jira API error looking up %r: %s — counted under jira_api_errors",
-                    name,
-                    exc,
-                )
-                jira_api_errors += 1
-                continue
-            if not isinstance(jira_user, dict):
-                not_found_in_jira.append(name)
-                continue
-
-            # Build the candidate identifier ladder for this Jira user
-            # (``accountId`` → ``name`` → ``key`` → ``emailAddress`` →
-            # ``displayName``). The probe orders are NOT identical
-            # across consumer migrations:
-            #
-            #   - ``WatcherMigration._resolve_user_id``:
-            #     account_id → name → email_address → display_name (no ``key``).
-            #   - ``AttachmentProvenanceMigration._author_identifiers``:
-            #     accountId → name → key → emailAddress → email → displayName.
-            #   - ``WpMetadataBackfillMigration._resolve_user_id``:
-            #     accountId → name → key → emailAddress → displayName.
-            #
-            # Writing the alias under EVERY identifier (including
-            # ``key`` even though watcher skips it) ensures the same
-            # user is reachable from any probe path the consumers use
-            # now — or might use after a future code change.
-            #
-            # **Always include the seed ``name``** even when Jira's
-            # profile doesn't return it as a string field. Locked /
-            # inactive Server users sometimes have ``name=None`` on
-            # the SDK object; without this guard the alias would
-            # never get written under the identifier the watcher
-            # probes for, which is the entire point of this backfill.
-            # Caught by the live 2026-05-07 NRS run: 18 watcher
-            # ``unmapped_users`` were marked ``already_mapped`` (no
-            # alias written) because their Jira profiles' ``name``
-            # was None and only ``key`` made it into cand_keys.
-            cand_keys = self._candidate_keys(jira_user)
-            if name not in cand_keys:
-                cand_keys.insert(0, name)
-
-            # Reuse path: an alternate identifier already maps this
-            # Jira user (e.g. ``user_map["JIRAUSER18400"]`` exists but
-            # ``user_map["anne.geissler"]`` doesn't). Reuse the
-            # existing entry's ``openproject_id`` instead of querying
-            # OP — extra API calls aren't needed and the existing
-            # entry may carry operator-set metadata we shouldn't
-            # overwrite.
-            #
-            # Caught by the live 2026-05-07 NRS run: 18 watcher
-            # ``unmapped_users`` were already mapped under their
-            # ``JIRAUSER<id>`` keys but the watcher resolver probes
-            # ``name`` first and never reached the ``key`` field. The
-            # earlier "skip if any candidate present" logic was too
-            # aggressive — it left the mapping reachable only via
-            # ``key`` and the consumer kept dropping watchers.
-            existing_op_id, conflict = self._resolve_existing_op_id(user_map, cand_keys)
-            if conflict:
-                # Multiple cand_keys point to DIFFERENT OP users.
-                # Don't silently pick one — that would write alias
-                # entries pointing to whichever id we happened to see
-                # first and could redirect the consumer to the wrong
-                # OP user. Surface as ``not_found_in_op`` so the
-                # operator triages (the conflict could be a stale
-                # auto-mapped entry vs an operator-fixed one).
-                not_found_in_op.append(
-                    {
-                        "jira_name": name,
-                        "reason": "alias_op_id_conflict",
-                        "details": "multiple cand_keys map to different OP users; refusing to silently pick one",
-                    },
-                )
-                continue
-
-            if existing_op_id is not None:
-                missing_keys = [k for k in cand_keys if k not in user_map]
-                if not missing_keys:
-                    already_mapped.append(name)
-                    continue
-                # Emit a thin alias entry that points at the same OP
-                # user under each missing identifier. ``matched_by``
-                # marks these as alias-only writes so an audit can
-                # tell them apart from primary backfills.
-                alias_entry: dict[str, Any] = {
-                    "openproject_id": existing_op_id,
-                    "jira_name": jira_user.get("name"),
-                    "jira_email": jira_user.get("emailAddress"),
-                    "jira_display_name": jira_user.get("displayName"),
-                    "jira_key": jira_user.get("key"),
-                    "matched_by": "user_mapping_backfill_alias",
-                }
-                for k in missing_keys:
-                    user_map[k] = alias_entry
-                added.append(
-                    {
-                        "name": name,
-                        "openproject_id": existing_op_id,
-                        "alias_for_existing": True,
-                        "added_keys": missing_keys,
-                    },
-                )
-                continue
-
-            # No existing alias — probe OP normally.
-            op_user = self._find_op_user(jira_user)
-            if op_user is None:
-                not_found_in_op.append(
-                    {
-                        "jira_name": name,
-                        "jira_email": jira_user.get("emailAddress"),
-                        "jira_display": jira_user.get("displayName"),
-                        "active": jira_user.get("active"),
-                    },
-                )
-                continue
-
-            entry = self._build_entry(op_user, jira_user)
-            if entry is None:
-                not_found_in_op.append(
-                    {
-                        "jira_name": name,
-                        "reason": "op_user_id_missing_or_non_integer",
-                    },
-                )
-                continue
-            for k in cand_keys:
-                if k not in user_map:
-                    user_map[k] = entry
-            added.append({"name": name, "openproject_id": entry["openproject_id"]})
+            self._backfill_user(name, user_map, report)
 
         # Persist only when something actually changed. Avoids re-writing
         # the file every run when no candidates were resolved.
-        if added:
+        if report.added:
             self.mappings.set_mapping("user", user_map)
             self.logger.info(
                 "Backfilled %d Jira identities into user_mapping (was %d → %d entries).",
-                len(added),
+                len(report.added),
                 before,
                 len(user_map),
             )
-        if not_found_in_op:
-            sample = [u.get("jira_name") for u in not_found_in_op[:20]]
+        if report.not_found_in_op:
+            sample = [u.get("jira_name") for u in report.not_found_in_op[:20]]
             self.logger.warning(
                 "%d Jira identities have no matching OP user (sample: %s)."
                 " Operator must create these in OP or accept the loss as"
                 " expected for fully-deleted accounts.",
-                len(not_found_in_op),
+                len(report.not_found_in_op),
                 sample,
             )
 
         return ComponentResult(
             success=True,
-            updated=len(added),
+            updated=len(report.added),
             message=(
-                f"User mapping backfill: added={len(added)},"
-                f" already_mapped={len(already_mapped)},"
-                f" not_found_in_jira={len(not_found_in_jira)},"
-                f" not_found_in_op={len(not_found_in_op)},"
-                f" jira_api_errors={jira_api_errors}"
+                f"User mapping backfill: added={len(report.added)},"
+                f" already_mapped={len(report.already_mapped)},"
+                f" not_found_in_jira={len(report.not_found_in_jira)},"
+                f" not_found_in_op={len(report.not_found_in_op)},"
+                f" jira_api_errors={report.jira_api_errors}"
             ),
             details={
                 "from_previous_results": len(from_results),
                 "from_issue_cache": len(from_cache),
-                "added": len(added),
-                "already_mapped": len(already_mapped),
-                "not_found_in_jira": len(not_found_in_jira),
-                "not_found_in_op_count": len(not_found_in_op),
-                "not_found_in_op_sample": not_found_in_op[:20],
-                "jira_api_errors": jira_api_errors,
-                "added_sample": added[:20],
+                "added": len(report.added),
+                "already_mapped": len(report.already_mapped),
+                "not_found_in_jira": len(report.not_found_in_jira),
+                "not_found_in_op_count": len(report.not_found_in_op),
+                "not_found_in_op_sample": report.not_found_in_op[:20],
+                "jira_api_errors": report.jira_api_errors,
+                "added_sample": report.added[:20],
             },
         )
 
@@ -531,38 +481,24 @@ def _harvest_users_from_issue(issue: Any, into: set[str]) -> None:
     * ``fields.watches.watchers[*]``
     * ``fields.comment.comments[*].author``
     """
+    fields = _profile_value(issue, "fields")
+    _add_identity(_profile_value(fields, "assignee"), into)
+    _add_identity(_profile_value(fields, "reporter"), into)
+    watches = _profile_value(fields, "watches")
+    for watcher in _profile_value(watches, "watchers") or ():
+        _add_identity(watcher, into)
+    comments = _profile_value(fields, "comment")
+    for comment in _profile_value(comments, "comments") or ():
+        _add_identity(_profile_value(comment, "author"), into)
 
-    def _read(obj: Any, name: str) -> Any:
-        if isinstance(obj, dict):
-            return obj.get(name)
-        return getattr(obj, name, None)
 
-    def _add(user: Any) -> None:
-        if user is None:
+def _profile_value(obj: Any, name: str) -> Any:
+    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+
+def _add_identity(user: Any, into: set[str]) -> None:
+    for key in ("accountId", "name", "key", "emailAddress", "displayName"):
+        value = _profile_value(user, key)
+        if isinstance(value, str) and value.strip():
+            into.add(value.strip())
             return
-        # ``accountId`` first to match the consumer resolvers' probe
-        # order (``AttachmentProvenanceMigration._resolve_user_id`` /
-        # ``WatcherMigration._resolve_user_id``). Cloud users have a
-        # stable ``accountId`` but variable ``displayName``; preferring
-        # the latter would harvest less-stable identifiers and miss
-        # matches when the display-name in the cache differs from the
-        # current Jira directory.
-        for k in ("accountId", "name", "key", "emailAddress", "displayName"):
-            v = _read(user, k)
-            if isinstance(v, str) and v.strip():
-                into.add(v.strip())
-                return  # Prefer the first hit (matches the resolver probe order)
-
-    fields = _read(issue, "fields")
-    if fields is None:
-        return
-    _add(_read(fields, "assignee"))
-    _add(_read(fields, "reporter"))
-    watches = _read(fields, "watches")
-    if watches is not None:
-        for w in _read(watches, "watchers") or []:
-            _add(w)
-    comment = _read(fields, "comment")
-    if comment is not None:
-        for c in _read(comment, "comments") or []:
-            _add(_read(c, "author"))

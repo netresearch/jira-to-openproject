@@ -23,6 +23,7 @@ from typing import Any
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from scripts.operator_files import open_operator_text, write_operator_json
 from src.display import configure_logging
 from src.infrastructure.jira.jira_client import JiraClient
 
@@ -36,7 +37,7 @@ def load_work_package_mapping(data_dir: Path) -> dict[str, dict[str, Any]]:
         logger.error("Work package mapping not found at %s", mapping_path)
         sys.exit(1)
 
-    with open(mapping_path) as f:
+    with open_operator_text(mapping_path) as f:
         return json.load(f)
 
 
@@ -100,12 +101,12 @@ def cache_all_jira_metadata(
     # Load existing metadata if resuming
     existing_metadata = {}
     if resume and output_path.exists():
-        try:
-            with open(output_path) as f:
-                existing_metadata = json.load(f)
-            logger.info("Loaded %d existing metadata entries", len(existing_metadata))
-        except Exception:
-            logger.warning("Could not load existing metadata, starting fresh")
+        with open_operator_text(output_path) as f:
+            existing_metadata = json.load(f)
+        if not isinstance(existing_metadata, dict):
+            msg = "Expected the previous metadata cache to be a JSON object"
+            raise ValueError(msg)
+        logger.info("Loaded %d existing metadata entries", len(existing_metadata))
 
     # Load work package mapping
     wp_mapping = load_work_package_mapping(data_dir)
@@ -147,12 +148,13 @@ def cache_all_jira_metadata(
         )
 
         batch_metadata = fetch_metadata_batch(jira_client, batch_keys)
+        if set(batch_metadata) != set(batch_keys):
+            msg = "Jira returned an incomplete metadata batch; previous progress is preserved"
+            raise ValueError(msg)
         all_metadata.update(batch_metadata)
 
         # Save progress after each batch
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            json.dump(all_metadata, f, indent=2)
+        write_operator_json(output_path, all_metadata)
 
         logger.info(
             "Progress: %d/%d (%.1f%%)",

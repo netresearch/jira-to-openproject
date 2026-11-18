@@ -38,6 +38,7 @@ from src.infrastructure.exceptions import (
     QueryExecutionError,
     RecordNotFoundError,
 )
+from src.infrastructure.openproject.batch_records import index_batch_rows
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.idempotency_decorators import batch_idempotent
 
@@ -152,55 +153,20 @@ class OpenProjectUserService:
         client = self._client
         try:
             # Normalize identifier
-            identifier: str | int
-            if isinstance(user_identifier, str):
-                identifier = user_identifier.strip()
-                if not identifier:
-                    msg = "Empty user identifier"
-                    raise ValueError(msg)
-            else:
-                identifier = int(user_identifier)
-
-            # If numeric string, treat as id
-            if isinstance(identifier, str) and identifier.isdigit():
-                identifier = int(identifier)
-
-            # Try cache fast-paths when possible
-            if isinstance(identifier, int):
-                # Check cached users first
-                if getattr(client, "_users_cache", None):
-                    for user in client._users_cache or []:
-                        try:
-                            uid = user.get("id")
-                            if isinstance(uid, int) and uid == identifier:
-                                return user
-                            if isinstance(uid, str) and uid.isdigit() and int(uid) == identifier:
-                                return user
-                        except Exception:
-                            self._logger.debug("Malformed user cache entry encountered")
-                            continue
-
-                # Fallback to direct lookup by id
-                return client.find_record("User", identifier)
-
-            # Email lookup
-            if isinstance(identifier, str) and "@" in identifier:
+            identifier = user_identifier.strip() if isinstance(user_identifier, str) else int(user_identifier)
+            if identifier == "":
+                msg = "Empty user identifier"
+                raise ValueError(msg)
+            if isinstance(identifier, int) or identifier.isdigit():
+                uid = int(identifier)
+                return self._user_by_id(uid)
+            if "@" in identifier:
                 return self.get_user_by_email(identifier)
-
-            # Login lookup (try cache first)
-            login = identifier  # type: ignore[assignment]
-            if getattr(client, "_users_cache", None):
-                for user in client._users_cache or []:
-                    if user.get("login") == login:
-                        # Opportunistically cache by email for future lookups
-                        email = user.get("mail") or user.get("email")
-                        if isinstance(email, str):
-                            client._users_by_email_cache[email.lower()] = user
-                        return user
-
-            # Fallback to direct lookup by login
-            user = client.find_record("User", {"login": login})
-            # Opportunistically cache by email for future lookups
+            user = next(
+                (u for u in client._users_cache or [] if isinstance(u, dict) and u.get("login") == identifier), None
+            )
+            if user is None:
+                user = client.find_record("User", {"login": identifier})
             email = user.get("mail") or user.get("email")
             if isinstance(email, str):
                 client._users_by_email_cache[email.lower()] = user
@@ -211,6 +177,15 @@ class OpenProjectUserService:
         except Exception as e:
             msg = "Error getting user."
             raise QueryExecutionError(msg) from e
+
+    def _user_by_id(self, uid: int) -> dict[str, Any]:
+        for user in self._client._users_cache or []:
+            if not isinstance(user, dict):
+                continue
+            value = user.get("id")
+            if isinstance(value, (str, int)) and str(value).isdigit() and int(value) == uid:
+                return user
+        return self._client.find_record("User", uid)
 
     def get_user_by_email(self, email: str) -> dict[str, Any]:
         """Get a user by email address.
@@ -365,17 +340,7 @@ class OpenProjectUserService:
                     f"Batch fetch users by email {batch_emails[:2]}{'...' if len(batch_emails) > 2 else ''}",
                 )
 
-                if batch_results:
-                    # Ensure we have a list
-                    if isinstance(batch_results, dict):
-                        batch_results = [batch_results]
-
-                    # Map results by email
-                    for record in batch_results:
-                        if isinstance(record, dict) and "mail" in record:
-                            email = record["mail"]
-                            if email in batch_emails:
-                                results[email] = record
+                results.update(index_batch_rows(batch_results, batch_emails, "mail"))
 
             except Exception as e:
                 self._logger.warning(

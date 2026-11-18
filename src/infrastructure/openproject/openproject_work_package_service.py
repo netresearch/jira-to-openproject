@@ -56,6 +56,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from src.infrastructure.exceptions import QueryExecutionError
+from src.infrastructure.openproject.openproject_bulk_create_service import reject_legacy_journal_operations
 
 if TYPE_CHECKING:
     from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -128,6 +129,7 @@ class OpenProjectWorkPackageService:
         updates: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Update multiple work packages in batches."""
+        reject_legacy_journal_operations(updates)
         if not updates:
             return {"updated": 0, "failed": 0, "results": []}
 
@@ -215,57 +217,31 @@ J2O_UPDATES
 
         """
         client = self._client
-        # Convert API-style payload to batch format if needed
-        wp_data: dict[str, Any] = {}
-
-        # Handle API-style _links format
-        if "_links" in payload:
-            links = payload["_links"]
-
-            # Extract project ID from href
-            if "project" in links and "href" in links["project"]:
-                href = links["project"]["href"]
-                if match := re.search(r"/projects/(\d+)", href):
-                    wp_data["project_id"] = int(match.group(1))
-
-            # Extract type ID from href
-            if "type" in links and "href" in links["type"]:
-                href = links["type"]["href"]
-                if match := re.search(r"/types/(\d+)", href):
-                    wp_data["type_id"] = int(match.group(1))
-
-            # Extract status ID from href
-            if "status" in links and "href" in links["status"]:
-                href = links["status"]["href"]
-                if match := re.search(r"/statuses/(\d+)", href):
-                    wp_data["status_id"] = int(match.group(1))
-        else:
-            # Direct format - copy relevant fields
-            for key in ["project_id", "type_id", "status_id", "priority_id", "author_id", "assigned_to_id"]:
-                if key in payload:
-                    wp_data[key] = payload[key]
-
-        # Copy subject and description
-        if "subject" in payload:
-            wp_data["subject"] = payload["subject"]
-        if "description" in payload:
-            wp_data["description"] = payload["description"]
-
-        # Call the internal batch method (still on the client) directly
-        # for a single item, avoiding the ``process_batches`` wrapper
-        # which may alter the return format. The bulk-creation
-        # pipeline is large enough to deserve its own focused
-        # extraction in a follow-up phase — until then the service
-        # reaches it through ``self._client._create_work_packages_batch``.
+        reject_legacy_journal_operations([payload])
+        wp_data = self._creation_attributes(payload)
         try:
             result = client._create_work_packages_batch([wp_data])
-            if isinstance(result, dict) and result.get("results"):
-                results = result["results"]
-                if results and len(results) > 0:
-                    return results[0] if isinstance(results[0], dict) else {"id": results[0]}
         except Exception as e:
             self._logger.error("Failed to create work package: %s", e)
-        return None
+            return None
+        results = result.get("results") if isinstance(result, dict) else None
+        if not results:
+            return None
+        first = results[0]
+        return first if isinstance(first, dict) else {"id": first}
+
+    @staticmethod
+    def _creation_attributes(payload: dict[str, Any]) -> dict[str, Any]:
+        data = {field: payload[field] for field in ("subject", "description") if field in payload}
+        if "_links" not in payload:
+            ids = ("project_id", "type_id", "status_id", "priority_id", "author_id", "assigned_to_id")
+            data.update({key: payload[key] for key in ids if key in payload})
+            return data
+        for name, resource in (("project", "projects"), ("type", "types"), ("status", "statuses")):
+            href = payload["_links"].get(name, {}).get("href")
+            if href and (match := re.search(rf"/{resource}/(\d+)", href)):
+                data[f"{name}_id"] = int(match.group(1))
+        return data
 
     def update_work_package(
         self,

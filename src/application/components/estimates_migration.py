@@ -46,104 +46,56 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
     def _parse_estimate_string_to_hours(value: str | None) -> float | None:
         if not value or not isinstance(value, str):
             return None
-        # Accept patterns like "1w 2d 3h 30m"
+        units = {"w": HOURS_PER_DAY * DAYS_PER_WEEK, "d": HOURS_PER_DAY, "h": 1.0, "m": 1 / 60}
         total_hours = 0.0
-        token = ""
-        for ch in value.strip():
-            if ch.isdigit() or ch in {".", ","}:
-                token += "." if ch == "," else ch
+        number = ""
+        for char in value.strip():
+            if char.isdigit() or char in ".,":
+                number += char.replace(",", ".")
                 continue
-            # unit boundary
-            if token:
-                try:
-                    num = float(token)
-                except Exception:
-                    num = 0.0
-                if ch.lower() == "w":
-                    total_hours += num * HOURS_PER_DAY * DAYS_PER_WEEK
-                elif ch.lower() == "d":
-                    total_hours += num * HOURS_PER_DAY
-                elif ch.lower() == "h":
-                    total_hours += num
-                elif ch.lower() == "m":
-                    total_hours += num / 60.0
-                token = ""
-            # ignore other separators (space etc.)
-        # trailing number without unit: assume hours if present
-        if token:
-            try:
-                total_hours += float(token)
-            except Exception:
-                pass
+            total_hours += EstimatesMigration._number(number) * units.get(char.lower(), 0)
+            number = ""
+        total_hours += EstimatesMigration._number(number)
         return total_hours if total_hours > 0 else None
 
     @staticmethod
-    def _seconds_to_hours(value: float | None) -> float | None:
+    def _number(token: str) -> float:
         try:
-            if value is None:
-                return None
-            return float(value) / 3600.0
-        except Exception:
-            return None
+            return float(token)
+        except ValueError:
+            return 0.0
+
+    @classmethod
+    def _hours(cls, fields, seconds_field: str, display_field: str) -> float | None:
+        seconds = getattr(fields, seconds_field, None)
+        if seconds is not None:
+            try:
+                return float(seconds) / 3600
+            except ValueError, TypeError:
+                pass
+        tracking = getattr(fields, "timetracking", None)
+        return cls._parse_estimate_string_to_hours(getattr(tracking, display_field, None))
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
-        issues: dict[str, Any] = (extracted.data or {}).get("issues", {}) if extracted.data else {}
-        if not issues:
-            return ComponentResult(success=True, data={"updates": []})
-
+        issues = (extracted.data or {}).get("issues", {})
         wp_map = self.mappings.get_mapping("work_package") or {}
-        updates: list[dict[str, Any]] = []
-
-        for key, issue in issues.items():
-            try:
-                wp_entry = wp_map.get(key)
-                if wp_entry is None:
-                    continue
-                try:
-                    typed_entry = WorkPackageMappingEntry.from_legacy(key, wp_entry)
-                except ValueError:
-                    # Corrupt or unsupported shape — skip this issue rather
-                    # than abort the run; phase 3c's normalisation script
-                    # will scrub these on the next pass.
-                    continue
-                wp_id = typed_entry.openproject_id
-                if not wp_id:
-                    continue
-
-                fields = getattr(issue, "fields", None)
-                if not fields:
-                    continue
-                # Prefer explicit seconds fields when available
-                orig_sec = getattr(fields, "timeoriginalestimate", None)
-                rem_sec = getattr(fields, "timeestimate", None)
-                orig_hours = self._seconds_to_hours(orig_sec)
-                rem_hours = self._seconds_to_hours(rem_sec)
-
-                # Fall back to timetracking strings
-                if orig_hours is None or rem_hours is None:
-                    tt = getattr(fields, "timetracking", None)
-                    if tt:
-                        if orig_hours is None:
-                            orig_hours = self._parse_estimate_string_to_hours(
-                                getattr(tt, "originalEstimate", None),
-                            )
-                        if rem_hours is None:
-                            rem_hours = self._parse_estimate_string_to_hours(
-                                getattr(tt, "remainingEstimate", None),
-                            )
-
-                update_rec: dict[str, Any] = {"id": int(wp_id)}
-                if orig_hours is not None:
-                    update_rec["estimated_hours"] = float(orig_hours)
-                if rem_hours is not None:
-                    update_rec["remaining_hours"] = float(rem_hours)
-
-                # Only enqueue if at least one field present
-                if len(update_rec) > 1:
-                    updates.append(update_rec)
-            except Exception:
+        updates = []
+        for outer_key, raw in wp_map.items():
+            key = self._inner_jira_key(outer_key, raw)
+            fields = getattr(issues.get(key), "fields", None)
+            if not fields:
                 continue
-
+            try:
+                entry = WorkPackageMappingEntry.from_legacy(key, raw)
+            except ValueError:
+                continue
+            values = {
+                "estimated_hours": self._hours(fields, "timeoriginalestimate", "originalEstimate"),
+                "remaining_hours": self._hours(fields, "timeestimate", "remainingEstimate"),
+            }
+            present = {name: value for name, value in values.items() if value is not None}
+            if present:
+                updates.append({"id": int(entry.openproject_id), **present})
         return ComponentResult(success=True, data={"updates": updates}, mapped_fields_count=len(updates))
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
@@ -156,6 +108,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         try:
             res = self.op_client.batch_update_work_packages(updates)
             updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
+            failed = max(len(updates) - updated, int((res or {}).get("failed", 0)))
         except Exception:
             logger.exception("Failed to batch update estimates on work packages")
             failed = len(updates)

@@ -46,13 +46,14 @@ import json
 import re
 import unicodedata
 from collections import Counter
-from typing import Any
+from typing import Any, NamedTuple
 
 from src.application.components.attachments_migration import (
     AttachmentsMigration,
     compute_wp_lookup_by_jira_key,
 )
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
@@ -62,9 +63,16 @@ from src.models import ComponentResult
 # injection from a malformed project key.
 _JIRA_PROJECT_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]+\z")
 
-# Hard cap on pagination — same defence the audit tool uses against a
-# buggy upstream returning the same page repeatedly.
-_PAGINATION_MAX_PAGES = 1000
+
+class AttachmentDifferences(NamedTuple):
+    """Missing and extra filenames grouped by source issue, with summary counts."""
+
+    missing: dict[str, list[str]]
+    clean: int
+    extra_total: int
+    paired_names: int
+    missing_total: int
+    extra: dict[str, list[str]]
 
 
 @register_entity_types("attachment_recovery")
@@ -175,99 +183,45 @@ class AttachmentRecoveryMigration(BaseMigration):
             )
             return {}
 
-        underlying = getattr(self.jira_client, "jira", None)
+        underlying = self.jira_client.jira
         if underlying is None:
-            self.logger.warning(
-                "JiraClient.jira is None — Jira not initialised; recovery for project %r skipped",
-                jira_project_key,
-            )
-            return {}
-
-        out: dict[str, list[dict[str, Any]]] = {}
-        page_size = 100
-        start_at = 0
+            msg = "Jira is unavailable for the attachment inventory"
+            raise ValueError(msg)
         jql = f'project = "{jira_project_key}"'
-        for _ in range(_PAGINATION_MAX_PAGES):
-            try:
-                page = underlying.search_issues(
-                    jql,
-                    startAt=start_at,
-                    maxResults=page_size,
-                    fields="attachment",
-                    expand="",
-                )
-            except Exception:
-                self.logger.exception(
-                    "Recovery aborted enumerating Jira attachments for %r",
-                    jira_project_key,
-                )
-                return out
-            if not page:
-                break
-            for issue in page:
-                key = self._read_attr(issue, "key")
-                fields_obj = self._read_attr(issue, "fields")
-                if not key or fields_obj is None:
-                    continue
-                atts = self._read_attr(fields_obj, "attachment") or []
-                entries: list[dict[str, Any]] = []
-                for a in atts:
-                    raw_filename = self._read_attr(a, "filename")
-                    aid = self._read_attr(a, "id")
-                    # Apply the SAME ``noname``/empty → ``jira-attachment-{aid}``
-                    # transformation that ``AttachmentsMigration._extract_batch``
-                    # applies before upload. Without this, the recovery
-                    # audit compares Jira's raw ``noname`` against OP's
-                    # uploaded ``jira-attachment-{aid}`` and reports the
-                    # files as missing even though the upload succeeded —
-                    # caught on the live 2026-05-07 NRS audit
-                    # (e.g. NRS-4347 reported ``['noname','noname','noname']``
-                    # missing while the same WP held the uploaded
-                    # ``jira-attachment-XXXX`` triplet under ``extra``).
-                    is_blank = (
-                        not isinstance(raw_filename, str)
-                        or not raw_filename.strip()
-                        or raw_filename.strip().lower() == "noname"
-                    )
-                    if is_blank:
-                        if not aid:
-                            # No id and no filename — genuinely
-                            # un-uploadable; the upload pipeline drops
-                            # these too via ``extract_no_id_no_filename``.
-                            continue
-                        filename = f"jira-attachment-{aid}"
-                    else:
-                        filename = raw_filename
-                    entries.append(
-                        {
-                            "filename": filename,
-                            "size": self._read_attr(a, "size"),
-                            "id": aid,
-                            "url": self._read_attr(a, "content"),
-                        },
-                    )
-                if entries:
-                    # Apply the SAME per-WP duplicate-filename
-                    # disambiguation that ``AttachmentsMigration._load``
-                    # applies before upload. Without this, the audit
-                    # compares raw Jira filenames (with duplicates)
-                    # against OP's disambiguated filenames (with " (2)"
-                    # / " (3)" suffixes) and reports phantom losses.
-                    # See PR following 2026-05-07 NRS audit:
-                    # NRS-3363 alone had 13 duplicate-filename pairs.
-                    raw_names = [e["filename"] for e in entries]
-                    unique_names = AttachmentsMigration.disambiguate_duplicate_filenames_in_group(raw_names)
-                    for e, new_name in zip(entries, unique_names, strict=True):
-                        e["filename"] = new_name
-                    out[str(key)] = entries
-            start_at += len(page)
-        else:
-            self.logger.warning(
-                "Recovery hit %d-page safety cap on project %r",
-                _PAGINATION_MAX_PAGES,
-                jira_project_key,
-            )
+
+        def fetch(offset, size):
+            return underlying.search_issues(jql, startAt=offset, maxResults=size, fields="attachment", expand="")
+
+        out = {}
+        for issue in iter_issue_pages(jira_project_key, fetch, 100):
+            key = self._read_attr(issue, "key")
+            fields = self._read_attr(issue, "fields")
+            entries = self._attachment_entries(self._read_attr(fields, "attachment") or [])
+            if entries:
+                out[str(key)] = entries
         return out
+
+    def _attachment_entries(self, attachments):
+        entries = []
+        for attachment in attachments:
+            filename = self._read_attr(attachment, "filename")
+            aid = self._read_attr(attachment, "id")
+            if not isinstance(filename, str) or filename.strip().lower() in {"", "noname"}:
+                if not aid:
+                    continue
+                filename = f"jira-attachment-{aid}"
+            entries.append(
+                {
+                    "filename": filename,
+                    "size": self._read_attr(attachment, "size"),
+                    "id": aid,
+                    "url": self._read_attr(attachment, "content"),
+                }
+            )
+        names = AttachmentsMigration.disambiguate_duplicate_filenames_in_group([row["filename"] for row in entries])
+        for row, name in zip(entries, names, strict=True):
+            row["filename"] = name
+        return entries
 
     @staticmethod
     def _build_op_attachment_query(wp_ids: list[int]) -> str:
@@ -306,36 +260,30 @@ puts end_marker
         for i in range(0, len(wp_ids), batch_size):
             batch = wp_ids[i : i + batch_size]
             script = self._build_op_attachment_query(batch)
-            try:
-                envelope = self.op_client.execute_script_with_data(script, [])
-            except Exception:
-                self.logger.exception(
-                    "Recovery: Rails fetch of OP attachments failed for batch starting at %d",
-                    i,
-                )
-                continue
-            if not isinstance(envelope, dict):
-                continue
-            if envelope.get("status") != "success":
-                self.logger.warning(
-                    "Recovery: Rails returned status=%r message=%r — batch skipped",
-                    envelope.get("status"),
-                    envelope.get("message"),
-                )
-                continue
-            data = envelope.get("data") or {}
-            if not isinstance(data, dict):
-                continue
-            for k, v in data.items():
-                try:
-                    wid = int(k)
-                except TypeError, ValueError:
-                    continue
-                if isinstance(v, list):
-                    merged[wid] = [str(fn) for fn in v if isinstance(fn, str)]
+            envelope = self.op_client.execute_script_with_data(script, [])
+            data = envelope.get("data") if isinstance(envelope, dict) else None
+            if not isinstance(data, dict) or envelope.get("status") != "success":
+                msg = "OpenProject did not confirm the attachment inventory"
+                raise ValueError(msg)
+            for key, filenames in data.items():
+                if (
+                    int(key) not in batch
+                    or not isinstance(filenames, list)
+                    or not all(isinstance(n, str) for n in filenames)
+                ):
+                    msg = "Invalid OpenProject attachment inventory"
+                    raise ValueError(msg)
+                merged[int(key)] = filenames
         return merged
 
-    def run(self) -> ComponentResult:  # type: ignore[override]
+    def run(self) -> ComponentResult:
+        try:
+            return self._recover_from_inventories()
+        except Exception:
+            self.logger.exception("Attachment recovery stopped before it could verify both inventories")
+            return ComponentResult(success=False, failed=1, message="Attachment inventory could not be verified")
+
+    def _recover_from_inventories(self) -> ComponentResult:
         self.logger.info("Starting attachment recovery (per-issue diff + targeted re-attach)")
 
         # Use the shared ``compute_wp_lookup_by_jira_key`` helper so we
@@ -382,26 +330,7 @@ puts end_marker
             jira_atts_all.update(self._iter_jira_issues_with_attachments(proj_key))
 
         # Split into in-scope (mapped) and unmapped buckets.
-        jira_atts: dict[str, list[dict[str, Any]]] = {}
-        unmapped_jira_keys: list[str] = []
-        for k, v in jira_atts_all.items():
-            if k in wp_map:
-                jira_atts[k] = v
-            else:
-                unmapped_jira_keys.append(k)
-
-        if unmapped_jira_keys:
-            # These issues exist in Jira but their WPs aren't in our
-            # mapping — surface as a real warning so an operator
-            # knows attachments on those WPs (if any) cannot be
-            # recovered by this run.
-            self.logger.warning(
-                "Recovery: %d Jira issues have attachments but no WP mapping entry"
-                " (sample: %s) — out of scope for this component;"
-                " run work_packages_skeleton on those projects first.",
-                len(unmapped_jira_keys),
-                unmapped_jira_keys[:10],
-            )
+        jira_atts, unmapped_jira_keys = self._mapped_attachment_sources(jira_atts_all, wp_map)
 
         if not jira_atts:
             return ComponentResult(
@@ -423,6 +352,121 @@ puts end_marker
         op_by_wp = self._fetch_op_attachments_by_wp(relevant_wp_ids)
 
         # Per-issue diff (multiset semantics).
+        before = self._compare_attachment_lists(jira_atts, wp_map, op_by_wp)
+        recovery_keys = sorted(before.missing)
+        if not recovery_keys:
+            self.logger.info(
+                "Recovery: no missing attachments detected (%d issues clean, %d extras,"
+                " %d unmapped, %d fidelity false positives paired)",
+                before.clean,
+                before.extra_total,
+                len(unmapped_jira_keys),
+                before.paired_names,
+            )
+            # Use the same key names as the recovery branch so callers
+            # can read ``details`` uniformly regardless of which path
+            # the component took.
+            return ComponentResult(
+                success=True,
+                updated=0,
+                message=(
+                    f"All in-scope attachments present in OP. clean={before.clean},"
+                    f" extra={before.extra_total}, wp_unmapped={len(unmapped_jira_keys)},"
+                    f" fidelity_false_positives={before.paired_names}"
+                ),
+                details={
+                    "projects_examined": len(project_keys),
+                    "issues_examined": len(jira_atts),
+                    "clean": before.clean,
+                    "wp_unmapped": len(unmapped_jira_keys),
+                    "missing_total_before": 0,
+                    "still_missing_total": 0,
+                    "extra_total": before.extra_total,
+                    "fidelity_false_positives": before.paired_names,
+                    "recovered": 0,
+                },
+            )
+
+        self.logger.info(
+            "Recovery: %d issues with missing attachments (%d files); delegating to attachments_migration",
+            len(recovery_keys),
+            before.missing_total,
+        )
+
+        # Delegate to the same path the original attachments migration
+        # uses. ``_process_batch_end_to_end`` is idempotent on the
+        # Rails side — files already attached are skipped, so passing
+        # the whole jira_keys list (not just the missing filenames)
+        # is safe AND simpler than re-implementing per-filename
+        # filtering. Rails-side dedup keeps the cost proportional to
+        # the actually-missing count.
+        merged_mapping, recovered, failed = self._recover_missing_batches(recovery_keys)
+
+        # Persist the recovered attachment mapping. Merge with any
+        # existing ``attachment_mapping.json`` so the original run's
+        # entries aren't lost. Atomic write (tmp + rename) — same
+        # defence PR #197 added for the WP mapping.
+        if merged_mapping:
+            self._merge_attachment_mapping(merged_mapping)
+
+        # After the recovery pass, recompute the missing tail so we
+        # report what's *still* lost (genuine 404s / collisions /
+        # transfer errors) — not the original count.
+        op_by_wp_after = self._fetch_op_attachments_by_wp(relevant_wp_ids)
+        recovered_sources = {key: jira_atts[key] for key in recovery_keys}
+        after = self._compare_attachment_lists(recovered_sources, wp_map, op_by_wp_after)
+
+        msg = (
+            f"Recovery: recovered={recovered}, still_missing={after.missing_total},"
+            f" failed_batches={failed}, clean={before.clean}, extra={before.extra_total},"
+            f" wp_unmapped={len(unmapped_jira_keys)},"
+            f" fidelity_false_positives={before.paired_names}"
+        )
+        self.logger.info(msg)
+        return ComponentResult(
+            success=after.missing_total == 0 and failed == 0,
+            updated=recovered,
+            failed=failed,
+            message=msg,
+            details={
+                "projects_examined": len(project_keys),
+                "issues_examined": len(jira_atts),
+                "clean": before.clean,
+                "wp_unmapped": len(unmapped_jira_keys),
+                "missing_total_before": before.missing_total,
+                "still_missing_total": after.missing_total,
+                "extra_total": before.extra_total,
+                "fidelity_false_positives": before.paired_names,
+                "recovered": recovered,
+                "still_missing_sample": dict(list(after.missing.items())[:20]),
+                "extra_sample": dict(list(before.extra.items())[:20]),
+            },
+        )
+
+    def _mapped_attachment_sources(self, jira_atts_all, wp_map):
+        jira_atts: dict[str, list[dict[str, Any]]] = {}
+        unmapped_jira_keys: list[str] = []
+        for k, v in jira_atts_all.items():
+            if k in wp_map:
+                jira_atts[k] = v
+            else:
+                unmapped_jira_keys.append(k)
+
+        if unmapped_jira_keys:
+            # These issues exist in Jira but their WPs aren't in our
+            # mapping — surface as a real warning so an operator
+            # knows attachments on those WPs (if any) cannot be
+            # recovered by this run.
+            self.logger.warning(
+                "Recovery: %d Jira issues have attachments but no WP mapping entry"
+                " (sample: %s) — out of scope for this component;"
+                " run work_packages_skeleton on those projects first.",
+                len(unmapped_jira_keys),
+                unmapped_jira_keys[:10],
+            )
+        return jira_atts, unmapped_jira_keys
+
+    def _compare_attachment_lists(self, jira_atts, wp_map, op_by_wp):
         per_issue_missing: dict[str, list[str]] = {}
         per_issue_extra: dict[str, list[str]] = {}
         clean = 0
@@ -467,54 +511,11 @@ puts end_marker
                 extra_total += len(extra)
             if not missing and not extra:
                 clean += 1
-
-        recovery_keys = sorted(per_issue_missing)
-        if not recovery_keys:
-            self.logger.info(
-                "Recovery: no missing attachments detected (%d issues clean, %d extras,"
-                " %d unmapped, %d fidelity false positives paired)",
-                clean,
-                extra_total,
-                len(unmapped_jira_keys),
-                fidelity_false_positives,
-            )
-            # Use the same key names as the recovery branch so callers
-            # can read ``details`` uniformly regardless of which path
-            # the component took.
-            return ComponentResult(
-                success=True,
-                updated=0,
-                message=(
-                    f"All in-scope attachments present in OP. clean={clean},"
-                    f" extra={extra_total}, wp_unmapped={len(unmapped_jira_keys)},"
-                    f" fidelity_false_positives={fidelity_false_positives}"
-                ),
-                details={
-                    "projects_examined": len(project_keys),
-                    "issues_examined": len(jira_atts),
-                    "clean": clean,
-                    "wp_unmapped": len(unmapped_jira_keys),
-                    "missing_total_before": 0,
-                    "still_missing_total": 0,
-                    "extra_total": extra_total,
-                    "fidelity_false_positives": fidelity_false_positives,
-                    "recovered": 0,
-                },
-            )
-
-        self.logger.info(
-            "Recovery: %d issues with missing attachments (%d files); delegating to attachments_migration",
-            len(recovery_keys),
-            missing_total,
+        return AttachmentDifferences(
+            per_issue_missing, clean, extra_total, fidelity_false_positives, missing_total, per_issue_extra
         )
 
-        # Delegate to the same path the original attachments migration
-        # uses. ``_process_batch_end_to_end`` is idempotent on the
-        # Rails side — files already attached are skipped, so passing
-        # the whole jira_keys list (not just the missing filenames)
-        # is safe AND simpler than re-implementing per-filename
-        # filtering. Rails-side dedup keeps the cost proportional to
-        # the actually-missing count.
+    def _recover_missing_batches(self, recovery_keys):
         att_migration = AttachmentsMigration(
             jira_client=self.jira_client,
             op_client=self.op_client,
@@ -541,61 +542,21 @@ puts end_marker
             # downstream consumers (work_packages_content uses this
             # mapping to resolve ``!image.png!`` references to OP API
             # URLs). Per PR #206 review.
-            if isinstance(mapping, dict):
-                for jk, file_map in mapping.items():
-                    if not isinstance(file_map, dict):
+            self._collect_uploaded_ids(merged_mapping, mapping)
+        return merged_mapping, recovered, failed
+
+    @staticmethod
+    def _collect_uploaded_ids(merged_mapping, mapping) -> None:
+        if isinstance(mapping, dict):
+            for jk, file_map in mapping.items():
+                if not isinstance(file_map, dict):
+                    continue
+                bucket = merged_mapping.setdefault(str(jk), {})
+                for fn, att_id in file_map.items():
+                    try:
+                        bucket[str(fn)] = int(att_id)
+                    except TypeError, ValueError:
                         continue
-                    bucket = merged_mapping.setdefault(str(jk), {})
-                    for fn, att_id in file_map.items():
-                        try:
-                            bucket[str(fn)] = int(att_id)
-                        except TypeError, ValueError:
-                            continue
-
-        # Persist the recovered attachment mapping. Merge with any
-        # existing ``attachment_mapping.json`` so the original run's
-        # entries aren't lost. Atomic write (tmp + rename) — same
-        # defence PR #197 added for the WP mapping.
-        if merged_mapping:
-            self._merge_attachment_mapping(merged_mapping)
-
-        # After the recovery pass, recompute the missing tail so we
-        # report what's *still* lost (genuine 404s / collisions /
-        # transfer errors) — not the original count.
-        op_by_wp_after = self._fetch_op_attachments_by_wp(relevant_wp_ids)
-        still_missing_total = 0
-        for jira_key in recovery_keys:
-            wp_id = wp_map[jira_key]  # guaranteed by in-scope filter
-            jira_counter = Counter(a["filename"] for a in jira_atts[jira_key])
-            op_counter = Counter(op_by_wp_after.get(wp_id, []))
-            still_missing_total += sum((jira_counter - op_counter).values())
-
-        msg = (
-            f"Recovery: recovered={recovered}, still_missing={still_missing_total},"
-            f" failed_batches={failed}, clean={clean}, extra={extra_total},"
-            f" wp_unmapped={len(unmapped_jira_keys)},"
-            f" fidelity_false_positives={fidelity_false_positives}"
-        )
-        self.logger.info(msg)
-        return ComponentResult(
-            success=still_missing_total == 0,
-            updated=recovered,
-            failed=failed,
-            message=msg,
-            details={
-                "projects_examined": len(project_keys),
-                "issues_examined": len(jira_atts),
-                "clean": clean,
-                "wp_unmapped": len(unmapped_jira_keys),
-                "missing_total_before": missing_total,
-                "still_missing_total": still_missing_total,
-                "extra_total": extra_total,
-                "fidelity_false_positives": fidelity_false_positives,
-                "recovered": recovered,
-                "still_missing_sample": dict(list(per_issue_missing.items())[:20]),
-                "extra_sample": dict(list(per_issue_extra.items())[:20]),
-            },
-        )
 
     def _merge_attachment_mapping(self, new_mapping: dict[str, dict[str, int]]) -> None:
         """Merge ``new_mapping`` into ``attachment_mapping.json`` atomically.

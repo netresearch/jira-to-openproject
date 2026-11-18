@@ -296,8 +296,7 @@ class JiraIssueService:
         self, issue_keys: list[str], chunk_index: int, status: int, **kwargs: object
     ) -> dict[str, Issue]:
         batch_num = kwargs.get("batch_num")
-        first_key = issue_keys[0] if issue_keys else "?"
-        last_key = issue_keys[-1] if issue_keys else "?"
+        first_key, last_key = (issue_keys[0], issue_keys[-1]) if issue_keys else ("?", "?")
         # HTTP 413/414: the request URI is genuinely too long.  Recover by
         # halving the chunk and retrying — the only failure mode where
         # "URL-length" is the honest cause and where data can be reclaimed.
@@ -358,8 +357,7 @@ class JiraIssueService:
         quoted_keys = ",".join(f'"{key}"' for key in issue_keys)
         jql = f"key in ({quoted_keys})"
         batch_num = kwargs.get("batch_num")
-        first_key = issue_keys[0] if issue_keys else "?"
-        last_key = issue_keys[-1] if issue_keys else "?"
+        first_key, last_key = (issue_keys[0], issue_keys[-1]) if issue_keys else ("?", "?")
 
         auth_retries = 0
         while True:
@@ -394,44 +392,34 @@ class JiraIssueService:
                     )
                     time.sleep(_CHUNK_TRANSIENT_RETRY_BACKOFF_SECONDS)
                     continue
-                if status in {401, 403}:
-                    # Still failing after the retry: a genuine authentication/
-                    # authorization failure, NOT a URL-length rejection.  Name it
-                    # honestly and make the dropped keys explicit.
-                    self._logger.warning(
-                        "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
-                        " — authentication/authorization failure (HTTP %s) after %d retr(y/ies);"
-                        " these %d issue(s) were NOT fetched. Check Jira credentials/session and re-run.",
-                        batch_num,
-                        chunk_index,
-                        first_key,
-                        last_key,
-                        status,
-                        auth_retries,
-                        len(issue_keys),
-                    )
-                    return {}
-                if status is not None:
-                    self._logger.warning(
-                        "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
-                        " — Jira returned HTTP %s; these %d issue(s) were NOT fetched.",
-                        batch_num,
-                        chunk_index,
-                        first_key,
-                        last_key,
-                        status,
-                        len(issue_keys),
-                    )
-                    return {}
-                # Unexpected error with no HTTP status — keep the full traceback.
-                self._logger.exception(
-                    "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]",
-                    batch_num,
-                    chunk_index,
-                    first_key,
-                    last_key,
-                )
+                location = (batch_num, chunk_index, first_key, last_key)
+                if status is None:
+                    self._logger.exception("Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]", *location)
+                else:
+                    self._log_http_chunk_failure(status, location, auth_retries, len(issue_keys))
                 return {}
+
+    def _log_http_chunk_failure(
+        self, status: int, location: tuple[object, int, str, str], auth_retries: int, issue_count: int
+    ) -> None:
+        if status in {401, 403}:
+            self._logger.warning(
+                "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
+                " — authentication/authorization failure (HTTP %s) after %d retr(y/ies);"
+                " these %d issue(s) were NOT fetched. Check Jira credentials/session and re-run.",
+                *location,
+                status,
+                auth_retries,
+                issue_count,
+            )
+        else:
+            self._logger.warning(
+                "Chunk fetch failed: batch_num=%s, chunk_index=%s, keys=[%s..%s]"
+                " — Jira returned HTTP %s; these %d issue(s) were NOT fetched.",
+                *location,
+                status,
+                issue_count,
+            )
 
     @staticmethod
     def _extract_http_status(exc: BaseException) -> int | None:

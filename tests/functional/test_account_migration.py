@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, mock_open, patch
 import pytest
 
 from src.application.components.account_migration import AccountMigration
+from src.models import MigrationError
 
 
 class TestAccountMigration(unittest.TestCase):
@@ -249,10 +250,16 @@ class TestAccountMigration(unittest.TestCase):
                     assert result["102"]["matched_by"] == "none"
 
     def test_create_account_custom_field(self) -> None:
-        """Test the create_account_custom_field method."""
-        # Simply make the test pass for now since it's non-critical
-        # This avoids the complex mocking needed for this test after our refactoring
-        # The actual functionality is tested in real migrations
+        migration = AccountMigration(MagicMock(), MagicMock())
+        migration.op_client.execute_json_query.return_value = {"id": 42}
+        assert migration.create_account_custom_field() == 42
+        assert migration.account_custom_field_id == 42
+        migration.op_client.execute_query.assert_not_called()
+
+        for invalid in ("console line 42", {}, {"id": False}, {"id": 0}):
+            migration.op_client.execute_json_query.return_value = invalid
+            with pytest.raises(MigrationError, match="no valid Tempo Account"):
+                migration.create_account_custom_field()
 
     @patch("src.application.components.account_migration.Mappings")
     def test_migrate_accounts(self, mock_mappings: MagicMock) -> None:
