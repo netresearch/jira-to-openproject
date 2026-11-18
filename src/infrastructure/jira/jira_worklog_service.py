@@ -142,6 +142,51 @@ class JiraWorklogService:
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
 
+    def _read_project_work_logs(self, issue_key: str, project_key: str) -> list[dict[str, Any]] | None:
+        # Apply adaptive rate limiting before request
+        self._client.rate_limiter.wait_if_needed(f"get_work_logs_{project_key}")
+
+        try:
+            request_start = time.time()
+            work_logs = self.get_work_logs_for_issue(issue_key)
+            response_time = time.time() - request_start
+
+            # Record successful response for rate limiting adaptation
+            self._client.rate_limiter.record_response(response_time, HTTP_OK)
+
+            return work_logs
+        except JiraResourceNotFoundError:
+            # Issue was deleted between listing and fetching work logs
+            self._logger.warning(
+                "Issue %s not found when fetching work logs",
+                issue_key,
+            )
+            self._client.rate_limiter.record_response(
+                time.time() - request_start,
+                HTTP_NOT_FOUND,
+            )
+            return None
+        except JiraApiError as e:
+            self._logger.warning(
+                "Failed to get work logs for issue %s: %s",
+                issue_key,
+                e,
+            )
+            # Record an actual 5xx so the rate-limiter's
+            # server-error backoff kicks in. The
+            # pre-extraction code wrote
+            # ``HTTP_BAD_REQUEST_MIN + 5`` (= 405) with
+            # an inline ``# 500`` comment, but the
+            # arithmetic was wrong (400 + 5 = 405) and
+            # ``RateLimiter.record_response`` only flags
+            # ``status_code >= 500`` as a server error,
+            # so the backoff path never fired.
+            self._client.rate_limiter.record_response(
+                time.time() - request_start,
+                500,
+            )
+            return None
+
     def get_all_work_logs_for_project(
         self,
         project_key: str,
@@ -170,8 +215,6 @@ class JiraWorklogService:
             )
 
             work_logs_by_issue = {}
-            issues_with_logs = 0
-            total_work_logs = 0
 
             for issue in all_issues:
                 issue_key = issue.key
@@ -182,60 +225,14 @@ class JiraWorklogService:
                 )
 
                 if has_work_logs or include_empty:
-                    # Apply adaptive rate limiting before request
-                    self._client.rate_limiter.wait_if_needed(f"get_work_logs_{project_key}")
-
-                    try:
-                        request_start = time.time()
-                        work_logs = self.get_work_logs_for_issue(issue_key)
-                        response_time = time.time() - request_start
-
-                        # Record successful response for rate limiting adaptation
-                        self._client.rate_limiter.record_response(response_time, HTTP_OK)
-
-                        if work_logs or include_empty:
-                            work_logs_by_issue[issue_key] = work_logs
-                            if work_logs:
-                                issues_with_logs += 1
-                                total_work_logs += len(work_logs)
-
-                    except JiraResourceNotFoundError:
-                        # Issue was deleted between listing and fetching work logs
-                        self._logger.warning(
-                            "Issue %s not found when fetching work logs",
-                            issue_key,
-                        )
-                        self._client.rate_limiter.record_response(
-                            time.time() - request_start,
-                            HTTP_NOT_FOUND,
-                        )
-                        continue
-                    except JiraApiError as e:
-                        self._logger.warning(
-                            "Failed to get work logs for issue %s: %s",
-                            issue_key,
-                            e,
-                        )
-                        # Record an actual 5xx so the rate-limiter's
-                        # server-error backoff kicks in. The
-                        # pre-extraction code wrote
-                        # ``HTTP_BAD_REQUEST_MIN + 5`` (= 405) with
-                        # an inline ``# 500`` comment, but the
-                        # arithmetic was wrong (400 + 5 = 405) and
-                        # ``RateLimiter.record_response`` only flags
-                        # ``status_code >= 500`` as a server error,
-                        # so the backoff path never fired.
-                        self._client.rate_limiter.record_response(
-                            time.time() - request_start,
-                            500,
-                        )
-                        continue
-
+                    work_logs = self._read_project_work_logs(issue_key, project_key)
+                    if work_logs is not None and (work_logs or include_empty):
+                        work_logs_by_issue[issue_key] = work_logs
             self._logger.info(
                 "Work log extraction complete for project '%s': %s issues with work logs, %s total work logs",
                 project_key,
-                issues_with_logs,
-                total_work_logs,
+                sum(bool(logs) for logs in work_logs_by_issue.values()),
+                sum(len(logs) for logs in work_logs_by_issue.values()),
             )
 
             return work_logs_by_issue

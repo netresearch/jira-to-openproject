@@ -34,6 +34,10 @@ from src.infrastructure.jira.jira_client import (
 from src.utils.performance_optimizer import cached
 
 
+def _optional_string(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
 class JiraProjectService:
     """Project-domain queries for ``JiraClient``."""
 
@@ -48,6 +52,68 @@ class JiraProjectService:
 
     # ── reads ────────────────────────────────────────────────────────────
 
+    def _project_details(self, project: Any) -> dict[str, Any]:
+        client = self._client
+        detail = None
+        try:
+            detail = client.jira.project(project.id)
+        except Exception as exc:
+            self._logger.debug(
+                "Failed to fetch detailed project metadata for %s: %s",
+                project.key,
+                exc,
+            )
+
+        raw_detail = getattr(detail, "raw", {}) or {}
+
+        project_category = raw_detail.get("projectCategory") or {}
+        if not isinstance(project_category, dict):
+            project_category = {}
+
+        category_name = _optional_string(project_category.get("name"))
+        category_id = _optional_string(project_category.get("id"))
+
+        lead_info = raw_detail.get("lead") or {}
+        if not isinstance(lead_info, dict):
+            lead_info = {}
+
+        lead_login = lead_info.get("name") or lead_info.get("key")
+        lead_display = lead_info.get("displayName")
+
+        avatar_urls = raw_detail.get("avatarUrls") or {}
+        if not isinstance(avatar_urls, dict):
+            avatar_urls = {}
+        preferred_avatar_url = ""
+        for size_key in ("128x128", "64x64", "48x48", "32x32", "24x24", "16x16"):
+            candidate = avatar_urls.get(size_key)
+            if candidate:
+                preferred_avatar_url = str(candidate)
+                break
+
+        project_type = raw_detail.get("projectTypeKey") or getattr(project, "projectTypeKey", None)
+
+        browse_url = f"{client.base_url}/browse/{project.key}"
+
+        description = raw_detail.get("description") or ""
+
+        return {
+            "key": project.key,
+            "name": project.name,
+            "id": project.id,
+            "project_type_key": project_type,
+            "project_category": project_category,
+            "project_category_name": category_name,
+            "project_category_id": category_id,
+            "description": description,
+            "lead": lead_login,
+            "lead_display": lead_display,
+            "avatar_urls": avatar_urls,
+            "avatar_url": preferred_avatar_url,
+            "url": raw_detail.get("self"),
+            "browse_url": browse_url,
+            "archived": raw_detail.get("archived", False),
+        }
+
     def get_projects(self) -> list[dict[str, Any]]:
         """Get all projects from Jira with enriched metadata."""
         client = self._client
@@ -55,85 +121,13 @@ class JiraProjectService:
             msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
-        def _sanitize_str(value: Any) -> str:
-            if value is None:
-                return ""
-            return str(value)
-
-        projects_details: list[dict[str, Any]] = []
-
         try:
             projects = client.jira.projects()
             if not projects:
                 self._logger.warning("No projects found in Jira")
                 return []
 
-            for project in projects:
-                detail = None
-                try:
-                    detail = client.jira.project(project.id)
-                except Exception as exc:
-                    self._logger.debug(
-                        "Failed to fetch detailed project metadata for %s: %s",
-                        project.key,
-                        exc,
-                    )
-
-                raw_detail = getattr(detail, "raw", {}) or {}
-
-                project_category = raw_detail.get("projectCategory") or {}
-                if not isinstance(project_category, dict):
-                    project_category = {}
-
-                category_name = _sanitize_str(project_category.get("name")) if project_category else ""
-                category_id = _sanitize_str(project_category.get("id")) if project_category else ""
-
-                lead_info = raw_detail.get("lead") or {}
-                if not isinstance(lead_info, dict):
-                    lead_info = {}
-
-                lead_login = lead_info.get("name") or lead_info.get("key")
-                lead_display = lead_info.get("displayName")
-
-                avatar_urls = raw_detail.get("avatarUrls") or {}
-                if not isinstance(avatar_urls, dict):
-                    avatar_urls = {}
-                preferred_avatar_url = ""
-                for size_key in ("128x128", "64x64", "48x48", "32x32", "24x24", "16x16"):
-                    candidate = avatar_urls.get(size_key)
-                    if candidate:
-                        preferred_avatar_url = str(candidate)
-                        break
-
-                project_type = raw_detail.get("projectTypeKey") or getattr(project, "projectTypeKey", None)
-
-                browse_url = f"{client.base_url}/browse/{project.key}"
-
-                description = raw_detail.get("description") or ""
-                if description is None:
-                    description = ""
-
-                projects_details.append(
-                    {
-                        "key": project.key,
-                        "name": project.name,
-                        "id": project.id,
-                        "project_type_key": project_type,
-                        "project_category": project_category,
-                        "project_category_name": category_name,
-                        "project_category_id": category_id,
-                        "description": description,
-                        "lead": lead_login,
-                        "lead_display": lead_display,
-                        "avatar_urls": avatar_urls,
-                        "avatar_url": preferred_avatar_url,
-                        "url": raw_detail.get("self"),
-                        "browse_url": browse_url,
-                        "archived": raw_detail.get("archived", False),
-                    },
-                )
-
-            return projects_details
+            return [self._project_details(project) for project in projects]
         except Exception as e:
             error_msg = f"Failed to get projects: {e!s}"
             self._logger.exception(error_msg)
@@ -196,6 +190,50 @@ class JiraProjectService:
             path = f"/{path}"
         return path
 
+    def _project_role_detail(self, role_url: str, role_name: str, project_key: str) -> dict[str, Any] | None:
+        detail_path = self._role_detail_path(role_url)
+
+        try:
+            detail_response = self._client._make_request(detail_path)
+            _assert_json_response(detail_response, path=detail_path)
+        except JiraServiceUnavailableError as exc:
+            self._logger.warning(
+                "Skipping Jira role '%s' for project '%s': endpoint unavailable. Details: %s",
+                role_name,
+                project_key,
+                exc,
+            )
+            return None
+        if detail_response.status_code != HTTP_OK:
+            self._logger.warning(
+                "Skipping Jira role '%s' for project '%s' due to HTTP %s",
+                role_name,
+                project_key,
+                detail_response.status_code,
+            )
+            return None
+
+        detail = detail_response.json() or {}
+        actors = []
+        for actor in detail.get("actors", []):
+            actors.append(
+                {
+                    "type": actor.get("type"),
+                    "name": actor.get("name"),
+                    "displayName": actor.get("displayName"),
+                    "accountId": ((actor.get("actorUser") or {}).get("accountId") or actor.get("accountId")),
+                    "userKey": ((actor.get("actorUser") or {}).get("key") or actor.get("userKey")),
+                    "groupName": ((actor.get("actorGroup") or {}).get("name") or actor.get("groupName")),
+                },
+            )
+
+        return {
+            "id": detail.get("id"),
+            "name": detail.get("name") or role_name,
+            "description": detail.get("description"),
+            "actors": actors,
+        }
+
     def get_project_roles(self, project_key: str) -> list[dict[str, Any]]:
         """Retrieve Jira project roles and their actors for a project."""
         if not project_key:
@@ -219,50 +257,9 @@ class JiraProjectService:
                 if not isinstance(role_url, str):
                     continue
 
-                detail_path = self._role_detail_path(role_url)
-
-                try:
-                    detail_response = client._make_request(detail_path)
-                    _assert_json_response(detail_response, path=detail_path)
-                except JiraServiceUnavailableError as exc:
-                    self._logger.warning(
-                        "Skipping Jira role '%s' for project '%s': endpoint unavailable. Details: %s",
-                        role_name,
-                        project_key,
-                        exc,
-                    )
-                    continue
-                if detail_response.status_code != HTTP_OK:
-                    self._logger.warning(
-                        "Skipping Jira role '%s' for project '%s' due to HTTP %s",
-                        role_name,
-                        project_key,
-                        detail_response.status_code,
-                    )
-                    continue
-
-                detail = detail_response.json() or {}
-                actors = []
-                for actor in detail.get("actors", []):
-                    actors.append(
-                        {
-                            "type": actor.get("type"),
-                            "name": actor.get("name"),
-                            "displayName": actor.get("displayName"),
-                            "accountId": ((actor.get("actorUser") or {}).get("accountId") or actor.get("accountId")),
-                            "userKey": ((actor.get("actorUser") or {}).get("key") or actor.get("userKey")),
-                            "groupName": ((actor.get("actorGroup") or {}).get("name") or actor.get("groupName")),
-                        },
-                    )
-
-                roles.append(
-                    {
-                        "id": detail.get("id"),
-                        "name": detail.get("name") or role_name,
-                        "description": detail.get("description"),
-                        "actors": actors,
-                    },
-                )
+                role = self._project_role_detail(role_url, role_name, project_key)
+                if role is not None:
+                    roles.append(role)
 
             self._logger.debug(
                 "Discovered %s Jira project roles for '%s'",
