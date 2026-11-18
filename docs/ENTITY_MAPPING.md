@@ -23,7 +23,7 @@ This document provides a comprehensive mapping of how Jira entities are transfor
 | **Resolution** | Custom Field Value | `resolutions` | On "Resolution" CF |
 | **Component** | Custom Field Value | `components` | On "Component" CF |
 | **Version** | Target versions | `versions` | All mapped Jira fix versions on multi-version targets. A single-version target reports a failed row when several versions are required. |
-| **Sprint** | Version | `agile_boards` + `sprint_epic` | Not OpenProject's native Sprint object — see [§11](#11-agile-migration) |
+| **Sprint** | Version, ordered membership history, optional native sprint and goal | `agile_boards` + `sprint_epic` | [Native sprint import on OpenProject 17.9](native-completed-sprints.md) |
 | **Epic / subtask parent** | Work package parent | `sprint_epic` | A subtask keeps its immediate Jira parent. Other issues use Epic Link. |
 | **Label** | Tag | `labels` / `native_tags` | Categorization |
 | **Attachment** | Attachment | `attachments` | File transfer |
@@ -414,6 +414,10 @@ column queries stay private and the archive project must remain private and
 memberless. An unchanged revision is checked in place. A changed source
 creates a separate revision. Moving a basic-board card in OpenProject changes
 its position without applying a Jira workflow transition.
+
+#### Native sprint import
+
+The optional runner creates native sprints for planned, active and closed Jira sprints, with goals scoped to each target project. It checks imported issue histories before assigning a work package to a sprint. See [Native sprints and goals](native-completed-sprints.md).
 
 #### Why boards and sprints are not mapped 1:1
 

@@ -745,15 +745,23 @@ def test_native_open_sprints_and_goal_roundtrip(native_sprint_projects, assigned
         User.current = User.admin.first!
         widget = Backlogs::SprintReports::Widgets::Goal.new(sprint, project, current_user: User.current)
         rendered = Nokogiri::HTML.fragment(ApplicationController.renderer.render(widget, layout: false)).text
+        card = Backlogs::SprintComponent.new(sprint: sprint, project: project, current_user: User.current)
+        html = ApplicationController.renderer.render(card, layout: false)
+        goal_id = ActionView::RecordIdentifier.dom_target(sprint, :goal)
+        card_goal = Nokogiri::HTML.fragment(html).at_css("##{{goal_id}}")
         [wp.version_id, response.status, data.dig("_links", "status", "href"), data["startDate"], data["finishDate"],
          data["startedAt"] && Time.iso8601(data["startedAt"]).iso8601, data["completedAt"],
          sprint.goal_text_for(project), rendered.include?(sprint.goal_text_for(project)),
+         card_goal.text.squish.include?(sprint.goal_text_for(project)),
          Sprint.where(project: project, status: :completed).sole.goal_text_for(project)]
     """)
     status = "in_planning" if assigned == "future" else "active"
     assert observed[:2] == [vid, 200]
     assert observed[2].endswith(f":sprints:status:{status}")
     assert observed[3:7] == (["2026-02-02", "2026-02-13", "2026-02-02T15:00:00Z", None] if active_dates else [None] * 4)
-    assert observed[7:] == [active["goal"], True, "Shipped"]
+    assert observed[7:] == [active["goal"], True, True, "Shipped"]
+    native_id = query(f"w=WorkPackage.find({wid}); old=w.sprint_id; w.update_columns(sprint_id: nil); old")
+    assert _run_sprints(query, manifest) == "Existing native sprint assignment conflicts"
+    query(f"WorkPackage.find({wid}).update_columns(sprint_id: {native_id})")
     query(f'WorkPackage.find({wid}).sprint.goals.sole.update!(text: "Edited locally"); true')
     assert _run_sprints(query, manifest) == "Native sprint changed"
