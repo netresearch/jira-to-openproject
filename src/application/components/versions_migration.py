@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.project_named_records import apply_work_package_updates, map_project_records, project_id
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -88,96 +89,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
-        data = extracted.data or {}
-        by_project: dict[str, list[str]] = data.get("by_project", {}) if isinstance(data, dict) else {}
-        # Preserve cached issues from extract phase for reuse in load phase
-        cached_issues = data.get("issues", {}) if isinstance(data, dict) else {}
-        if not by_project:
-            return ComponentResult(success=True, created=0, data={"version_map": {}, "issues": cached_issues})
-
-        proj_map = self.mappings.get_mapping("project") or {}
-        op_project_ids: dict[str, int] = {}
-        for jira_key in by_project:
-            entry = proj_map.get(jira_key)
-            pid = None
-            if isinstance(entry, dict):
-                pid = entry.get("openproject_id")
-            elif isinstance(entry, int):
-                pid = entry
-            if pid:
-                try:
-                    op_project_ids[jira_key] = int(pid)
-                except Exception:
-                    continue
-
-        pids = sorted(set(op_project_ids.values()))
-        existing: list[dict[str, Any]] = []
-        if pids:
-            try:
-                query = f"Version.where(project_id: [{', '.join(str(x) for x in pids)}]).select(:id,:name,:project_id)"
-                res = self.op_client.execute_json_query(query)
-                if isinstance(res, list):
-                    existing = [r for r in res if isinstance(r, dict)]
-            except Exception:
-                logger.exception("Failed to list existing Versions")
-                existing = []
-
-        by_pid_name_to_id: dict[str, dict[str, int]] = {}
-        for r in existing:
-            try:
-                pid = int(r.get("project_id"))
-                name = str(r.get("name"))
-                vid = int(r.get("id"))
-                by_pid_name_to_id.setdefault(str(pid), {})[name] = vid
-            except Exception:
-                continue
-
-        to_create: list[dict[str, Any]] = []
-        for jproj, names in by_project.items():
-            pid = op_project_ids.get(jproj)
-            if not pid:
-                continue
-            existing_for = by_pid_name_to_id.get(str(pid), {})
-            for name in names:
-                if name not in existing_for:
-                    to_create.append({"name": name, "project_id": int(pid)})
-
-        created = 0
-        if to_create:
-            try:
-                res = self.op_client.bulk_create_records("Version", to_create)
-                created = int(res.get("created_count", 0)) if isinstance(res, dict) else len(to_create)
-            except Exception:
-                logger.exception("Failed to create Versions in bulk")
-
-            # Refresh existing map after creation
-            try:
-                query = f"Version.where(project_id: [{', '.join(str(x) for x in pids)}]).select(:id,:name,:project_id)"
-                res2 = self.op_client.execute_json_query(query)
-                if isinstance(res2, list):
-                    by_pid_name_to_id.clear()
-                    for r in res2:
-                        try:
-                            pid = int(r.get("project_id"))
-                            name = str(r.get("name"))
-                            vid = int(r.get("id"))
-                            by_pid_name_to_id.setdefault(str(pid), {})[name] = vid
-                        except Exception:
-                            continue
-            except Exception:
-                logger.exception("Failed to refresh Version map after creation")
-
-        # Persist
-        try:
-            self.mappings.set_mapping("version", by_pid_name_to_id)
-        except Exception:
-            logger.exception("Failed to persist version mapping")
-
-        return ComponentResult(
-            success=True,
-            created=created,
-            data={"version_map": by_pid_name_to_id, "issues": cached_issues},
-        )
+        return map_project_records(self, extracted, "Version")
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         version_map: dict[str, dict[str, int]] = (mapped.data or {}).get("version_map", {}) if mapped.data else {}
@@ -198,57 +110,33 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         failed = 0
         for key, wp_entry in wp_map.items():
             try:
-                wp_id = None
-                if isinstance(wp_entry, dict):
-                    wp_id = wp_entry.get("openproject_id")
-                elif isinstance(wp_entry, int):
-                    wp_id = wp_entry
-                if not wp_id:
-                    continue
-
-                # The outer key may be a numeric Jira ID; issues is keyed by
-                # the human-readable Jira key returned by the API.
-                jira_key = self._inner_jira_key(key, wp_entry) or key
-                issue = issues.get(jira_key)
-                if not issue:
-                    continue
-                fields = JiraIssueFields.from_issue_any(issue)
-                if not fields.fix_versions:
-                    continue
-                # Choose first fixVersion name deterministically.
-                name = fields.fix_versions[0].name
-                if not name:
-                    continue
-
-                jproj = self._issue_project_key(jira_key)
-                proj_entry = proj_map.get(jproj)
-                op_pid = None
-                if isinstance(proj_entry, dict):
-                    op_pid = proj_entry.get("openproject_id")
-                elif isinstance(proj_entry, int):
-                    op_pid = proj_entry
-                if not op_pid:
-                    continue
-
-                ver_id = version_map.get(str(int(op_pid)), {}).get(str(name))
-                if not ver_id:
-                    continue
-                updates.append({"id": int(wp_id), "version_id": int(ver_id)})
+                assignment = self._version_assignment(key, wp_entry, issues, proj_map, version_map)
+                if assignment:
+                    updates.append(assignment)
             except Exception:
                 failed += 1
 
-        if not updates:
-            return ComponentResult(success=failed == 0, updated=0, failed=failed)
+        return apply_work_package_updates(self, updates, failed)
 
-        updated = 0
-        try:
-            res = self.op_client.batch_update_work_packages(updates)
-            updated = int(res.get("updated", 0)) if isinstance(res, dict) else len(updates)
-        except Exception:
-            logger.exception("Failed to batch update version_id on work packages")
-            failed += len(updates)
-
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+    def _version_assignment(self, key: str, entry: Any, issues: dict, projects: dict, versions: dict) -> dict | None:
+        if not isinstance(entry, (dict, int)):
+            return None
+        wp_id = entry.get("openproject_id") if isinstance(entry, dict) else entry
+        if not wp_id:
+            return None
+        jira_key = self._inner_jira_key(key, entry) or key
+        issue = issues.get(jira_key)
+        if not issue:
+            return None
+        fields = JiraIssueFields.from_issue_any(issue)
+        if not fields.fix_versions or not fields.fix_versions[0].name:
+            return None
+        proj_entry = projects.get(self._issue_project_key(jira_key))
+        op_pid = proj_entry.get("openproject_id") if isinstance(proj_entry, dict) else project_id(proj_entry)
+        if not op_pid:
+            return None
+        vid = versions.get(str(int(op_pid)), {}).get(str(fields.fix_versions[0].name))
+        return {"id": int(wp_id), "version_id": int(vid)} if vid else None
 
     def run(self) -> ComponentResult:
         """Execute versions migration pipeline."""
