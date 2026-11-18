@@ -784,14 +784,12 @@ class EnhancedUserAssociationMigrator:
             except ValueError:
                 reason = "Invalid timestamp"
                 age_seconds = self.refresh_interval_seconds * 3  # Assume very stale for invalid timestamps
-        return (
-            {
-                "username": username,
-                "action": "refresh",
-                "reason": reason,
-                "priority": ("high" if age_seconds > (self.refresh_interval_seconds * 2) else "medium"),
-            },
-        )
+        return {
+            "username": username,
+            "action": "refresh",
+            "reason": reason,
+            "priority": "high" if age_seconds > self.refresh_interval_seconds * 2 else "medium",
+        }
 
     def _get_op_users_index(
         self,
