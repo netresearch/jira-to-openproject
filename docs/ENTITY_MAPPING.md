@@ -385,23 +385,16 @@ The membership history distinguishes equally named sprints and preserves referen
 
 #### Jira Board → OpenProject Saved Query
 
-```
-Jira Board                        OpenProject Query
-──────────────────────────────    ──────────────────────────────
-name: "Scrum Board"          ──→  name: "[Board] Scrum Board"
-type / filter JQL / statuses ──→  description (plain text)
-—                            ──→  filters: []  (not derived)
-—                            ──→  columns: []  (not derived)
-—                            ──→  private on creation (sharing can be configured in OpenProject)
-```
+Each selected project gets one private saved query for each associated Jira board,
+named `[Jira Board <id>] <name>`. The importer pages through the visible Jira
+board issues within that project, resolves their OpenProject IDs, and checks the
+saved query returns exactly those work packages. An empty source board produces
+an empty query. Unmapped cards, shared target queries and ambiguous existing
+queries are reported as errors. The full profile imports work packages first.
 
-The migration records the board type, available JQL and column status IDs in the
-agile snapshot. On targets with a query description these also go into the
-description. OpenProject 17.9.7 has no query description column. The saved
-query uses the project's default filters. If Jira Server omits the board's
-location, the importer uses the board projects endpoint. Boards spanning
-multiple candidate projects appear in the component report for assignment.
-
+The query preserves membership at import time. Refreshing the import updates its
+membership and name. Jira column status IDs, board type and available filter JQL
+are recorded in the source snapshot. The board home determines sprint ownership.
 
 #### Why boards and sprints are not mapped 1:1
 
@@ -479,7 +472,7 @@ writes appear in the component result.
    └── versions       # Depends on: projects
    └── components     # Depends on: projects
    └── labels         # Depends on: work_packages
-   └── agile_boards   # Depends on: projects — creates the sprint versions + board queries
+   └── agile_boards   # Depends on: projects, work_packages — creates sprint versions and private board queries
    └── sprint_epic    # Depends on: agile_boards (sprint mapping), work_packages
 
 7. RELATIONSHIPS

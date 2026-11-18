@@ -108,9 +108,7 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "accounts",
     # === Structure: Projects ===
     "projects",
-    # === Agile: Workflows, Boards, Sprints ===
     "workflows",
-    "agile_boards",
     # === Phase 1: Work Package Skeletons (no content) ===
     "work_packages_skeleton",
     # === Phase 2: Attachments (creates mapping for URL conversion) ===
@@ -124,6 +122,8 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "attachment_recovery",
     # === Phase 3: Work Package Content (with resolved attachment URLs) ===
     "work_packages_content",
+    # Board queries require mapped work packages before sprint assignments run.
+    "agile_boards",
     "sprint_epic",
     # Backfill assignee + provenance CFs on existing WPs (closes Bug A
     # for pre-#175 WPs and the under-populated CF warnings flagged by

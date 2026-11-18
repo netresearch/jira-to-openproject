@@ -49,7 +49,7 @@ def migration(monkeypatch):
 
 @pytest.mark.parametrize("sequence", [DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES["full"]])
 def test_cold_run_dependencies(sequence):
-    assert sequence.index("agile_boards") < sequence.index("sprint_epic")
+    assert sequence.index("work_packages_skeleton") < sequence.index("agile_boards") < sequence.index("sprint_epic")
     assert (
         sequence.index("work_packages_skeleton")
         < sequence.index("work_packages_content")
