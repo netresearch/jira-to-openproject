@@ -36,6 +36,7 @@ work unchanged.
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from typing import Any
 
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -420,6 +421,36 @@ J2O_DATA
         except Exception as e:
             self._logger.warning("Failed to fetch migrated comment IDs: %s", e)
             return set()
+
+    def verify_imported_comments(self, approved: dict[int, list[dict[str, Any]]]) -> None:
+        """Check every previously marked note in this batch against the current public text."""
+        if not approved:
+            return
+        wp_ids = json.dumps([int(wp_id) for wp_id in approved])
+        script = f"""
+          require 'digest'
+          rows = Journal.where(journable_type: 'WorkPackage', journable_id: {wp_ids})
+                        .where("notes LIKE '%j2o:jira-comment-id:%'")
+                        .pluck(:journable_id, :notes)
+          {{ fingerprints: rows.map {{ |wp, note| [wp, Digest::SHA256.hexdigest(note)] }} }}
+        """
+        result = self._client.execute_query_to_json_file(script)
+        if not isinstance(result, dict) or not isinstance(result.get("fingerprints"), list):
+            msg = "Could not verify previously imported comments. Keep target access closed."
+            raise RuntimeError(msg)
+        allowed = {
+            (wp, sha256(_build_comment_with_marker(row["comment"], row["jira_comment_id"]).encode()).hexdigest())
+            for wp, rows in approved.items()
+            for row in rows
+            if row.get("jira_comment_id")
+        }
+        stale = {wp for wp, digest in result["fingerprints"] if (wp, digest) not in allowed}
+        if stale:
+            msg = (
+                f"Previously imported comments no longer match approved Jira text on work packages {sorted(stale)}. "
+                "Keep target access closed and restore a clean pre-import snapshot."
+            )
+            raise ValueError(msg)
 
     def bulk_create_work_package_activities(
         self,

@@ -494,7 +494,7 @@ class TestEnhancedAuditTrailMigrator:
         sample_changelog_data,
         sample_user_mapping,
     ) -> None:
-        """Ensure comments are queued alongside changelog events."""
+        """Cached comments cannot prove who may read them. Preserve the other changes."""
         migrator = migrator_with_mocks
         migrator.user_mapping = sample_user_mapping
 
@@ -507,6 +507,9 @@ class TestEnhancedAuditTrailMigrator:
             },
         ]
 
+        sample_changelog_data[0]["items"].append(
+            {"field": "Kommentar", "fieldId": "comment", "toString": "hidden edit"}
+        )
         migrator.changelog_data = {
             "TEST-123": {
                 "jira_issue_key": "TEST-123",
@@ -521,8 +524,9 @@ class TestEnhancedAuditTrailMigrator:
 
         assert result is True
         operations = migrator.rails_operations
-        assert any(op.get("operation") == "create_comment_event" for op in operations)
-        assert migrator.migration_results["comments_processed"] == 1
+        assert operations and all(op["operation"] == "create_audit_event" for op in operations)
+        assert "Reviewed change" not in repr(operations) and "hidden edit" not in repr(operations)
+        assert migrator.migration_results["comments_processed"] == 0
 
     @patch("subprocess.run")
     def test_execute_rails_audit_operations_success(

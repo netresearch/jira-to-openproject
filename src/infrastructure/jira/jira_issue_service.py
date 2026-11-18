@@ -179,16 +179,16 @@ class JiraIssueService:
                     "display_name": issue.fields.reporter.displayName,
                 }
 
-            # Add comments
+            # Embedded comments lack the audience check used by the content migration.
             if hasattr(issue.fields, "comment") and issue.fields.comment:
                 issue_data["comments"] = [
                     {
                         "id": comment.id,
                         "body": comment.body,
-                        "author": comment.author.displayName,
+                        "author": getattr(comment.author, "displayName", None),
                         "created": comment.created,
                     }
-                    for comment in issue.fields.comment.comments
+                    for comment in self._client.select_comments_for_migration(issue_key).comments
                 ]
 
             # Add attachments

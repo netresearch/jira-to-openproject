@@ -262,3 +262,85 @@ def test_work_package_content_roundtrip(rails):
       Journal.where(journable_type: 'WorkPackage', journable_id: {wp_id}).where('notes LIKE ?', '%Test note%')
              .order(:id).map {{ |j| [j.notes.lines.first.strip, j.created_at.utc.iso8601, j.user_id] }}
     """) == [[note["comment"], note["created_at"], seed["author_id"]] for note in notes]
+
+
+def test_comment_readers_on_private_work_package(rails, monkeypatch):
+    """Migrate mixed synthetic Jira comments, then read the real API as five principals."""
+    from unittest.mock import patch
+
+    from src.application.components.work_package_content_migration import WorkPackageContentMigration
+    from src.infrastructure.jira.comment_audience import select_comments
+    from src.infrastructure.openproject.openproject_work_package_content_service import (
+        OpenProjectWorkPackageContentService,
+    )
+    from tests.unit.test_jira_comment_audience import page, rows
+
+    client, query = rails
+    wp_id = query("""
+      template = WorkPackage.first!
+      project = template.project
+      project.update!(public: false)
+      root = User.admin.first!
+      viewers = [root]
+      %w[Member Reader].each_with_index do |role_name, i|
+        user = User.create!(login: "j2o-audience-#{i}", firstname: "Audience", lastname: "Test#{i}",
+                            mail: "audience#{i}@example.invalid", status: :active)
+        Member.create!(project: project, principal: user, roles: [ProjectRole.find_by!(name: role_name)])
+        viewers << user
+      end
+      viewers << User.create!(login: 'j2o-outsider', firstname: 'Outside', lastname: 'Project',
+                              mail: 'outside@example.invalid', status: :active)
+      wp = WorkPackage.create!(project: project, type: template.type, status: template.status,
+                               priority: template.priority, author: root, subject: 'J2O audience test')
+      # Keep tokens only in memory, never in test output.
+      $audience_tokens = viewers.map { |u| [u.id, Token::API.create!(user: u).plain_value] }
+      wp.id
+    """)
+    monkeypatch.setenv("J2O_COPY_PUBLIC_COMMENTS", "1")
+    jira = Mock(base_url="https://jira.example")
+    source = rows()
+    jira._make_request.return_value = page(source)
+    jira.select_comments_for_migration.side_effect = lambda key: select_comments(jira, key)
+    jira.get_issue_watchers.return_value = []
+    client.wp_content = OpenProjectWorkPackageContentService(client)
+    client.bulk_create_work_package_activities.side_effect = client.wp_content.bulk_create_work_package_activities
+    migration = WorkPackageContentMigration(jira_client=jira, op_client=client)
+    issue = SimpleNamespace(key="DEMO-1", fields=SimpleNamespace(description=None), raw={})
+    with patch("src.infrastructure.jira.comment_audience.requests.Session") as factory:
+        factory.return_value.__enter__.return_value.get.return_value = page(source[:4])
+        for attempt in range(2):
+            collected = migration._collect_content_for_issue(issue, wp_id)
+            result = migration._bulk_process_collected_content([collected])
+            assert result["comments_held"] == 7 and result["comments_migrated"] == int(attempt == 0), result
+
+    observations = query(f"""
+      ($audience_tokens + [[nil, nil]]).map do |id, token|
+        browser = ActionDispatch::Integration::Session.new(Rails.application)
+        browser.host! "localhost"
+        headers = {{ "ACCEPT" => "application/hal+json" }}
+        headers["HTTP_AUTHORIZATION"] = ActionController::HttpAuthentication::Basic.encode_credentials("apikey", token) if token
+        browser.get "/api/v3/users/me", headers: headers
+        me = JSON.parse(browser.response.body)["id"]
+        browser.get "/api/v3/work_packages/{wp_id}/activities", headers: headers
+        [id == me, browser.response.status, browser.response.body]
+      end
+    """)
+    for i, (identity_matches, status, body) in enumerate(observations):
+        if i < 4:
+            assert identity_matches, (i, status)
+        if i < 3:
+            assert status == 200 and source[0]["body"] in body, (i, status)
+        else:
+            assert status in (401, 403, 404) and source[0]["body"] not in body, (i, status)
+        assert all(row["body"] not in body for row in source[1:])
+    # A higher-level view or a later permission grant cannot reveal an absent body.
+    persisted = query(f"Journal.where(journable: WorkPackage.find({wp_id})).pluck(:notes)")
+    assert all(row["body"] not in str(persisted) for row in source[1:])
+
+    # Jira now denies anonymous access to the previously copied comment.
+    with patch("src.infrastructure.jira.comment_audience.requests.Session") as factory:
+        factory.return_value.__enter__.return_value.get.return_value = page([], status=403)
+        collected = migration._collect_content_for_issue(issue, wp_id)
+    assert collected["comments_held"] == len(source)
+    with pytest.raises(ValueError, match="restore a clean pre-import snapshot"):
+        migration._bulk_process_collected_content([collected])

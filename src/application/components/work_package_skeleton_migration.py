@@ -163,7 +163,18 @@ def _build_provenance_custom_field_entries(
     _add("J2O Origin Key", getattr(jira_issue, "key", None))
     _add("J2O Origin ID", getattr(jira_issue, "id", None))
     _add("J2O Origin System", "Jira")
-    if jira_base_url and getattr(jira_issue, "key", None):
+    from urllib.parse import urlsplit
+
+    origin = urlsplit(jira_base_url)
+    if (
+        origin.scheme in {"https", "http"}
+        and origin.hostname
+        and origin.username is None
+        and origin.password is None
+        and not origin.query
+        and not origin.fragment
+        and getattr(jira_issue, "key", None)
+    ):
         _add(
             "J2O Origin URL",
             f"{jira_base_url.rstrip('/')}/browse/{jira_issue.key}",
@@ -748,11 +759,8 @@ class WorkPackageSkeletonMigration(BaseMigration):
         # CFs were created by the startup bootstrap but received no
         # value. Now we populate every provenance CF that exists in OP.
         cf_ids = self._get_provenance_cf_ids()
-        jira_base_url = ""
-        try:
-            jira_cfg = getattr(self.jira_client, "jira_config", None) or {}
-            jira_base_url = str(jira_cfg.get("url") or "")
-        except Exception:
+        jira_base_url = getattr(self.jira_client, "base_url", "")
+        if not isinstance(jira_base_url, str):
             jira_base_url = ""
         cf_entries = _build_provenance_custom_field_entries(
             jira_issue,
