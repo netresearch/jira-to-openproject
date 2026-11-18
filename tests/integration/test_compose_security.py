@@ -58,7 +58,7 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
         services_needing_custom_user = ["app", "mock-jira", "mock-openproject"]
 
         # Services that should NOT have custom user mapping (Alpine images with built-in users)
-        services_with_builtin_users = ["redis", "postgres"]
+        services_with_builtin_users = ["valkey", "postgres"]
 
         for service_name, service_config in services.items():
             with self.subTest(service=service_name):
@@ -184,7 +184,7 @@ class TestComposeSecurityConfiguration(unittest.TestCase):
                             # They don't expose host filesystem and are managed by Docker
                             # SSH_AUTH_SOCK is for SSH agent forwarding (git operations in container)
                             safe_named_volumes = [
-                                "redis_data",
+                                "valkey_data",
                                 "postgres_data",
                                 "${SSH_AUTH_SOCK:-/dev/null}",
                             ]

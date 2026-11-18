@@ -54,7 +54,7 @@ def run(cmd: Iterable[str], *, check: bool = True) -> subprocess.CompletedProces
 
 
 def start_mocks() -> None:
-    run(["docker", "compose", "--profile", "test", "up", "-d", "mock-jira", "mock-openproject", "redis", "postgres"])
+    run(["docker", "compose", "--profile", "test", "up", "-d", "mock-jira", "mock-openproject", "valkey", "postgres"])
 
 
 def stop_mocks() -> None:

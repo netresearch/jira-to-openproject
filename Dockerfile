@@ -1,7 +1,7 @@
-# syntax=docker/dockerfile:1.29
+# syntax=docker/dockerfile:1
 
 # ===== Stage 1: build =====
-FROM python:3.15.2-slim AS build
+FROM python:3-slim AS build
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -22,8 +22,8 @@ RUN apt-get update \
         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv from its pinned release image (no unlocked pip resolution)
-COPY --from=ghcr.io/astral-sh/uv:0.13.9 /uv /uvx /usr/local/bin/
+# Upstream has no uv:0 image tag. Install the latest compatible 0.x wheel.
+RUN python -m pip install --no-cache-dir --only-binary=:all: 'uv>=0.13,<1'
 
 # Resolve + install dependencies into /opt/venv. The venv lives outside /app
 # so compose's bind mount of the source tree over /app does not hide it.
@@ -37,7 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
 
 # ===== Stage 2: runtime =====
-FROM python:3.15.2-slim AS runtime
+FROM python:3-slim AS runtime
 
 LABEL maintainer="Netresearch DTT GmbH <sebastian.mendel@netresearch.de>" \
       org.opencontainers.image.title="jira-to-openproject" \
