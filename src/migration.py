@@ -177,6 +177,18 @@ def _component_has_errors(result: ComponentResult | None) -> bool:
     return failed > 0 or legacy + _count_value(details, "failed") > 0
 
 
+def _time_entry_counts(details: dict, counts: tuple[int, int, int]) -> tuple[int, int, int]:
+    succeeded, failed, total = counts
+    time_entries = details.get("total_time_entries")
+    if isinstance(time_entries, dict) and (not total or not (succeeded or failed)):
+        migrated = _count_value(time_entries, "migrated")
+        errors = _count_value(time_entries, "failed")
+        succeeded = succeeded or migrated
+        failed = failed or errors
+        total = total or migrated + errors
+    return succeeded, failed, total
+
+
 def _derive_counts(result: ComponentResult, counts: tuple[int, int, int], details: dict) -> tuple[int, int, int]:
     succeeded, failed, total = counts
     data = result.data if isinstance(result.data, dict) else {}
@@ -186,13 +198,7 @@ def _derive_counts(result: ComponentResult, counts: tuple[int, int, int], detail
         total = total or issue_count
         if succeeded and not failed:
             failed = max(total - succeeded, 0)
-    time_entries = details.get("total_time_entries")
-    if isinstance(time_entries, dict) and (not total or not (succeeded or failed)):
-        migrated = _count_value(time_entries, "migrated")
-        errors = _count_value(time_entries, "failed")
-        succeeded = succeeded or migrated
-        failed = failed or errors
-        total = total or migrated + errors
+    succeeded, failed, total = _time_entry_counts(details, (succeeded, failed, total))
     generic_total = _source_count(details, data, "total")
     generic_errors = _source_count(details, data, "error_count")
     if generic_total or generic_errors:
