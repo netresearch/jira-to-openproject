@@ -659,7 +659,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         wp_mapping = _load_wp_mapping(data_dir, project_key)
         user_mapping = _load_user_mapping(data_dir)
-    except (OSError, ValueError, TypeError):
+    except OSError, ValueError, TypeError:
         logger.exception("Cannot load migration mappings")
         return 1
 
