@@ -159,47 +159,7 @@ class ConfigLoader:
         if "database" not in self.config:
             self.config["database"] = cast("DatabaseConfig", {})
 
-        # Priority: explicit secret file env -> env var -> default Docker secret path
-        postgres_password: str | None = None
-
-        secret_file_env = os.environ.get("POSTGRES_PASSWORD_FILE")
-        if secret_file_env:
-            try:
-                secret_path = Path(secret_file_env).resolve()
-                # Warn if path is outside expected secret directories (potential path traversal)
-                _ALLOWED_SECRET_DIRS = ("/run/secrets", "/var/run/secrets", "/etc/secrets")
-                if not any(str(secret_path).startswith(d) for d in _ALLOWED_SECRET_DIRS):
-                    config_logger.warning(
-                        "POSTGRES_PASSWORD_FILE points outside standard secret directories",
-                    )
-                postgres_password = secret_path.read_text().strip()
-            except OSError as e:
-                # Log only exception class name, not the file path
-                config_logger.warning("Failed to read Docker secret: %s", e.__class__.__name__)
-
-        if not postgres_password:
-            postgres_password = os.environ.get("POSTGRES_PASSWORD")
-
-        if not postgres_password:
-            # Try to load from Docker secrets
-            secret_path = Path("/run/secrets/postgres_password")
-            if secret_path.exists():
-                try:
-                    postgres_password = secret_path.read_text().strip()
-                    config_logger.debug(
-                        "Successfully loaded PostgreSQL password from Docker secret",
-                    )
-                except OSError as e:
-                    config_logger.warning(
-                        "Failed to read Docker secret: %s",
-                        e.__class__.__name__,
-                    )
-            else:
-                config_logger.debug("Docker secret file not found: %s", secret_path)
-        else:
-            config_logger.debug(
-                "Successfully loaded PostgreSQL password from environment variable",
-            )
+        postgres_password = self._database_password()
 
         # Validate password is present and non-empty
         if not postgres_password or not postgres_password.strip():
@@ -213,6 +173,7 @@ class ConfigLoader:
             )
 
         # Store in config
+        config_logger.debug("Successfully loaded PostgreSQL password")
         db_cfg = cast("DatabaseConfig", self.config["database"])
         db_cfg["postgres_password"] = postgres_password
 
@@ -228,102 +189,128 @@ class ConfigLoader:
 
         config_logger.debug("Database configuration loaded successfully")
 
+    @staticmethod
+    def _read_password_file(path: Path) -> str | None:
+        try:
+            return path.read_text().strip()
+        except OSError as exc:
+            config_logger.warning("Failed to read Docker secret: %s", type(exc).__name__)
+            return None
+
+    def _database_password(self) -> str | None:
+        explicit = os.environ.get("POSTGRES_PASSWORD_FILE")
+        if explicit:
+            path = Path(explicit).resolve()
+            if not any(path.is_relative_to(root) for root in ("/run/secrets", "/var/run/secrets", "/etc/secrets")):
+                config_logger.warning("POSTGRES_PASSWORD_FILE points outside standard secret directories")
+            if value := self._read_password_file(path):
+                return value
+        if value := os.environ.get("POSTGRES_PASSWORD"):
+            return value
+        default_path = Path("/run/secrets/postgres_password")
+        return self._read_password_file(default_path) if default_path.exists() else None
+
+    @staticmethod
+    def _redacted(key: str, value: str) -> str:
+        sensitive = {"api_token", "password", "secret", "token", "api_key", "private_key"}
+        return "***REDACTED***" if key in sensitive else value
+
     def _apply_environment_overrides(self) -> None:
         """Override configuration settings with environment variables."""
-        _SENSITIVE_KEYS = frozenset({"api_token", "password", "secret", "token", "api_key", "private_key"})
-
-        def _redact(key: str, value: str) -> str:
-            return "***REDACTED***" if key in _SENSITIVE_KEYS else value
-
         # Use pattern matching to organize environment variable processing
         for env_var, env_value in os.environ.items():
             if not env_var.startswith("J2O_"):
                 continue
 
-            match env_var.split("_"):
-                case ["J2O", "LOG", "LEVEL"]:
-                    # Cast to proper log level type
-                    log_level = env_value.upper()
-                    if log_level in [
-                        "DEBUG",
-                        "INFO",
-                        "NOTICE",
-                        "WARNING",
-                        "ERROR",
-                        "CRITICAL",
-                        "SUCCESS",
-                    ]:
-                        self.config["migration"]["log_level"] = cast("LogLevel", log_level)
-                    config_logger.debug("Applied log level: %s", log_level)
+            self._apply_environment_value(env_var, env_value)
 
-                case ["J2O", "JIRA", *rest] if rest:
-                    key: str = "_".join(rest).lower()
+    def _apply_jira_override(self, rest: list[str], env_value: str) -> None:
+        key: str = "_".join(rest).lower()
 
-                    # Handle ScriptRunner configuration separately
-                    if key.startswith("scriptrunner_"):
-                        # Initialize scriptrunner config if not present
-                        if "scriptrunner" not in self.config["jira"]:
-                            self.config["jira"]["scriptrunner"] = {}
+        # Handle ScriptRunner configuration separately
+        if key.startswith("scriptrunner_"):
+            # Initialize scriptrunner config if not present
+            if "scriptrunner" not in self.config["jira"]:
+                self.config["jira"]["scriptrunner"] = {}
 
-                        # Extract the specific scriptrunner config key
-                        sr_key = key[len("scriptrunner_") :]
-                        self.config["jira"]["scriptrunner"][sr_key] = (  # type: ignore[literal-required]
-                            self._convert_value(env_value)
-                        )
-                        config_logger.debug(
-                            "Applied Jira ScriptRunner config: %s=%s",
-                            sr_key,
-                            _redact(sr_key, env_value),
-                        )
-                    else:
-                        # Regular Jira config
-                        self.config["jira"][key] = self._convert_value(env_value)  # type: ignore[literal-required]
-                        config_logger.debug(
-                            "Applied Jira config: %s=%s",
-                            key,
-                            _redact(key, env_value),
-                        )
+            # Extract the specific scriptrunner config key
+            sr_key = key[len("scriptrunner_") :]
+            self.config["jira"]["scriptrunner"][sr_key] = (  # type: ignore[literal-required]
+                self._convert_value(env_value)
+            )
+            config_logger.debug(
+                "Applied Jira ScriptRunner config: %s=%s",
+                sr_key,
+                self._redacted(sr_key, env_value),
+            )
+        else:
+            # Regular Jira config
+            self.config["jira"][key] = self._convert_value(env_value)  # type: ignore[literal-required]
+            config_logger.debug(
+                "Applied Jira config: %s=%s",
+                key,
+                self._redacted(key, env_value),
+            )
 
-                case ["J2O", "OPENPROJECT", *rest] if rest:
-                    key = "_".join(rest).lower()
-                    # Known OpenProject keys are defined in OpenProjectConfig; still allow extras dynamically
-                    self.config["openproject"][key] = self._convert_value(env_value)  # type: ignore[literal-required]
+    def _apply_environment_value(self, env_var: str, env_value: str) -> None:
+        match env_var.split("_"):
+            case ["J2O", "LOG", "LEVEL"]:
+                # Cast to proper log level type
+                log_level = env_value.upper()
+                if log_level in [
+                    "DEBUG",
+                    "INFO",
+                    "NOTICE",
+                    "WARNING",
+                    "ERROR",
+                    "CRITICAL",
+                    "SUCCESS",
+                ]:
+                    self.config["migration"]["log_level"] = cast("LogLevel", log_level)
+                config_logger.debug("Applied log level: %s", log_level)
+
+            case ["J2O", "JIRA", *rest] if rest:
+                self._apply_jira_override(rest, env_value)
+            case ["J2O", "OPENPROJECT", *rest] if rest:
+                key = "_".join(rest).lower()
+                # Known OpenProject keys are defined in OpenProjectConfig; still allow extras dynamically
+                self.config["openproject"][key] = self._convert_value(env_value)  # type: ignore[literal-required]
+                config_logger.debug(
+                    "Applied OpenProject config: %s=%s",
+                    key,
+                    self._redacted(key, env_value),
+                )
+
+                # Special handling for tmux_session_name
+                if key == "tmux_session_name":
                     config_logger.debug(
-                        "Applied OpenProject config: %s=%s",
-                        key,
-                        _redact(key, env_value),
+                        "Configured OpenProject tmux session name: %s",
+                        env_value,
                     )
 
-                    # Special handling for tmux_session_name
-                    if key == "tmux_session_name":
-                        config_logger.debug(
-                            "Configured OpenProject tmux session name: %s",
-                            env_value,
-                        )
+            case ["J2O", "BATCH", "SIZE"]:
+                self.config["migration"]["batch_size"] = int(env_value)
+                config_logger.debug("Applied batch size: %s", env_value)
 
-                case ["J2O", "BATCH", "SIZE"]:
-                    self.config["migration"]["batch_size"] = int(env_value)
-                    config_logger.debug("Applied batch size: %s", env_value)
+            case ["J2O", "SSL", "VERIFY"]:
+                ssl_verify = env_value.lower() not in ("false", "0", "no", "n", "f")
+                self.config["migration"]["ssl_verify"] = ssl_verify
+                config_logger.debug("Applied SSL verify: %s", ssl_verify)
 
-                case ["J2O", "SSL", "VERIFY"]:
-                    ssl_verify = env_value.lower() not in ("false", "0", "no", "n", "f")
-                    self.config["migration"]["ssl_verify"] = ssl_verify
-                    config_logger.debug("Applied SSL verify: %s", ssl_verify)
+            case ["J2O", "FORCE"]:
+                force = self._convert_value(env_value) is True
+                self.config["migration"]["force"] = force
+                config_logger.debug("Applied migration force: %s", force)
 
-                case ["J2O", "FORCE"]:
-                    force = self._convert_value(env_value) is True
-                    self.config["migration"]["force"] = force
-                    config_logger.debug("Applied migration force: %s", force)
+            case ["J2O", "NO", "CONFIRM"]:
+                no_confirm = self._convert_value(env_value) is True
+                self.config["migration"]["no_confirm"] = no_confirm
+                config_logger.debug("Applied migration no_confirm: %s", no_confirm)
 
-                case ["J2O", "NO", "CONFIRM"]:
-                    no_confirm = self._convert_value(env_value) is True
-                    self.config["migration"]["no_confirm"] = no_confirm
-                    config_logger.debug("Applied migration no_confirm: %s", no_confirm)
-
-                case ["J2O", "STOP", "ON", "ERROR"]:
-                    stop_on_error = self._convert_value(env_value) is True
-                    self.config["migration"]["stop_on_error"] = stop_on_error
-                    config_logger.debug("Applied migration stop_on_error: %s", stop_on_error)
+            case ["J2O", "STOP", "ON", "ERROR"]:
+                stop_on_error = self._convert_value(env_value) is True
+                self.config["migration"]["stop_on_error"] = stop_on_error
+                config_logger.debug("Applied migration stop_on_error: %s", stop_on_error)
 
     def _convert_value(self, value: str) -> ConfigValue:
         """Convert string value to appropriate type."""

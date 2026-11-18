@@ -149,88 +149,8 @@ class AdminSchemeMigration(BaseMigration):
         user_assignments: defaultdict[tuple[int, int], set[int]] = defaultdict(set)
         skipped: list[dict[str, Any]] = []
 
-        def resolve_role_ids(jira_role_name: str) -> list[int]:
-            desired = ROLE_NAME_MAPPING.get(jira_role_name.lower())
-            if not desired:
-                return []
-            role_ids = [role_name_to_id.get(name) for name in desired if role_name_to_id.get(name)]
-            return [rid for rid in role_ids if rid]
-
-        def resolve_user_id(actor: dict[str, Any]) -> int | None:
-            candidates = [
-                actor.get("accountId"),
-                actor.get("userKey"),
-                actor.get("name"),
-            ]
-            for candidate in candidates:
-                if candidate and candidate in self.user_mapping:
-                    entry = self.user_mapping[candidate]
-                    op_id = entry.get("openproject_id") if isinstance(entry, dict) else None
-                    if op_id:
-                        return int(op_id)
-            return None
-
-        def resolve_group_name(actor: dict[str, Any]) -> str | None:
-            group_name = actor.get("groupName") or actor.get("name")
-            if not group_name:
-                return None
-            if group_name in self.group_mapping:
-                return group_name
-            # Some mappings may store case-variant names
-            for known in self.group_mapping:
-                if known.lower() == group_name.lower():
-                    return known
-            return None
-
         for project in projects:
-            project_key = project.get("project_key")
-            project_id = int(project.get("openproject_id", 0) or 0)
-            if project_id <= 0:
-                continue
-
-            for role in project.get("roles", []):
-                role_name = role.get("name")
-                if not isinstance(role_name, str):
-                    continue
-                role_ids = resolve_role_ids(role_name)
-                if not role_ids:
-                    skipped.append(
-                        {
-                            "project_key": project_key,
-                            "role": role_name,
-                            "reason": "unmapped_role",
-                        },
-                    )
-                    continue
-
-                for actor in role.get("actors", []):
-                    actor_type = (actor.get("type") or "").lower()
-                    if "user" in actor_type:
-                        user_id = resolve_user_id(actor)
-                        if user_id:
-                            user_assignments[(project_id, user_id)].update(role_ids)
-                        else:
-                            skipped.append(
-                                {
-                                    "project_key": project_key,
-                                    "role": role_name,
-                                    "actor": actor,
-                                    "reason": "user_not_mapped",
-                                },
-                            )
-                    elif "group" in actor_type:
-                        group_name = resolve_group_name(actor)
-                        if group_name:
-                            group_assignments[(group_name, project_id)].update(role_ids)
-                        else:
-                            skipped.append(
-                                {
-                                    "project_key": project_key,
-                                    "role": role_name,
-                                    "actor": actor,
-                                    "reason": "group_not_mapped",
-                                },
-                            )
+            self._map_project_roles(project, role_name_to_id, user_assignments, group_assignments, skipped)
 
         mapped = {
             "user_assignments": [
@@ -263,6 +183,95 @@ class AdminSchemeMigration(BaseMigration):
             },
         )
 
+    @staticmethod
+    def _resolve_role_ids(jira_role_name: str, role_name_to_id: dict) -> list[int]:
+        desired = ROLE_NAME_MAPPING.get(jira_role_name.lower())
+        if not desired:
+            return []
+        role_ids = [role_name_to_id.get(name) for name in desired if role_name_to_id.get(name)]
+        return [rid for rid in role_ids if rid]
+
+    def _resolve_actor_user(self, actor: dict[str, Any]) -> int | None:
+        candidates = [
+            actor.get("accountId"),
+            actor.get("userKey"),
+            actor.get("name"),
+        ]
+        for candidate in candidates:
+            if candidate and candidate in self.user_mapping:
+                entry = self.user_mapping[candidate]
+                op_id = entry.get("openproject_id") if isinstance(entry, dict) else None
+                if op_id:
+                    return int(op_id)
+        return None
+
+    def _resolve_actor_group(self, actor: dict[str, Any]) -> str | None:
+        group_name = actor.get("groupName") or actor.get("name")
+        if not group_name:
+            return None
+        if group_name in self.group_mapping:
+            return group_name
+        # Some mappings may store case-variant names
+        for known in self.group_mapping:
+            if known.lower() == group_name.lower():
+                return known
+        return None
+
+    def _map_project_roles(
+        self, project: dict, role_name_to_id: dict, user_assignments: dict, group_assignments: dict, skipped: list
+    ) -> None:
+        project_key = project.get("project_key")
+        project_id = int(project.get("openproject_id", 0) or 0)
+        if project_id <= 0:
+            return
+
+        for role in project.get("roles", []):
+            role_name = role.get("name")
+            if not isinstance(role_name, str):
+                continue
+            role_ids = self._resolve_role_ids(role_name, role_name_to_id)
+            if not role_ids:
+                skipped.append(
+                    {
+                        "project_key": project_key,
+                        "role": role_name,
+                        "reason": "unmapped_role",
+                    },
+                )
+                continue
+
+            self._map_role_actors(project, role, role_ids, user_assignments, group_assignments, skipped=skipped)
+
+    def _map_role_actors(
+        self,
+        project: dict,
+        role: dict,
+        role_ids: list[int],
+        user_assignments: dict,
+        group_assignments: dict,
+        *,
+        skipped: list,
+    ) -> None:
+        project_key, project_id = project.get("project_key"), int(project["openproject_id"])
+        role_name = role["name"]
+        for actor in role.get("actors", []):
+            actor_type = (actor.get("type") or "").lower()
+            if "user" in actor_type:
+                user_id = self._resolve_actor_user(actor)
+                if user_id:
+                    user_assignments[(project_id, user_id)].update(role_ids)
+                    continue
+                reason = "user_not_mapped"
+            elif "group" in actor_type:
+                group_name = self._resolve_actor_group(actor)
+                if group_name:
+                    group_assignments[(group_name, project_id)].update(role_ids)
+                    continue
+                reason = "group_not_mapped"
+            else:
+                continue
+            skipped.append({"project_key": project_key, "role": role_name, "actor": actor, "reason": reason})
+
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Create OpenProject memberships according to mapped roles."""
         if not mapped.success or not isinstance(mapped.data, dict):
@@ -275,25 +284,7 @@ class AdminSchemeMigration(BaseMigration):
         user_assignments: list[dict[str, Any]] = mapped.data.get("user_assignments", [])
         group_assignments: list[dict[str, Any]] = mapped.data.get("group_assignments", [])
 
-        updated = 0
-        failed = 0
-
-        if group_assignments:
-            try:
-                result = self.op_client.assign_group_roles(group_assignments)
-                if isinstance(result, dict):
-                    updated += int(result.get("updated", 0))
-                    group_errors = int(result.get("errors", 0))
-                    if group_errors:
-                        failed += group_errors
-                        details = result.get("error_details") or result.get("errors_detail")
-                        if details:
-                            self.logger.error("Group role assignment errors: %s", details)
-                        else:
-                            self.logger.error("Group role assignment reported %s errors without details", group_errors)
-            except Exception as exc:
-                failed += len(group_assignments)
-                self.logger.exception("Failed to assign group roles: %s", exc)
+        updated, failed = self._assign_group_roles(group_assignments)
 
         for assignment in user_assignments:
             try:
@@ -391,3 +382,24 @@ class AdminSchemeMigration(BaseMigration):
                 config.mappings.set_mapping("group", mapping)
             except Exception:
                 self.logger.debug("Persisting refreshed group mapping failed; continuing in-memory only")
+
+    def _assign_group_roles(self, group_assignments: list[dict]) -> tuple[int, int]:
+        """Apply group assignments and report partial or unsuccessful updates."""
+        updated = failed = 0
+        if group_assignments:
+            try:
+                result = self.op_client.assign_group_roles(group_assignments)
+                if isinstance(result, dict):
+                    updated += int(result.get("updated", 0))
+                    group_errors = int(result.get("errors", 0))
+                    if group_errors:
+                        failed += group_errors
+                        details = result.get("error_details") or result.get("errors_detail")
+                        if details:
+                            self.logger.error("Group role assignment errors: %s", details)
+                        else:
+                            self.logger.error("Group role assignment reported %s errors without details", group_errors)
+            except Exception as exc:
+                failed += len(group_assignments)
+                self.logger.exception("Failed to assign group roles: %s", exc)
+        return updated, failed

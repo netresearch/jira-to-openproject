@@ -34,6 +34,7 @@ out-of-scope and otherwise untouched.
 
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -43,7 +44,6 @@ from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.models import ComponentResult, MigrationError
-from src.utils import data_handler
 
 
 @register_entity_types("companies", "tempo_companies")
@@ -95,20 +95,7 @@ class CompanyMigration(BaseMigration):
         )
 
         # Load existing data if available
-        loaded_companies = self._load_from_json(Mappings.TEMPO_COMPANIES_FILE)
-        if loaded_companies:
-            # If loaded data is a list, convert to dictionary with id as key
-            if isinstance(loaded_companies, list):
-                self.tempo_companies = {}
-                for company in loaded_companies:
-                    if isinstance(company, dict) and "id" in company:
-                        self.tempo_companies[str(company["id"])] = company
-            elif isinstance(loaded_companies, dict):
-                self.tempo_companies = loaded_companies
-            else:
-                self.tempo_companies = {}
-        else:
-            self.tempo_companies = {}
+        self.tempo_companies = self._cached_companies(self._load_from_json(Mappings.TEMPO_COMPANIES_FILE))
 
         self.op_projects = self._load_from_json(Mappings.OP_PROJECTS_FILE) or []
         self.company_mapping = self._load_from_json(Mappings.COMPANY_MAPPING_FILE) or {}
@@ -141,6 +128,151 @@ class CompanyMigration(BaseMigration):
         )
         raise ValueError(msg)
 
+    def _cached_companies(self, data: object) -> dict[str, dict[str, Any]]:
+        records: Iterable[tuple[Any, Any]]
+        if isinstance(data, dict):
+            records = data.items()
+        elif isinstance(data, list):
+            records = ((None, company) for company in data)
+        else:
+            return {}
+        companies = {}
+        for key, row in records:
+            if not isinstance(row, dict):
+                continue
+            identifier = row.get("id") or row.get("tempo_id") or key
+            if isinstance(identifier, bool) or not isinstance(identifier, (str, int)) or not str(identifier).strip():
+                self.logger.warning("Skipping cached Tempo company without an identifier")
+                continue
+            aliases = {
+                name: row[f"tempo_{name}"] for name in ("key", "name") if not row.get(name) and row.get(f"tempo_{name}")
+            }
+            companies[str(identifier)] = {**row, **aliases, "id": str(identifier)}
+        return companies
+
+    def _uncreated_companies(
+        self, companies_data: list[dict[str, Any]], existing_projects_map: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        companies_to_create = []
+        for company_data in companies_data:
+            identifier = company_data["identifier"]
+            tempo_id = company_data["tempo_id"]
+
+            if identifier in existing_projects_map:
+                # Project already exists, update mapping
+                existing = existing_projects_map[identifier]
+                self.company_mapping[tempo_id] = {
+                    "tempo_id": tempo_id,
+                    "tempo_key": company_data["tempo_key"],
+                    "tempo_name": company_data["tempo_name"],
+                    "openproject_id": existing.get("id"),
+                    "openproject_identifier": identifier,
+                    "openproject_name": existing.get("name"),
+                    "matched_by": "existing",
+                }
+            else:
+                # Project doesn't exist, add to creation list
+                companies_to_create.append(company_data)
+
+        return companies_to_create
+
+    def _record_planned_projects(self, companies_to_create: list[dict[str, Any]]) -> None:
+        for company_data in companies_to_create:
+            tempo_id = company_data["tempo_id"]
+            self.company_mapping[tempo_id] = {
+                "tempo_id": tempo_id,
+                "tempo_key": company_data["tempo_key"],
+                "tempo_name": company_data["tempo_name"],
+                "openproject_id": None,
+                "openproject_identifier": company_data["identifier"],
+                "openproject_name": company_data["name"],
+                "matched_by": "would_create",
+            }
+
+    def _record_created_projects(self, result: dict[str, Any], meta: list[dict[str, Any]]) -> None:
+        created = 0
+        for item in result.get("created") or []:
+            index = item.get("index")
+            if not isinstance(index, int) or not 0 <= index < len(meta):
+                continue
+            data = meta[index]
+            tempo_id = data.get("tempo_id")
+            if tempo_id:
+                self.company_mapping[str(tempo_id)] = {
+                    "tempo_id": tempo_id,
+                    "tempo_key": data.get("tempo_key"),
+                    "tempo_name": data.get("tempo_name"),
+                    "openproject_id": item.get("id"),
+                    "openproject_identifier": data.get("identifier"),
+                    "openproject_name": data.get("name"),
+                    "matched_by": "created",
+                }
+                created += 1
+        self._created_companies = created
+        self.logger.info("Created %d company projects (errors: %d)", created, len(result.get("errors") or []))
+
+    @staticmethod
+    def _account_company(account_data: dict[str, Any], account_id: int | str) -> dict[str, Any] | None:
+        customer = account_data.get("customer")
+        if not isinstance(customer, dict) or not customer.get("id"):
+            return None
+        return {
+            "account_id": account_id,
+            "company_id": customer["id"],
+            "account_name": account_data.get("name", ""),
+            "account_key": account_data.get("key", ""),
+            "company_name": customer.get("name", ""),
+            "company_key": customer.get("key", ""),
+        }
+
+    def _company_parent(self, accounts: Any, account_mapping: dict[str, Any]) -> int | None:
+        if isinstance(accounts, list):
+            accounts = accounts[0] if accounts else None
+        account_id = accounts.get("id") if isinstance(accounts, dict) else accounts
+        if not isinstance(account_id, (int, str)):
+            return None
+        account = account_mapping.get(str(account_id))
+        if not isinstance(account, dict) or not account.get("company_id"):
+            return None
+        company = self.company_mapping.get(str(account["company_id"]))
+        return self._project_id(company)
+
+    @staticmethod
+    def _project_id(project: Any) -> int | None:
+        identifier = project.get("openproject_id") if isinstance(project, dict) else project
+        if isinstance(identifier, bool) or not isinstance(identifier, (int, str)):
+            return None
+        digits = str(identifier).strip()
+        if not digits.isascii() or not digits.isdecimal():
+            return None
+        value = int(digits)
+        return value if value > 0 else None
+
+    @staticmethod
+    def _company_project_data(company: dict[str, Any]) -> dict[str, Any]:
+        tempo_id = str(company["id"])
+        key = company.get("key", "")
+        name = company.get("name", f"Unknown Company {tempo_id}")
+        identifier = "customer_" + re.sub(r"[^a-z0-9_-]", "_", (key or name).lower())
+        description = f"Migrated from Tempo company: {key}\n"
+        lead = company.get("lead")
+        if isinstance(lead, dict):
+            lead = lead.get("key")
+        if lead:
+            description += f"Company Lead: {lead}\n"
+        base = config.jira_config.get("url", "").rstrip("/")
+        return {
+            "tempo_id": tempo_id,
+            "tempo_key": key,
+            "tempo_name": name,
+            "name": name,
+            "identifier": identifier[:100],
+            "description": description,
+            "status": company.get("status", "ACTIVE"),
+            "public": False,
+            "jira_url": f"{base}/rest/tempo-accounts/1/customer/{tempo_id}",
+        }
+
     def _extract_tempo_companies(self) -> dict[str, Any]:
         """Extract companies from Tempo API.
 
@@ -160,44 +292,9 @@ class CompanyMigration(BaseMigration):
             return self.tempo_companies
 
         # Try to load from file
-        loaded_data = data_handler.load_dict(self.tempo_companies_file)
-        if loaded_data:
-            # If loaded data is a dictionary, use it directly
-            if isinstance(loaded_data, dict):
-                self.tempo_companies = loaded_data
-            # If loaded data is a list (after JSON serialization/deserialization), convert back to dict
-            elif isinstance(loaded_data, list):
-                # Convert list to dictionary with id as key
-                self.tempo_companies = {}
-                for company in loaded_data:
-                    if not isinstance(company, dict):
-                        self.logger.warning(
-                            "Skipping non-dictionary company: %s",
-                            company,
-                        )
-                        continue
-
-                    # Get ID from either 'id' or 'tempo_id' field
-                    company_id = None
-                    if "id" in company:
-                        company_id = str(company["id"])
-                    elif "tempo_id" in company:
-                        company_id = str(company["tempo_id"])
-                        # Add 'id' field if missing but 'tempo_id' exists
-                        company["id"] = company_id
-
-                    if company_id:
-                        self.tempo_companies[company_id] = company
-                    else:
-                        self.logger.warning(
-                            "Skipping company without id or tempo_id: %s",
-                            company,
-                        )
-
-            self.logger.info(
-                "Loaded %d companies from cache",
-                len(self.tempo_companies),
-            )
+        self.tempo_companies = self._cached_companies(self._load_from_json(Mappings.TEMPO_COMPANIES_FILE))
+        if self.tempo_companies:
+            self.logger.info("Loaded %d companies from cache", len(self.tempo_companies))
             return self.tempo_companies
 
         self.logger.info("Extracting Tempo companies...")
@@ -220,7 +317,7 @@ class CompanyMigration(BaseMigration):
                 "id": company_id,
                 "key": company.get("key", "").strip(),
                 "name": company.get("name", "").strip(),
-                "lead": (company.get("lead", {}).get("key") if company.get("lead") else None),
+                "lead": company["lead"].get("key") if isinstance(company.get("lead"), dict) else company.get("lead"),
                 "status": company.get("status", "ACTIVE"),
                 "_raw": company,
             }
@@ -295,34 +392,7 @@ class CompanyMigration(BaseMigration):
         op_projects_by_name = {project.get("name", "").lower(): project for project in top_level_projects}
 
         mapping = {}
-        # Handle both dictionary and list types for tempo_companies
-        tempo_companies_list = (
-            self.tempo_companies.values() if isinstance(self.tempo_companies, dict) else self.tempo_companies
-        )
-
-        for tempo_company in tempo_companies_list:
-            if not isinstance(tempo_company, dict):
-                self.logger.warning(
-                    "Skipping non-dictionary tempo_company: %s",
-                    tempo_company,
-                )
-                continue
-
-            # Get ID from either 'id' or 'tempo_id' field
-            tempo_id = tempo_company.get("id")
-            if not tempo_id and "tempo_id" in tempo_company:
-                tempo_id = tempo_company.get("tempo_id")
-                # Add 'id' if missing but 'tempo_id' exists
-                tempo_company["id"] = tempo_id
-
-            if not tempo_id:
-                self.logger.warning(
-                    "Skipping company without ID: %s",
-                    tempo_company,
-                )
-                continue
-
-            tempo_id = str(tempo_id)  # Ensure it's a string
+        for tempo_id, tempo_company in self._cached_companies(self.tempo_companies).items():
             tempo_key = tempo_company.get("key", "")
             tempo_name = tempo_company.get("name", f"Unknown Company {tempo_id}")
             tempo_name_lower = tempo_name.lower()
@@ -466,12 +536,8 @@ class CompanyMigration(BaseMigration):
 
         companies_to_migrate = [
             company
-            for company in self.tempo_companies.values()
-            if self.company_mapping.get(
-                company.get("id", company.get("tempo_id", "")),
-                {},
-            ).get("matched_by")
-            == "none"
+            for tempo_id, company in self._cached_companies(self.tempo_companies).items()
+            if self.company_mapping.get(tempo_id, {}).get("matched_by") == "none"
         ]
 
         if not companies_to_migrate:
@@ -481,80 +547,19 @@ class CompanyMigration(BaseMigration):
         self._created_companies = 0
 
         # Prepare company data for bulk creation
-        companies_data = []
-        identifier_to_tempo_id = {}  # Map identifiers to tempo IDs for later lookup
-
-        for company in companies_to_migrate:
-            # Get company ID from either field
-            tempo_id = company.get("id")
-            if not tempo_id and "tempo_id" in company:
-                tempo_id = company.get("tempo_id")
-                # Add 'id' if missing but 'tempo_id' exists
-                company["id"] = tempo_id
-
-            if not tempo_id:
-                self.logger.warning("Skipping company without ID: %s", company)
-                continue
-
-            tempo_id = str(tempo_id)  # Ensure it's a string
-            tempo_key = company.get("key", "")
-            tempo_name = company.get("name", f"Unknown Company {tempo_id}")
-            lead = company.get("lead", "")
-
-            description = f"Migrated from Tempo company: {tempo_key}\n"
-            if lead:
-                description += f"Company Lead: {lead}\n"
-
-            # Generate a valid identifier
-            base_identifier = "customer_"
-            if tempo_key:
-                raw_id = tempo_key.lower()
-                sanitized_id = re.sub(r"[^a-z0-9_-]", "_", raw_id)
-                base_identifier += sanitized_id
-            else:
-                raw_id = tempo_name.lower()
-                sanitized_id = re.sub(r"[^a-z0-9_-]", "_", raw_id)
-                base_identifier += sanitized_id
-
-            identifier = base_identifier[:100]
-            identifier_to_tempo_id[identifier] = tempo_id
-
-            # Generate the Jira URL for this Tempo company
-            jira_base_url = config.jira_config.get("url", "").rstrip("/")
-            jira_url = f"{jira_base_url}/rest/tempo-accounts/1/customer/{tempo_id}"
-
-            # Add to the companies data for bulk creation
-            companies_data.append(
-                {
-                    "tempo_id": tempo_id,
-                    "tempo_key": tempo_key,
-                    "tempo_name": tempo_name,
-                    "name": tempo_name,
-                    "identifier": identifier,
-                    "description": description,
-                    "status": company.get("status", "ACTIVE"),
-                    "public": False,
-                    "jira_url": jira_url,  # Add Jira URL for tracking
-                },
-            )
-
-        if not companies_data:
-            self.logger.info(
-                "No companies need to be created, all matched or already exist",
-            )
-            self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
-            return self.company_mapping
+        companies_data = [self._company_project_data(company) for company in companies_to_migrate]
+        identifiers = [company["identifier"] for company in companies_data]
 
         # Now do a bulk check for existing projects with these identifiers
         self.logger.info(
             "Checking for existing projects with %d identifiers...",
-            len(identifier_to_tempo_id),
+            len(identifiers),
         )
 
         # Create a Ruby script to check all identifiers at once
-        identifiers_list = list(identifier_to_tempo_id.keys())
+
         check_script = f"""
-        identifiers = {json.dumps(identifiers_list)}
+        identifiers = {json.dumps(identifiers)}
         existing_projects = Project.where(identifier: identifiers).pluck(:identifier, :id, :name)
         existing_map = {{}}
         existing_projects.each do |identifier, id, name|
@@ -566,26 +571,8 @@ class CompanyMigration(BaseMigration):
         existing_projects_map = self.op_client.execute_json_query(check_script) or {}
 
         # Filter out companies that already exist
-        companies_to_create = []
-        for company_data in companies_data:
-            identifier = company_data["identifier"]
-            tempo_id = company_data["tempo_id"]
 
-            if identifier in existing_projects_map:
-                # Project already exists, update mapping
-                existing = existing_projects_map[identifier]
-                self.company_mapping[tempo_id] = {
-                    "tempo_id": tempo_id,
-                    "tempo_key": company_data["tempo_key"],
-                    "tempo_name": company_data["tempo_name"],
-                    "openproject_id": existing.get("id"),
-                    "openproject_identifier": identifier,
-                    "openproject_name": existing.get("name"),
-                    "matched_by": "existing",
-                }
-            else:
-                # Project doesn't exist, add to creation list
-                companies_to_create.append(company_data)
+        companies_to_create = self._uncreated_companies(companies_data, existing_projects_map)
 
         if not companies_to_create:
             self.logger.info("No companies need to be created, all already exist")
@@ -597,17 +584,7 @@ class CompanyMigration(BaseMigration):
                 "DRY RUN: Would create %d company projects",
                 len(companies_to_create),
             )
-            for company_data in companies_to_create:
-                tempo_id = company_data["tempo_id"]
-                self.company_mapping[tempo_id] = {
-                    "tempo_id": tempo_id,
-                    "tempo_key": company_data["tempo_key"],
-                    "tempo_name": company_data["tempo_name"],
-                    "openproject_id": None,
-                    "openproject_identifier": company_data["identifier"],
-                    "openproject_name": company_data["name"],
-                    "matched_by": "would_create",
-                }
+            self._record_planned_projects(companies_to_create)
             self._save_to_json(self.company_mapping, Mappings.COMPANY_MAPPING_FILE)
             return self.company_mapping
 
@@ -644,60 +621,13 @@ class CompanyMigration(BaseMigration):
                 result_basename="j2o_companies_bulk_result.json",
             )
 
-            if not isinstance(result, dict) or result.get("status") != "success":
+            if not isinstance(result, dict):
+                msg = "OpenProject returned no bulk project creation report"
+                raise MigrationError(msg)
+            if result.get("status") != "success":
                 raise MigrationError(result.get("message", "Bulk project creation failed"))
 
-            created_list = result.get("created", []) or []
-            error_list = result.get("errors", []) or []
-
-            created_companies: list[dict[str, Any]] = []
-            errors: list[dict[str, Any]] = []
-            for item in created_list:
-                idx = item.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(meta):
-                    m = meta[idx]
-                    created_companies.append(
-                        {
-                            "tempo_id": m.get("tempo_id"),
-                            "tempo_key": m.get("tempo_key"),
-                            "tempo_name": m.get("tempo_name"),
-                            "openproject_id": item.get("id"),
-                            "openproject_identifier": m.get("identifier"),
-                            "openproject_name": m.get("name"),
-                            "status": "created",
-                        },
-                    )
-                    tempo_id = m.get("tempo_id")
-                    if tempo_id:
-                        self.company_mapping[str(tempo_id)] = {
-                            "tempo_id": tempo_id,
-                            "tempo_key": m.get("tempo_key"),
-                            "tempo_name": m.get("tempo_name"),
-                            "openproject_id": item.get("id"),
-                            "openproject_identifier": m.get("identifier"),
-                            "openproject_name": m.get("name"),
-                            "matched_by": "created",
-                        }
-
-            for err in error_list:
-                idx = err.get("index")
-                msg = "; ".join(err.get("errors", []))
-                errors.append({"index": idx, "error": msg, "type": "create_failed"})
-
-            output = {
-                "status": "success",
-                "created": created_companies,
-                "errors": errors,
-                "created_count": len(created_companies),
-                "error_count": len(errors),
-                "total": total_companies,
-            }
-
-            self.logger.info(
-                "Created %d company projects (errors: %d)",
-                output.get("created_count", 0),
-                output.get("error_count", 0),
-            )
+            self._record_created_projects(result, meta)
 
             # Refresh cached projects from OpenProject
             self.op_client.get_projects()
@@ -1282,26 +1212,11 @@ class CompanyMigration(BaseMigration):
                 continue
             account_id_str = str(account_id)
 
-            # Get customer info (contains company_id)
-            customer = account_data.get("customer")
-            if not customer or not isinstance(customer, dict):
+            entry = self._account_company(account_data, account_id)
+            if entry is None:
                 results["accounts_without_customer"] += 1
                 continue
-
-            company_id = customer.get("id")
-            if not company_id:
-                results["accounts_without_customer"] += 1
-                continue
-
-            # Create the mapping entry
-            account_mapping[account_id_str] = {
-                "account_id": account_id,
-                "company_id": company_id,
-                "account_name": account_data.get("name", ""),
-                "account_key": account_data.get("key", ""),
-                "company_name": customer.get("name", ""),
-                "company_key": customer.get("key", ""),
-            }
+            account_mapping[account_id_str] = entry
             results["mappings_created"] += 1
 
         # Save the mapping
@@ -1352,44 +1267,16 @@ class CompanyMigration(BaseMigration):
         updates: list[tuple[int, int]] = []
 
         for jira_key, project_info in project_mapping.items():
-            child_op_id = project_info.get("openproject_id")
+            child_op_id = self._project_id(project_info)
             if not child_op_id:
                 results["skipped"] += 1
                 continue
 
-            # Find parent company using the same logic as find_parent_company_for_project
-            # 1) Get account for this project
-            raw_accts = project_account_mapping.get(jira_key)
-            if not raw_accts:
+            parent_op_id = self._company_parent(project_account_mapping.get(jira_key), account_mapping)
+            if parent_op_id is None:
                 results["no_parent_found"] += 1
                 continue
-
-            # 2) Use the project's default Tempo account (first entry)
-            acct_entry = raw_accts[0] if isinstance(raw_accts, list) else raw_accts
-            acct_id = acct_entry if isinstance(acct_entry, int | str) else acct_entry.get("id")
-            if not acct_id:
-                results["no_parent_found"] += 1
-                continue
-            acct_id_str = str(acct_id)
-
-            # 3) Map account to company_id
-            acct_map = account_mapping.get(acct_id_str)
-            if not acct_map:
-                results["no_parent_found"] += 1
-                continue
-            company_id = acct_map.get("company_id")
-            if not company_id:
-                results["no_parent_found"] += 1
-                continue
-
-            # 4) Map company_id to OpenProject project ID
-            company = self.company_mapping.get(str(company_id))
-            if not company or not company.get("openproject_id"):
-                results["no_parent_found"] += 1
-                continue
-
-            parent_op_id = company.get("openproject_id")
-            updates.append((int(child_op_id), int(parent_op_id)))
+            updates.append((child_op_id, parent_op_id))
 
         if not updates:
             self.logger.info("No projects need parent relationship updates")
@@ -1397,29 +1284,20 @@ class CompanyMigration(BaseMigration):
 
         self.logger.info("Found %d projects to update parent relationships", len(updates))
 
-        # Generate Ruby script to update parent_ids
-        # Use ensure_ascii=False and heredoc literal syntax for safe Unicode handling
-        updates_json = json.dumps(updates, ensure_ascii=False)
-        script = f"""
-require 'json'
-updates = JSON.parse(<<-'J2O_DATA'
-{updates_json}
-J2O_DATA
-)
-results = {{ 'updated' => 0, 'already_correct' => 0, 'errors' => [] }}
-
-updates.each do |child_id, parent_id|
+        script = """
+results = { 'updated' => 0, 'already_correct' => 0, 'errors' => [] }
+input_data.each do |child_id, parent_id|
   begin
     child = Project.find_by(id: child_id)
     parent = Project.find_by(id: parent_id)
 
     if child.nil?
-      results['errors'] << "Child project #{{child_id}} not found"
+      results['errors'] << "Child project #{child_id} not found"
       next
     end
 
     if parent.nil?
-      results['errors'] << "Parent project #{{parent_id}} not found"
+      results['errors'] << "Parent project #{parent_id} not found"
       next
     end
 
@@ -1433,26 +1311,20 @@ updates.each do |child_id, parent_id|
     child.save!
     results['updated'] += 1
   rescue => e
-    results['errors'] << "Failed to update #{{child_id}}: #{{e.message}}"
+    results['errors'] << "Failed to update #{child_id}: #{e.message}"
   end
 end
 
+puts $j2o_start_marker
 puts results.to_json
+puts $j2o_end_marker
 """
 
         try:
-            result = self.op_client.execute_query_to_json_file(script)
-            if isinstance(result, dict):
-                results["updated"] = result.get("updated", 0)
-                results["already_correct"] = result.get("already_correct", 0)
-                if result.get("errors"):
-                    results["errors"].extend(result["errors"][:10])
-            elif isinstance(result, str):
-                parsed = json.loads(result)
-                results["updated"] = parsed.get("updated", 0)
-                results["already_correct"] = parsed.get("already_correct", 0)
-                if parsed.get("errors"):
-                    results["errors"].extend(parsed["errors"][:10])
+            result = self._project_parent_report(script, updates)
+            results["updated"] = result["updated"]
+            results["already_correct"] = result["already_correct"]
+            results["errors"].extend(result["errors"])
 
             if results["updated"] > 0:
                 self.logger.success(
@@ -1471,6 +1343,16 @@ puts results.to_json
             results["errors"].append(str(e))
 
         return results
+
+    def _project_parent_report(self, script: str, updates: list[tuple[int, int]]) -> dict[str, Any]:
+        envelope = self.op_client.execute_script_with_data(script, updates)
+        data = envelope.get("data") if isinstance(envelope, dict) and envelope.get("status") == "success" else None
+        if isinstance(data, dict) and isinstance(data.get("errors"), list):
+            counts = [data.get(key) for key in ("updated", "already_correct")]
+            if all(type(count) is int and count >= 0 for count in counts):
+                return data
+        msg = "OpenProject returned no valid project-parent update report"
+        raise MigrationError(msg)
 
     def should_skip_migration(
         self,

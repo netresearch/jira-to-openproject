@@ -15,6 +15,7 @@ This module provides complete time tracking data migration capabilities:
 import json
 import os
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
@@ -28,6 +29,9 @@ from src.utils.time_entry_transformer import TimeEntryTransformer
 
 # Get logger from config
 logger = configure_logging("INFO", None)
+
+
+type EntryOutcome = tuple[str, int | str | None, str | None]
 
 
 def _extract_worklog_keys_from_op_entries(
@@ -57,7 +61,7 @@ def _extract_worklog_keys_from_op_entries(
     return keys
 
 
-def _worklog_custom_values(values, worklog_cf_id):
+def _worklog_custom_values(values: Any, worklog_cf_id: int) -> set[str]:
     if isinstance(values, dict):
         value = values.get(str(worklog_cf_id)) or values.get(worklog_cf_id)
         return {value} if isinstance(value, str) and value else set()
@@ -230,7 +234,7 @@ class TimeEntryMigrator:
                         expanded[str(key)] = op_id
         return expanded
 
-    def _matching_work_logs(self, issue_key, work_logs):
+    def _matching_work_logs(self, issue_key: str, work_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # Add issue_key to each work log for later processing
         filtered_logs = []
         for log in work_logs:
@@ -296,7 +300,9 @@ class TimeEntryMigrator:
                     existing_keys = set()
         return existing_keys
 
-    def _migrate_adaptive_chunks(self, entries_to_migrate, batch_size, migration_summary):
+    def _migrate_adaptive_chunks(
+        self, entries_to_migrate: list[dict[str, Any]], batch_size: int, migration_summary: dict[str, Any]
+    ) -> list[dict[str, Any]] | None:
         # Process in chunks to avoid timeout (batch_size entries per Rails execution)
         # Adaptive chunk sizing: increase if fast, decrease if slow
         chunk_size = batch_size
@@ -386,7 +392,7 @@ class TimeEntryMigrator:
                 return entries_to_migrate[chunk_start:]
         return None
 
-    def _record_migration_totals(self, migration_summary, start_time):
+    def _record_migration_totals(self, migration_summary: dict[str, Any], start_time: datetime) -> None:
         processing_time = (datetime.now(tz=UTC) - start_time).total_seconds()
         self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
         self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
@@ -399,7 +405,14 @@ class TimeEntryMigrator:
             processing_time,
         )
 
-    def _migrate_individual_entries(self, entries, batch_size, existing_keys, summary, heartbeat_sec):
+    def _migrate_individual_entries(
+        self,
+        entries: list[dict[str, Any]],
+        batch_size: int,
+        existing_keys: set[str],
+        summary: dict[str, Any],
+        heartbeat_sec: int,
+    ) -> None:
         try:
             concurrency = int(os.environ.get("J2O_TIME_ENTRY_CONCURRENCY", "8"))
         except ValueError:
@@ -422,7 +435,9 @@ class TimeEntryMigrator:
                         summary, processed, len(entries), last_heartbeat, heartbeat_sec
                     )
 
-    def _batch_outcomes(self, batch, concurrency):
+    def _batch_outcomes(
+        self, batch: list[dict[str, Any]], concurrency: int
+    ) -> Iterator[tuple[dict[str, Any] | None, EntryOutcome]]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         if concurrency <= 1:
@@ -438,7 +453,7 @@ class TimeEntryMigrator:
                     outcome = ("failed", None, str(exc))
                 yield None, outcome
 
-    def _create_time_entry(self, entry, *, parallel):
+    def _create_time_entry(self, entry: dict[str, Any], *, parallel: bool) -> EntryOutcome:
         valid, reason = self._validate_time_entry_with_reason(entry)
         if not valid:
             return "skipped", None, reason
@@ -452,7 +467,9 @@ class TimeEntryMigrator:
         return "failed", None, None
 
     @staticmethod
-    def _record_entry_outcome(summary, outcome, *, parallel, entry=None) -> None:
+    def _record_entry_outcome(
+        summary: dict[str, Any], outcome: EntryOutcome, *, parallel: bool, entry: dict[str, Any] | None = None
+    ) -> None:
         status, identifier, reason = outcome
         if reason and (parallel or status == "failed"):
             summary["errors"].append(reason)
@@ -465,7 +482,9 @@ class TimeEntryMigrator:
         else:
             summary["failed_migrations"] += 1
 
-    def _log_entry_progress(self, summary, processed, total, last, interval):
+    def _log_entry_progress(
+        self, summary: dict[str, Any], processed: int, total: int, last: float, interval: int
+    ) -> float:
         now = time.time()
         if now - last < interval:
             return last
@@ -479,7 +498,7 @@ class TimeEntryMigrator:
         )
         return now
 
-    def _load_fast_forward_cutoff(self):
+    def _load_fast_forward_cutoff(self) -> None:
         # Compute cutoff from existing OP entries if enabled
         if not self._ff_enabled:
             return

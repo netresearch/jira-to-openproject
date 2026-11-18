@@ -135,3 +135,11 @@ def test_attachment_search_covers_requested_keys_and_reports_omissions(missing):
     )
     assert result.success is (not missing)
     assert result.failed == int(missing)
+
+
+def test_paginated_dict_rows_cannot_repeat_an_earlier_nonadjacent_issue():
+    from src.infrastructure.jira.issue_pagination import iter_issue_pages
+
+    pages = [[{"key": "X-1"}], [{"key": "X-2"}], [{"key": "X-1"}]]
+    with pytest.raises(JiraApiError, match="duplicate issue"):
+        list(iter_issue_pages("X", lambda offset, size: pages[offset], 1))

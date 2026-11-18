@@ -37,6 +37,7 @@ from src.infrastructure.exceptions import (
     QueryExecutionError,
     RecordNotFoundError,
 )
+from src.infrastructure.openproject.batch_records import index_batch_rows
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.idempotency_decorators import batch_idempotent
 
@@ -281,17 +282,7 @@ class OpenProjectProjectService:
                     f"{batch_identifiers[:2]}{'...' if len(batch_identifiers) > 2 else ''}",
                 )
 
-                if batch_results:
-                    # Ensure we have a list
-                    if isinstance(batch_results, dict):
-                        batch_results = [batch_results]
-
-                    # Map results by identifier
-                    for record in batch_results:
-                        if isinstance(record, dict) and "identifier" in record:
-                            identifier = record["identifier"]
-                            if identifier in batch_identifiers:
-                                results[identifier] = record
+                results.update(index_batch_rows(batch_results, batch_identifiers, "identifier"))
 
             except Exception as e:
                 self._logger.warning(
