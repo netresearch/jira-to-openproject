@@ -137,6 +137,98 @@ def rails(tmp_path, request):
                 subprocess.run(["docker", "exec", container, "rm", "-f", "--", *files], check=True, timeout=20)
 
 
+@pytest.mark.parametrize("rails", ["committed_archive"], indirect=True)
+def test_attachment_native_filename_download_and_repeat(rails, tmp_path):
+    """Read the stored filename, work package and bytes from the native OpenProject API."""
+    import hashlib
+    from collections import Counter
+
+    from src.application.components.attachments_migration import AttachmentsMigration
+    from src.infrastructure.openproject.container_staging import private_container_directory
+
+    client, query = rails
+    wp = query("""
+      template = WorkPackage.first!
+      WorkPackage.create!(project: template.project, type: template.type, status: template.status,
+                          priority: template.priority, author: User.admin.first!, subject: "Attachment fidelity").id
+    """)
+    required_name = "Prüfung (2) α.txt"
+    payload = bytes(range(256))
+    source = tmp_path / "payload"
+    source.write_bytes(payload)
+    loader = AttachmentsMigration.__new__(AttachmentsMigration)
+    loader.op_client = client
+    loader._loss_counters = Counter()
+
+    def submit(script, ops):
+        data = query(f"input_data = JSON.parse({json.dumps(json.dumps(ops))}); {script}\nresult")
+        return {"status": "success", "data": data}
+
+    client.execute_script_with_data.side_effect = submit
+    with private_container_directory(client.docker_client) as remote:
+        target = remote / "private-staging-id"
+        client.transfer_file_to_container(source, target)
+        op = {
+            "jira_key": "DEMO-1",
+            "work_package_id": wp,
+            "filename": required_name,
+            "digest": hashlib.sha256(payload).hexdigest(),
+            "container_path": str(target),
+        }
+        create = loader._attach_files([op])
+        assert create.success
+        assert create.updated == 1
+        attachment_id = create.data["attachment_mapping"]["DEMO-1"][required_name]
+        again = loader._attach_files([op])
+        assert again.success
+        assert again.updated == 0
+        assert again.data == create.data
+        for unsafe in ("one;other.txt", "../other", "bad\nname"):
+            rejected = loader._attach_files([{**op, "filename": unsafe}])
+            assert not rejected.success
+            assert rejected.failed == 1
+        mismatched = loader._attach_files([{**op, "digest": "0" * 64}])
+        assert not mismatched.success
+        assert mismatched.failed == 1
+        source.write_bytes(b"other")
+        client.transfer_file_to_container(source, target)
+        conflict = loader._attach_files([{**op, "digest": hashlib.sha256(b"other").hexdigest()}])
+        assert not conflict.success
+        assert conflict.failed == 1
+
+    seen = query(f"""
+      a = Attachment.find({attachment_id})
+      token = Token::API.create!(user: User.admin.first!)
+      begin
+        opts = {{ "HTTP_HOST"=>"localhost",
+                  "HTTP_AUTHORIZATION"=>ActionController::HttpAuthentication::Basic.encode_credentials("apikey", token.plain_value) }}
+        rack = Rack::MockRequest.new(Rails.application)
+        path = "http://localhost/api/v3/attachments/#{{a.id}}"
+        meta = rack.get(path, opts)
+        blob = rack.get(path + "/content", opts)
+        raise "Attachment read failed" unless meta.status == 200 && blob.status == 200
+        info = JSON.parse(meta.body)
+        # 17.9.7 emits an unquoted filename in Content-Disposition. A semicolon would
+        # start another header parameter and cannot round-trip as part of the filename.
+        header_boundary = Attachment.new(filename: "one;other.txt").content_disposition.include?("filename=one;other.txt")
+        [info.fetch("fileName"), info.fetch("_links").fetch("container").fetch("href"), info.fetch("fileSize"),
+         Digest::SHA256.hexdigest(blob.body), blob["Content-Disposition"].split("; ", 2).last,
+         header_boundary, Attachment.where(container_type: "WorkPackage", container_id: {wp}).count]
+      ensure
+        token.destroy!
+      end
+    """)
+    assert seen == [
+        required_name,
+        f"/api/v3/work_packages/{wp}",
+        len(payload),
+        hashlib.sha256(payload).hexdigest(),
+        f"filename={required_name}",
+        True,
+        1,
+    ]
+
+
 def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
     client, query = rails
     setup = OpenProjectProjectSetupService(client)

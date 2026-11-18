@@ -342,48 +342,19 @@ def test_extract_batch_skips_when_no_id_and_no_filename(
 # --- filename fidelity (added 2026-05-07) ---
 
 
-def test_load_rails_script_includes_update_columns_filename_guard():
-    """The generated Rails script MUST include the byte-exact filename
-    write so OP's silent normalisation (strip internal whitespace)
-    doesn't corrupt the stored filename.
+def test_load_preserves_source_digest_and_display_name_across_private_transfer():
+    import hashlib
 
-    Caught by the live 2026-05-07 NRS audit: ~31 of 163 "missing"
-    files were present in OP under a sanitised name (e.g.
-    ``Screenshot 2026-04-21 122931.png`` → ``Screenshot2026-04-21 122931.png``).
-    The user-visible ``filename`` column is a plain string in OP's
-    schema; ``update_columns`` skips callbacks/validations and writes
-    the byte-exact value — restoring fidelity without touching the
-    on-disk storage path.
-    """
-    op = DummyOp()
-    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=op)  # type: ignore[arg-type]
-    # Run the load on a small payload so we can inspect the script.
-    att_data = {"PRJ-1": [{"id": "1", "filename": "x.txt", "size": 1, "url": "http://example/x"}]}
-    ex = ComponentResult(success=True, data={"attachments": att_data})
-    mp = mig._map(ex)
-    mig._load(mp)
-    # Inspect the Rails script the dummy received via execute_script_with_data.
-    # The dummy stores its calls; pull the script content.
-    # ``transfers`` is set by transfer_file_to_container; the script is what
-    # _load passes to execute_script_with_data. The dummy doesn't store the
-    # script directly, so re-derive: the script source is computed in _load
-    # from a static template — assert against the running migration's
-    # method by re-invoking the same code path via inspecting it.
-    # Instead: find the Rails string in the source — pin the substring.
-    import inspect
-
-    from src.application.components.attachments_migration import AttachmentsMigration as _AM
-
-    src = inspect.getsource(_AM._attach_files)
-    assert "att.update_columns(filename: fname)" in src, (
-        "Rails script must include the byte-exact filename guard "
-        "(att.update_columns) to prevent OP's silent filename"
-        " normalisation"
-    )
-    # Idempotency: only update if AR's setter mutated the value.
-    assert "att.filename != fname" in src, (
-        "update_columns must be conditional on a mismatch — otherwise every save triggers a redundant UPDATE"
-    )
+    client = DummyOp()
+    migration = AttachmentsMigration(jira_client=DummyJira(), op_client=client)
+    data = {"PRJ-1": [{"id": "77", "filename": "Review copy (2).txt", "size": 7, "url": "http://example/source"}]}
+    mapped = migration._map(ComponentResult(success=True, data={"attachments": data}))
+    source = Path(mapped.data["ops"][0]["local_path"])
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert migration._load(mapped).success
+    assert client.last_input[0]["filename"] == "Review copy (2).txt"
+    assert client.last_input[0]["digest"] == expected
+    assert Path(client.last_input[0]["container_path"]).name != client.last_input[0]["filename"]
 
 
 # --- per-stage loss counters (added 2026-05-07) ---
@@ -817,3 +788,26 @@ def test_absent_rails_envelope_marks_batch_incomplete():
     migration = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
     assert migration._attachment_rows(None, 3) is None
     assert migration._loss_counters["load_rails_status_not_success"] == 3
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [{"jira_key": "PRJ-1", "filename": "other.txt", "attachment_id": 14}],
+        [{"jira_key": "PRJ-1", "filename": "source.txt", "attachment_id": 0}],
+        [{"jira_key": "PRJ-1", "filename": "source.txt", "attachment_id": True}],
+    ],
+)
+def test_writer_withholds_mapping_when_an_acknowledgement_is_missing_or_different(rows):
+    from unittest.mock import Mock
+
+    client = DummyOp()
+    client.execute_script_with_data = Mock(return_value={"status": "success", "data": {"results": rows, "errors": []}})
+    migration = AttachmentsMigration(jira_client=DummyJira(), op_client=client)
+    op = {"jira_key": "PRJ-1", "work_package_id": 12, "filename": "source.txt", "container_path": "/private/staged"}
+    result = migration._attach_files([op])
+    assert not result.success
+    assert result.failed == 1
+    assert result.updated == 0
+    assert result.data == {"attachment_mapping": {}}

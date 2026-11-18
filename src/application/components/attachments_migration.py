@@ -516,6 +516,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         "jira_key": jira_key,
                         "filename": filename,
                         "container_path": container_path.as_posix(),
+                        "digest": op.get("digest"),
                     },
                 )
             except Exception:
@@ -542,78 +543,64 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         # filename pairs == 26 files).
         container_ops = self._disambiguate_duplicate_filenames(container_ops)
 
-        # Rails script returns attachment IDs for mapping content migration
-        # Must output JSON between markers for execute_script_with_data to parse.
-        #
-        # Filename fidelity: ``att.filename = fname`` runs through
-        # ActiveRecord's setter, which on OP / CarrierWave models can
-        # apply silent normalisation (strip internal whitespace,
-        # Unicode-normalise) — caught by the live 2026-05-07 NRS run
-        # where Jira's ``Screenshot 2026-04-21 122931.png`` was stored
-        # in OP as ``Screenshot2026-04-21 122931.png``. ``update_columns``
-        # bypasses callbacks/validations and writes the exact byte
-        # string we provide. Run AFTER ``save!`` so the row exists
-        # to update; the storage filename (CarrierWave's
-        # ``file_file_name``) is left untouched (it's the
-        # on-disk path) — only the user-visible ``filename`` column
-        # is corrected.
-        ruby_runner = (
-            "require 'json'\n"
-            "start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'\n"
-            "end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'\n"
-            "result = begin\n"
-            "  ops = input_data\n"
-            "  results = []\n"
-            "  errors = []\n"
-            "  ops.each do |op|\n"
-            "    begin\n"
-            "      wp = WorkPackage.find_by(id: op['work_package_id'])\n"
-            "      next unless wp\n"
-            "      jira_key = op['jira_key']\n"
-            "      fname = op['filename']\n"
-            "      # Check if an attachment with same name already exists.\n"
-            "      # Compare against the byte-exact ``filename`` column the\n"
-            "      # post-save ``update_columns`` writes — case-insensitive\n"
-            "      # to match the project's existing idempotency contract.\n"
-            "      existing = wp.attachments.where('LOWER(filename) = ?', fname.to_s.downcase).first\n"
-            "      if existing\n"
-            "        # Return existing attachment ID for mapping.\n"
-            "        results << { jira_key: jira_key, filename: fname, attachment_id: existing.id, existed: true }\n"
-            "        next\n"
-            "      end\n"
-            "      path = op['container_path']\n"
-            "      author = User.where(admin: true).first\n"
-            "      att = Attachment.new(container: wp, author: author)\n"
-            "      # Assign file using Paperclip-style API. Wrap the\n"
-            "      # ``File.open`` in a block so the descriptor is\n"
-            "      # always closed, even if ``att.save!`` raises mid-\n"
-            "      # batch — without this the Rails runner process\n"
-            "      # could leak FDs across hundreds of ops in a single\n"
-            "      # bulk call. Per PR #210 / #217 review.\n"
-            "      File.open(path, 'rb') do |file|\n"
-            "        att.file = file if att.respond_to?(:file=)\n"
-            "        att.filename = fname if att.respond_to?(:filename=)\n"
-            "        att.save!\n"
-            "      end\n"
-            "      # Filename-fidelity guard: bypass any AR callbacks and\n"
-            "      # write the exact byte string. Without this, OP's\n"
-            "      # filename sanitiser strips selected internal\n"
-            "      # whitespace (NRS audit: ~31 of 163 'missing' files\n"
-            "      # were present under a normalised name).\n"
-            "      att.update_columns(filename: fname) if att.filename != fname\n"
-            "      results << { jira_key: jira_key, filename: fname, attachment_id: att.id, existed: false }\n"
-            "    rescue => e\n"
-            "      errors << { jira_key: op['jira_key'], filename: op['filename'], error: e.message }\n"
-            "    end\n"
-            "  end\n"
-            "  { results: results, errors: errors }\n"
-            "rescue => e\n"
-            "  { results: [], errors: [{ error: e.message }] }\n"
-            "end\n"
-            "puts start_marker\n"
-            "puts result.to_json\n"
-            "puts end_marker\n"
-        )
+        ruby_runner = r"""
+require "digest"
+require "json"
+start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'
+end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'
+result = begin
+  results = []
+  errors = []
+  input_data.each do |op|
+    begin
+      wp = WorkPackage.find(op.fetch("work_package_id"))
+      name = op.fetch("filename")
+      # The storage identifier also becomes the HTTP download name on OpenProject.
+      # Accept one basename. Path components and unsafe header characters cannot be preserved.
+      unless name.is_a?(String) && name.present? && name.bytesize <= 255 &&
+             !name.match?(%r{[[:cntrl:]/\\;"]}) && ![".", ".."].include?(name)
+        raise "Unsupported attachment filename"
+      end
+      path = op.fetch("container_path")
+      size = File.size(path)
+      digest = Digest::SHA256.file(path).hexdigest
+      raise "Staged attachment digest differs from source" if op["digest"] && op["digest"] != digest
+
+      # Native uploads may have only the CarrierWave identifier. Older imports also
+      # wrote the original name to the separate filename column.
+      matches = wp.attachments.where("LOWER(filename) = LOWER(?) OR LOWER(file) = LOWER(?)", name, name).limit(2).to_a
+      raise "Ambiguous existing attachment name" if matches.length > 1
+      att = matches.first
+      existed = !att.nil?
+      unless existed
+        att = Attachment.new(container: wp, author: User.where(admin: true).first!)
+        File.open(path, "rb") do |source|
+          att.file = source
+          # The cache keeps its independently sanitized staging name. Only the final
+          # uploader object receives the validated basename used to store and retrieve this file.
+          att.file.define_singleton_method(:filename) { name }
+          att.filename = name
+          att.save!
+        end
+      end
+      att.reload
+      raise "Stored attachment filename differs" unless att.filename == name
+      unless att.filesize == size && Digest::SHA256.file(att.diskfile.path).hexdigest == digest
+        raise "Stored attachment bytes differ"
+      end
+      results << { jira_key: op.fetch("jira_key"), filename: name, attachment_id: att.id, existed: existed }
+    rescue => e
+      errors << { jira_key: op["jira_key"], filename: op["filename"], error: e.message }
+    end
+  end
+  { results: results, errors: errors }
+rescue => e
+  { results: [], errors: [{ error: e.message }] }
+end
+puts start_marker
+puts result.to_json
+puts end_marker
+"""
 
         updated = 0
         failed = 0
@@ -628,16 +615,14 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                     success=False, updated=0, failed=len(container_ops), data={"attachment_mapping": {}}
                 )
             results, errors = rows
+            if not self._attachment_acknowledgements_match(container_ops, results, errors):
+                self._loss_counters["load_rails_malformed_data"] += len(container_ops)
+                logger.warning("_load: Rails did not acknowledge the requested attachment identities")
+                return ComponentResult(success=False, failed=len(container_ops), data={"attachment_mapping": {}})
             for result in results:
-                if not isinstance(result, dict):
-                    continue
-                jira_key = result.get("jira_key")
-                filename = result.get("filename")
-                attachment_id = result.get("attachment_id")
-                if jira_key and filename and attachment_id:
-                    attachment_mapping.setdefault(jira_key, {})[filename] = int(attachment_id)
-                    if not result.get("existed"):
-                        updated += 1
+                attachment_mapping.setdefault(result["jira_key"], {})[result["filename"]] = result["attachment_id"]
+                if not result.get("existed"):
+                    updated += 1
             failed = len(errors)
             if errors:
                 self._loss_counters["load_rails_per_op_error"] += failed
@@ -654,6 +639,18 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             failed=failed,
             data={"attachment_mapping": attachment_mapping},
         )
+
+    @staticmethod
+    def _attachment_acknowledgements_match(ops: list, results: list, errors: list) -> bool:
+        """Require one response per requested attachment and one positive target ID per success."""
+        rows = results + errors
+        if len(rows) != len(ops) or any(not isinstance(row, dict) for row in rows):
+            return False
+        identities = Counter((op["jira_key"], op["filename"]) for op in ops)
+        if Counter((row.get("jira_key"), row.get("filename")) for row in rows) != identities:
+            return False
+        ids = [row.get("attachment_id") for row in results]
+        return all(type(value) is int and value > 0 for value in ids) and len(set(ids)) == len(ids)
 
     def _attachment_rows(self, envelope: Any, count: int) -> tuple[list, list] | None:
         """Validate the Rails runner envelope before treating the batch as complete."""
