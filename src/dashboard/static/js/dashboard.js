@@ -62,6 +62,17 @@ function stat(term, value) {
     return row;
 }
 
+function comparisonRow([name, pair]) {
+    const row = node('tr');
+    const heading = node('th', name);
+    heading.scope = 'row';
+    row.append(heading);
+    for (const value of [pair.source, pair.target]) {
+        row.append(Number.isInteger(value) ? node('td', number.format(value)) : node('td', 'Not checked', 'unmeasured'));
+    }
+    return row;
+}
+
 function phaseRow(phase) {
     const item = node('li');
     const heading = node('div', undefined, 'phase-row');
@@ -133,7 +144,11 @@ function renderProgress(data) {
     renderProgressBar(data, phases);
     element('run-times').replaceChildren(...runDetails(data));
     showRows('phases', phases.map(phaseRow), 'phases-empty');
+    const comparisons = Object.entries(data.comparison_counts ?? {});
+    element('comparison-rows').replaceChildren(...comparisons.map(comparisonRow));
+    element('comparison-card').hidden = comparisons.length === 0;
     const counts = Object.entries(data.verified_counts ?? {});
+    element('counts-card').hidden = comparisons.length > 0 && counts.length === 0;
     showRows('verified-counts', counts.map(([key,value]) => stat(label(key), number.format(value))), 'counts-empty');
     const checks = data.pending_checks ?? [];
     element('checks-empty').textContent = idle ? 'Awaiting check results.' : 'No pending checks reported.';

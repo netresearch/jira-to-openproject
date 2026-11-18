@@ -71,3 +71,15 @@ button:disabled { cursor: default; color: #65706d; border-color: var(--line); }
 }
 
 [hidden] { display: none; }
+
+.comparison-card { margin-top: .95rem; }
+.comparison { width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: .7rem; }
+.comparison caption { text-align: start; font-size: 1.15rem; font-weight: 650; margin-block: .5rem; }
+.comparison th, .comparison td { padding: .48rem .4rem; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.comparison th:first-child { width: 45%; text-align: start; padding-inline-start: 0; }
+.comparison thead th { color: var(--muted); font-size: .9rem; }
+.comparison tbody th { font-weight: 450; }
+.comparison th:not(:first-child), .comparison td { text-align: end; }
+.comparison small { display: block; font-size: .75rem; font-weight: 450; }
+.comparison td { font-variant-numeric: tabular-nums; font-weight: 650; }
+.comparison .unmeasured { font-weight: 450; font-size: .85rem; color: var(--muted); }

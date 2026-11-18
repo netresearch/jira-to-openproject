@@ -52,6 +52,7 @@ def test_published_values_and_system_memory_are_displayed(tmp_path: Path) -> Non
         "elapsed_seconds": 380,
         "phases": [{"name": "Work packages", "status": "completed"}],
         "verified_counts": {"Source issues": 12, "Rejected files": 0},
+        "comparison_counts": {"Attachments": {"source": 10, "target": 0}, "Comments": {"source": 13}},
         "pending_checks": ["Verify comment permissions"],
         "memory_usage_mb": 48,
     }
@@ -73,6 +74,8 @@ def test_published_values_and_system_memory_are_displayed(tmp_path: Path) -> Non
     assert "<dt>Elapsed</dt><dd>6m 20s</dd>" in dom
     assert "<dt>Source issues</dt><dd>12</dd>" in dom
     assert "<dt>Rejected files</dt><dd>0</dd>" in dom
+    assert '<th scope="row">Attachments</th><td>10</td><td>0</td>' in dom
+    assert '<th scope="row">Comments</th><td>13</td><td class="unmeasured">Not checked</td>' in dom
     assert "<li>Verify comment permissions</li>" in dom
     assert 'aria-valuetext="1 of 1 phases completed"' in dom
 

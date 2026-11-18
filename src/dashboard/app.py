@@ -378,7 +378,12 @@ def _summary_context(progress: MigrationProgress) -> dict[str, Any]:
     ):
         if amount is not None:
             counts.append((name, amount))
-    return {"facts": facts, "counts": counts, "pending_checks": progress.pending_checks}
+    return {
+        "facts": facts,
+        "counts": counts,
+        "comparison_counts": progress.comparison_counts,
+        "pending_checks": progress.pending_checks,
+    }
 
 
 @app.get(
@@ -604,6 +609,9 @@ def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
     ):
         row(measured, name, data[name])
     row(measured, "pilot_memory_usage_mb", progress.memory_usage_mb)
+    for name, pair in progress.comparison_counts.items():
+        row(measured, f"comparison_counts.{name}.source", pair.source)
+        row(measured, f"comparison_counts.{name}.target", pair.target)
     for name, value in progress.verified_counts.items():
         row(measured, f"verified_counts.{name}", value)
     for phase in progress.phases:
