@@ -38,12 +38,15 @@ def test_catalog_exports_use_private_staging(tmp_path, monkeypatch):
     client.file_manager.data_dir = tmp_path
     client.ssh_client = host
     client.docker_client = DockerClient(container_name=container, ssh_client=host)
+    client.transfer_file_to_container = client.docker_client.transfer_file_to_container
     client.rails_runner = OpenProjectRailsRunnerService(client)
 
     statuses = OpenProjectStatusTypeService(client).get_statuses()
-    assert statuses and all(row["id"] and row["name"] for row in statuses)
+    assert statuses
+    assert all(row["id"] and row["name"] for row in statuses)
     projects = OpenProjectProjectService(client).get_projects()
-    assert projects and all("public" in row and "enabled_modules" in row for row in projects)
+    assert projects
+    assert all("public" in row and "enabled_modules" in row for row in projects)
     # The currently executing Ruby script and file must be in the same private directory.
     result = client.rails_runner.execute_large_query_to_json_file(
         "[File.dirname(__FILE__), File.stat(File.dirname(__FILE__)).mode & 0777]"
@@ -52,3 +55,12 @@ def test_catalog_exports_use_private_staging(tmp_path, monkeypatch):
     assert mode == 0o700
     assert Path(directory).name.startswith("j2o-stage.")
     assert not client.docker_client.check_file_exists_in_container(directory)
+
+    structured = client.rails_runner.execute_script_with_data(
+        "puts $j2o_start_marker; puts [input_data, File.dirname(__FILE__)].to_json; puts $j2o_end_marker",
+        {"name": "wrapped [text]"},
+    )
+    assert structured["status"] == "success"
+    value, stage = structured["data"]
+    assert value == {"name": "wrapped [text]"}
+    assert not client.docker_client.check_file_exists_in_container(stage)
