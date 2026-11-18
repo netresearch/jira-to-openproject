@@ -60,3 +60,15 @@ def test_legacy_batch_refuses_to_replace_native_journals():
     with pytest.raises(LegacyJournalReplayError):
         migration._update_existing_work_packages_batch(batch)
     assert not migration.op_client.mock_calls
+
+
+def test_confirmed_empty_history_is_a_read_only_rerun():
+    migration = WorkPackageMigration.__new__(WorkPackageMigration)
+    migration.op_client = Mock()
+    issue = SimpleNamespace(
+        key="P-1",
+        raw={"changelog": {"histories": [], "total": 0}, "fields": {"comment": {"comments": [], "total": 0}}},
+    )
+    migration._update_existing_work_package(issue, {"id": 10}, 8)
+    assert migration._update_existing_work_packages_batch([(issue, {"id": 10}, 8)]) == (0, 0)
+    assert not migration.op_client.mock_calls

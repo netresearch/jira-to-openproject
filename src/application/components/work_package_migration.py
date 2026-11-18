@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from jira import Issue
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.work_package_history import has_no_source_journals
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.config import logger
 from src.display import ProgressTracker
@@ -881,6 +882,8 @@ class WorkPackageMigration(BaseMigration):
         op_project_id: int,
     ) -> None:
         """The legacy updater cannot distinguish imported journals from native history."""
+        if has_no_source_journals(jira_issue, require_complete=True):
+            return
         self.logger.error(
             "Legacy journal replay blocked for %s, target %s in project %s",
             jira_issue.key,
@@ -892,7 +895,7 @@ class WorkPackageMigration(BaseMigration):
     @staticmethod
     def _update_existing_work_packages_batch(batch: list[tuple[Issue, dict[str, Any], int]]) -> tuple[int, int]:
         """Refuse a legacy journal replacement before reading or writing the target."""
-        if batch:
+        if any(not has_no_source_journals(issue, require_complete=True) for issue, _, _ in batch):
             raise LegacyJournalReplayError
         return 0, 0
 
@@ -1535,7 +1538,7 @@ class WorkPackageMigration(BaseMigration):
         timestamp_result = self.enhanced_timestamp_migrator.migrate_timestamps(
             jira_issue=jira_issue,
             work_package_data=work_package,
-            use_rails_for_immutable=True,
+            use_rails_for_immutable=False,
             author_id=author_id,
         )
 
