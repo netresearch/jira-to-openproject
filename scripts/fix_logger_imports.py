@@ -2,88 +2,67 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Fix logger import issues across the codebase."""
+"""Update legacy module-level logger assignments in the maintenance scripts."""
 
-import os
-import re
+import ast
 from pathlib import Path
 
 
+def _legacy_assignment(node: ast.stmt) -> bool:
+    if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        return False
+    target = node.targets[0]
+    return (
+        node.col_offset == 0
+        and isinstance(target, ast.Name)
+        and target.id == "logger"
+        and ast.unparse(node.value) == "config.logger"
+    )
+
+
+def _has_logging_import(node: ast.stmt) -> bool:
+    if not isinstance(node, ast.ImportFrom) or node.module != "src.display":
+        return False
+    return any(name.name == "configure_logging" and name.asname is None for name in node.names)
+
+
+def _rewrite(content: str) -> str:
+    body = ast.parse(content).body
+    assignments = [node for node in body if _legacy_assignment(node)]
+    if not assignments:
+        return content
+    # Replace only whole assignment lines. Keep surrounding imports, comments,
+    # module docstrings and future directives in their original positions.
+    newline = "\r\n" if "\r\n" in content else "\n"
+    lines = content.splitlines(keepends=True)
+    for node in reversed(assignments):
+        end = node.end_lineno or node.lineno
+        last = lines[end - 1]
+        suffix = last.encode("utf-8")[node.end_col_offset :].decode("utf-8")
+        lines[node.lineno - 1 : end] = ['logger = configure_logging("INFO", None)' + suffix]
+    first = assignments[0].lineno - 1
+    if not any(_has_logging_import(node) for node in body if node.lineno <= first):
+        lines.insert(first, "from src.display import configure_logging" + newline)
+    return "".join(lines)
+
+
 def fix_logger_imports():
-    """Fix logger import issues in all Python files."""
-    # Get the project root
-    project_root = Path(__file__).parent
-
-    # Find all Python files
-    python_files = []
-    for root, dirs, files in os.walk(project_root):
-        # Skip certain directories
-        if any(skip in root for skip in [".git", "__pycache__", ".venv", "venv", ".pytest_cache"]):
+    root = Path(__file__).parent
+    excluded = {".git", "__pycache__", ".venv", "venv", ".pytest_cache"}
+    fixed = []
+    for path in sorted(root.rglob("*.py")):
+        if excluded.intersection(path.relative_to(root).parts):
             continue
-
-        for file in files:
-            if file.endswith(".py"):
-                python_files.append(Path(root) / file)
-
-    fixed_files = []
-
-    for file_path in python_files:
         try:
-            with open(file_path, encoding="utf-8") as f:
-                content = f.read()
-
-            # Check if file has the problematic import
-            if 'logger = configure_logging("INFO", None)' in content:
-                # Replace the import pattern
-                new_content = re.sub(
-                    r"from src import config\s*\n(.*?)\nlogger = config\.logger",
-                    r'from src.display import configure_logging\n\1\nlogger = configure_logging("INFO", None)',
-                    content,
-                    flags=re.DOTALL,
-                )
-
-                # Also handle cases where config is imported differently
-                new_content = re.sub(
-                    r"import src\.config as config\s*\n(.*?)\nlogger = config\.logger",
-                    r'from src.display import configure_logging\n\1\nlogger = configure_logging("INFO", None)',
-                    new_content,
-                    flags=re.DOTALL,
-                )
-
-                # Handle cases where config is imported at module level
-                new_content = new_content.replace("logger = config.logger", 'logger = configure_logging("INFO", None)')
-
-                # Add the import if it's not already there
-                if "from src.display import configure_logging" not in new_content:
-                    # Find the last import statement and add after it
-                    lines = new_content.split("\n")
-                    for i, line in enumerate(lines):
-                        if (
-                            line.strip().startswith(
-                                "import ",
-                            )
-                            or line.strip().startswith("from ")
-                            or line.strip() == ""
-                        ):
-                            continue
-                        # Insert the import before this line
-                        lines.insert(i, "from src.display import configure_logging")
-                        break
-                    new_content = "\n".join(lines)
-
-                # Write the fixed content back
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(new_content)
-
-                fixed_files.append(file_path)
-                print(f"Fixed: {file_path}")
-
-        except Exception as e:
-            print(f"Error processing {file_path}: {e}")
-
-    print(f"\nFixed {len(fixed_files)} files:")
-    for file_path in fixed_files:
-        print(f"  - {file_path}")
+            content = path.read_bytes().decode("utf-8")
+            updated = _rewrite(content)
+            if updated != content:
+                path.write_bytes(updated.encode("utf-8"))
+                fixed.append(path)
+                print(f"Fixed: {path}")
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            print(f"Error processing {path}: {exc}")
+    print(f"\nFixed {len(fixed)} files:")
 
 
 if __name__ == "__main__":

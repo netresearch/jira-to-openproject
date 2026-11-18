@@ -300,6 +300,30 @@ export POSTGRES_USER="{settings.postgres_user}"
     logger.info("Run 'direnv allow' to enable this configuration")
 
 
+def _validate(settings: Settings) -> None:
+    errors = validate_configuration(settings)
+    if errors:
+        logger.error("Configuration validation failed:")
+        for error in errors:
+            logger.error(f"  - {error}")
+        sys.exit(1)
+    else:
+        logger.info("✓ Configuration validation passed")
+
+
+def _test_connections(settings: Settings) -> None:
+    logger.info("Testing service connections...")
+
+    jira_ok = test_jira_connection(settings)
+    openproject_ok = test_openproject_connection(settings)
+
+    if jira_ok and openproject_ok:
+        logger.info("✓ All service connections successful")
+    else:
+        logger.error("✗ Some service connections failed")
+        sys.exit(1)
+
+
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -367,27 +391,9 @@ Examples:
         logger.info("Configuration loaded successfully")
 
         if args.command == "validate":
-            errors = validate_configuration(settings)
-            if errors:
-                logger.error("Configuration validation failed:")
-                for error in errors:
-                    logger.error(f"  - {error}")
-                sys.exit(1)
-            else:
-                logger.info("✓ Configuration validation passed")
-
+            _validate(settings)
         elif args.command == "test-connections":
-            logger.info("Testing service connections...")
-
-            jira_ok = test_jira_connection(settings)
-            openproject_ok = test_openproject_connection(settings)
-
-            if jira_ok and openproject_ok:
-                logger.info("✓ All service connections successful")
-            else:
-                logger.error("✗ Some service connections failed")
-                sys.exit(1)
-
+            _test_connections(settings)
         elif args.command == "show":
             print_settings_summary(settings, show_secrets=args.secrets)
 

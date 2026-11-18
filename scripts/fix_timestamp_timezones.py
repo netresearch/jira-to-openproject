@@ -217,6 +217,13 @@ class TimestampCorrectionScript:
                 )
                 self.stats["errors"] += 1
 
+    def _timestamp_values(self, work_package: dict[str, Any]):
+        for field in ("createdAt", "updatedAt", "dueDate"):
+            yield field, work_package.get(field)
+        for field_id, data in (work_package.get("customFields") or {}).items():
+            if isinstance(data, dict) and self._is_timestamp_field(data):
+                yield f"customField{field_id}", data.get("value")
+
     def _process_work_package(self, work_package: dict[str, Any]) -> None:
         """Process a single work package to correct timestamp timezones.
 
@@ -228,41 +235,11 @@ class TimestampCorrectionScript:
         if not wp_id:
             return
 
-        # Check if this work package has timestamp fields that need correction
-        corrections_needed = []
-
-        # Check standard timestamp fields
-        timestamp_fields = ["createdAt", "updatedAt", "dueDate"]
-
-        for field in timestamp_fields:
-            if field in work_package:
-                timestamp_str = work_package[field]
-                if timestamp_str and self._needs_timezone_correction(timestamp_str):
-                    corrections_needed.append(
-                        {
-                            "field": field,
-                            "current_value": timestamp_str,
-                            "corrected_value": self._correct_timestamp(timestamp_str),
-                        },
-                    )
-
-        # Check custom date fields
-        custom_fields = work_package.get("customFields", {})
-        for field_id, field_data in custom_fields.items():
-            if isinstance(field_data, dict) and "value" in field_data:
-                timestamp_str = field_data["value"]
-                if (
-                    timestamp_str
-                    and self._is_timestamp_field(field_data)
-                    and self._needs_timezone_correction(timestamp_str)
-                ):
-                    corrections_needed.append(
-                        {
-                            "field": f"customField{field_id}",
-                            "current_value": timestamp_str,
-                            "corrected_value": self._correct_timestamp(timestamp_str),
-                        },
-                    )
+        corrections_needed = [
+            {"field": field, "current_value": value, "corrected_value": self._correct_timestamp(value)}
+            for field, value in self._timestamp_values(work_package)
+            if value and self._needs_timezone_correction(value)
+        ]
 
         if corrections_needed:
             self.stats["packages_with_timestamps"] += 1
