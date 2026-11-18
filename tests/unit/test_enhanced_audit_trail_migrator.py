@@ -730,7 +730,8 @@ class TestEnhancedAuditTrailMigrator:
         entries = migration.extract_changelog_from_issue(sample_jira_issue)
         assert entries[0]["author"]["accountId"] == "cloud:123"
         events = migration.transform_changelog_to_audit_events(entries[:1], "TEST-1", 72)
-        assert events and all(event["user_id"] == 27 for event in events)
+        assert events
+        assert all(event["user_id"] == 27 for event in events)
         assert migration.migration_results["user_attribution_failures"] == 0
 
     def test_save_migration_results_io_error(self, migrator_with_mocks) -> None:
