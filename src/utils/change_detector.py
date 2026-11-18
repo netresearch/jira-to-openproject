@@ -12,6 +12,7 @@ migration runs, enabling incremental and idempotent migration operations.
 
 import hashlib
 import json
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
@@ -283,11 +284,11 @@ class ChangeDetector:
         baseline_entities = {snapshot["entity_id"]: snapshot for snapshot in baseline.get("snapshots", [])}
 
         # Build current entities lookup
-        current_entities_lookup = {}
-        for entity in current_entities:
-            entity_id = self._get_entity_id(entity, entity_type)
-            if entity_id:
-                current_entities_lookup[entity_id] = entity
+        current_entities_lookup = {
+            identifier: entity
+            for entity in current_entities
+            if (identifier := self._get_entity_id(entity, entity_type))
+        }
 
         changes: list[EntityChange] = []
 
@@ -326,10 +327,7 @@ class ChangeDetector:
                 changes.append(change)
 
         # Calculate summary statistics
-        changes_by_type = {}
-        for change in changes:
-            change_type = change["change_type"]
-            changes_by_type[change_type] = changes_by_type.get(change_type, 0) + 1
+        changes_by_type = dict(Counter(change["change_type"] for change in changes))
 
         # Sort changes by priority (highest first)
         changes.sort(key=lambda x: x["priority"], reverse=True)
