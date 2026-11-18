@@ -123,7 +123,7 @@ const dashboardApp = createApp({
 
         const startHeartbeat = () => {
             heartbeatInterval.value = setInterval(() => {
-                if (websocket.value && websocket.value.readyState === WebSocket.OPEN) {
+                if (websocket.value?.readyState === WebSocket.OPEN) {
                     sendWebSocketMessage({
                         type: 'heartbeat',
                         timestamp: new Date().toISOString()
@@ -140,7 +140,7 @@ const dashboardApp = createApp({
         };
 
         const sendWebSocketMessage = (message) => {
-            if (websocket.value && websocket.value.readyState === WebSocket.OPEN) {
+            if (websocket.value?.readyState === WebSocket.OPEN) {
                 websocket.value.send(JSON.stringify(message));
             }
         };
@@ -495,7 +495,7 @@ const dashboardApp = createApp({
                     a.download = data.filename;
                     document.body.appendChild(a);
                     a.click();
-                    document.body.removeChild(a);
+                    a.remove();
                     window.URL.revokeObjectURL(url);
 
                     addEvent({
@@ -525,10 +525,10 @@ const dashboardApp = createApp({
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `migration_progress_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+                    a.download = `migration_progress_${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.json`;
                     document.body.appendChild(a);
                     a.click();
-                    document.body.removeChild(a);
+                    a.remove();
                     window.URL.revokeObjectURL(url);
 
                     addEvent({

@@ -39,6 +39,9 @@ from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.mappings.mappings import Mappings
 from src.models import ComponentResult, MigrationError
 
+_ACCOUNT_MAPPING_ANALYSIS_FILE = "account_mapping_analysis.json"
+
+
 # Constants for filenames
 ACCOUNT_MAPPING_FILE = "account_mapping.json"
 TEMPO_ACCOUNTS_FILE = "tempo_accounts.json"
@@ -126,7 +129,7 @@ class AccountMigration(BaseMigration):
             Mappings.ACCOUNT_MAPPING_FILE,
         )
 
-        analysis_data = self._load_from_json("account_mapping_analysis.json", {})
+        analysis_data = self._load_from_json(_ACCOUNT_MAPPING_ANALYSIS_FILE, {})
         custom_field_id = analysis_data.get("custom_field_id")
 
         # Validate the custom field ID
@@ -637,7 +640,7 @@ class AccountMigration(BaseMigration):
             "custom_field_id": self.account_custom_field_id,
         }
 
-        self._save_to_json(analysis, "account_mapping_analysis.json")
+        self._save_to_json(analysis, _ACCOUNT_MAPPING_ANALYSIS_FILE)
 
         self.logger.info("=== Account Migration Summary ===")
         self.logger.info(
@@ -697,9 +700,9 @@ class AccountMigration(BaseMigration):
             )
             return
 
-        analysis = self._load_from_json("account_mapping_analysis.json", {})
+        analysis = self._load_from_json(_ACCOUNT_MAPPING_ANALYSIS_FILE, {})
         analysis["custom_field_id"] = cf_id
-        self._save_to_json(analysis, "account_mapping_analysis.json")
+        self._save_to_json(analysis, _ACCOUNT_MAPPING_ANALYSIS_FILE)
         self.account_custom_field_id = cf_id
 
     def migrate_accounts(self) -> dict:

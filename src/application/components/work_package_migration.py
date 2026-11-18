@@ -39,6 +39,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.config import logger
 from src.display import ProgressTracker
+from src.domain import provenance_fields
 from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.comment_audience import issue_without_comments
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
@@ -50,6 +51,9 @@ from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
 from src.utils.enhanced_timestamp_migrator import EnhancedTimestampMigrator
 from src.utils.enhanced_user_association_migrator import EnhancedUserAssociationMigrator
 from src.utils.markdown_converter import MarkdownConverter
+
+_TIMESTAMP_WITH_MICROSECONDS = "%Y-%m-%dT%H:%M:%S.%f"
+_UTC_OFFSET_COMPACT = "+0000"
 
 
 @register_entity_types("work_packages", "issues")
@@ -964,7 +968,9 @@ class WorkPackageMigration(BaseMigration):
                             # Add 1 SECOND to separate colliding entries (OpenProject uses second-precision timestamps)
                             dt = dt + timedelta(seconds=1)
                             # Convert back to ISO8601 format
-                            all_journal_entries[i]["timestamp"] = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
+                            all_journal_entries[i]["timestamp"] = (
+                                dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + _UTC_OFFSET_COMPACT
+                            )
                             self.logger.info(
                                 f"Resolved timestamp collision for {jira_key}: {previous_timestamp} → {all_journal_entries[i]['timestamp']}",
                             )
@@ -1061,12 +1067,12 @@ class WorkPackageMigration(BaseMigration):
                         try:
                             # Try parsing with milliseconds first
                             dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S.%f")
-                            validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                            validity_start_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                         except ValueError:
                             try:
                                 # Try parsing without milliseconds
                                 dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S")
-                                validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                                validity_start_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                             except ValueError as e:
                                 self.logger.warning(f"Failed to parse timestamp '{comment_created}': {e}, using as-is")
                                 validity_start_iso = comment_created
@@ -1086,17 +1092,17 @@ class WorkPackageMigration(BaseMigration):
                         try:
                             # First try parsing ISO8601 format with timezone (from collision detection)
                             dt = datetime.strptime(comment_created, "%Y-%m-%dT%H:%M:%S.%f%z")
-                            validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                            validity_start_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                         except ValueError:
                             try:
                                 # Try parsing with milliseconds (database format)
                                 dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S.%f")
-                                validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                                validity_start_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                             except ValueError:
                                 try:
                                     # Try parsing without milliseconds
                                     dt = datetime.strptime(comment_created, "%Y-%m-%d %H:%M:%S")
-                                    validity_start_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                                    validity_start_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                                 except ValueError as e:
                                     self.logger.warning(
                                         f"Failed to parse timestamp '{comment_created}': {e}, using as-is",
@@ -1109,27 +1115,21 @@ class WorkPackageMigration(BaseMigration):
                         try:
                             # First try parsing ISO8601 format with timezone (from collision detection)
                             dt = datetime.strptime(next_created, "%Y-%m-%dT%H:%M:%S.%f%z")
-                            validity_end_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                            validity_end_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                         except ValueError:
                             try:
                                 # Try parsing with milliseconds (database format)
                                 dt = datetime.strptime(next_created, "%Y-%m-%d %H:%M:%S.%f")
-                                validity_end_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                                validity_end_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                             except ValueError:
                                 try:
                                     # Try parsing without milliseconds
                                     dt = datetime.strptime(next_created, "%Y-%m-%d %H:%M:%S")
-                                    validity_end_iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                                    validity_end_iso = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + "Z"
                                 except ValueError as e:
                                     self.logger.warning(f"Failed to parse timestamp '{next_created}': {e}, using as-is")
                                     validity_end_iso = next_created
                     # else: Leave validity_end_iso as None for open-ended range (last comment)
-
-                    # Only set validity_period string if validity_end_iso is not None
-                    if validity_end_iso is not None:
-                        pass
-                    else:
-                        pass
 
                 # Bug #14/#15 fix - Build Ruby validity_period code as single-line expressions
                 if validity_end_iso is None:
@@ -1282,11 +1282,13 @@ class WorkPackageMigration(BaseMigration):
                         # Collision: add 1 second to previous
                         try:
                             if "T" in prev_ts:
-                                dt = datetime.fromisoformat(prev_ts.replace("Z", "+00:00").replace("+0000", "+00:00"))
+                                dt = datetime.fromisoformat(
+                                    prev_ts.replace("Z", "+00:00").replace(_UTC_OFFSET_COMPACT, "+00:00")
+                                )
                             else:
                                 dt = datetime.fromisoformat(prev_ts)
                             dt = dt + timedelta(seconds=1)
-                            curr_ts = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
+                            curr_ts = dt.strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3] + _UTC_OFFSET_COMPACT
                             entry["timestamp"] = curr_ts
                         except Exception:
                             pass
@@ -1405,21 +1407,8 @@ class WorkPackageMigration(BaseMigration):
                                     if mapped_to:
                                         field_changes[op_field] = [mapped_from, mapped_to]
                                         field_mapped = True
-                                elif op_field == "assigned_to_id":
+                                elif op_field in {"assigned_to_id", "author_id"}:
                                     # Map user names to IDs
-                                    mapped_to = (
-                                        self.user_mapping.get(to_str, {}).get("openproject_id")
-                                        if self.user_mapping and to_str
-                                        else None
-                                    )
-                                    mapped_from = (
-                                        self.user_mapping.get(from_str, {}).get("openproject_id")
-                                        if self.user_mapping and from_str
-                                        else None
-                                    )
-                                    field_changes[op_field] = [mapped_from, mapped_to]
-                                    field_mapped = True
-                                elif op_field == "author_id":
                                     mapped_to = (
                                         self.user_mapping.get(to_str, {}).get("openproject_id")
                                         if self.user_mapping and to_str
@@ -2090,33 +2079,7 @@ class WorkPackageMigration(BaseMigration):
 
         # BUG #21 FIX: Early load J2O CF IDs for Workflow/Resolution tracking in changelog processing
         # This must happen BEFORE changelog processing so cf_field_changes can be populated
-        if not hasattr(self, "_j2o_wp_cf_ids_full") or not isinstance(self._j2o_wp_cf_ids_full, dict):
-            cf_specs = (
-                ("J2O Origin System", "string", False),
-                ("J2O Origin ID", "string", True),
-                ("J2O Origin Key", "string", True),
-                ("J2O Origin URL", "string", False),
-                ("J2O First Migration Date", "date", False),
-                ("J2O Last Update Date", "date", False),
-                ("J2O Jira Workflow", "string", True),
-                ("J2O Jira Resolution", "string", True),
-                ("J2O Affects Version", "string", True),  # Searchable: Jira "Version" field (where bug occurs)
-            )
-            cf_ids: dict[str, int] = {}
-            for name, fmt, searchable in cf_specs:
-                try:
-                    cf = self.op_client.ensure_custom_field(
-                        name,
-                        field_format=fmt,
-                        cf_type="WorkPackageCustomField",
-                        searchable=searchable,
-                    )
-                    if isinstance(cf, dict) and cf.get("id"):
-                        cf_ids[name] = int(cf["id"])
-                except Exception:
-                    continue
-            self._j2o_wp_cf_ids_full = cf_ids
-            self.logger.debug(f"[BUG21] Loaded J2O CF IDs: {cf_ids}")
+        self._ensure_provenance_field_ids()
 
         # Extract the necessary fields from the Jira Issue object
         issue_type_id = jira_issue.fields.issuetype.id
@@ -2342,7 +2305,8 @@ class WorkPackageMigration(BaseMigration):
                                 while True:
                                     new_dt = original_dt + timedelta(seconds=offset_seconds)
                                     new_timestamp = (
-                                        new_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0000"
+                                        new_dt.astimezone(UTC).strftime(_TIMESTAMP_WITH_MICROSECONDS)[:-3]
+                                        + _UTC_OFFSET_COMPACT
                                     )
 
                                     if new_timestamp not in used_timestamps:
@@ -2432,9 +2396,9 @@ class WorkPackageMigration(BaseMigration):
 
                         # Get CF IDs for Workflow/Resolution/Affects Version tracking
                         cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
-                        workflow_cf_id = cf_map.get("J2O Jira Workflow")
-                        resolution_cf_id = cf_map.get("J2O Jira Resolution")
-                        affects_version_cf_id = cf_map.get("J2O Affects Version")
+                        workflow_cf_id = cf_map.get(provenance_fields.JIRA_WORKFLOW)
+                        resolution_cf_id = cf_map.get(provenance_fields.JIRA_RESOLUTION)
+                        affects_version_cf_id = cf_map.get(provenance_fields.AFFECTS_VERSION)
 
                         # BUG #60 FIX: Load custom field mapping for proper CF journal tracking
                         # This allows custom fields like Account, Matrix Webhook URL, etc.
@@ -2676,9 +2640,9 @@ class WorkPackageMigration(BaseMigration):
                         # Different from state_snapshot: build FORWARD (oldest to newest), applying changes
                         # This ensures v1 has initial values and vN has final values
                         cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
-                        workflow_cf_id = cf_map.get("J2O Jira Workflow")
-                        resolution_cf_id = cf_map.get("J2O Jira Resolution")
-                        affects_version_cf_id = cf_map.get("J2O Affects Version")
+                        workflow_cf_id = cf_map.get(provenance_fields.JIRA_WORKFLOW)
+                        resolution_cf_id = cf_map.get(provenance_fields.JIRA_RESOLUTION)
+                        affects_version_cf_id = cf_map.get(provenance_fields.AFFECTS_VERSION)
 
                         if workflow_cf_id or resolution_cf_id or affects_version_cf_id:
                             # Start with empty CF state - no values before any changes
@@ -2776,79 +2740,56 @@ class WorkPackageMigration(BaseMigration):
 
         # Attach standardized J2O Origin CFs
         try:
-            if not hasattr(self, "_j2o_wp_cf_ids_full") or not isinstance(self._j2o_wp_cf_ids_full, dict):
-                cf_specs = (
-                    ("J2O Origin System", "string", False),
-                    ("J2O Origin ID", "string", True),  # Searchable for finding by Jira ID
-                    ("J2O Origin Key", "string", True),  # Searchable for finding by Jira Key (e.g., NRS-2358)
-                    ("J2O Origin URL", "string", False),
-                    ("J2O First Migration Date", "date", False),
-                    ("J2O Last Update Date", "date", False),
-                    ("J2O Jira Workflow", "string", True),  # Searchable: Current/final Jira workflow scheme
-                    ("J2O Jira Resolution", "string", True),  # Searchable: Final Jira resolution (Done, Fixed, etc.)
-                    ("J2O Affects Version", "string", True),  # Searchable: Jira "Version" field (where bug occurs)
-                )
-                cf_ids: dict[str, int] = {}
-                for name, fmt, searchable in cf_specs:
-                    try:
-                        cf = self.op_client.ensure_custom_field(
-                            name,
-                            field_format=fmt,
-                            cf_type="WorkPackageCustomField",
-                            searchable=searchable,
-                        )
-                        if isinstance(cf, dict) and cf.get("id"):
-                            cf_ids[name] = int(cf["id"])  # type: ignore[arg-type]
-                    except Exception:
-                        continue
-                self._j2o_wp_cf_ids_full = cf_ids
+            self._ensure_provenance_field_ids()
 
             cf_vals: list[dict[str, object]] = []
             cf_map = getattr(self, "_j2o_wp_cf_ids_full", {}) or {}
-            if cf_map.get("J2O Origin System"):
-                cf_vals.append({"id": cf_map["J2O Origin System"], "value": "Jira Server on-prem 9.11"})
-            if cf_map.get("J2O Origin ID") and jira_id:
-                cf_vals.append({"id": cf_map["J2O Origin ID"], "value": str(jira_id)})
-            if cf_map.get("J2O Origin Key") and jira_key:
-                cf_vals.append({"id": cf_map["J2O Origin Key"], "value": jira_key})
+            if cf_map.get(provenance_fields.ORIGIN_SYSTEM):
+                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_SYSTEM], "value": "Jira Server on-prem 9.11"})
+            if cf_map.get(provenance_fields.ORIGIN_ID) and jira_id:
+                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_ID], "value": str(jira_id)})
+            if cf_map.get(provenance_fields.ORIGIN_KEY) and jira_key:
+                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_KEY], "value": jira_key})
             base_url = (config.jira_config or {}).get("J2O_JIRA_URL") or (config.jira_config or {}).get("url")
-            if cf_map.get("J2O Origin URL") and jira_key and base_url:
+            if cf_map.get(provenance_fields.ORIGIN_URL) and jira_key and base_url:
                 try:
                     url_val = "/".join([str(base_url).rstrip("/"), "browse", str(jira_key)])
                 except Exception:
                     url_val = f"{base_url}/browse/{jira_key}"
-                cf_vals.append({"id": cf_map["J2O Origin URL"], "value": url_val})
+                cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_URL], "value": url_val})
             from datetime import date as _date
 
             today_str = _date.today().isoformat()
-            if cf_map.get("J2O First Migration Date"):
-                cf_vals.append({"id": cf_map["J2O First Migration Date"], "value": today_str})
-            if cf_map.get("J2O Last Update Date"):
-                cf_vals.append({"id": cf_map["J2O Last Update Date"], "value": today_str})
+            if cf_map.get(provenance_fields.FIRST_MIGRATION_DATE):
+                cf_vals.append({"id": cf_map[provenance_fields.FIRST_MIGRATION_DATE], "value": today_str})
+            if cf_map.get(provenance_fields.LAST_UPDATE_DATE):
+                cf_vals.append({"id": cf_map[provenance_fields.LAST_UPDATE_DATE], "value": today_str})
             # Extract final workflow scheme from changelog (last "Workflow" field change)
-            if cf_map.get("J2O Jira Workflow"):
+            if cf_map.get(provenance_fields.JIRA_WORKFLOW):
                 final_workflow = self._extract_final_workflow(jira_issue)
                 if final_workflow:
-                    cf_vals.append({"id": cf_map["J2O Jira Workflow"], "value": final_workflow})
+                    cf_vals.append({"id": cf_map[provenance_fields.JIRA_WORKFLOW], "value": final_workflow})
             # Extract resolution from Jira issue (direct field, not changelog)
-            if cf_map.get("J2O Jira Resolution"):
+            if cf_map.get(provenance_fields.JIRA_RESOLUTION):
                 try:
                     resolution = getattr(jira_issue.fields, "resolution", None)
                     if resolution:
                         resolution_name = getattr(resolution, "name", None) or str(resolution)
                         if resolution_name:
-                            cf_vals.append({"id": cf_map["J2O Jira Resolution"], "value": resolution_name})
+                            cf_vals.append({"id": cf_map[provenance_fields.JIRA_RESOLUTION], "value": resolution_name})
                 except Exception:
                     pass
             # Extract Affects Version from Jira issue (versions field = where bug occurs)
-            if cf_map.get("J2O Affects Version"):
+            if cf_map.get(provenance_fields.AFFECTS_VERSION):
                 try:
                     versions = getattr(jira_issue.fields, "versions", None)
                     if versions and isinstance(versions, list) and len(versions) > 0:
                         # Join multiple versions with comma if present
                         version_names = [getattr(v, "name", str(v)) for v in versions if v]
                         if version_names:
-                            cf_vals.append({"id": cf_map["J2O Affects Version"], "value": ", ".join(version_names)})
+                            cf_vals.append(
+                                {"id": cf_map[provenance_fields.AFFECTS_VERSION], "value": ", ".join(version_names)}
+                            )
                 except Exception:
                     pass
             if cf_vals:
@@ -2950,9 +2891,9 @@ class WorkPackageMigration(BaseMigration):
                 if not hasattr(self, "_j2o_wp_cf_ids") or not isinstance(self._j2o_wp_cf_ids, dict):
                     # Ensure minimal set of provenance CFs (WP scope)
                     cf_names = (
-                        ("J2O Origin System", "string"),
-                        ("J2O External ID", "string"),
-                        ("J2O External Key", "string"),
+                        (provenance_fields.ORIGIN_SYSTEM, "string"),
+                        (provenance_fields.EXTERNAL_ID, "string"),
+                        (provenance_fields.EXTERNAL_KEY, "string"),
                     )
                     cf_ids: dict[str, int] = {}
                     for n, fmt in cf_names:
@@ -2971,13 +2912,13 @@ class WorkPackageMigration(BaseMigration):
                 cf_vals: list[dict[str, object]] = []
                 cf_map = getattr(self, "_j2o_wp_cf_ids", {}) or {}
                 # Populate values
-                if cf_map.get("J2O Origin System"):
-                    cf_vals.append({"id": cf_map["J2O Origin System"], "value": "jira"})
+                if cf_map.get(provenance_fields.ORIGIN_SYSTEM):
+                    cf_vals.append({"id": cf_map[provenance_fields.ORIGIN_SYSTEM], "value": "jira"})
                 ext_id = jira_issue.get("id")
-                if cf_map.get("J2O External ID") and ext_id:
-                    cf_vals.append({"id": cf_map["J2O External ID"], "value": str(ext_id)})
-                if cf_map.get("J2O External Key") and jira_key:
-                    cf_vals.append({"id": cf_map["J2O External Key"], "value": jira_key})
+                if cf_map.get(provenance_fields.EXTERNAL_ID) and ext_id:
+                    cf_vals.append({"id": cf_map[provenance_fields.EXTERNAL_ID], "value": str(ext_id)})
+                if cf_map.get(provenance_fields.EXTERNAL_KEY) and jira_key:
+                    cf_vals.append({"id": cf_map[provenance_fields.EXTERNAL_KEY], "value": jira_key})
                 if cf_vals:
                     work_package["custom_fields"] = cf_vals
             except Exception:
@@ -3138,6 +3079,23 @@ class WorkPackageMigration(BaseMigration):
             f"Supported types: ['work_packages', 'issues']"
         )
         raise ValueError(msg)
+
+    def _ensure_provenance_field_ids(self) -> None:
+        """Cache the field IDs used when mapping work packages and their change history."""
+        if isinstance(getattr(self, "_j2o_wp_cf_ids_full", None), dict):
+            return
+        field_ids: dict[str, int] = {}
+        for name, field_format, searchable in provenance_fields.WORK_PACKAGE_FIELD_SPECS:
+            try:
+                field = self.op_client.ensure_custom_field(
+                    name, field_format=field_format, cf_type="WorkPackageCustomField", searchable=searchable
+                )
+                if isinstance(field, dict) and field.get("id"):
+                    field_ids[name] = int(field["id"])
+            except Exception:
+                continue
+        self._j2o_wp_cf_ids_full = field_ids
+        self.logger.debug("Loaded work package provenance fields: %s", field_ids)
 
     def _load_custom_field_mapping(self) -> dict[str, Any]:
         """Load or rebuild custom field mapping from cache or OpenProject metadata.

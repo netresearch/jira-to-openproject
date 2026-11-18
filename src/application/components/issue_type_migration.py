@@ -47,6 +47,9 @@ from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 from src.models import ComponentResult, MigrationError
 
+_USER_STORY_TYPE = "User Story"
+_JIRA_ISSUE_TYPES_FILE = "jira_issue_types.json"
+
 
 @register_entity_types("issue_types", "work_package_types")
 class IssueTypeMigration(BaseMigration):
@@ -86,10 +89,10 @@ class IssueTypeMigration(BaseMigration):
         self.default_mappings: dict[str, dict[str, str]] = {
             "Bug": {"name": "Bug", "color": "#D35400"},
             "Task": {"name": "Task", "color": "#1A67A3"},
-            "User Story": {"name": "User Story", "color": "#27AE60"},
+            _USER_STORY_TYPE: {"name": _USER_STORY_TYPE, "color": "#27AE60"},
             "Epic": {"name": "Epic", "color": "#9B59B6"},
             "Feature": {"name": "Feature", "color": "#2788C8"},
-            "Story": {"name": "User Story", "color": "#27AE60"},
+            "Story": {"name": _USER_STORY_TYPE, "color": "#27AE60"},
             "Improvement": {"name": "Feature", "color": "#2788C8"},
             "New Feature": {"name": "Feature", "color": "#2788C8"},
             "Change Request": {"name": "Task", "color": "#1A67A3"},
@@ -136,7 +139,7 @@ class IssueTypeMigration(BaseMigration):
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
-        self.jira_issue_types = self._load_from_json(Path("jira_issue_types.json"), [])
+        self.jira_issue_types = self._load_from_json(Path(_JIRA_ISSUE_TYPES_FILE), [])
         self.op_work_package_types = self._load_from_json(
             Path("op_work_package_types.json"),
             [],
@@ -162,7 +165,7 @@ class IssueTypeMigration(BaseMigration):
             List of Jira issue type dictionaries
 
         """
-        issue_types_file = self.data_dir / "jira_issue_types.json"
+        issue_types_file = self.data_dir / _JIRA_ISSUE_TYPES_FILE
 
         if issue_types_file.exists() and not config.migration_config.get(
             "force",
@@ -183,7 +186,7 @@ class IssueTypeMigration(BaseMigration):
             self.logger.info("Extracted %s issue types from Jira", len(issue_types))
 
             self.jira_issue_types = issue_types
-            self._save_to_json(issue_types, Path("jira_issue_types.json"))
+            self._save_to_json(issue_types, Path(_JIRA_ISSUE_TYPES_FILE))
 
             return issue_types
         except Exception as e:
@@ -383,15 +386,12 @@ class IssueTypeMigration(BaseMigration):
             normal_types[jira_type_name] = type_data
 
         # Process all sub-types and map them to normal types
-        for jira_type_name, type_data in list(normalized_mapping.items()):
+        for jira_type_name in normalized_mapping:
             if not (jira_type_name.startswith(("Sub:", "Sub-"))):
                 continue
 
             # Get the base type name by removing the "Sub:" or "Sub-" prefix
-            if jira_type_name.startswith("Sub:"):
-                base_type_name = jira_type_name[4:].strip()
-            else:  # Sub-
-                base_type_name = jira_type_name[4:].strip()
+            base_type_name = jira_type_name[4:].strip()
 
             # Find the corresponding normal type
             base_type_data = normal_types.get(base_type_name)

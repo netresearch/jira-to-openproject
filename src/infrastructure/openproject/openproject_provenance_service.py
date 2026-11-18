@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.domain import provenance_fields
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
@@ -159,7 +160,7 @@ class OpenProjectProvenanceService:
             ("J2O OP Account ID", "int"),  # Tempo Account → OP Project ID
             ("J2O OP Custom_field ID", "int"),  # Jira CF ID → OP CustomField ID
             ("J2O OP Link_type ID", "int"),  # Jira Link Type ID → OP CustomField ID
-            ("J2O Entity Type", "string"),  # Entity type for filtering
+            (provenance_fields.ENTITY_TYPE, "string"),  # Entity type for filtering
         ]
 
         for name, fmt in cf_specs:
@@ -225,7 +226,7 @@ class OpenProjectProvenanceService:
         # in ensure_provenance_custom_fields.
         cf_op_id_field = f"J2O OP {self._entity_type_label(entity_type)} ID"
         cf_op_id = cf_ids.get(cf_op_id_field)
-        cf_entity_type_id = cf_ids.get("J2O Entity Type")
+        cf_entity_type_id = cf_ids.get(provenance_fields.ENTITY_TYPE)
 
         # Build cf_values assignments as independent optional lines. The
         # previous chained-conditional form silently truncated the script
@@ -431,7 +432,7 @@ class OpenProjectProvenanceService:
 
         cf_op_id_field = f"J2O OP {self._entity_type_label(entity_type)} ID"
         cf_op_id = cf_ids.get(cf_op_id_field)
-        cf_entity_type_id = cf_ids.get("J2O Entity Type")
+        cf_entity_type_id = cf_ids.get(provenance_fields.ENTITY_TYPE)
 
         # Build Ruby array of mappings
         ruby_mappings = []

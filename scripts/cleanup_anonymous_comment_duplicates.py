@@ -280,7 +280,7 @@ def run(
     try:
         result = op_client.execute_query_to_json_file(fetch_script)
     except Exception as exc:
-        logger.error("Rails query failed: %s", exc)
+        logger.exception("Rails query failed: %s", exc)
         raise
 
     if isinstance(result, dict) and result.get("error"):
@@ -396,7 +396,7 @@ def run(
                 deleted += n
                 logger.info("Deleted batch %d–%d: %d rows", i + 1, i + len(batch), n)
             except Exception as exc:
-                logger.error("Delete batch %d–%d failed: %s", i + 1, i + len(batch), exc)
+                logger.exception("Delete batch %d–%d failed: %s", i + 1, i + len(batch), exc)
         logger.info("DONE: deleted %d duplicate journals", deleted)
     else:
         logger.info("DRY-RUN complete — pass --apply to delete %d journals", total_to_delete)
@@ -477,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
             also_delete_orphan_anonymous=args.also_delete_orphan_anonymous,
         )
     except Exception as exc:
-        logger.error("Fatal: %s", exc)
+        logger.exception("Fatal: %s", exc)
         return 1
 
     print(json.dumps(stats, indent=2))

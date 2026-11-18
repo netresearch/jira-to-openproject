@@ -12,6 +12,9 @@ import logging
 import re
 from typing import Any
 
+_UNMAPPED_ATTACHMENT_MESSAGE = "No attachment mapping for %s in %s, using filename"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,14 +136,14 @@ class MarkdownConverter:
         # and allows filenames with mixed-case extensions (e.g. .PDF, .Docx).
         # Spaces are permitted in filenames (e.g. "some report.pdf").
         self.attachment_pattern = re.compile(
-            r"\[([^\|\]]+)\|(?!https?://|ftp://)([^\]|]+\.[a-zA-Z0-9]{1,10})\]",
+            r"\[([^\|\]]+)\|(?!https?://|ftp://)([^\]|]+\.[a-z0-9]{1,10})\]",
             re.IGNORECASE,
         )
         # Pattern for [^filename.ext] format (Jira attachment reference).
         # Matches any filename with a dot-extension (not just the original whitelist).
         # re.IGNORECASE allows mixed-case extensions; spaces permitted in filenames.
         self.attachment_ref_pattern = re.compile(
-            r"\[\^([^\]]+\.[a-zA-Z0-9]{1,10})\]",
+            r"\[\^([^\]]+\.[a-z0-9]{1,10})\]",
             re.IGNORECASE,
         )
 
@@ -520,7 +523,7 @@ class MarkdownConverter:
 
             # Fallback: use filename only (OpenProject may not resolve this)
             logger.debug(
-                "No attachment mapping for %s in %s, using filename",
+                _UNMAPPED_ATTACHMENT_MESSAGE,
                 filename,
                 self._current_jira_key or "unknown",
             )
@@ -559,7 +562,7 @@ class MarkdownConverter:
 
             # Fallback: use filename only
             logger.debug(
-                "No attachment mapping for %s in %s, using filename",
+                _UNMAPPED_ATTACHMENT_MESSAGE,
                 filename,
                 self._current_jira_key or "unknown",
             )
@@ -582,7 +585,7 @@ class MarkdownConverter:
 
             # Fallback: use filename only
             logger.debug(
-                "No attachment mapping for %s in %s, using filename",
+                _UNMAPPED_ATTACHMENT_MESSAGE,
                 filename,
                 self._current_jira_key or "unknown",
             )

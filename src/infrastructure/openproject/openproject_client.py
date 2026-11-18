@@ -31,6 +31,9 @@ from src.utils.idempotency_decorators import batch_idempotent
 from src.utils.performance_optimizer import PerformanceOptimizer
 from src.utils.rate_limiter import create_openproject_rate_limiter
 
+_EXISTING_CLIENT_DESCRIPTION = "Using provided"
+
+
 # Module-level constants
 BATCH_SIZE_DEFAULT = 50
 SAFE_OFFSET_LIMIT = 5000
@@ -225,7 +228,7 @@ class OpenProjectClient:
         )
         logger.debug(
             "%s SSHClient for host %s",
-            "Using provided" if ssh_client else "Initialized",
+            _EXISTING_CLIENT_DESCRIPTION if ssh_client else "Initialized",
             self.ssh_host,
         )
 
@@ -239,7 +242,7 @@ class OpenProjectClient:
         )
         logger.debug(
             "%s DockerClient for container %s",
-            "Using provided" if docker_client else "Initialized",
+            _EXISTING_CLIENT_DESCRIPTION if docker_client else "Initialized",
             self.container_name,
         )
 
@@ -250,7 +253,7 @@ class OpenProjectClient:
         )
         logger.debug(
             "%s RailsConsoleClient with tmux session %s",
-            "Using provided" if rails_client else "Initialized",
+            _EXISTING_CLIENT_DESCRIPTION if rails_client else "Initialized",
             self.tmux_session_name,
         )
 

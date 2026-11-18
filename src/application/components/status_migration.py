@@ -45,6 +45,10 @@ from src.mappings.mappings import Mappings
 from src.models import ComponentResult
 from src.models.migration_error import MigrationError
 
+_JIRA_STATUS_CATEGORIES_FILE = "jira_status_categories.json"
+_JIRA_STATUSES_FILE = "jira_statuses.json"
+_OP_STATUSES_FILE = "op_statuses.json"
+
 
 @register_entity_types("statuses", "status_types")
 class StatusMigration(BaseMigration):
@@ -134,12 +138,12 @@ class StatusMigration(BaseMigration):
 
     def _load_data(self) -> None:
         """Load existing data from JSON files."""
-        self.jira_statuses = self._load_from_json(Path("jira_statuses.json"), [])
+        self.jira_statuses = self._load_from_json(Path(_JIRA_STATUSES_FILE), [])
         self.jira_status_categories = self._load_from_json(
-            Path("jira_status_categories.json"),
+            Path(_JIRA_STATUS_CATEGORIES_FILE),
             [],
         )
-        self.op_statuses = self._load_from_json(Path("op_statuses.json"), [])
+        self.op_statuses = self._load_from_json(Path(_OP_STATUSES_FILE), [])
 
         logger.info("Loaded %s Jira statuses", len(self.jira_statuses))
         logger.info(
@@ -155,7 +159,7 @@ class StatusMigration(BaseMigration):
             List of Jira status dictionaries
 
         """
-        statuses_file = self.data_dir / "jira_statuses.json"
+        statuses_file = self.data_dir / _JIRA_STATUSES_FILE
 
         if statuses_file.exists() and not config.migration_config.get("force", False):
             logger.info(
@@ -185,7 +189,7 @@ class StatusMigration(BaseMigration):
             logger.info("Extracted %s statuses from Jira", len(statuses))
 
             self.jira_statuses = statuses
-            self._save_to_json(statuses, "jira_statuses.json")
+            self._save_to_json(statuses, _JIRA_STATUSES_FILE)
 
             return statuses
         except Exception as e:
@@ -200,7 +204,7 @@ class StatusMigration(BaseMigration):
             List of Jira status category dictionaries
 
         """
-        categories_file = self.data_dir / "jira_status_categories.json"
+        categories_file = self.data_dir / _JIRA_STATUS_CATEGORIES_FILE
 
         if categories_file.exists() and not config.migration_config.get("force", False):
             logger.info(
@@ -221,7 +225,7 @@ class StatusMigration(BaseMigration):
             logger.info("Extracted %s status categories from Jira", len(categories))
 
             self.jira_status_categories = categories
-            self._save_to_json(categories, "jira_status_categories.json")
+            self._save_to_json(categories, _JIRA_STATUS_CATEGORIES_FILE)
 
             return categories
         except Exception as e:
@@ -236,7 +240,7 @@ class StatusMigration(BaseMigration):
             List of OpenProject status dictionaries
 
         """
-        statuses_file = self.data_dir / "op_statuses.json"
+        statuses_file = self.data_dir / _OP_STATUSES_FILE
 
         if statuses_file.exists() and not config.migration_config.get("force", False):
             logger.info(
@@ -302,7 +306,7 @@ class StatusMigration(BaseMigration):
                         logger.warning("Skipping invalid status format: %s", status)
 
             self.op_statuses = result_statuses
-            self._save_to_json(result_statuses, "op_statuses.json")
+            self._save_to_json(result_statuses, _OP_STATUSES_FILE)
 
             return result_statuses
         except Exception as e:

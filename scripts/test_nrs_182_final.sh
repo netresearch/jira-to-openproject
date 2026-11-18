@@ -1,12 +1,14 @@
 #!/bin/bash
+
+readonly section_separator="================================================================================"
 # Final test for NRS-182 ONLY using environment variable filtering
 # This is the CORRECT approach: use J2O_TEST_ISSUES to filter
 
 cd /home/sme/p/j2o
 
-echo "================================================================================"
+echo "$section_separator"
 echo "NRS-182 ONLY - Bug #32 Regression Fix Validation"
-echo "================================================================================"
+echo "$section_separator"
 echo ""
 echo "🧪 Test: Migrate ONLY NRS-182"
 echo "📝 Expected: 23/23 journals with complete audit trail"
@@ -65,9 +67,9 @@ python3 src/main.py migrate \
     --no-confirm 2>&1 | tee /tmp/nrs_182_final.log
 
 echo ""
-echo "================================================================================"
+echo "$section_separator"
 echo "VALIDATION"
-echo "================================================================================"
+echo "$section_separator"
 echo ""
 
 # Check results
@@ -124,6 +126,6 @@ except Exception as e:
 PYEOF
 
 echo ""
-echo "================================================================================"
+echo "$section_separator"
 echo "Test completed"
-echo "================================================================================"
+echo "$section_separator"

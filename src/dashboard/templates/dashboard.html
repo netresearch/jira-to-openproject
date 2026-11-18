@@ -114,12 +114,10 @@
                             </h5>
                         </div>
                         <div class="card-body">
-                            <div class="progress mb-3" style="height: 30px;">
-                                <div class="progress-bar bg-success"
-                                     :style="{ width: progressPercentage + '%' }"
-                                     role="progressbar">
-                                    {{ progressPercentage.toFixed(1) }}%
-                                </div>
+                            <div class="d-flex align-items-center gap-2 mb-3">
+                                <progress class="migration-progress" aria-label="Migration progress"
+                                          :value="progressPercentage" max="100"></progress>
+                                <span>{{ progressPercentage.toFixed(1) }}%</span>
                             </div>
                             <div class="row">
                                 <div class="col-md-6">
@@ -182,24 +180,24 @@
                         <div class="card-body">
                             <div class="row">
                                 <div class="col-6">
-                                    <div class="metric-item">
-                                        <label>Entities/sec:</label>
-                                        <span class="metric-value">{{ metrics.entities_per_second }}</span>
-                                    </div>
-                                    <div class="metric-item">
-                                        <label>Avg Processing:</label>
-                                        <span class="metric-value">{{ metrics.average_processing_time }}s</span>
-                                    </div>
+                                    <dl class="metric-item">
+                                        <dt>Entities/sec:</dt>
+                                        <dd class="metric-value">{{ metrics.entities_per_second }}</dd>
+                                    </dl>
+                                    <dl class="metric-item">
+                                        <dt>Avg Processing:</dt>
+                                        <dd class="metric-value">{{ metrics.average_processing_time }}s</dd>
+                                    </dl>
                                 </div>
                                 <div class="col-6">
-                                    <div class="metric-item">
-                                        <label>Memory Usage:</label>
-                                        <span class="metric-value">{{ metrics.memory_usage_mb }} MB</span>
-                                    </div>
-                                    <div class="metric-item">
-                                        <label>CPU Usage:</label>
-                                        <span class="metric-value">{{ metrics.cpu_usage_percent }}%</span>
-                                    </div>
+                                    <dl class="metric-item">
+                                        <dt>Memory Usage:</dt>
+                                        <dd class="metric-value">{{ metrics.memory_usage_mb }} MB</dd>
+                                    </dl>
+                                    <dl class="metric-item">
+                                        <dt>CPU Usage:</dt>
+                                        <dd class="metric-value">{{ metrics.cpu_usage_percent }}%</dd>
+                                    </dl>
                                 </div>
                             </div>
                         </div>
