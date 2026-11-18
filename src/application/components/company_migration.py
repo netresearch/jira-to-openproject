@@ -863,7 +863,7 @@ class CompanyMigration(BaseMigration):
                 msg,
             )
 
-        except (ValueError, Exception) as e:
+        except Exception as e:
             error_msg = f"Failed to create companies batch {batch_index}: {e}"
             self.logger.exception(error_msg)
             raise MigrationError(error_msg) from e
