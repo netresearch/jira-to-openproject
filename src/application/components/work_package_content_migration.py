@@ -62,6 +62,7 @@ from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.domain.enums import JournalEntryType
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, JiraUser, WorkPackageMappingEntry
@@ -293,55 +294,22 @@ class WorkPackageContentMigration(BaseMigration):
             Individual Jira Issue objects with all fields
 
         """
-        start_at = 0
         batch_size = config.migration_config.get("batch_size", 100)
-
-        max_issues = None
-        if os.getenv("J2O_MAX_ISSUES"):
-            try:
-                max_issues = int(os.getenv("J2O_MAX_ISSUES"))
-            except ValueError:
-                pass
-
-        jql = f'project = "{project_key}" ORDER BY created ASC'
-        total_yielded = 0
-
-        while True:
-            if max_issues is not None and total_yielded >= max_issues:
-                break
-
-            issues = self._fetch_issues_batch(jql, start_at, batch_size)
-            if not issues:
-                break
-
-            for issue in issues:
-                if max_issues is not None and total_yielded >= max_issues:
-                    break
-                yield issue
-                total_yielded += 1
-
-            if len(issues) < batch_size:
-                break
-            start_at += batch_size
-
-    def _fetch_issues_batch(
-        self,
-        jql: str,
-        start_at: int,
-        batch_size: int,
-    ) -> list[Issue]:
-        """Fetch issues with full fields for content migration."""
         try:
-            # Expanded fields for content
+            limit = int(os.environ["J2O_MAX_ISSUES"])
+        except KeyError, ValueError:
+            limit = None
+        jql = f'project = "{project_key}" ORDER BY created ASC, key ASC'
+
+        def fetch_page(offset: int, size: int) -> list[Issue]:
             return self.jira_client.jira.search_issues(
                 jql,
-                startAt=start_at,
-                maxResults=batch_size,
+                startAt=offset,
+                maxResults=size,
                 expand="renderedFields,changelog",
             )
-        except Exception as e:
-            self.logger.error("Failed to fetch issues: %s", e)
-            return []
+
+        yield from iter_issue_pages(project_key, fetch_page, batch_size, limit)
 
     def _convert_jira_links(self, text: str | None, jira_key: str | None = None) -> str:
         """Convert Jira issue references to OpenProject WP links.
