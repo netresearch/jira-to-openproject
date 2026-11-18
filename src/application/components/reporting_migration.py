@@ -138,7 +138,7 @@ class ReportingMigration(BaseMigration):
         return queries, pages
 
     @staticmethod
-    def _jql_project(jql):
+    def _jql_project(jql: str) -> str | None:
         match = re.fullmatch(
             r"""\s*project\s*=\s*("[A-Z][A-Z0-9_]*"|'[A-Z][A-Z0-9_]*'|[A-Z][A-Z0-9_]*)\s*""",
             jql,
@@ -175,7 +175,7 @@ class ReportingMigration(BaseMigration):
         return public, held
 
     @staticmethod
-    def _filter_text(row):
+    def _filter_text(row: dict[str, Any]) -> str:
         name = row.get("name") or f"Filter {row['id']}"
         lines = [f"Imported from Jira filter '{name}'"]
         jql = row.get("jql") or row.get("query")
@@ -213,7 +213,7 @@ class ReportingMigration(BaseMigration):
         return self.op_client.ensure_reporting_project(preferred or REPORTING_PROJECT_IDENTIFIER_DEFAULT, name)
 
     @staticmethod
-    def _wiki_payload(dashboard, project_id):
+    def _wiki_payload(dashboard: dict[str, Any], project_id: int) -> dict[str, Any]:
         name = dashboard.get("name") or f"Dashboard {dashboard['id']}"
         lines = [
             f"## Imported Jira Dashboard: {name}",

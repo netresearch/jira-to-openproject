@@ -3,12 +3,13 @@
 
 """Read the public representation of a Jira report before publishing its contents."""
 
+from typing import Any
 from urllib.parse import urlsplit
 
 import requests
 
 
-def public_report(base_url, kind, report_id):
+def public_report(base_url: str, kind: str, report_id: str | int | None) -> dict[str, Any] | None:
     """Return an anonymously readable record, or None when access cannot be confirmed."""
     base = urlsplit(base_url)
     identifier = str(report_id)
