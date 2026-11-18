@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import Mock
 
 import pyrage
@@ -160,3 +164,29 @@ def test_key_only_epic_object_uses_verified_identity_and_rejects_conflicting_ids
     epic["id"] = "14"
     with pytest.raises(ValueError, match="conflicting immutable"):
         inventory(issues, mapped, **options)
+
+
+def test_offline_reader_needs_no_checkout_or_migration_configuration(tmp_path):
+    identity = x25519.Identity.generate()
+    key = tmp_path / "operator"
+    key.write_text(str(identity))
+    archive = tmp_path / "refs.age"
+    write_snapshot(archive, sample(), identity)
+    invocation = [
+        sys.executable,
+        "-c",
+        "from src.deferred_references_cli import main; main()",
+        "--archive",
+        str(archive),
+        "--identity",
+        str(key),
+        "read",
+    ]
+    result = subprocess.run(
+        invocation,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])},
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == sample()

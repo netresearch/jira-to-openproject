@@ -12,7 +12,6 @@ from pyrage import x25519
 
 from src.comment_archive.cli import input_file, load
 from src.deferred_references import inventory, mappings, read_snapshot, write_snapshot
-from src.deferred_references_replay import apply
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -48,6 +47,7 @@ def main(argv: list[str] | None = None) -> None:
         write_snapshot(args.archive, data, identity)
         result = {"archived": len(data["references"])}
     else:
+        from src.deferred_references_replay import apply
         from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
         data = read_snapshot(args.archive, identity)
