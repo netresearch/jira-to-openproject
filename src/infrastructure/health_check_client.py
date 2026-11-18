@@ -650,11 +650,7 @@ class HealthCheckClient:
 
         # Log all check results
         for name, check in snapshot.checks.items():
-            level = (
-                logging.ERROR
-                if check.severity == "ERROR"
-                else (logging.WARNING if check.severity == "WARNING" else logging.INFO)
-            )
+            level = {"ERROR": logging.ERROR, "WARNING": logging.WARNING}.get(check.severity, logging.INFO)
             logger.log(level, "Health check [%s]: %s", name, check.message)
             if not check.healthy:
                 prefix = "CRITICAL: " if check.severity == "ERROR" else "WARNING: "
@@ -673,6 +669,20 @@ class HealthCheckClient:
             logger.info("Pre-migration health checks PASSED")
 
         return True, issues
+
+    @staticmethod
+    def _trend_warnings(current: HealthSnapshot, previous: HealthSnapshot) -> list[str]:
+        warnings = []
+        disk_decrease = previous.container_disk_free_mb - current.container_disk_free_mb
+        file_increase = current.temp_file_count - previous.temp_file_count
+
+        if disk_decrease > 500:
+            warnings.append(f"Disk space decreased by {disk_decrease}MB since last check")
+
+        if file_increase > 100:
+            warnings.append(f"Temp file count increased by {file_increase} since last check")
+
+        return warnings
 
     def run_during_migration_check(
         self,
@@ -707,14 +717,7 @@ class HealthCheckClient:
 
         # Check for degradation trends
         if previous:
-            disk_decrease = previous.container_disk_free_mb - current.container_disk_free_mb
-            file_increase = current.temp_file_count - previous.temp_file_count
-
-            if disk_decrease > 500:
-                warnings.append(f"Disk space decreased by {disk_decrease}MB since last check")
-
-            if file_increase > 100:
-                warnings.append(f"Temp file count increased by {file_increase} since last check")
+            warnings.extend(self._trend_warnings(current, previous))
 
         # Update stored snapshot for next comparison
         self._baseline_snapshot = current
