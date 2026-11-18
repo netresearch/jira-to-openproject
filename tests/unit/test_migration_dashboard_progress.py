@@ -230,3 +230,42 @@ def test_new_invocation_replaces_previous_snapshot_and_counters(local_run) -> No
     assert snapshot.migration_id != previous.migration_id
     assert [phase.name for phase in snapshot.phases] == ["versions"]
     assert snapshot.verified_counts == {}
+
+
+@pytest.mark.parametrize(
+    ("errors", "expected_attempts", "expected_file_status"),
+    [
+        ([OSError("transient")], 2, "completed"),
+        ([OSError("unavailable")] * 3, 3, "running"),
+        ([ValueError("invalid")], 1, "running"),
+    ],
+)
+def test_only_a_terminal_io_failure_retries_the_same_report(
+    local_run, monkeypatch, errors, expected_attempts, expected_file_status
+) -> None:
+    from src import migration_progress
+
+    real_write = migration_progress.write_progress
+    terminal_timestamps = []
+    running_attempts = []
+    component = Mock(return_value=ComponentResult(success=True, updated=1))
+    local_run.factories["labels"] = lambda: SimpleNamespace(run=component)
+
+    def intermittent(snapshot, *, path):
+        if snapshot.get("finished_at"):
+            terminal_timestamps.append(snapshot["last_update"])
+            if len(terminal_timestamps) <= len(errors):
+                raise errors[len(terminal_timestamps) - 1]
+        elif snapshot.get("current_component"):
+            running_attempts.append(snapshot["last_update"])
+            raise OSError("temporary loss of running state")
+        real_write(snapshot, path=path)
+
+    monkeypatch.setattr(migration_progress, "write_progress", intermittent)
+    monkeypatch.setattr(migration_progress, "sleep", Mock())
+    assert run_command("labels") == 0
+    component.assert_called_once()
+    assert len(running_attempts) == 1
+    assert len(terminal_timestamps) == expected_attempts
+    assert len(set(terminal_timestamps)) == 1
+    assert read_progress(local_run.target).status == expected_file_status

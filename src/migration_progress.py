@@ -6,6 +6,7 @@
 from collections import Counter
 from datetime import UTC, datetime
 from logging import getLogger
+from time import sleep
 from typing import Any
 from uuid import uuid4
 
@@ -126,6 +127,14 @@ class MigrationRunProgress:
     def _publish(self) -> None:
         self.snapshot["last_update"] = datetime.now(UTC).isoformat()
         try:
+            # A later event refreshes an active run. Its final report has no successor.
+            if "finished_at" in self.snapshot:
+                for delay in (0.05, 0.1):
+                    try:
+                        write_progress(self.snapshot, path=self.path)
+                        return
+                    except OSError:
+                        sleep(delay)
             write_progress(self.snapshot, path=self.path)
         except (OSError, ValueError) as exc:
             getLogger(__name__).warning("Could not publish dashboard progress (%s)", type(exc).__name__)

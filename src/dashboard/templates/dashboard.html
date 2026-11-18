@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Jira to OpenProject · Migration dashboard</title>
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=3f8e877bfc9e">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=1ba3af633b8f">
     <script defer src="/static/js/dashboard.js?v=d2bf76a85ece"></script>
 </head>
 <body>
@@ -16,13 +16,13 @@
 </header>
 <main id="app" class="frame">
     {% include "published_run.html" %}
+    <output id="load-error" class="notice" hidden></output>
     <div id="live-dashboard" hidden>
         <noscript>Enable JavaScript to see migration updates.</noscript>
         <div class="title-row">
             <h1>Migration dashboard</h1>
             <span id="run-status" class="status" aria-live="polite">Loading</span>
         </div>
-        <output id="load-error" class="notice" hidden></output>
 
         <section class="card run" aria-labelledby="run-heading">
             <div class="card-heading">

@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, cast
 from uuid import uuid4
 
@@ -125,6 +126,7 @@ redis_client: redis.Redis | None = None
 BACKGROUND_TASKS: set[asyncio.Task[object]] = set()
 
 # Global state for migration tracking
+_LOCAL_STATE_LOCK = Lock()
 migration_state = {
     "is_running": False,
     "migration_id": None,
@@ -282,20 +284,20 @@ def _progress() -> MigrationProgress:
     target = progress_file()
     if target is not None:
         try:
-            progress = read_progress(target)
+            return read_progress(target)
         except (OSError, ValidationError) as exc:
             raise HTTPException(status_code=503, detail=_UNAVAILABLE_RUN, headers=_SNAPSHOT_HEADERS) from exc
-    elif migration_state["is_running"]:
-        progress = MigrationProgress(
-            migration_id=migration_state["migration_id"],
-            status="paused" if migration_state["pause_time"] else "running",
-            current_component=migration_state["current_component"],
-            start_time=migration_state["start_time"],
-            last_update=migration_state["pause_time"] or migration_state["start_time"],
-        )
-    else:
-        progress = MigrationProgress(migration_id="none", status="idle")
-    return progress
+    with _LOCAL_STATE_LOCK:
+        state = migration_state.copy()
+    if not state["is_running"]:
+        return MigrationProgress(migration_id="none", status="idle")
+    return MigrationProgress(
+        migration_id=state["migration_id"],
+        status="paused" if state["pause_time"] else "running",
+        current_component=state["current_component"],
+        start_time=state["start_time"],
+        last_update=state["pause_time"] or state["start_time"],
+    )
 
 
 def _requested_progress(migration_id: str | None) -> MigrationProgress:
@@ -471,27 +473,31 @@ async def handle_control_command(command: dict[str, Any], websocket: WebSocket) 
         )
 
 
-async def start_migration_background(config: dict[str, Any]) -> None:
+async def start_migration_background(config: dict[str, Any], *, run_id: str | None = None) -> None:
     """Start migration in background."""
     try:
-        migration_state["is_running"] = True
-        migration_state["migration_id"] = str(uuid4())
-        migration_state["start_time"] = datetime.now(UTC)
-        migration_state["current_component"] = config.get("component", "all")
-
-        # Broadcast migration start event
-        event = MigrationEvent(
-            level="info",
-            message="Migration started",
-            component=migration_state["current_component"],
-        )
+        run_id = run_id or str(uuid4())
+        started = datetime.now(UTC)
+        component = config.get("component", "all")
+        event = MigrationEvent(level="info", message="Migration started", component=component)
+        with _LOCAL_STATE_LOCK:
+            migration_state.update(
+                is_running=True,
+                migration_id=run_id,
+                start_time=started,
+                current_component=component,
+                pause_time=None,
+                total_pause_time=0,
+            )
         await manager.broadcast_event(event)
 
-        logger.info("Migration started: %s", migration_state["migration_id"])
+        logger.info("Migration started: %s", run_id)
 
     except Exception:
         logger.exception("Error starting migration")
-        migration_state["is_running"] = False
+        with _LOCAL_STATE_LOCK:
+            if migration_state["migration_id"] == run_id:
+                migration_state["is_running"] = False
 
         event = MigrationEvent(level="error", message="Failed to start migration")
         await manager.broadcast_event(event)
@@ -500,7 +506,8 @@ async def start_migration_background(config: dict[str, Any]) -> None:
 async def stop_migration_background() -> None:
     """Stop migration in background."""
     try:
-        migration_state["is_running"] = False
+        with _LOCAL_STATE_LOCK:
+            migration_state["is_running"] = False
 
         # Broadcast migration stop event
         event = MigrationEvent(level="info", message="Migration stopped by user")
@@ -515,7 +522,8 @@ async def stop_migration_background() -> None:
 async def pause_migration_background() -> None:
     """Pause migration in background."""
     try:
-        migration_state["pause_time"] = datetime.now(UTC)
+        with _LOCAL_STATE_LOCK:
+            migration_state["pause_time"] = datetime.now(UTC)
 
         # Broadcast migration pause event
         event = MigrationEvent(level="info", message="Migration paused")
@@ -530,11 +538,12 @@ async def pause_migration_background() -> None:
 async def resume_migration_background() -> None:
     """Resume migration in background."""
     try:
-        if migration_state["pause_time"]:
-            # Calculate total pause time
-            pause_duration = (datetime.now(UTC) - migration_state["pause_time"]).total_seconds()
-            migration_state["total_pause_time"] += int(pause_duration)
-            migration_state["pause_time"] = None
+        with _LOCAL_STATE_LOCK:
+            if migration_state["pause_time"]:
+                # Calculate total pause time
+                pause_duration = (datetime.now(UTC) - migration_state["pause_time"]).total_seconds()
+                migration_state["total_pause_time"] += int(pause_duration)
+                migration_state["pause_time"] = None
 
         # Broadcast migration resume event
         event = MigrationEvent(level="info", message="Migration resumed")
@@ -642,12 +651,13 @@ async def start_migration(
 
     try:
         # Start migration in background
-        background_tasks.add_task(start_migration_background, control.config or {})
+        run_id = str(uuid4())
+        background_tasks.add_task(start_migration_background, control.config or {}, run_id=run_id)
 
         return JSONResponse(
             content={
                 "message": "Migration started",
-                "migration_id": migration_state["migration_id"],
+                "migration_id": run_id,
             },
         )
 

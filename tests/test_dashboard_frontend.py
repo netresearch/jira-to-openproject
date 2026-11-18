@@ -150,3 +150,30 @@ def test_upgrade_with_previous_dashboard_in_browser_cache(tmp_path: Path) -> Non
     assert 'data-current-styles="true"' in refreshed
     assert "<dt>Imported rows</dt><dd>23</dd>" in refreshed
     assert '<dd id="system-ram">7.1\u00a0GiB</dd>' in refreshed
+
+
+def test_failed_initial_refresh_keeps_snapshot_and_warning_visible(tmp_path: Path) -> None:
+    shell = (DASHBOARD / "templates/dashboard.html").read_text(encoding="utf-8")
+    shell = shell.replace('"/static/', '"' + (DASHBOARD / "static").as_uri() + "/")
+    summary = '<section id="published-run-summary">Latest published run</section>'
+    shell = shell.replace('{% include "published_run.html" %}', summary)
+    harness = """<script>
+        window.fetch = async () => { throw new Error('Test connection unavailable'); };
+        window.WebSocket = class {};
+        addEventListener('load', () => setTimeout(() => {
+            const summary = document.getElementById('published-run-summary');
+            const warning = document.getElementById('load-error');
+            document.body.dataset.snapshotVisible = String(summary.checkVisibility());
+            document.body.dataset.warningVisible = String(warning.checkVisibility());
+            const brand = document.querySelector('.brand');
+            brand.focus({focusVisible: true});
+            document.body.dataset.focusOutline = getComputedStyle(brand).outlineColor;
+        }, 20));
+    </script>"""
+    page = tmp_path / "dashboard.html"
+    page.write_text(shell.replace("</head>", harness + "</head>"), encoding="utf-8")
+    dom = dump_page(tmp_path / "profile", page.as_uri())
+    assert 'data-snapshot-visible="true"' in dom
+    assert 'data-warning-visible="true"' in dom
+    assert 'data-focus-outline="rgb(255, 255, 255)"' in dom
+    assert "Migration data could not be refreshed." in dom

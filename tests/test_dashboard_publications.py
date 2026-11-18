@@ -3,10 +3,15 @@
 
 """The pilot publishes complete, private snapshots that every dashboard transport can read."""
 
+import asyncio
 import csv
 import io
 import os
+from concurrent.futures import ThreadPoolExecutor
+from importlib import import_module
 from pathlib import Path
+from threading import Event
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +19,14 @@ from pydantic import ValidationError
 
 from src.dashboard.app import app
 from src.dashboard.progress import write_progress
+
+
+@pytest.fixture(autouse=True)
+def isolate_dashboard_cache_and_state(monkeypatch):
+    module = import_module("src.dashboard.app")
+    monkeypatch.setattr(module.redis.Redis, "from_url", Mock(return_value=AsyncMock()))
+    monkeypatch.setattr(module, "collect_system_metrics", AsyncMock())
+    monkeypatch.setattr(module, "migration_state", module.migration_state.copy())
 
 
 @pytest.fixture
@@ -184,3 +197,41 @@ def test_published_api_errors_are_in_the_openapi_contract():
         assert "503" in paths[route]["get"]["responses"]
     for action in ("start", "stop", "pause", "resume"):
         assert "409" in paths[f"/api/migration/{action}"]["post"]["responses"]
+
+
+def test_paused_then_stopped_run_does_not_pause_the_next_run(monkeypatch):
+    monkeypatch.delenv("J2O_DASHBOARD_PROGRESS_FILE", raising=False)
+    with TestClient(app) as client:
+        first = client.post("/api/migration/start", json={"action": "start"}).json()["migration_id"]
+        assert client.post("/api/migration/pause").is_success
+        assert client.get("/api/progress").json()["status"] == "paused"
+        assert client.post("/api/migration/stop").is_success
+        second = client.post("/api/migration/start", json={"action": "start"}).json()["migration_id"]
+        assert first != second
+        progress = client.get("/api/progress").json()
+        assert progress["migration_id"] == second
+        assert progress["status"] == "running"
+        assert progress["last_update"] == progress["start_time"]
+
+
+def test_reader_sees_complete_local_generations_during_start(monkeypatch):
+    module = import_module("src.dashboard.app")
+    monkeypatch.delenv("J2O_DASHBOARD_PROGRESS_FILE", raising=False)
+    allocating, release = Event(), Event()
+
+    def delayed_id():
+        allocating.set()
+        assert release.wait(timeout=5)
+        return "new-run"
+
+    monkeypatch.setattr(module, "uuid4", delayed_id)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, module.start_migration_background({"component": "Check"}))
+        try:
+            assert allocating.wait(timeout=5)
+            assert module._progress().status == "idle"
+        finally:
+            release.set()
+        future.result(timeout=5)
+    progress = module._progress()
+    assert (progress.status, progress.migration_id, progress.current_component) == ("running", "new-run", "Check")

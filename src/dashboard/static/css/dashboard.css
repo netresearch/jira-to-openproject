@@ -60,6 +60,7 @@ button { font: inherit; font-size: .88rem; color: var(--accent); background: #ff
 button:hover:enabled { background: #eaf4f0; }
 button:disabled { cursor: default; color: #65706d; border-color: var(--line); }
 :focus-visible { outline: .19rem solid #287bb4; outline-offset: .14rem; }
+.site-header :focus-visible { outline-color: #fff; }
 .notice, #export-error { color: #873224; }
 .notice { display: block; margin-block: .6rem; }
 @media (max-width: 45rem) {
