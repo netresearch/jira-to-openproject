@@ -177,7 +177,6 @@ def analyze_differences(jira_issues: list[dict], op_work_packages: dict[str, dic
     print("\nAnalyzing differences...")
 
     user_mapping = mappings.get("user_mapping", {})
-    priority_mapping = mappings.get("priority_mapping", {})
 
     analysis = {
         "total_sampled": len(jira_issues),

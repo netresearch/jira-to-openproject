@@ -69,22 +69,6 @@ def main() -> None:
     else:
         print(f"Error executing script: {script_result.get('error')}")
 
-    # Example 5: Creating a record
-    print("\nExample 5: Creating a Record (not actually executed)")
-    # attributes = {
-    #     "name": "Test Project",
-    #     "identifier": "test-project-123",
-    #     "description": "A test project created via the API",
-    #     "status": "on_track"
-    # }
-
-    # Uncomment to actually create a project
-    # result = client.create_record("Project", attributes)
-    # if result["status"] == "success":
-    #     print(f"Created project with ID: {result['record'].get('id')}")
-    # else:
-    #     print(f"Error creating project: {result.get('errors')}")
-
     print("\nAll examples completed.")
 
 
