@@ -1276,142 +1276,68 @@ class TestCompleteMigrationWorkflow:
     @pytest.mark.end_to_end
     @pytest.mark.slow
     @pytest.mark.asyncio
-    async def test_component_dependency_order(self, temp_dir, test_env) -> None:
-        """Test that migration components run in the correct dependency order.
+    async def test_component_dependency_order(self, tmp_path, monkeypatch) -> None:
+        """Run users, projects and work packages with fresh mappings and a verified target project."""
+        for name in config.var_dirs:
+            directory = tmp_path if name == "root" else tmp_path / name
+            directory.mkdir(exist_ok=True)
+            monkeypatch.setitem(config.var_dirs, name, directory)
+        monkeypatch.setattr(config, "migration_config", {"dry_run": False, "no_backup": True})
 
-        This test validates:
-        1. Users are created before projects (projects need users)
-        2. Projects are created before work packages (work packages need projects)
-        3. Custom fields are created before work packages (work packages may use custom fields)
-        """
-        # Set up test environment
-        data_dir = temp_dir / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        test_env["J2O_DATA_DIR"] = str(data_dir)
+        jira, op, health = MagicMock(), MagicMock(), MagicMock()
+        jira.get_projects.return_value = [{"id": "10001", "key": "ORDER", "name": "Order fixture"}]
+        jira.jira.project.return_value = None
+        op.get_projects.return_value = []
+        op.get_roles.return_value = []
+        op.batch_get_custom_fields_by_names.return_value = {}
+        op.bulk_enable_project_modules.return_value = {"processed": 1, "failed": 0}
+        op.bulk_record_entity_provenance.return_value = {"success": 1, "failed": 0}
+        health.run_pre_migration_checks.return_value = (True, [])
+        health.run_during_migration_check.return_value = {"healthy": True}
+        health.cleanup_temp_files.return_value = SimpleNamespace(success=True, files_removed=0)
+        health.get_health_snapshot.return_value = SimpleNamespace(
+            container_disk_free_mb=100,
+            temp_file_count=0,
+            local_disk_free_mb=100,
+            remote_disk_free_mb=100,
+        )
 
-        call_order = []
+        order = []
+        with _isolated_global_mappings(tmp_path / "data") as mappings:
+            mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
+            mappings.set_mapping("issue_type_id", {"1": 1})
+            mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
 
-        def track_users_call(*args, **kwargs):
-            call_order.append("users")
-            return {"id": 1, "login": "test"}
+            def migrate_users(**_kwargs):
+                mappings.set_mapping("user", {"reader": {"openproject_id": 7}})
+                order.append("users")
+                return ComponentResult(success=True)
 
-        def track_projects_call(*args, **kwargs):
-            call_order.append("projects")
-            return {"id": 1, "identifier": "test"}
+            def lookup_target(_query):
+                assert mappings.get_mapping("user")["reader"]["openproject_id"] == 7
+                order.append("projects")
+                return [True, 42, "Order fixture", "order"]
 
-        def track_work_packages_call(*args, **kwargs):
-            call_order.append("work_packages")
-            return {"id": 1, "subject": "test"}
+            def migrate_work_packages(**_kwargs):
+                project = mappings.get_mapping("project")["ORDER"]
+                assert project["openproject_id"] == 42
+                assert project["openproject_identifier"] == "order"
+                order.append("work_packages")
+                return ComponentResult(success=True)
 
-        # Configure comprehensive mocks
-        mock_subprocess_run = setup_subprocess_mocks()
+            op.execute_query_to_json_file.side_effect = lookup_target
+            with (
+                patch("src.migration._create_migration_clients", return_value=(jira, op, health)),
+                patch(
+                    "src.application.components.user_migration.UserMigration.run_with_change_detection",
+                    side_effect=migrate_users,
+                ),
+                patch(
+                    "src.application.components.work_package_migration.WorkPackageMigration.run_with_change_detection",
+                    side_effect=migrate_work_packages,
+                ),
+            ):
+                result = await run_migration(components=["users", "projects", "work_packages"], no_confirm=True)
 
-        # Mock file system operations to handle different file types
-        def mock_path_exists(self) -> bool:
-            """Mock Path.exists to return False for custom field files to force migration."""
-            filename = str(self)
-            return not any(
-                cf_file in filename
-                for cf_file in [
-                    "jira_custom_fields.json",
-                    "op_custom_fields.json",
-                    "custom_field_mapping.json",
-                    "custom_field_analysis.json",
-                ]
-            )
-
-        with (
-            patch("src.migration.JiraClient") as mock_jira_class,
-            patch("src.migration.OpenProjectClient") as mock_op_class,
-            patch("src.migration.SSHClient"),
-            patch("src.migration.DockerClient"),
-            patch("src.migration.RailsConsoleClient"),
-            patch("src.migration.HealthCheckClient") as _mock_health_class,
-            patch("sys.exit"),
-            patch("subprocess.run", side_effect=mock_subprocess_run),
-            patch("pathlib.Path.exists", mock_path_exists),
-            patch("builtins.open", create=True) as mock_open,
-        ):
-            # Set up clients without spec restrictions
-            mock_jira = MagicMock()
-            mock_jira_class.return_value = mock_jira
-            mock_op = MagicMock()
-            mock_op_class.return_value = mock_op
-            _mock_health_class.return_value.run_pre_migration_checks.return_value = (True, [])
-
-            # Configure comprehensive mocks
-            mock_jira, mock_op = configure_comprehensive_mocks(mock_jira, mock_op)
-
-            # Configure file operations for issue types
-            work_package_types_data = [
-                {"id": 1, "name": "User Story"},
-                {"id": 2, "name": "Bug"},
-                {"id": 3, "name": "Task"},
-            ]
-            mock_file_handle = MagicMock()
-            mock_file_handle.read.return_value = json.dumps(work_package_types_data)
-            mock_file_handle.__enter__.return_value = mock_file_handle
-            mock_file_handle.__exit__.return_value = None
-            mock_open.return_value = mock_file_handle
-
-            # Track call order
-            mock_op.create_user.side_effect = track_users_call
-            mock_op.create_project.side_effect = track_projects_call
-            mock_op.create_work_package.side_effect = track_work_packages_call
-
-            # See note in test_large_dataset_migration: seed the preflight
-            # mappings so this test runs identically locally and in CI.
-            # Use the tmp-scoped helper so the writes don't pollute the
-            # developer's real ``var/data/``.
-            with _isolated_global_mappings(data_dir) as tmp_mappings:
-                tmp_mappings.set_mapping("project", {"TEST": {"openproject_id": 1}})
-                tmp_mappings.set_mapping("user", {"alice": {"openproject_id": 1}})
-                tmp_mappings.set_mapping("issue_type", {"Task": {"openproject_id": 1}})
-                tmp_mappings.set_mapping("issue_type_id", {"1": 1})
-                tmp_mappings.set_mapping("status", {"To Do": {"openproject_id": 1}})
-
-                with (
-                    patch(
-                        "src.config.migration_config",
-                        {
-                            "dry_run": False,
-                            "no_backup": True,
-                        },
-                    ),
-                    # See note in test_large_dataset_migration about stubbing the
-                    # heavy migrations; the dependency-order assertion below only
-                    # needs each component to complete successfully.
-                    patch(
-                        "src.application.components.user_migration.UserMigration.run",
-                        return_value=ComponentResult(
-                            success=True,
-                            message="stubbed user migration",
-                            success_count=0,
-                        ),
-                    ),
-                    patch(
-                        "src.application.components.work_package_migration.WorkPackageMigration.run",
-                        return_value=ComponentResult(
-                            success=True,
-                            message="stubbed work package migration",
-                            success_count=0,
-                        ),
-                    ),
-                ):
-                    result = await run_migration(
-                        components=["users", "projects", "work_packages"],
-                        no_confirm=True,
-                    )
-
-            # Validate migration completed successfully
-            assert result.overall["status"] == "success"
-
-            # Note: Actual call order depends on cached data availability
-            # If mapping files exist, some calls may not occur
-            # The important thing is that the migration system handles dependencies correctly
-            # and completes successfully
-            print(f"Call order observed: {call_order}")
-
-            # All components should succeed regardless of call order
-            for component_result in result.components.values():
-                assert component_result.success is True
+        assert result.overall["status"] == "success"
+        assert order == ["users", "projects", "work_packages"]
