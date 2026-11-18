@@ -124,7 +124,12 @@ class ReportingMigration(BaseMigration):
             project_id = self._mapped_project(project_key)
             if project_id:
                 queries.append(
-                    {"name": f"Jira Filter {row['id']}", "project_id": project_id, "is_public": True, "options": {}}
+                    {
+                        "name": f"Jira Filter {row['id']}",
+                        "project_id": project_id,
+                        "is_public": True,
+                        "options": {"include_subprojects": False, "filters": []},
+                    }
                 )
             elif fallback is None:
                 fallback = self._reporting_project()

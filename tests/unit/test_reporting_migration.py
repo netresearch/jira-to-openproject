@@ -122,9 +122,10 @@ def test_reporting_migration_end_to_end_creates_query_and_wiki(_mock_mappings: N
     assert mapped.details["filters"] == 1
     assert mapped.details["dashboards"] == 1
     assert result.success is True
-    # One filter-query + one dashboard-wiki = 2 successful artefacts.
+    # One saved query, the original JQL page and the dashboard summary.
     assert result.success_count == 3
     assert op.queries[0]["project_id"] == 11
+    assert op.queries[0]["options"] == {"include_subprojects": False, "filters": []}
     assert "project = PROJ" in op.wikis[1]["content"]
     # Wiki page got the matched project_id from sharePermissions (11), not the
     # reporting fallback (555).
