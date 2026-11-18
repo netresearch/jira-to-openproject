@@ -15,6 +15,8 @@
 
 # Use 1 second increment for safer timestamp spacing (avoids precision issues with microseconds)
 SYNTHETIC_TIMESTAMP_INCREMENT = 1  # 1 second increment
+sql_row_separator = ",\n       "
+journal_timestamp_format = '%Y-%m-%d %H:%M:%S.%6N%:z'
 
 if rails_ops && rails_ops.respond_to?(:each)
   catch(:skip_work_package) do
@@ -28,7 +30,7 @@ if rails_ops && rails_ops.respond_to?(:each)
 
     if v2_plus_count > 0
       # Delete associated customizable_journals and work_package_journals first
-      v2_plus_ids = v2_plus_journals.pluck(:id)
+      v2_plus_ids = v2_plus_journals.ids
       if v2_plus_ids.any?
         Journal::CustomizableJournal.where(journal_id: v2_plus_ids).delete_all
         # Get data_ids before deleting journals
@@ -227,10 +229,10 @@ if rails_ops && rails_ops.respond_to?(:each)
           v1_journal.save(validate: false)
 
           # Update timestamps via raw SQL
-          target_time_str = target_time.to_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+          target_time_str = target_time.to_time.strftime(journal_timestamp_format)
           if validity_period.end
             period_end_time = validity_period.end.is_a?(Time) ? validity_period.end : Time.parse(validity_period.end.to_s)
-            period_end_str = period_end_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+            period_end_str = period_end_time.strftime(journal_timestamp_format)
             range_sql = "tstzrange('#{target_time_str}', '#{period_end_str}', '[)')"
           else
             range_sql = "tstzrange('#{target_time_str}', NULL, '[)')"
@@ -318,7 +320,7 @@ if rails_ops && rails_ops.respond_to?(:each)
         INSERT INTO work_package_journals (type_id, project_id, subject, description,
           due_date, category_id, status_id, assigned_to_id, priority_id, version_id, author_id,
           done_ratio, estimated_hours, start_date, parent_id, schedule_manually, ignore_non_working_days)
-        VALUES #{wp_journal_values.join(",\n       ")}
+        VALUES #{wp_journal_values.join(sql_row_separator)}
         RETURNING id
       SQL
 
@@ -335,12 +337,12 @@ if rails_ops && rails_ops.respond_to?(:each)
         wp_journal_id = wp_journal_ids[idx]
         next nil unless wp_journal_id
 
-        ts_str = j[:created_at].to_time.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+        ts_str = j[:created_at].to_time.strftime(journal_timestamp_format)
         notes_escaped = conn.quote(j[:notes].to_s)
 
         if j[:validity_period].end
           period_end = j[:validity_period].end.is_a?(Time) ? j[:validity_period].end : Time.parse(j[:validity_period].end.to_s)
-          period_end_str = period_end.strftime('%Y-%m-%d %H:%M:%S.%6N%:z')
+          period_end_str = period_end.strftime(journal_timestamp_format)
           range_sql = "tstzrange('#{ts_str}', '#{period_end_str}', '[)')"
         else
           range_sql = "tstzrange('#{ts_str}', NULL, '[)')"
@@ -354,7 +356,7 @@ if rails_ops && rails_ops.respond_to?(:each)
         insert_sql = <<~SQL
           INSERT INTO journals (journable_id, journable_type, user_id, notes, version, created_at, updated_at,
             data_type, data_id, validity_period)
-          VALUES #{journal_values.join(",\n       ")}
+          VALUES #{journal_values.join(sql_row_separator)}
           RETURNING id, version
         SQL
 
@@ -403,7 +405,7 @@ if rails_ops && rails_ops.respond_to?(:each)
         if cf_journal_values.any?
           cf_insert_sql = <<~SQL
             INSERT INTO customizable_journals (journal_id, custom_field_id, value)
-            VALUES #{cf_journal_values.join(",\n       ")}
+            VALUES #{cf_journal_values.join(sql_row_separator)}
           SQL
           conn.execute(cf_insert_sql)
         end
