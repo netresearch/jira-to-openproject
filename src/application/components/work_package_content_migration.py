@@ -435,6 +435,24 @@ class WorkPackageContentMigration(BaseMigration):
             self.logger.debug("Failed to update description for WP#%d: %s", wp_id, e)
             return False
 
+    def _mapped_field_value(self, mapping: Any, value: Any, issue_key: str) -> Any:
+        """Prepare values according to their target format without changing selection labels."""
+        field_format = mapping.get("openproject_type") if isinstance(mapping, dict) else None
+        if field_format == "user":
+            # Never use a numeric Jira user ID as an OpenProject user ID.
+            users = value if isinstance(value, list) else [value]
+            ids = []
+            for user in users:
+                payload = {"name": user, "key": user} if isinstance(user, str) else user
+                op_id = self._resolve_jira_user_id(payload)
+                if op_id is None:
+                    return {"unmapped_jira_user": True}
+                ids.append(op_id)
+            return ids if isinstance(value, list) else ids[0]
+        if isinstance(value, str) and field_format in (None, "text", "string"):
+            return self._convert_jira_links(value, jira_key=issue_key)
+        return value
+
     def _populate_custom_fields(
         self,
         jira_issue: Issue,
@@ -465,10 +483,7 @@ class WorkPackageContentMigration(BaseMigration):
                 mapping = self.custom_field_mapping[jira_field_id]
                 op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
                 if op_cf_id:
-                    # Convert value if it's text (may contain links or attachments)
-                    if isinstance(value, str):
-                        value = self._convert_jira_links(value, jira_key=jira_issue.key)
-                    updates[f"customField{op_cf_id}"] = value
+                    updates[f"customField{op_cf_id}"] = self._mapped_field_value(mapping, value, jira_issue.key)
 
         if updates:
             try:
@@ -617,7 +632,7 @@ class WorkPackageContentMigration(BaseMigration):
             return 0
 
         for watcher in watchers:
-            op_user_id = self._resolve_watcher_user_id(watcher)
+            op_user_id = self._resolve_jira_user_id(watcher)
             if not op_user_id:
                 continue
             try:
@@ -628,8 +643,8 @@ class WorkPackageContentMigration(BaseMigration):
 
         return added
 
-    def _resolve_watcher_user_id(self, watcher: Any) -> int | None:
-        """Resolve a Jira watcher payload to an OpenProject user id.
+    def _resolve_jira_user_id(self, watcher: Any) -> int | None:
+        """Resolve a Jira user from a watcher or custom field to an OpenProject user id.
 
         Phase 7g: parse the watcher payload at the boundary via
         :class:`JiraUser` and probe ``user_mapping`` using the canonical
@@ -718,9 +733,9 @@ class WorkPackageContentMigration(BaseMigration):
                 mapping = self.custom_field_mapping[jira_field_id]
                 op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
                 if op_cf_id:
-                    if isinstance(value, str):
-                        value = self._convert_jira_links(value, jira_key=jira_issue.key)
-                    collected["custom_field_updates"][f"customField{op_cf_id}"] = value
+                    collected["custom_field_updates"][f"customField{op_cf_id}"] = self._mapped_field_value(
+                        mapping, value, jira_issue.key
+                    )
 
         # Collect comments — preserve author id and Jira comment id so
         # _bulk_process_collected_content can include both in every activity
@@ -745,14 +760,15 @@ class WorkPackageContentMigration(BaseMigration):
                             "created_at": _coerce_comment_timestamp(getattr(comment, "created", None)),
                         }
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            collected["comment_read_failed"] = True
+            self.logger.warning("Incomplete Jira comment read for %s: %s", jira_issue.key, exc)
 
         # Collect watchers
         try:
             watchers = self.jira_client.get_issue_watchers(jira_issue.key)
             for watcher in watchers:
-                op_user_id = self._resolve_watcher_user_id(watcher)
+                op_user_id = self._resolve_jira_user_id(watcher)
                 if op_user_id:
                     collected["watchers"].append(op_user_id)
         except Exception:
@@ -775,50 +791,46 @@ class WorkPackageContentMigration(BaseMigration):
         """
         results = {
             "descriptions_updated": 0,
+            "descriptions_failed": 0,
             "custom_fields_updated": 0,
+            "custom_fields_failed": 0,
             "comments_migrated": 0,
             "comments_failed": 0,
+            "comment_reads_failed": sum(bool(item.get("comment_read_failed")) for item in collected_items),
             "watchers_added": 0,
         }
 
-        if not collected_items:
-            return results
-
-        # Batch 1: Descriptions (using batch_update_work_packages)
-        description_updates = []
-        for item in collected_items:
-            if item["description_update"]:
-                description_updates.append(
-                    {
-                        "id": item["wp_id"],
-                        "description": item["description_update"],
-                    },
-                )
-
-        if description_updates:
+        descriptions = [
+            {"id": item["wp_id"], "description": item["description_update"]}
+            for item in collected_items
+            if item["description_update"]
+        ]
+        # An unmapped selection or reference must not roll back the other
+        # fields on the same issue. All rows still travel in one Rails call.
+        fields = [
+            {"id": item["wp_id"], key: value}
+            for item in collected_items
+            for key, value in item["custom_field_updates"].items()
+        ]
+        for kind, updates in (("descriptions", descriptions), ("custom_fields", fields)):
+            if not updates:
+                continue
             try:
-                result = self.op_client.batch_update_work_packages(description_updates)
-                results["descriptions_updated"] = result.get("updated", 0)
-            except Exception as e:
-                self.logger.debug("Bulk description update failed: %s", e)
-
-        # Batch 2: Custom fields (using batch_update_work_packages)
-        cf_updates = []
-        for item in collected_items:
-            if item["custom_field_updates"]:
-                cf_updates.append(
-                    {
-                        "id": item["wp_id"],
-                        **item["custom_field_updates"],
-                    },
-                )
-
-        if cf_updates:
-            try:
-                result = self.op_client.batch_update_work_packages(cf_updates)
-                results["custom_fields_updated"] = result.get("updated", 0)
-            except Exception as e:
-                self.logger.debug("Bulk custom field update failed: %s", e)
+                result = self.op_client.batch_update_work_packages(updates)
+                updated = int(result["updated"])
+                if not 0 <= updated <= len(updates):
+                    msg = "Invalid work package update count"
+                    raise ValueError(msg)
+                results[f"{kind}_updated"] = updated
+                results[f"{kind}_failed"] = len(updates) - updated
+                if results[f"{kind}_failed"]:
+                    errors = [row for row in result.get("results", []) if row.get("status") == "failed"]
+                    self.logger.warning(
+                        "Incomplete %s batch: %d failed. First failures: %s", kind, len(updates) - updated, errors[:3]
+                    )
+            except Exception as exc:
+                results[f"{kind}_failed"] = len(updates)
+                self.logger.warning("Could not confirm %s writes: %s", kind, exc)
 
         # Batch 3: Comments (using bulk_create_work_package_activities).
         # Each entry in item["comments"] carries comment text, user_id,
@@ -848,6 +860,8 @@ class WorkPackageContentMigration(BaseMigration):
                 # previously only ``created`` was read, so dropped comments
                 # (e.g. all but the first per WP) looked like a clean success (#260).
                 failed = int(result.get("failed", 0) or 0)
+                acknowledged = int(result.get("created", 0)) + int(result.get("skipped", 0))
+                failed = max(failed, len(all_comments) - acknowledged, int(result.get("success") is False))
                 results["comments_failed"] = failed
                 if failed or result.get("success") is False:
                     self.logger.warning(
@@ -940,6 +954,9 @@ class WorkPackageContentMigration(BaseMigration):
             "total_skipped": 0,
             "total_failed": 0,
             "descriptions_updated": 0,
+            "descriptions_failed": 0,
+            "custom_fields_failed": 0,
+            "comment_reads_failed": 0,
             "custom_fields_updated": 0,
             "comments_migrated": 0,
             "comments_failed": 0,
@@ -986,11 +1003,8 @@ class WorkPackageContentMigration(BaseMigration):
                 if len(collected_batch) >= batch_size:
                     batch_results = self._bulk_process_collected_content(collected_batch)
                     project_results["updated"] += len(collected_batch)
-                    results["descriptions_updated"] += batch_results["descriptions_updated"]
-                    results["custom_fields_updated"] += batch_results["custom_fields_updated"]
-                    results["comments_migrated"] += batch_results["comments_migrated"]
-                    results["comments_failed"] += batch_results.get("comments_failed", 0)
-                    results["watchers_added"] += batch_results["watchers_added"]
+                    for metric, count in batch_results.items():
+                        results[metric] += count
 
                     self.logger.info(
                         "  Bulk processed %d work packages for %s (total: %d)",
@@ -1004,11 +1018,8 @@ class WorkPackageContentMigration(BaseMigration):
             if collected_batch:
                 batch_results = self._bulk_process_collected_content(collected_batch)
                 project_results["updated"] += len(collected_batch)
-                results["descriptions_updated"] += batch_results["descriptions_updated"]
-                results["custom_fields_updated"] += batch_results["custom_fields_updated"]
-                results["comments_migrated"] += batch_results["comments_migrated"]
-                results["comments_failed"] += batch_results.get("comments_failed", 0)
-                results["watchers_added"] += batch_results["watchers_added"]
+                for metric, count in batch_results.items():
+                    results[metric] += count
 
                 self.logger.info(
                     "  Bulk processed %d work packages for %s (final batch)",
@@ -1077,9 +1088,21 @@ class WorkPackageContentMigration(BaseMigration):
             end_time = datetime.now(tz=UTC)
             duration_seconds = (end_time - start_time).total_seconds()
 
+            failures = sum(
+                migration_results.get(key, 0)
+                for key in (
+                    "total_failed",
+                    "descriptions_failed",
+                    "custom_fields_failed",
+                    "comments_failed",
+                    "comment_reads_failed",
+                )
+            )
             return ComponentResult(
-                status="success",
-                success=True,
+                status="error" if failures else "success",
+                success=failures == 0,
+                failed=failures,
+                error=f"{failures} content reads or writes failed. Review the batch diagnostics." if failures else None,
                 timestamp=end_time.isoformat(),
                 start_time=start_time.isoformat(),
                 duration_seconds=duration_seconds,
@@ -1091,6 +1114,10 @@ class WorkPackageContentMigration(BaseMigration):
                     "descriptions_updated": migration_results["descriptions_updated"],
                     "comments_migrated": migration_results["comments_migrated"],
                     "comments_failed": migration_results.get("comments_failed", 0),
+                    "comment_reads_failed": migration_results.get("comment_reads_failed", 0),
+                    "descriptions_failed": migration_results.get("descriptions_failed", 0),
+                    "custom_fields_failed": migration_results.get("custom_fields_failed", 0),
+                    "custom_fields_updated": migration_results.get("custom_fields_updated", 0),
                 },
             )
         except Exception as e:

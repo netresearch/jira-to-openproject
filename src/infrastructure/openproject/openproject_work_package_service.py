@@ -131,30 +131,62 @@ class OpenProjectWorkPackageService:
         if not updates:
             return {"updated": 0, "failed": 0, "results": []}
 
-        # Build batch update script
-        # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
-        # that Ruby misinterprets as invalid Unicode escape sequences
-        # NOTE: Ruby parses {"key": value} as symbol keys (:key), so we use :id etc.
         updates_json = json.dumps(updates, ensure_ascii=False)
         script = f"""
-        updates = {updates_json}
+        updates = JSON.parse(<<-'J2O_UPDATES'
+{updates_json}
+J2O_UPDATES
+)
         updated_count = 0
         failed_count = 0
         results = []
 
         updates.each do |update|
           begin
-            wp = WorkPackage.find(update[:id])
-            update.each do |key, value|
-              next if key == :id
-              wp.send("#{{key}}=", value) if wp.respond_to?("#{{key}}=")
+            wp = WorkPackage.find(update.fetch('id'))
+            wp.with_lock(requires_new: true) do
+              attributes = update.except('id')
+              fields = attributes.extract!(*attributes.keys.grep(/\\AcustomField[0-9]+\\z/))
+              wp.assign_attributes(attributes)
+              expected = {{}}
+              values = fields.to_h do |key, raw|
+                cf = wp.available_custom_fields.find {{ |f| f.id == key.delete_prefix('customField').to_i }}
+                raise "Field #{{key}} unavailable for work package" unless cf
+                items = raw.is_a?(Array) ? raw : [raw]
+                raise "Multiple values for single field #{{key}}" if !cf.multi_value? && items.size > 1
+                normalized = items.map do |item|
+                  if cf.field_format == 'list' && !item.nil?
+                    raise "Cascading selection needs a mapping for #{{key}}" if item.is_a?(Hash) && item['child']
+                    label = item.is_a?(Hash) ? (item['value'] || item['name']) : item
+                    ids = cf.custom_options.where(value: label.to_s).limit(2).pluck(:id)
+                    raise "Missing or ambiguous option for #{{key}}" unless ids.one?
+                    item = ids.first
+                  elsif cf.field_format == 'user'
+                    raise "Unmapped user for #{{key}}" unless item.is_a?(Integer) && User.exists?(item)
+                  elsif item.is_a?(Hash) || item.is_a?(Array) || cf.field_format == 'version'
+                    raise "Source value needs an explicit mapping for #{{key}}"
+                  end
+                  CustomValue.new(custom_field: cf, value: item).value
+                end
+                expected[cf.id] = normalized.compact.reject(&:empty?).sort
+                [cf.id, cf.multi_value? ? normalized : normalized.first]
+              end
+              wp.custom_field_values = values unless values.empty?
+              wp.save!
+              unless expected.empty?
+                stored = CustomValue.where(customized: wp, custom_field_id: expected.keys)
+                                    .pluck(:custom_field_id, :value).group_by(&:first)
+                expected.each do |id, want|
+                  actual = Array(stored[id]).map(&:last).compact.reject(&:empty?).sort
+                  raise "Custom field #{{id}} was not persisted" unless actual == want
+                end
+              end
             end
-            wp.save!
             updated_count += 1
             results << {{ id: wp.id, status: 'updated' }}
           rescue => e
             failed_count += 1
-            results << {{ id: update[:id], status: 'failed', error: e.message }}
+            results << {{ id: update['id'], status: 'failed', error: e.message }}
           end
         end
 

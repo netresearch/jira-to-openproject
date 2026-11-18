@@ -171,3 +171,48 @@ def test_run_returns_success_on_clean_migration(
     assert result.success is True
     assert result.details["total_updated"] == 1
     assert result.details["descriptions_updated"] == 1
+
+
+@pytest.mark.parametrize("batch_size", [1, 10])
+def test_run_reports_unread_comments_and_individual_field_failures(tmp_path, _mock_mappings, monkeypatch, batch_size):
+    from types import SimpleNamespace
+
+    from src import config
+
+    monkeypatch.setattr(config, "migration_config", {"batch_size": batch_size})
+    mig = _build_mig(tmp_path)
+    mig.work_package_mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
+    mig.custom_field_mapping = {"customfield_1": 91, "customfield_2": 92}
+    mig.jira_client.get_projects.return_value = [{"key": "PROJ"}]
+    issue = SimpleNamespace(
+        key="PROJ-1",
+        id="1001",
+        fields=SimpleNamespace(description=None),
+        raw={"fields": {"customfield_1": 4, "customfield_2": {"value": "unknown"}}},
+    )
+    monkeypatch.setattr(mig, "iter_project_issues", lambda project: iter([issue]))
+    mig.jira_client.jira.comments.side_effect = OSError("read failed")
+    mig.op_client.batch_update_work_packages.return_value = {
+        "updated": 1,
+        "failed": 1,
+        "results": [{"id": 5001, "status": "failed"}],
+    }
+    result = mig.run()
+    mig.op_client.batch_update_work_packages.assert_called_once_with(
+        [
+            {"id": 5001, "customField91": 4},
+            {"id": 5001, "customField92": {"value": "unknown"}},
+        ]
+    )
+    assert not result.success and result.failed == 2
+    assert result.details["comment_reads_failed"] == result.details["custom_fields_failed"] == 1
+    assert result.details["custom_fields_updated"] == 1
+
+
+def test_user_field_converts_jira_accounts_and_preserves_list_labels(tmp_path, _mock_mappings):
+    mig = _build_mig(tmp_path)
+    assert mig._mapped_field_value({"openproject_type": "user"}, [{"name": "alice"}], "PROJ-1") == [21]
+    assert mig._mapped_field_value({"openproject_type": "user"}, {"name": "unknown"}, "PROJ-1") == {
+        "unmapped_jira_user": True
+    }
+    assert mig._mapped_field_value({"openproject_type": "list"}, "PROJ-1", "PROJ-1") == "PROJ-1"

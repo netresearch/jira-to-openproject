@@ -153,3 +153,10 @@ def test_load_writes_actual_cf_value_not_placeholder(monkeypatch: pytest.MonkeyP
     joined = "\n".join(set_scripts)
     assert "Free text" in joined, "actual Jira CF value must be written, not discarded"
     assert "=> 'set'" not in joined, "placeholder 'set' must not replace the real value"
+
+
+def test_generic_pass_leaves_native_mapped_values_to_content_migration():
+    mig = CustomFieldsGenericMigration(jira_client=DummyJira(), op_client=DummyOp())
+    mapping = mig.mappings.get_mapping("custom_field")
+    mapping["customfield_10010"]["openproject_id"] = 23
+    assert mig._extract().data["values_by_wp"][20001] == [("Text Field", "text", "Free text")]

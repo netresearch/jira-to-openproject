@@ -172,3 +172,93 @@ def test_agile_metadata_roundtrip(rails, monkeypatch, tmp_path):
     transition = {"type_id": type_id, "from_status_id": from_id, "to_status_id": to_id}
     assert setup.sync_workflow_transitions([transition], [role_id]) == {"existing": 0, "created": 1, "errors": 0}
     assert setup.sync_workflow_transitions([transition], [role_id]) == {"existing": 1, "created": 0, "errors": 0}
+
+
+def test_work_package_content_roundtrip(rails):
+    """Read back imported content, option IDs and two backdated journals."""
+    from src.infrastructure.openproject.openproject_bulk_create_service import OpenProjectBulkCreateService
+    from src.infrastructure.openproject.openproject_work_package_content_service import (
+        OpenProjectWorkPackageContentService,
+    )
+
+    client, query = rails
+    seed = query("""
+      wp = WorkPackage.first!
+      {project_id: wp.project_id, type_id: wp.type_id, author_id: User.current.id,
+       priority_id: wp.priority_id, status_id: wp.status_id}
+    """)
+    fields = OpenProjectCustomFieldService(client)
+    text_id = fields.ensure_custom_field("J2O Test Text", field_format="string")["id"]
+    user_id = fields.ensure_custom_field("J2O Test User", field_format="user")["id"]
+    flag_id = fields.ensure_custom_field("J2O Test Flag", field_format="bool")["id"]
+    query("""
+      cf = WorkPackageCustomField.new(name: 'J2O Test List', field_format: 'list', is_for_all: true)
+      cf.custom_options.build(value: 'One')
+      cf.custom_options.build(value: 'Two')
+      cf.save!
+    """)
+    list_id = fields.ensure_custom_field("J2O Test List", field_format="list")["id"]
+    client.docker_client.transfer_file_to_container.side_effect = client.transfer_file_to_container.side_effect
+    rows = [
+        {
+            **seed,
+            "subject": f"Test item {n}",
+            "custom_fields": [{"id": text_id, "value": "initial"}],
+            "created_at": "2020-11-18T09:30:00Z",
+        }
+        for n in range(3)
+    ]
+    created = OpenProjectBulkCreateService(client)._create_work_packages_batch(rows)
+    assert created["created"] == 3, created
+    wp_id = created["results"][-1]["id"]
+
+    def values(field_id):
+        return query(
+            f"CustomValue.where(customized: WorkPackage.find({wp_id}), custom_field_id: {field_id}).pluck(:value)"
+        )
+
+    assert values(text_id) == ["initial"]
+    assert query(f"WorkPackage.find({wp_id}).created_at.utc.iso8601") == "2020-11-18T09:30:00Z"
+    service = OpenProjectWorkPackageService(client)
+    updates = [
+        {
+            "id": wp_id,
+            "description": "Beschreibung ä",
+            f"customField{text_id}": "übernommen",
+            f"customField{flag_id}": False,
+            f"customField{user_id}": seed["author_id"],
+            f"customField{list_id}": {"id": "jira-99", "value": "Two"},
+        }
+    ]
+    for _ in range(2):
+        result = service.batch_update_work_packages(updates)
+        assert result["updated"] == 1 and result["failed"] == 0, result
+        assert values(text_id) == ["übernommen"]
+        assert values(user_id) == [str(seed["author_id"])]
+        assert query(f"WorkPackage.find({wp_id}).description") == "Beschreibung ä"
+        assert query(f"WorkPackage.find({wp_id}).custom_value_for(CustomField.find({flag_id})).typed_value") is False
+        option_id = query(f"CustomField.find({list_id}).custom_options.find_by!(value: 'Two').id")
+        assert values(list_id) == [str(option_id)]
+    failed = service.batch_update_work_packages(
+        [{"id": wp_id, "description": "incomplete", f"customField{list_id}": {"id": "other", "value": "Missing"}}]
+    )
+    assert failed["failed"] == 1
+    assert query(f"WorkPackage.find({wp_id}).description") == "Beschreibung ä"
+
+    journals = OpenProjectWorkPackageContentService(client)
+    notes = [
+        {
+            "work_package_id": wp_id,
+            "comment": f"Test note {n}",
+            "user_id": seed["author_id"],
+            "jira_comment_id": str(n),
+            "created_at": f"2021-01-0{n}T11:00:00Z",
+        }
+        for n in (1, 2)
+    ]
+    assert journals.bulk_create_work_package_activities(notes)["created"] == 2
+    assert journals.bulk_create_work_package_activities(notes)["skipped"] == 2
+    assert query(f"""
+      Journal.where(journable_type: 'WorkPackage', journable_id: {wp_id}).where('notes LIKE ?', '%Test note%')
+             .order(:id).map {{ |j| [j.notes.lines.first.strip, j.created_at.utc.iso8601, j.user_id] }}
+    """) == [[note["comment"], note["created_at"], seed["author_id"]] for note in notes]

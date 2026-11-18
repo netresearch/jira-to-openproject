@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded `AGENTS.md` with Overview, Setup, Development, Architecture, Testing, and Critical-constraints sections.
 
 ### Changed
+- Work-package content writes persist mapped field values through OpenProject custom values. Incomplete writes and unread Jira comment collections now surface in the component result.
 - `Dockerfile.test` now includes OCI labels and a `HEALTHCHECK`.
 - All Python dependencies upgraded to their latest compatible releases (see commit history and `uv.lock`).
 
