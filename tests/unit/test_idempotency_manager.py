@@ -411,3 +411,21 @@ class TestIdempotencyKeyManager:
         retrieved = self.manager.get_cached_result("large-payload")
         assert retrieved.found
         assert len(retrieved.value["items"]) == 10000
+
+
+@pytest.mark.parametrize(
+    ("configured", "explicit", "expected"),
+    [
+        (None, None, "redis://redis:6379"),
+        ("redis://valkey:6379", None, "redis://valkey:6379"),
+        ("redis://valkey:6379", "redis://other:6379/1", "redis://other:6379/1"),
+    ],
+)
+def test_idempotency_cache_url_precedence(monkeypatch, configured, explicit, expected):
+    if configured is None:
+        monkeypatch.delenv("REDIS_URL", raising=False)
+    else:
+        monkeypatch.setenv("REDIS_URL", configured)
+    with patch("redis.Redis.from_url") as connect:
+        IdempotencyKeyManager(redis_url=explicit)
+    assert connect.call_args.args == (expected,)

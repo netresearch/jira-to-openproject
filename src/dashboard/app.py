@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -51,16 +52,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     bootstrap()
 
     try:
-        redis_client = redis.Redis(
-            host="localhost",
-            port=6379,
-            db=0,
+        redis_client = redis.Redis.from_url(
+            os.environ.get("REDIS_URL", "redis://localhost:6379"),
             decode_responses=True,
         )
         await redis_client.ping()
-        logger.info("Connected to Redis")
+        logger.info("Connected to the dashboard cache")
     except Exception:
-        logger.warning("Could not connect to Redis")
+        logger.warning("Could not connect to the dashboard cache")
         redis_client = None
 
     t_metrics: asyncio.Task[object] = asyncio.create_task(collect_system_metrics())
@@ -77,7 +76,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         if redis_client:
-            await redis_client.close()
+            await redis_client.aclose()
         logger.info("Dashboard shutdown complete")
 
 

@@ -35,12 +35,12 @@ services:
       # This migration tool uses SSH-based remote Docker client - no local Docker daemon access needed
       # See src/infrastructure/openproject/docker_client.py for SSH-based Docker operations
     environment:
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=${REDIS_URL:-redis://valkey:6379}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jira_migration}
       - PYTHONPATH=/app
       - SSH_AUTH_SOCK=/ssh-agent
     depends_on:
-      - redis
+      - valkey
       - postgres
     restart: unless-stopped
     deploy:
@@ -54,7 +54,7 @@ services:
 
   # Mock Jira API server
   mock-jira:
-    image: stoplight/prism:5.15.10
+    image: stoplight/prism:5
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     profiles:
       - test
@@ -75,7 +75,7 @@ services:
 
   # Mock OpenProject API server
   mock-openproject:
-    image: stoplight/prism:5.15.10
+    image: stoplight/prism:5
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     profiles:
       - test
@@ -94,15 +94,17 @@ services:
           cpus: '0.1'
           memory: 64M
 
-  # Redis for caching and task queues
-  redis:
-    image: redis:8.10.3-alpine
-    # SECURITY: No port exposure needed - internal service only
-    # NOTE: Redis Alpine runs as dedicated 'redis' user (not root) by default - no custom user needed
+  # Redis-compatible cache; keep the original hostname for existing client URLs.
+  valkey:
+    image: valkey/valkey:9-alpine
+    networks:
+      default:
+        aliases:
+          - redis
     volumes:
-      - redis_data:/data
+      - valkey_data:/data
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: valkey-server --appendonly yes
     deploy:
       resources:
         limits:
@@ -114,7 +116,7 @@ services:
 
   # PostgreSQL for data storage
   postgres:
-    image: postgres:18.7-alpine
+    image: postgres:18-alpine
     # SECURITY: No port exposure needed - internal service only
     # NOTE: PostgreSQL Alpine runs as dedicated 'postgres' user (not root) by default - no custom user needed
     env_file:
@@ -155,12 +157,12 @@ services:
     volumes:
       - .:/app
     environment:
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=${REDIS_URL:-redis://valkey:6379}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jira_migration}
       - PYTHONPATH=/app
       - PYTEST_ADDOPTS=-v --tb=short
     depends_on:
-      - redis
+      - valkey
       - postgres
       - mock-jira
       - mock-openproject
@@ -177,5 +179,5 @@ services:
           memory: 512M
 
 volumes:
-  redis_data:
+  valkey_data:
   postgres_data:
