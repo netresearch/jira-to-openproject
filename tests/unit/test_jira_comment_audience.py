@@ -119,8 +119,10 @@ def test_legacy_history_requires_an_identifiable_non_comment_field():
     history = [
         {"field": "Kommentar", "toString": "confidential revision"},
         {"field": "Texte du journal", "fieldtype": "jira", "fromString": "another private revision"},
+        {"field": "  ", "fieldtype": "custom", "toString": "unidentified custom revision"},
         {"field": "Status", "toString": "Done"},
+        {"field": "Legacy Team", "fieldtype": "custom", "toString": "Platform"},
         {"field": "Team", "fieldId": "customfield_10400", "toString": "Platform"},
     ]
     result = issue_without_comments({"changelog": {"histories": [{"items": history}]}})
-    assert result["changelog"]["histories"][0]["items"] == history[2:]
+    assert result["changelog"]["histories"][0]["items"] == history[3:]

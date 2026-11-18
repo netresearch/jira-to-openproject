@@ -85,7 +85,7 @@ def may_copy_history_item(item: dict[str, Any]) -> bool:
     return (
         key in _HISTORY_FIELDS
         or (key.startswith("customfield_") and key.removeprefix("customfield_").isdecimal())
-        or (item.get("fieldtype") == "custom" and not field_id)
+        or (item.get("fieldtype") == "custom" and not field_id and isinstance(item.get("field"), str) and bool(field))
     )
 
 
