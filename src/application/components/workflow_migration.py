@@ -322,13 +322,9 @@ class WorkflowMigration(BaseMigration):
         issue_type_to_workflow: dict[str, str] = {}
         workflow_names: set[str] = set()
         for scheme in schemes:
-            mappings = scheme.get("issueTypeMappings") or scheme.get("mappings") or {}
-            if isinstance(mappings, dict):
-                for type_id, workflow in mappings.items():
-                    name = issue_type_by_id.get(str(type_id))
-                    if name and isinstance(workflow, str) and workflow:
-                        issue_type_to_workflow[name] = workflow
-                        workflow_names.add(workflow)
+            for name, workflow in WorkflowMigration._explicit_workflows(scheme, issue_type_by_id):
+                issue_type_to_workflow[name] = workflow
+                workflow_names.add(workflow)
             default = scheme.get("defaultWorkflow")
             if isinstance(default, str) and default and not issue_type_to_workflow:
                 issue_type_to_workflow.update(dict.fromkeys(issue_type_by_id.values(), default))
@@ -367,3 +363,12 @@ class WorkflowMigration(BaseMigration):
         if not role_ids:
             role_ids = [int(role["id"]) for role in roles if int(role.get("id", 0)) > 0]
         return role_ids
+
+    @staticmethod
+    def _explicit_workflows(scheme: dict, issue_type_by_id: dict) -> Iterator[tuple[str, str]]:
+        mappings = scheme.get("issueTypeMappings") or scheme.get("mappings") or {}
+        if isinstance(mappings, dict):
+            for type_id, workflow in mappings.items():
+                name = issue_type_by_id.get(str(type_id))
+                if name and isinstance(workflow, str) and workflow:
+                    yield name, workflow
