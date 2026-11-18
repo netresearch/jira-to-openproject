@@ -16,34 +16,15 @@ This module provides advanced audit trail migration capabilities that:
 from pathlib import Path
 from typing import Any, TypedDict
 
+from src import config
 from src.display import configure_logging
-from src.infrastructure.jira.comment_audience import may_copy_history_item
+from src.infrastructure.jira.comment_audience import has_comment_audience, may_copy_history_item
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.markdown_converter import MarkdownConverter
 
 # Get logger from config
 logger = configure_logging("INFO", None)
-
-
-# Add config attribute for tests and modules expecting src.application.components.tempo_account_migration.config
-def _default_get_path(key: str) -> Path:
-    # Default to local ./data for tests unless overridden by patches
-    if key == "data":
-        return Path("data")
-    if key == "results":
-        return Path("data")
-    return Path("data")
-
-
-config = type(
-    "Config",
-    (),
-    {
-        "logger": logger,
-        "get_path": staticmethod(_default_get_path),
-    },
-)()
 
 
 class AuditEventData(TypedDict):
@@ -77,11 +58,12 @@ class EnhancedAuditTrailMigrator:
         self.jira_client = jira_client
         self.op_client = op_client
         self.logger = logger
+        self.data_dir = Path(config.get_path("data"))
 
         # Data storage
         self.changelog_data: dict[str, list[Any]] = {}
         self.audit_events: list[AuditEventData] = []
-        self.user_mapping: dict[str, int] = {}
+        self.user_mapping: dict[str, Any] = {}
         self.project_mapping: dict[str, dict[str, Any]] = {}
 
         # Migration results
@@ -147,54 +129,46 @@ class EnhancedAuditTrailMigrator:
             self.logger.warning(f"Failed to load project mapping: {e}")
 
     @staticmethod
-    def _has_comment_audience(record: Any) -> bool:
-        """A comment audience marker makes even an otherwise recognized history field ambiguous."""
-        fields = record if isinstance(record, dict) else getattr(record, "__dict__", {})
-        raw = fields.get("raw")
-        if isinstance(raw, dict):
-            fields = {**raw, **fields}
-        return bool(
-            fields.get("visibility") is not None
-            or fields.get("properties")
-            or any(key in fields for key in ("internal", "isInternal", "public", "jsdPublic"))
-        )
-
-    @classmethod
-    def _history_entry(cls, history: Any) -> dict[str, Any]:
+    def _history_entry(history: Any) -> dict[str, Any]:
         author = getattr(history, "author", None)
         items = []
         for raw in history.items:
-            if cls._has_comment_audience(raw):
+            if not may_copy_history_item(raw, history):
                 continue
             item = {
                 key: getattr(raw, key, None)
                 for key in ("field", "fieldtype", "fieldId", "from", "fromString", "to", "toString")
             }
-            if may_copy_history_item(item):
-                items.append(item)
+            items.append(item)
         return {
             "id": history.id,
             "created": history.created,
-            "author": {key: getattr(author, key, None) for key in ("name", "displayName", "emailAddress")},
+            "author": {
+                key: getattr(author, key, None) for key in ("accountId", "name", "key", "displayName", "emailAddress")
+            },
             "items": items,
         }
 
     def _audit_author(self, entry: dict[str, Any], jira_issue_key: str) -> tuple[int, str | None]:
-        # Map user
-        user_id = None
-        user_name = None
-        if entry.get("author") and entry["author"].get("name"):
-            user_name = entry["author"]["name"]
-            user_id = self.user_mapping.get(user_name)
+        author = entry.get("author") or {}
+        keys = [author.get(key) for key in ("accountId", "name", "key", "emailAddress", "displayName")]
+        names = [value for value in keys if isinstance(value, str) and value.strip()]
+        for name in names:
+            if (user_id := self._mapped_user_id(name)) is not None:
+                return user_id, name
+        name = next(iter(names), None)
+        self.migration_results["user_attribution_failures"] += 1
+        self.migration_results["warnings"].append(f"No user mapping found for {name} in issue {jira_issue_key}")
+        return 1, name
 
-        if not user_id:
-            self.migration_results["user_attribution_failures"] += 1
-            self.migration_results["warnings"].append(
-                f"No user mapping found for {user_name} in issue {jira_issue_key}",
-            )
-            # Use system user as fallback
-            user_id = 1  # Assuming admin user ID is 1
-        return user_id, user_name
+    def _mapped_user_id(self, key: Any) -> int | None:
+        if not isinstance(key, str):
+            return None
+        entry = self.user_mapping.get(key)
+        value = entry.get("openproject_id") if isinstance(entry, dict) else entry
+        if isinstance(value, str) and value.isascii() and value.isdecimal():
+            value = int(value)
+        return value if type(value) is int and value > 0 else None
 
     def _queue_grouped_events(self, audit_events: list[AuditEventData]) -> None:
         grouped = {}
@@ -234,8 +208,6 @@ class EnhancedAuditTrailMigrator:
             )
 
             for history in jira_issue.changelog.histories:
-                if self._has_comment_audience(history):
-                    continue
                 # Extract basic history information
                 entry = self._history_entry(history)
 
@@ -279,7 +251,7 @@ class EnhancedAuditTrailMigrator:
         audit_events = []
 
         for entry in changelog_entries:
-            if self._has_comment_audience(entry):
+            if has_comment_audience(entry):
                 continue
             try:
                 self._collect_audit_events(entry, jira_issue_key, openproject_work_package_id, audit_events)
@@ -304,7 +276,7 @@ class EnhancedAuditTrailMigrator:
 
         # Process each change item in the entry
         for item in entry.get("items", []) or []:
-            if self._has_comment_audience(item) or not may_copy_history_item(item):
+            if not may_copy_history_item(item, entry):
                 continue
             # Map field changes to OpenProject audit format
             changes = self._map_field_changes(item)
@@ -372,8 +344,8 @@ class EnhancedAuditTrailMigrator:
         # Special handling for certain fields
         if field in ["assignee", "reporter"]:
             # Map user names to IDs
-            from_id = self.user_mapping.get(from_value) if from_value else None
-            to_id = self.user_mapping.get(to_value) if to_value else None
+            from_id = self._mapped_user_id(from_value)
+            to_id = self._mapped_user_id(to_value)
             # Filter out no-change after ID mapping
             if from_id == to_id:
                 return None
@@ -669,14 +641,14 @@ class EnhancedAuditTrailMigrator:
             self.migration_results["errors"].extend(errors)
         return {"status": "success" if success else "error", "processed": processed, "total": total, "errors": errors}
 
-    @classmethod
-    def _audit_activity(cls, operation: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _audit_activity(operation: dict[str, Any]) -> dict[str, Any]:
         """Build a repeatable, dated history note for the OpenProject activity writer."""
         import hashlib
         import json
 
         event = operation.get("data", operation)
-        if cls._has_comment_audience(operation) or cls._has_comment_audience(event):
+        if has_comment_audience(operation) or has_comment_audience(event):
             msg = "Refusing an audit event with comment audience metadata"
             raise ValueError(msg)
         note = event.get("comment") or event.get("notes") or ""
@@ -776,69 +748,16 @@ class EnhancedAuditTrailMigrator:
 
     def save_migration_results(self) -> bool:
         """Save audit trail migration results to file."""
+        from src.utils import data_handler
+
         try:
-            import tempfile
-            from pathlib import Path as _Path
-
-            from src import config as global_config
-            from src.utils import data_handler
-
-            # Prefer the same base dir used by tests: temp_data_dir
-            # Tests patch module 'config', but do not set get_path; they pass temp_data_dir via fixture.
-            # We can mirror other modules by using global_config.get_path('data') directly.
-            base_dir = _Path(global_config.get_path("data"))
-            results = self.migration_results.copy()
-            # If tests provided a temp data dir (via temp_data_dir fixture) and set it on instance,
-            # base_dir will already be that path. Ensure we mirror their expectation of data/migration_data
-            # when base_dir points at a 'data' directory under temp.
-            # If tests patch the module-level config, get_path("data") should return the
-            # temp data dir directly. If it returns a parent that contains a 'data' child
-            # (e.g., var/), but our test created temp_data_dir already, prefer temp_data_dir
-            # if available via the patched config.
-            # If the instance has data_dir set (in integration contexts), use it.
-            if getattr(self, "data_dir", None):
-                base_dir = _Path(self.data_dir)
-            save_dir = base_dir / "migration_data"
-            save_dir.mkdir(parents=True, exist_ok=True)
             data_handler.save(
-                data=results,
+                data=self.migration_results,
                 filename="audit_trail_migration_results.json",
-                directory=save_dir,
+                directory=Path(self.data_dir) / "migration_data",
             )
-            # Opportunistically also save into pytest temp data dirs if present, to satisfy
-            # unit tests that expect temp_data_dir/migration_data path
-            try:
-                import os
-
-                tmp_root = _Path(tempfile.gettempdir())
-                test_id = os.environ.get("PYTEST_CURRENT_TEST", "")
-                # Extract method name (last part before space)
-                method_name = ""
-                if "::" in test_id:
-                    method_name = test_id.split("::")[-1].split()[0]
-                candidates = []
-                # Search only current test's temp data dir if name known
-                pattern = f"pytest-*/**/{method_name}*/data" if method_name else "pytest-*/**/data"
-                for candidate in tmp_root.glob(pattern):
-                    try:
-                        candidates.append((candidate.stat().st_mtime, candidate))
-                    except Exception:
-                        continue
-                # Pick most recent candidate
-                if candidates:
-                    _mtime, latest = max(candidates, key=lambda x: x[0])
-                    mig_dir = latest / "migration_data"
-                    mig_dir.mkdir(parents=True, exist_ok=True)
-                    data_handler.save(
-                        data=results,
-                        filename="audit_trail_migration_results.json",
-                        directory=mig_dir,
-                    )
-            except Exception:
-                pass
-            self.logger.info("Saved audit trail migration results JSON")
-            return True
-
-        except Exception as e:
-            self.logger.exception(f"Failed to save audit trail migration results: {e}")
+        except Exception:
+            self.logger.exception("Failed to save audit trail migration results")
             return False
+        self.logger.info("Saved audit trail migration results JSON")
+        return True
