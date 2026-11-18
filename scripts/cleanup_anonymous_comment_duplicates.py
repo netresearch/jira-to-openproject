@@ -25,7 +25,7 @@ This script deduplicates those journals **safely**:
 3. Within each duplicate group keep the journal with a **real** author
    (user_id != 2, i.e. not the Anonymous fallback) — or, if all
    duplicates have the same author, keep the newest.
-4. Delete the others.
+4. Clear the duplicate notes while preserving journal versions and attribute changes.
 5. Log every deletion to stdout AND to
    ``var/logs/cleanup_anonymous_comment_duplicates_<ts>.log``.
 
@@ -40,7 +40,9 @@ renderer produced different text (e.g. ``concourse~~ci`` vs ``concourse-ci``)
 so text-based dedup would not catch the duplicate, while avoiding false
 deletions of legitimate newer Anonymous comments.
 
-Defaults to ``--dry-run``.  Deletion requires explicit ``--apply``.
+The deletion count refers to comments cleared from the journal. Each journal row
+and its recorded attribute changes remain in OpenProject. Clearing notes requires
+explicit ``--apply``. The default is ``--dry-run``.
 ``--also-delete-orphan-anonymous`` is opt-in (not the default).
 
 Usage::
@@ -55,6 +57,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import re
@@ -71,7 +74,7 @@ from typing import Any
 ANONYMOUS_USER_ID = 2
 
 #: Regex to strip the j2o provenance marker from notes for dedup matching.
-_MARKER_RE = re.compile(r"\n?<!--\s*j2o:jira-comment-id:[^\s>]+\s*-->")
+_MARKER_RE = re.compile(r"\n?<!--\s*j2o:jira-comment-id:([^\s>]+)\s*-->")
 
 #: Minimum valid project key: 2+ uppercase letters/digits
 _PROJECT_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]+\z")
@@ -152,6 +155,10 @@ def _plan_deletions(
     to_delete: list[dict[str, Any]] = []
 
     for _key, group in groups.items():
+        markers = {source_id for journal in group for source_id in _MARKER_RE.findall(journal["notes"])}
+        if len(markers) > 1:
+            to_keep.extend(group)
+            continue
         keeper = _select_keeper(group)
         to_keep.append(keeper)
         for j in group:
@@ -194,7 +201,11 @@ def _plan_orphan_anonymous_deletions(
     earliest_real = min(real_timestamps)
     # Only delete Anonymous journals that are strictly older than the earliest
     # real-author journal.  Journals at the same timestamp or newer are kept.
-    return [j for j in journals if j["user_id"] == ANONYMOUS_USER_ID and j["created_at"] < earliest_real]
+    return [
+        j
+        for j in journals
+        if j["user_id"] == ANONYMOUS_USER_ID and j["created_at"] < earliest_real and not _MARKER_RE.search(j["notes"])
+    ]
 
 
 def _build_fetch_script(project_key: str) -> str:
@@ -209,6 +220,7 @@ if proj
   wp_ids = WorkPackage.where(project_id: proj.id).pluck(:id)
   journals = Journal
     .where(journable_type: 'WorkPackage', journable_id: wp_ids)
+    .where(restricted: false)
     .where.not(notes: [nil, ''])
     .order(:journable_id, :created_at)
     .pluck(:id, :journable_id, :user_id, :notes, :created_at)
@@ -228,15 +240,146 @@ end
 """
 
 
-def _build_delete_script(journal_ids: list[int]) -> str:
-    """Ruby script to delete a batch of journal IDs."""
-    ids_json = json.dumps(journal_ids)
+def _journal_snapshot(journal):
+    """Identify the exact public journal observed when selecting a keeper."""
+    return {
+        "id": journal["id"],
+        "wp_id": journal["wp_id"],
+        "user_id": journal["user_id"],
+        "created_at": journal["created_at"],
+        "digest": hashlib.sha256(journal["notes"].encode()).hexdigest(),
+    }
+
+
+def _build_delete_script(plans: list[dict[str, Any]]) -> str:
+    """Lock both public journals and recheck their identities before deletion."""
     return f"""
 require 'json'
-ids = {ids_json}
-deleted = Journal.where(id: ids).delete_all
+require 'digest'
+plans = JSON.parse(<<'J2O_PLANS')
+{json.dumps(plans)}
+J2O_PLANS
+matches = lambda do |journal, expected|
+  journal && journal.journable_id == expected['wp_id'] && journal.user_id == expected['user_id'] &&
+    journal.created_at.as_json == expected['created_at'] && Digest::SHA256.hexdigest(journal.notes.to_s) == expected['digest']
+end
+deleted = 0
+plans.each do |plan|
+  Journal.transaction do
+    candidate = plan.fetch('candidate')
+    keeper = plan.fetch('keeper')
+    next if candidate['id'] == keeper['id'] || candidate['wp_id'] != keeper['wp_id']
+    public_notes = Journal.where(journable_type: 'WorkPackage', journable_id: candidate['wp_id'], restricted: false)
+    rows = public_notes.where(id: [candidate['id'], keeper['id']]).order(:id).lock.index_by(&:id)
+    next unless matches.call(rows[keeper['id']], keeper) && matches.call(rows[candidate['id']], candidate)
+    if plan['orphan']
+      next if public_notes.where.not(notes: [nil, '']).where.not(user_id: {ANONYMOUS_USER_ID})
+                          .where(created_at: ..rows[candidate['id']].created_at).exists?
+    end
+    deleted += 1 if rows[candidate['id']].update_columns(notes: '')
+  end
+end
 {{deleted: deleted}}
 """
+
+
+def _fetch_project_journals(project_key: str, op_client: Any, logger: logging.Logger):
+    # Step 1: Fetch all non-empty journals
+    logger.info("Fetching journals from OpenProject via Rails …")
+    fetch_script = _build_fetch_script(project_key)
+    try:
+        result = op_client.execute_query_to_json_file(fetch_script)
+    except Exception as exc:
+        logger.exception("Rails query failed: %s", exc)
+        raise
+
+    if isinstance(result, dict) and result.get("error"):
+        logger.error("Rails returned error: %s", result["error"])
+        raise RuntimeError(result["error"])
+
+    if not isinstance(result, dict):
+        logger.error("Unexpected result type: %r", type(result))
+        raise TypeError(f"Expected dict, got {type(result)}")
+
+    journals_raw: list[dict[str, Any]] = result.get("journals", [])
+    wp_ids_count: int = result.get("wp_ids_count", 0)
+    logger.info(
+        "Found %d non-empty journals across %d work packages",
+        len(journals_raw),
+        wp_ids_count,
+    )
+
+    return journals_raw, wp_ids_count
+
+
+def _collect_deletions(journals_raw, *, apply, also_delete_orphan_anonymous, logger):
+    by_wp = {}
+    for journal in journals_raw:
+        by_wp.setdefault(journal["wp_id"], []).append(journal)
+    all_to_delete = []
+    duplicate_groups = 0
+    for wp_id, journals in by_wp.items():
+        plans, groups = _plan_wp_deletions(wp_id, journals, apply, also_delete_orphan_anonymous, logger)
+        duplicate_groups += groups
+        all_to_delete.extend(plans)
+    return all_to_delete, duplicate_groups
+
+
+def _plan_wp_deletions(wp_id, journals, apply, also_delete_orphan_anonymous, logger):
+    seen = set()
+    all_to_delete = []
+    kept, duplicates = _plan_deletions(journals)
+    keepers = {_strip_marker(row["notes"]): row for row in kept}
+    real = [row for row in kept if row["user_id"] != ANONYMOUS_USER_ID]
+    earliest_real = min(real, key=lambda row: row["created_at"], default=None)
+    duplicate_groups = len({_strip_marker(row["notes"]) for row in duplicates})
+    reasons = {
+        row["id"]: ("Anonymous-author duplicate" if row["user_id"] == ANONYMOUS_USER_ID else "duplicate")
+        for row in duplicates
+    }
+    candidates = list(duplicates)
+    if also_delete_orphan_anonymous:
+        candidates.extend(_plan_orphan_anonymous_deletions(journals))
+    for journal in candidates:
+        journal_id = journal["id"]
+        if journal_id in seen:
+            continue
+        seen.add(journal_id)
+        reason = reasons.get(journal_id, "Anonymous-orphan (WP also has real-author journals)")
+        logger.info(
+            "  [%s] WP#%d  Journal#%d  user_id=%d  created_at=%s  reason=%s",
+            "DELETE" if apply else "WOULD DELETE",
+            wp_id,
+            journal_id,
+            journal["user_id"],
+            journal["created_at"],
+            reason,
+        )
+        is_orphan = journal_id not in reasons
+        keeper = earliest_real if is_orphan else keepers[_strip_marker(journal["notes"])]
+        if keeper is not None:
+            all_to_delete.append(
+                {"candidate": _journal_snapshot(journal), "keeper": _journal_snapshot(keeper), "orphan": is_orphan}
+            )
+    return all_to_delete, duplicate_groups
+
+
+def _delete_batches(all_to_delete, op_client, logger):
+    deleted = 0
+    # Delete in batches of 100 to avoid overly large SQL IN clauses
+    batch_size = 100
+    for i in range(0, len(all_to_delete), batch_size):
+        batch = all_to_delete[i : i + batch_size]
+        del_script = _build_delete_script(batch)
+        try:
+            del_result = op_client.execute_query_to_json_file(del_script)
+            n = del_result.get("deleted", 0) if isinstance(del_result, dict) else 0
+            deleted += n
+            logger.info("Deleted batch %d–%d: %d rows", i + 1, i + len(batch), n)
+        except Exception as exc:
+            logger.exception("Delete batch %d–%d failed: %s", i + 1, i + len(batch), exc)
+    logger.info("DONE: deleted %d duplicate journals", deleted)
+    return deleted
 
 
 def run(
@@ -274,100 +417,19 @@ def run(
     orphan_flag = " +orphan-anon" if also_delete_orphan_anonymous else ""
     logger.info("Project: %s  Mode: %s%s", project_key, mode, orphan_flag)
 
-    # Step 1: Fetch all non-empty journals
-    logger.info("Fetching journals from OpenProject via Rails …")
-    fetch_script = _build_fetch_script(project_key)
-    try:
-        result = op_client.execute_query_to_json_file(fetch_script)
-    except Exception as exc:
-        logger.exception("Rails query failed: %s", exc)
-        raise
-
-    if isinstance(result, dict) and result.get("error"):
-        logger.error("Rails returned error: %s", result["error"])
-        raise RuntimeError(result["error"])
-
-    if not isinstance(result, dict):
-        logger.error("Unexpected result type: %r", type(result))
-        raise TypeError(f"Expected dict, got {type(result)}")
-
-    journals_raw: list[dict[str, Any]] = result.get("journals", [])
-    wp_ids_count: int = result.get("wp_ids_count", 0)
-    logger.info(
-        "Found %d non-empty journals across %d work packages",
-        len(journals_raw),
-        wp_ids_count,
+    journals_raw, wp_ids_count = _fetch_project_journals(project_key, op_client, logger)
+    all_to_delete, duplicate_group_count = _collect_deletions(
+        journals_raw,
+        apply=apply,
+        also_delete_orphan_anonymous=also_delete_orphan_anonymous,
+        logger=logger,
     )
-
-    # Step 2: Group journals by WP, then plan deletions
-    by_wp: dict[int, list[dict[str, Any]]] = {}
-    for j in journals_raw:
-        wp_id = j["wp_id"]
-        by_wp.setdefault(wp_id, []).append(j)
-
-    all_to_delete: list[dict[str, Any]] = []
-    # Track IDs already scheduled for deletion to avoid double-counting when
-    # both text-based dedup AND the orphan heuristic flag the same journal.
-    to_delete_ids: set[int] = set()
-    duplicate_group_count = 0
-
-    for wp_id, wp_journals in by_wp.items():
-        wp_to_delete: list[dict[str, Any]] = []
-
-        # --- text-based dedup (always active) ---
-        _kept, text_to_delete = _plan_deletions(wp_journals)
-        for j in text_to_delete:
-            if j["id"] not in to_delete_ids:
-                wp_to_delete.append(j)
-                to_delete_ids.add(j["id"])
-
-        # Count duplicate groups (unique note texts with >1 copy for this WP)
-        if text_to_delete:
-            groups: dict[str, list[dict[str, Any]]] = {}
-            for j in wp_journals:
-                key = _strip_marker(j["notes"])
-                groups.setdefault(key, []).append(j)
-            duplicate_group_count += sum(1 for g in groups.values() if len(g) > 1)
-
-        # --- orphan-anonymous heuristic (opt-in) ---
-        if also_delete_orphan_anonymous:
-            orphans = _plan_orphan_anonymous_deletions(wp_journals)
-            for j in orphans:
-                if j["id"] not in to_delete_ids:
-                    wp_to_delete.append(j)
-                    to_delete_ids.add(j["id"])
-
-        for j in wp_to_delete:
-            if j["user_id"] == ANONYMOUS_USER_ID and also_delete_orphan_anonymous:
-                # Check whether this was already flagged by text-based dedup or
-                # only by the orphan heuristic.
-                text_delete_ids = {x["id"] for x in text_to_delete}
-                if j["id"] not in text_delete_ids:
-                    reason = "Anonymous-orphan (WP also has real-author journals)"
-                else:
-                    reason = "Anonymous-author duplicate"
-            elif j["user_id"] == ANONYMOUS_USER_ID:
-                reason = "Anonymous-author duplicate"
-            else:
-                reason = "duplicate"
-
-            logger.info(
-                "  [%s] WP#%d  Journal#%d  user_id=%d  created_at=%s  reason=%s",
-                "DELETE" if apply else "WOULD DELETE",
-                wp_id,
-                j["id"],
-                j["user_id"],
-                j["created_at"],
-                reason,
-            )
-            all_to_delete.append(j)
-
     total_journals = len(journals_raw)
     total_to_delete = len(all_to_delete)
     logger.info(
         "Summary: %d journals scanned, %d WPs with deletions planned, %d journals to delete",
         total_journals,
-        len({j["wp_id"] for j in all_to_delete}),
+        len({plan["candidate"]["wp_id"] for plan in all_to_delete}),
         total_to_delete,
     )
 
@@ -384,20 +446,7 @@ def run(
     # Step 3: Delete if --apply
     deleted = 0
     if apply:
-        delete_ids = [j["id"] for j in all_to_delete]
-        # Delete in batches of 100 to avoid overly large SQL IN clauses
-        batch_size = 100
-        for i in range(0, len(delete_ids), batch_size):
-            batch = delete_ids[i : i + batch_size]
-            del_script = _build_delete_script(batch)
-            try:
-                del_result = op_client.execute_query_to_json_file(del_script)
-                n = del_result.get("deleted", 0) if isinstance(del_result, dict) else 0
-                deleted += n
-                logger.info("Deleted batch %d–%d: %d rows", i + 1, i + len(batch), n)
-            except Exception as exc:
-                logger.exception("Delete batch %d–%d failed: %s", i + 1, i + len(batch), exc)
-        logger.info("DONE: deleted %d duplicate journals", deleted)
+        deleted = _delete_batches(all_to_delete, op_client, logger)
     else:
         logger.info("DRY-RUN complete — pass --apply to delete %d journals", total_to_delete)
 
@@ -481,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(json.dumps(stats, indent=2))
-    return 0
+    return int(args.apply and stats["deleted"] != stats["to_delete"])
 
 
 if __name__ == "__main__":
