@@ -196,8 +196,6 @@ class WorkPackageSkeletonMigration(BaseMigration):
     a complete Jira→OpenProject ID mapping before any content migration.
     """
 
-    WORK_PACKAGE_MAPPING_FILE = "work_package_mapping.json"
-
     def __init__(
         self,
         jira_client: JiraClient,

@@ -148,6 +148,23 @@ def test_prepare_avatar_job_uses_cache(logger_stub):
     )
 
 
+@pytest.mark.parametrize(
+    ("jira_user", "op_user"),
+    [({"key": "another-jira-user"}, {"id": 42}), ({"key": "jira-1"}, {"id": 41})],
+)
+def test_avatar_job_rejects_a_conflicting_source_or_target_account(jira_user, op_user):
+    instance = UserMigration.__new__(UserMigration)
+    assert (
+        instance._prepare_avatar_job(
+            jira_user=jira_user,
+            op_user=op_user,
+            mapping={"openproject_id": 42, "jira_key": "jira-1"},
+            meta={"avatar_url": "https://example.invalid/avatar.png"},
+        )
+        is None
+    )
+
+
 # --- User discovery from cached issues ---------------------------------------
 # Per the live TEST audit (2026-05-06): the directory ``get_users()``
 # call misses users who appear as watchers/assignees/reporters/
