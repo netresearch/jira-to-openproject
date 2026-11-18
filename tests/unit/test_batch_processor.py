@@ -176,3 +176,29 @@ class TestBatchConfig:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_stream_completed_objects_with_small_chunks(tmp_path):
+    from src.utils.batch_processor import StreamingJSONProcessor
+
+    source = tmp_path / "export.json"
+    processor = StreamingJSONProcessor(chunk_size=3)
+    source.write_text('[{"id":1,"nested":{"key":2}},{"id":2}]')
+    report = processor.process_large_json_file(source, lambda item: item)
+    assert report["success"]
+    assert report["results"] == [{"id": 1, "nested": {"key": 2}}, {"id": 2}]
+    source.write_text('{"arr":[1,2]}')
+    assert processor.process_large_json_file(source, lambda item: item)["results"] == [{"arr": [1, 2]}]
+
+
+def test_stream_failure_preserves_preceding_objects(tmp_path):
+    from src.utils.batch_processor import StreamingJSONProcessor
+
+    source = tmp_path / "export.json"
+    source.write_text('[{"id":1},3,{"id":2},')
+    report = StreamingJSONProcessor(chunk_size=2).process_large_json_file(source, lambda item: item["id"])
+    assert not report["success"]
+    assert report["processed_count"] == 2
+    assert report["failed_count"] == 1
+    assert report["results"] == [1, 2]
+    assert len(report["errors"]) == 2

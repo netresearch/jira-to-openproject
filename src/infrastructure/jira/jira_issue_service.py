@@ -26,6 +26,7 @@ import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import (
     JiraApiError,
@@ -93,7 +94,7 @@ class JiraIssueService:
         self._logger.notice("Fetching all issues for project '%s'...", project_key)
 
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         # Verify project exists
@@ -137,7 +138,7 @@ class JiraIssueService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -219,7 +220,7 @@ class JiraIssueService:
         if not issue_keys:
             return {}
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         # ``BatchProcessor.process_batches`` returns a ``list`` of
@@ -291,6 +292,43 @@ class JiraIssueService:
             )
         return merged
 
+    def _split_oversized_chunk(
+        self, issue_keys: list[str], chunk_index: int, status: int, **kwargs: object
+    ) -> dict[str, Issue]:
+        batch_num = kwargs.get("batch_num")
+        first_key = issue_keys[0] if issue_keys else "?"
+        last_key = issue_keys[-1] if issue_keys else "?"
+        # HTTP 413/414: the request URI is genuinely too long.  Recover by
+        # halving the chunk and retrying — the only failure mode where
+        # "URL-length" is the honest cause and where data can be reclaimed.
+        if len(issue_keys) > 1:
+            mid = len(issue_keys) // 2
+            self._logger.warning(
+                "Chunk too large (HTTP %s): batch_num=%s, chunk_index=%s, keys=[%s..%s];"
+                " splitting %d keys into %d+%d and retrying",
+                status,
+                batch_num,
+                chunk_index,
+                first_key,
+                last_key,
+                len(issue_keys),
+                mid,
+                len(issue_keys) - mid,
+            )
+            merged: dict[str, Issue] = {}
+            merged.update(self._fetch_single_chunk(issue_keys[:mid], chunk_index, **kwargs))
+            merged.update(self._fetch_single_chunk(issue_keys[mid:], chunk_index, **kwargs))
+            return merged
+        # A single key whose URI is still rejected cannot be split further.
+        self._logger.warning(
+            "Single issue key %s rejected as too large (HTTP %s); skipping it (batch_num=%s, chunk_index=%s)",
+            first_key,
+            status,
+            batch_num,
+            chunk_index,
+        )
+        return {}
+
     def _fetch_single_chunk(
         self,
         issue_keys: list[str],
@@ -335,38 +373,8 @@ class JiraIssueService:
             except Exception as exc:
                 status = self._extract_http_status(exc)
 
-                # HTTP 413/414: the request URI is genuinely too long.  Recover by
-                # halving the chunk and retrying — the only failure mode where
-                # "URL-length" is the honest cause and where data can be reclaimed.
-                if status in {413, 414} and len(issue_keys) > 1:
-                    mid = len(issue_keys) // 2
-                    self._logger.warning(
-                        "Chunk too large (HTTP %s): batch_num=%s, chunk_index=%s, keys=[%s..%s];"
-                        " splitting %d keys into %d+%d and retrying",
-                        status,
-                        batch_num,
-                        chunk_index,
-                        first_key,
-                        last_key,
-                        len(issue_keys),
-                        mid,
-                        len(issue_keys) - mid,
-                    )
-                    merged: dict[str, Issue] = {}
-                    merged.update(self._fetch_single_chunk(issue_keys[:mid], chunk_index, **kwargs))
-                    merged.update(self._fetch_single_chunk(issue_keys[mid:], chunk_index, **kwargs))
-                    return merged
                 if status in {413, 414}:
-                    # A single key whose URI is still rejected cannot be split further.
-                    self._logger.warning(
-                        "Single issue key %s rejected as too large (HTTP %s); skipping it"
-                        " (batch_num=%s, chunk_index=%s)",
-                        first_key,
-                        status,
-                        batch_num,
-                        chunk_index,
-                    )
-                    return {}
+                    return self._split_oversized_chunk(issue_keys, chunk_index, status, **kwargs)
                 # HTTP 401/403: an unexpected auth failure on a pre-bounded chunk is
                 # usually a transient session/proxy/WAF blip — retry once with a short
                 # backoff before giving up. NOT a URL-length rejection.
@@ -467,7 +475,7 @@ class JiraIssueService:
     ) -> Iterator[dict[str, Any]]:
         """Stream project issues, respecting the page size negotiated by Jira."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         # Use ``is not None`` so a caller-supplied ``batch_size=0`` is
@@ -501,7 +509,7 @@ class JiraIssueService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:

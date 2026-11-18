@@ -37,8 +37,8 @@ def update_file(file_path: Path, dry_run: bool = False) -> bool:
     )
 
     # Replace class references
-    new_content = re.sub(r"OpenProjectRailsClient\(", "OpenProjectClient(", new_content)
-    new_content = re.sub(r"OpenProjectRailsClient\.", "OpenProjectClient.", new_content)
+    new_content = new_content.replace("OpenProjectRailsClient(", "OpenProjectClient(")
+    new_content = new_content.replace("OpenProjectRailsClient.", "OpenProjectClient.")
     new_content = re.sub(
         r"isinstance\((.+?), OpenProjectRailsClient\)",
         r"isinstance(\1, OpenProjectClient)",

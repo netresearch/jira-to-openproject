@@ -29,6 +29,10 @@ from src.infrastructure.jira.jira_client import JiraApiError, JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.validators import validate_jira_key
 
+_REFRESHED_MAPPING_MESSAGE = "Successfully refreshed mapping for %s"
+_ENHANCED_USER_MAPPINGS_FILE = "enhanced_user_mappings.json"
+
+
 # =============================================================================
 # CONFIGURATION CONSTANTS - CENTRALIZED FOR MAINTAINABILITY
 # =============================================================================
@@ -571,9 +575,9 @@ class EnhancedUserAssociationMigrator:
             if not isinstance(data_path, (str, Path)):
                 data_path = Path("data")
             if isinstance(data_path, str):
-                enhanced_mapping_file = Path(data_path) / "enhanced_user_mappings.json"
+                enhanced_mapping_file = Path(data_path) / _ENHANCED_USER_MAPPINGS_FILE
             else:
-                enhanced_mapping_file = data_path / "enhanced_user_mappings.json"
+                enhanced_mapping_file = data_path / _ENHANCED_USER_MAPPINGS_FILE
             if enhanced_mapping_file.exists():
                 with enhanced_mapping_file.open() as f:
                     raw = f.read()
@@ -1435,11 +1439,11 @@ class EnhancedUserAssociationMigrator:
 
                 if isinstance(success, dict):
                     # If refresh returned the full mapping dict, log success, record metrics, and return it
-                    self.logger.debug("Successfully refreshed mapping for %s", username)
+                    self.logger.debug(_REFRESHED_MAPPING_MESSAGE, username)
                     return success
                 if success:
                     # MONITORING: Refresh success logging and metrics
-                    self.logger.debug("Successfully refreshed mapping for %s", username)
+                    self.logger.debug(_REFRESHED_MAPPING_MESSAGE, username)
 
                     # MONITORING: Refresh success metrics (YOLO FIX: defensive metrics)
                     # Ensure mapping is returned for success path per end-to-end expectations
@@ -1921,16 +1925,11 @@ class EnhancedUserAssociationMigrator:
                 jira_user_data = self._get_jira_user_info(username)
                 used_direct_helper = True
                 used_internal_helper = True
-            elif used_timeout_path or get_user_info_side_effect_set:
-                # Timeout-aware or explicit get_user_info retry path
-                jira_user_data = self._get_jira_user_with_retry(username)
-                used_retry_path = True
-            elif get_side_effect_set:
-                # End-to-end path prefers internal HTTP helper using raw .get
-                jira_user_data = self._get_jira_user_info(username)
-                used_direct_helper = True
-            # Default preference: if get_user_info exists, use retry helper; else internal HTTP
-            elif callable(ji_get_user_info):
+            elif (
+                used_timeout_path
+                or get_user_info_side_effect_set
+                or (not get_side_effect_set and callable(ji_get_user_info))
+            ):
                 jira_user_data = self._get_jira_user_with_retry(username)
                 used_retry_path = True
             else:
@@ -2092,7 +2091,7 @@ class EnhancedUserAssociationMigrator:
 
             # MONITORING: Refresh success logging
             self.logger.debug("Successfully completed refresh for %s", username)
-            self.logger.info("Successfully refreshed mapping for %s", username)
+            self.logger.info(_REFRESHED_MAPPING_MESSAGE, username)
 
             # Return type depends on path semantics and test expectations
             if used_retry_path:
@@ -2778,9 +2777,9 @@ class EnhancedUserAssociationMigrator:
             # YOLO FIX: Handle both Path objects and strings from config
             data_path = config.get_path("data")
             if isinstance(data_path, str):
-                enhanced_mapping_file = Path(data_path) / "enhanced_user_mappings.json"
+                enhanced_mapping_file = Path(data_path) / _ENHANCED_USER_MAPPINGS_FILE
             else:
-                enhanced_mapping_file = data_path / "enhanced_user_mappings.json"
+                enhanced_mapping_file = data_path / _ENHANCED_USER_MAPPINGS_FILE
 
             # YOLO FIX: Convert to serializable format, handling Mock objects
             serializable_mappings = self._make_json_serializable(

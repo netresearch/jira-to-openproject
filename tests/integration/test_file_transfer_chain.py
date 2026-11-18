@@ -23,6 +23,7 @@ import concurrent.futures
 import functools
 import os
 import random
+import shlex
 import tempfile
 import time
 import unittest
@@ -61,57 +62,60 @@ include the following required configuration:
 
 
 class MockSSHClient:
-    """Mock SSH client for use when real connections fail."""
+    """In-memory transfer endpoint for the explicitly selected mock run."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize a mock SSH client."""
+    def __init__(self) -> None:
         self.connected = os.environ.get("J2O_TEST_MOCK_MODE") == "true"
+        self.files: dict[str, bytes] = {}
+        self.directories: set[str] = set()
 
     def is_connected(self) -> bool:
-        """Check if connected."""
         return self.connected
 
-    def execute_command(self, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
-        """Mock executing a command."""
-        if self.connected:
-            # Simulate successful command execution
-            return "Command executed successfully", "", 0
-        return "", "Not connected", 1
-
-    def copy_file_to_remote(self, *args: Any, **kwargs: Any) -> None:
-        """Mock copying a file to remote."""
+    def execute_command(self, command: str, **kwargs: Any) -> tuple[str, str, int]:
         if not self.connected:
-            msg = "Not connected"
-            raise ValueError(msg)
+            return "", "Not connected", 1
+        parts = shlex.split(command)
+        match parts:
+            case ["echo", message]:
+                return message, "", 0
+            case ["mkdir", "-p", directory]:
+                self.directories.add(directory)
+            case ["test", flag, path, "&&", "echo", message]:
+                entries = self.directories if flag == "-d" else self.files
+                return (message, "", 0) if path in entries else ("", "", 1)
+            case ["cat", filename] if filename in self.files:
+                return self.files[filename].decode(), "", 0
+            case ["rm", "-rf", directory]:
+                self.directories.discard(directory)
+                self.files = {p: value for p, value in self.files.items() if not p.startswith(directory + "/")}
+            case _:
+                return "", "Unsupported fixture command", 1
+        return "", "", 0
+
+    def copy_file_to_remote(self, source: str, destination: str) -> None:
+        if not self.connected:
+            raise ConnectionError("SSH fixture disconnected")
+        self.files[destination] = Path(source).read_bytes()
 
 
-class MockDockerClient:
-    """Mock Docker client for use when real connections fail."""
+class MockDockerClient(MockSSHClient):
+    """Separate container file store backed by the SSH host fixture."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize a mock Docker client."""
-        self.connected = os.environ.get("J2O_TEST_MOCK_MODE") == "true"
+    def __init__(self, remote: SSHClient | MockSSHClient) -> None:
+        super().__init__()
+        self.remote = remote
 
     def check_container_exists(self) -> bool:
-        """Mock checking if container exists."""
         return self.connected
 
-    def execute_command(self, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
-        """Mock executing a command."""
-        if self.connected:
-            # Simulate successful command execution
-            return "Command executed successfully", "", 0
-        return "", "Not connected", 1
+    def copy_file_to_container(self, source: str, destination: str) -> None:
+        if not self.connected or not isinstance(self.remote, MockSSHClient):
+            raise ConnectionError("Container fixture disconnected")
+        self.files[destination] = self.remote.files[source]
 
-    def copy_file_to_container(self, *args: Any, **kwargs: Any) -> None:
-        """Mock copying a file to container."""
-        if not self.connected:
-            msg = "Not connected"
-            raise ValueError(msg)
-
-    def check_file_exists_in_container(self, *args: Any, **kwargs: Any) -> bool:
-        """Mock checking if file exists in container."""
-        return self.connected
+    def check_file_exists_in_container(self, filename: str) -> bool:
+        return filename in self.files
 
 
 class MockRailsConsoleClient(RailsConsoleClient):
@@ -193,7 +197,7 @@ class FileTransferChainTest(unittest.TestCase):
 
         try:
             # Initialize SSH client
-            if server and user:
+            if server and user and not mock_mode:
                 try:
                     cls.ssh_client = SSHClient(
                         host=str(server),
@@ -219,13 +223,8 @@ class FileTransferChainTest(unittest.TestCase):
                     print("Using mock SSH connection")
 
             # Initialize Docker client if SSH is connected
-            if cls.ssh_connected and container:
+            if isinstance(cls.ssh_client, SSHClient) and cls.ssh_connected and container:
                 try:
-                    # Add type assertion to ensure correct type
-                    assert isinstance(
-                        cls.ssh_client,
-                        SSHClient,
-                    ), "Expected SSHClient instance"
                     cls.docker_client = DockerClient(
                         container_name=str(container),
                         ssh_client=cls.ssh_client,
@@ -241,19 +240,19 @@ class FileTransferChainTest(unittest.TestCase):
                         cls.skip_messages.append(
                             f"Docker container '{container}' not found",
                         )
-                        cls.docker_client = MockDockerClient()
+                        cls.docker_client = MockDockerClient(cls.ssh_client)
                         cls.docker_connected = cls.docker_client.check_container_exists()
                         if cls.docker_connected:
                             print("Using mock Docker connection")
                 except Exception as e:
                     print(f"Warning: Docker connection failed: {e!s}")
                     cls.skip_messages.append(f"Docker connection failed: {e!s}")
-                    cls.docker_client = MockDockerClient()
+                    cls.docker_client = MockDockerClient(cls.ssh_client)
                     cls.docker_connected = cls.docker_client.check_container_exists()
                     if cls.docker_connected:
                         print("Using mock Docker connection")
             else:
-                cls.docker_client = MockDockerClient()
+                cls.docker_client = MockDockerClient(cls.ssh_client)
                 cls.docker_connected = cls.docker_client.check_container_exists()
                 if cls.docker_connected:
                     print("Using mock Docker connection")
@@ -425,7 +424,7 @@ class FileTransferChainTest(unittest.TestCase):
         try:
             assert isinstance(
                 cls.ssh_client,
-                SSHClient,
+                (SSHClient, MockSSHClient),
             ), "SSH client is not initialized"
             cls.ssh_client.execute_command(f"mkdir -p {remote_dir}")
             stdout, _stderr, _rc = cls.ssh_client.execute_command(
@@ -446,7 +445,7 @@ class FileTransferChainTest(unittest.TestCase):
         try:
             assert isinstance(
                 cls.docker_client,
-                DockerClient,
+                (DockerClient, MockDockerClient),
             ), "Docker client is not initialized"
             cls.docker_client.execute_command(f"mkdir -p {container_dir}")
             stdout, _stderr, _rc = cls.docker_client.execute_command(
@@ -546,11 +545,11 @@ class FileTransferChainTest(unittest.TestCase):
         assert self.__class__.container_temp_dir, "Container temp directory is not set"
         assert isinstance(
             self.__class__.ssh_client,
-            SSHClient,
+            (SSHClient, MockSSHClient),
         ), "SSH client is not initialized"
         assert isinstance(
             self.__class__.docker_client,
-            DockerClient,
+            (DockerClient, MockDockerClient),
         ), "Docker client is not initialized"
 
         local_file = self.__class__.temp_dir / local_filename
@@ -632,11 +631,11 @@ class FileTransferChainTest(unittest.TestCase):
     def _test_ssh_connection(self) -> bool:
         """Test SSH connection."""
         print("Testing SSH connection...")
+        assert isinstance(
+            self.__class__.ssh_client,
+            (SSHClient, MockSSHClient),
+        ), "SSH client is not initialized"
         try:
-            assert isinstance(
-                self.__class__.ssh_client,
-                SSHClient,
-            ), "SSH client is not initialized"
             is_connected = self.__class__.ssh_client.is_connected()
             stdout, _stderr, rc = self.__class__.ssh_client.execute_command(
                 "echo 'SSH connection successful'",
@@ -649,11 +648,11 @@ class FileTransferChainTest(unittest.TestCase):
     def _test_docker_connection(self) -> bool:
         """Test Docker connection."""
         print("Testing Docker connection...")
+        assert isinstance(
+            self.__class__.docker_client,
+            (DockerClient, MockDockerClient),
+        ), "Docker client is not initialized"
         try:
-            assert isinstance(
-                self.__class__.docker_client,
-                DockerClient,
-            ), "Docker client is not initialized"
             container_exists = self.__class__.docker_client.check_container_exists()
             stdout, _stderr, rc = self.__class__.docker_client.execute_command(
                 "echo 'Docker command successful'",
@@ -666,8 +665,8 @@ class FileTransferChainTest(unittest.TestCase):
     def _test_rails_connection(self) -> bool:
         """Test Rails console connection."""
         print("Testing Rails console connection...")
+        assert self.__class__.rails_client is not None, "Rails client is not initialized"
         try:
-            assert self.__class__.rails_client is not None, "Rails client is not initialized"
             result = self.__class__.rails_client.execute("puts 'Rails console test'")
             return "Rails console test" in result
         except Exception as e:
@@ -712,12 +711,11 @@ class FileTransferChainTest(unittest.TestCase):
             print("Skipping remote file verification (SSH not connected)")
             return True
 
+        assert isinstance(
+            self.__class__.ssh_client,
+            (SSHClient, MockSSHClient),
+        ), "SSH client is not initialized"
         try:
-            assert isinstance(
-                self.__class__.ssh_client,
-                SSHClient,
-            ), "SSH client is not initialized"
-
             # First check if file exists
             stdout, _stderr, _rc = self.__class__.ssh_client.execute_command(
                 f"test -f {file_path} && echo 'FILE_EXISTS'",
@@ -726,22 +724,8 @@ class FileTransferChainTest(unittest.TestCase):
                 print(f"Remote file does not exist: {file_path}")
                 return False
 
-            # Then get file content
-            try:
-                stdout, _stderr, _rc = self.__class__.ssh_client.execute_command(
-                    f"cat {file_path}",
-                )
-                content_match = stdout.strip() == expected_content
-                if not content_match:
-                    print(
-                        f"Remote file content mismatch. Expected: '{expected_content}', Got: '{stdout.strip()}'",
-                    )
-                return content_match
-            except Exception as e:
-                # If we can confirm the file exists but can't read it, consider it a permission issue
-                # and pass the test to avoid environment-specific failures
-                print(f"Warning: File exists but could not read content: {e!s}")
-                return True
+            stdout, _stderr, status = self.__class__.ssh_client.execute_command(f"cat {file_path}")
+            return status == 0 and stdout.strip() == expected_content
         except Exception as e:
             print(f"Error verifying remote file: {e!s}")
             return False
@@ -755,12 +739,11 @@ class FileTransferChainTest(unittest.TestCase):
             print("Skipping container file verification (Docker not connected)")
             return True
 
+        assert isinstance(
+            self.__class__.docker_client,
+            (DockerClient, MockDockerClient),
+        ), "Docker client is not initialized"
         try:
-            assert isinstance(
-                self.__class__.docker_client,
-                DockerClient,
-            ), "Docker client is not initialized"
-
             # First check if file exists
             stdout, _stderr, _rc = self.__class__.docker_client.execute_command(
                 f"test -f {file_path} && echo 'FILE_EXISTS'",
@@ -769,22 +752,8 @@ class FileTransferChainTest(unittest.TestCase):
                 print(f"Container file does not exist: {file_path}")
                 return False
 
-            # Then get file content
-            try:
-                stdout, _stderr, _rc = self.__class__.docker_client.execute_command(
-                    f"cat {file_path}",
-                )
-                content_match = stdout.strip() == expected_content
-                if not content_match:
-                    print(
-                        f"Container file content mismatch. Expected: '{expected_content}', Got: '{stdout.strip()}'",
-                    )
-                return content_match
-            except Exception as e:
-                # If we can confirm the file exists but can't read it, consider it a permission issue
-                # and pass the test to avoid environment-specific failures
-                print(f"Warning: File exists but could not read content: {e!s}")
-                return True
+            stdout, _stderr, status = self.__class__.docker_client.execute_command(f"cat {file_path}")
+            return status == 0 and stdout.strip() == expected_content
         except Exception as e:
             print(f"Error verifying container file: {e!s}")
             return False
@@ -834,23 +803,19 @@ class FileTransferChainTest(unittest.TestCase):
         print(f"Created local Ruby script: {local_script}")
 
         # Use the OpenProject client to execute the script directly
-        try:
-            # Execute the script using the optimized client methods
-            assert self.__class__.op_client is not None, "OpenProject client is not initialized"
-            result = self.__class__.op_client.execute(ruby_script)
-            print(f"Script execution result: {result}")
+        # Execute the script using the optimized client methods
+        assert self.__class__.op_client is not None, "OpenProject client is not initialized"
+        result = self.__class__.op_client.execute(ruby_script)
+        print(f"Script execution result: {result}")
 
-            # Verify the result contains expected values
-            assert result is not None, "Script execution returned None"
+        # Verify the result contains expected values
+        assert result is not None, "Script execution returned None"
 
-            # The execute method returns a dict with 'result' key when it can't parse as JSON
-            result_str = str(result["result"]) if isinstance(result, dict) and "result" in result else str(result)
+        # The execute method returns a dict with 'result' key when it can't parse as JSON
+        result_str = str(result["result"]) if isinstance(result, dict) and "result" in result else str(result)
 
-            assert f"test_value: {test_value}" in result_str, f"Script did not return expected test value: {test_value}"
-            assert 'message: "Script executed successfully"' in result_str, "Script did not return expected message"
-
-        except Exception as e:
-            self.fail(f"Script execution failed: {e!s}")
+        assert f"test_value: {test_value}" in result_str, f"Script did not return expected test value: {test_value}"
+        assert 'message: "Script executed successfully"' in result_str, "Script did not return expected message"
 
     def test_04_parallel_operations(self) -> None:
         """Test multiple parallel operations to verify client thread safety."""
@@ -873,7 +838,7 @@ class FileTransferChainTest(unittest.TestCase):
         assert self.__class__.remote_temp_dir, "Remote temp directory is not set"
         assert isinstance(
             self.__class__.ssh_client,
-            SSHClient,
+            (SSHClient, MockSSHClient),
         ), "SSH client is not initialized"
 
         local_files = []
@@ -900,11 +865,8 @@ class FileTransferChainTest(unittest.TestCase):
             # Wait for all transfers to complete
             remote_results = []
             for future, remote_file, filename, content in remote_futures:
-                try:
-                    future.result()  # Wait for transfer to complete
-                    remote_results.append((remote_file, filename, content))
-                except Exception as e:
-                    self.fail(f"Parallel file transfer failed: {e!s}")
+                future.result()  # Wait for transfer to complete
+                remote_results.append((remote_file, filename, content))
 
         # 3. Verify all files one by one (parallel verification is already tested)
         for remote_file, _filename, content in remote_results:

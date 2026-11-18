@@ -29,15 +29,14 @@ work unchanged.
 from __future__ import annotations
 
 import json
-import os
-import secrets
-import time
-from contextlib import suppress
-from pathlib import Path
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from src.infrastructure.exceptions import QueryExecutionError
-from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 
 
 class OpenProjectMembershipService:
@@ -90,34 +89,43 @@ class OpenProjectMembershipService:
 
     # ── group membership ────────────────────────────────────────────────
 
+    @contextmanager
+    def _assignment_files(self, assignments: list[dict[str, Any]]) -> Iterator[tuple[Path, Path, Path]]:
+        """Stage membership data in private per-call directories on both systems."""
+        client = self._client
+        root = Path(client.file_manager.data_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(dir=root) as local:
+            source = Path(local) / "assignments.json"
+            source.write_text(json.dumps(assignments), encoding="utf-8")
+            created = client.execute_json_query("(require 'tmpdir'; Dir.mktmpdir('j2o-members-')).as_json")
+            if (
+                not isinstance(created, str)
+                or not PurePosixPath(created).is_absolute()
+                or not PurePosixPath(created).name.startswith("j2o-members-")
+            ):
+                msg = "OpenProject could not allocate a private membership directory"
+                raise QueryExecutionError(msg)
+            remote = Path(created)
+            try:
+                target = remote / "assignments.json"
+                client.transfer_file_to_container(source, target)
+                yield target, remote / "result.json", Path(local) / "result.json"
+            finally:
+                path = escape_ruby_single_quoted(created)
+                client.execute_query(f"require 'fileutils'; FileUtils.remove_entry_secure('{path}')")
+
     def sync_group_memberships(self, assignments: list[dict[str, Any]]) -> dict[str, int]:
         """Ensure each group has the provided membership list."""
         if not assignments:
             return {"updated": 0, "errors": 0}
 
         client = self._client
-        temp_dir = Path(client.file_manager.data_dir) / "group_sync"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        # ``token_hex(4)`` adds 8 random hex chars so two calls within
-        # the same process during the same wall-clock second can't
-        # collide on the payload, the result file, or the container
-        # ``/tmp`` paths derived from the filename.
-        unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
-        payload_path = temp_dir / f"group_memberships_{unique_suffix}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
-
-        try:
-            with payload_path.open("w", encoding="utf-8") as handle:
-                json.dump(assignments, handle)
-
-            container_input = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
-            client.transfer_file_to_container(payload_path, container_input)
-
+        with self._assignment_files(assignments) as (container_input, container_output, result_path):
             ruby = (
                 "require 'json'\n"
-                f"input_path = '{container_input.as_posix()}'\n"
-                f"output_path = '{container_output.as_posix()}'\n"
+                f"input_path = '{escape_ruby_single_quoted(container_input.as_posix())}'\n"
+                f"output_path = '{escape_ruby_single_quoted(container_output.as_posix())}'\n"
                 "rows = JSON.parse(File.read(input_path))\n"
                 "updated = 0\n"
                 "errors = []\n"
@@ -125,22 +133,17 @@ class OpenProjectMembershipService:
                 "  name = row['name']\n"
                 "  next unless name && !name.strip.empty?\n"
                 "  begin\n"
-                "    group = Group.find_or_create_by(name: name)\n"
-                # ``compact`` drops nils first, then ``map(&:to_i)`` is
-                # safe; ``select { |id| id.positive? }`` filters the 0
-                # values that ``nil``-ish or non-numeric inputs would
-                # otherwise smuggle through (ActiveRecord would raise
-                # later when assigning a non-existent user id 0).
-                "    desired_ids = Array(row['user_ids']).compact.map(&:to_i).select { |id| id.positive? }.uniq.sort\n"
-                "    current_ids = group.user_ids.sort\n"
-                "    if desired_ids != current_ids\n"
-                "      group.user_ids = desired_ids\n"
-                # ``save!`` so a validation failure raises into the
-                # outer ``rescue`` (and is recorded as an error)
-                # instead of silently flagging ``updated += 1``.
-                "      group.save!\n"
-                "      updated += 1\n"
+                "    ids = Array(row['user_ids']).compact.map(&:to_i).select(&:positive?).uniq.sort\n"
+                "    groups = Group.where(name: name)\n"
+                "    group = groups.exists? ? groups.sole : nil\n"
+                "    next if group && group.user_ids.sort == ids\n"
+                "    result = if group\n"
+                "      Groups::UpdateService.new(user: User.system, model: group).call(replace_user_ids: ids)\n"
+                "    else\n"
+                "      Groups::CreateService.new(user: User.system).call(name: name, add_user_ids: ids)\n"
                 "    end\n"
+                "    raise result.errors.full_messages.join(', ') unless result.success?\n"
+                "    updated += 1\n"
                 "  rescue => e\n"
                 "    errors << { name: name, error: e.message }\n"
                 "  end\n"
@@ -156,11 +159,6 @@ class OpenProjectMembershipService:
                 "updated": int(summary.get("updated", 0)),
                 "errors": int(summary.get("errors", 0)),
             }
-        finally:
-            with suppress(OSError):
-                payload_path.unlink()
-            with suppress(OSError):
-                result_path.unlink()
 
     # ── project memberships / role assignment ───────────────────────────
 
@@ -185,27 +183,11 @@ class OpenProjectMembershipService:
             return {"updated": 0, "errors": 0}
 
         client = self._client
-        temp_dir = Path(client.file_manager.data_dir) / "group_roles"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        # See ``sync_group_memberships`` for the suffix rationale —
-        # pid + whole-second timestamp alone can collide within a single
-        # process when this method is called from a tight loop.
-        unique_suffix = f"{os.getpid()}_{int(time.time())}_{secrets.token_hex(4)}"
-        payload_path = temp_dir / f"group_roles_{unique_suffix}.json"
-        result_path = temp_dir / (payload_path.name + ".result")
-
-        try:
-            with payload_path.open("w", encoding="utf-8") as handle:
-                json.dump(assignments, handle)
-
-            container_input = Path("/tmp") / payload_path.name
-            container_output = Path("/tmp") / (payload_path.name + ".result")
-            client.transfer_file_to_container(payload_path, container_input)
-
+        with self._assignment_files(assignments) as (container_input, container_output, result_path):
             ruby = (
                 "require 'json'\n"
-                f"input_path = '{container_input.as_posix()}'\n"
-                f"output_path = '{container_output.as_posix()}'\n"
+                f"input_path = '{escape_ruby_single_quoted(container_input.as_posix())}'\n"
+                f"output_path = '{escape_ruby_single_quoted(container_output.as_posix())}'\n"
                 "updated = 0\n"
                 "errors = []\n"
                 "begin\n"
@@ -257,11 +239,6 @@ class OpenProjectMembershipService:
                 "updated": int(summary.get("updated", 0)),
                 "errors": int(summary.get("errors", 0)),
             }
-        finally:
-            with suppress(OSError):
-                payload_path.unlink()
-            with suppress(OSError):
-                result_path.unlink()
 
     def assign_user_roles(
         self,

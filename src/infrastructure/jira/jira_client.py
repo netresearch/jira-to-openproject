@@ -171,9 +171,9 @@ def _import_real_jira_module() -> Any:
                     is_local_stub = False
                 if is_local_stub:
                     # Remove stub and any submodules to force a clean import
-                    for key in list(sys.modules.keys()):
-                        if key == "jira" or key.startswith("jira."):
-                            sys.modules.pop(key, None)
+                    stub_modules = [key for key in sys.modules if key == "jira" or key.startswith("jira.")]
+                    for key in stub_modules:
+                        sys.modules.pop(key, None)
 
         # Prefer virtualenv site-packages path. site.getsitepackages() can
         # raise AttributeError on bare/embedded interpreters; OSError covers

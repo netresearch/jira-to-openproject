@@ -98,15 +98,9 @@ class TestWorkPackageStructure:
         # Mock the file existence check
         with patch("pathlib.Path.exists", return_value=False):
             # This should NOT raise AttributeError if method is in class
-            try:
-                result = migration._load_custom_field_mapping()
-                # If we get here, the method exists and is callable
-                assert isinstance(result, dict), "Should return a dict"
-            except AttributeError as e:
-                pytest.fail(
-                    f"AttributeError calling _load_custom_field_mapping: {e}. "
-                    f"This indicates the method is not an instance method of the class!",
-                )
+            result = migration._load_custom_field_mapping()
+            # If we get here, the method exists and is callable
+            assert isinstance(result, dict), "Should return a dict"
 
     @patch("src.utils.data_handler.load_dict")
     def test_all_critical_methods_exist(self, mock_load_dict):

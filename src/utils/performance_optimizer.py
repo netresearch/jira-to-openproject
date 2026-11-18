@@ -265,12 +265,11 @@ class BatchProcessor:
                 if result:
                     results.extend(result if isinstance(result, list) else [result])
             except Exception as e:
-                logger.error(
+                logger.exception(
                     "Batch processing failed: %s (batch_size=%d, workers=%d)",
                     e,
                     self.batch_size,
                     self.max_workers,
-                    exc_info=True,
                 )
 
         return results

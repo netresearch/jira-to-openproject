@@ -41,6 +41,11 @@ if TYPE_CHECKING:
     from src.domain.enums import JournalEntryType
 
 
+def _dict_fields(value: Any) -> dict[str, Any]:
+    """Read optional Jira fields from dictionary-shaped REST data."""
+    return value if isinstance(value, dict) else {}
+
+
 class IssueTransformer:
     """Pure mapping logic extracted from ``WorkPackageMigration``.
 
@@ -54,6 +59,7 @@ class IssueTransformer:
     # Default fallback user id used when a journal author cannot be resolved
     # from the user mapping. See ``resolve_journal_author_id`` (BUG #32).
     _BUG32_FALLBACK_USER_ID = 148941
+    _FIX_VERSION_FIELD = "Fix Version"
 
     # Probe order for resolving Jira changelog/comment authors against the
     # owner's ``user_mapping``.  Canonical Cloud-first order mirrors
@@ -199,29 +205,13 @@ class IssueTransformer:
 
         """
         try:
-            # Access changelog from issue
-            changelog = getattr(jira_issue, "changelog", None)
-            if not changelog:
-                return None
-
-            histories = getattr(changelog, "histories", None)
-            if not histories:
-                return None
-
-            # Find all Workflow field changes, sorted by date (most recent last)
-            workflow_changes = []
-            for history in histories:
-                items = getattr(history, "items", [])
-                for item in items:
-                    field = getattr(item, "field", None) or (item.get("field") if isinstance(item, dict) else None)
-                    if field == "Workflow":
-                        to_string = getattr(item, "toString", None) or (
-                            item.get("toString") if isinstance(item, dict) else None
-                        )
-                        if to_string:
-                            created = getattr(history, "created", "")
-                            workflow_changes.append((created, to_string))
-
+            histories = getattr(getattr(jira_issue, "changelog", None), "histories", None) or []
+            workflow_changes = [
+                (getattr(history, "created", ""), name)
+                for history in histories
+                for item in getattr(history, "items", [])
+                if self.get_attr(item, "field") == "Workflow" and (name := self.get_attr(item, "toString"))
+            ]
             if workflow_changes:
                 # Sort by timestamp and get the most recent
                 workflow_changes.sort(key=lambda x: x[0])
@@ -318,43 +308,27 @@ class IssueTransformer:
 
     def resolve_start_date(self, issue: Any) -> str | None:
         """Resolve start date from configured Jira custom fields."""
-        owner = self._owner
-        candidates: list[str] = list(owner.start_date_fields)
+        candidates = list(self._owner.start_date_fields)
+        fields = getattr(issue, "fields", None)
+        for field_id in candidates:
+            date = self._start_date_value(getattr(fields, field_id, None))
+            if date:
+                return date
 
-        # jira.Issue style access
-        if hasattr(issue, "fields"):
-            fields_obj = getattr(issue, "fields", None)
-            for field_id in candidates:
-                try:
-                    value = getattr(fields_obj, field_id)
-                except AttributeError:
-                    value = None
-                if value:
-                    normalized = owner.enhanced_timestamp_migrator._normalize_timestamp(str(value))
-                    if normalized:
-                        return normalized.split("T", 1)[0]
-
-        # Raw dict fields from jira.Issue
-        raw_fields = {}
-        if hasattr(issue, "raw"):
-            raw_fields = getattr(issue, "raw", {}).get("fields", {})
-        if isinstance(issue, dict):
-            raw_fields = issue.get("fields", issue)
-
+        raw_fields = (
+            issue.get("fields", issue) if isinstance(issue, dict) else getattr(issue, "raw", {}).get("fields", {})
+        )
         if isinstance(raw_fields, dict):
             for field_id in candidates:
-                value = raw_fields.get(field_id)
-                if value:
-                    normalized = owner.enhanced_timestamp_migrator._normalize_timestamp(str(value))
-                    if normalized:
-                        return normalized.split("T", 1)[0]
+                date = self._start_date_value(raw_fields.get(field_id))
+                if date:
+                    return date
 
-        # Fallback: derive start date from Jira status history
-        history_start = self.resolve_start_date_from_history(issue)
-        if history_start:
-            return history_start
+        return self.resolve_start_date_from_history(issue)
 
-        return None
+    def _start_date_value(self, value: Any) -> str | None:
+        normalized = self._owner.enhanced_timestamp_migrator._normalize_timestamp(str(value)) if value else None
+        return normalized.split("T", 1)[0] if normalized else None
 
     def resolve_start_date_from_history(self, issue: Any) -> str | None:
         """Infer start date from the first transition into an 'In Progress' category."""
@@ -378,31 +352,20 @@ class IssueTransformer:
 
         for normalized, history in normalized_histories:
             items = self.get_attr(history, "items") or []
-            for item in items:
-                field_name = str(self.get_attr(item, "field") or "").lower()
-                if field_name != "status":
-                    continue
-
-                status_id = str(self.get_attr(item, "to") or "").strip()
-                status_name = str(self.get_attr(item, "toString") or "").strip().lower()
-
-                category: dict[str, Any] = {}
-                if status_id and status_id in owner.status_category_by_id:
-                    category = owner.status_category_by_id[status_id] or {}
-                elif status_name and status_name in owner.status_category_by_name:
-                    category = owner.status_category_by_name[status_name] or {}
-
-                if not category and status_name:
-                    # Attempt loose lookup by name if exact match missing
-                    category = next(
-                        (val for key, val in owner.status_category_by_name.items() if key == status_name),
-                        {},
-                    )
-
-                if self.is_in_progress_category(category):
-                    return normalized.split("T", 1)[0]
-
+            if any(self._enters_in_progress(item) for item in items):
+                return normalized.split("T", 1)[0]
         return None
+
+    def _enters_in_progress(self, item: Any) -> bool:
+        if str(self.get_attr(item, "field") or "").lower() != "status":
+            return False
+        owner = self._owner
+        status_id = str(self.get_attr(item, "to") or "").strip()
+        status_name = str(self.get_attr(item, "toString") or "").strip().lower()
+        category = owner.status_category_by_id.get(status_id) if status_id else None
+        if not category and status_name:
+            category = owner.status_category_by_name.get(status_name)
+        return self.is_in_progress_category(category or {})
 
     @staticmethod
     def get_attr(obj: Any, key: str) -> Any:
@@ -428,11 +391,7 @@ class IssueTransformer:
             Dictionary mapping OpenProject field names to [old_value, new_value] or None.
 
         """
-        owner = self._owner
         field = item.get("field")
-        if not field:
-            return None
-
         # Field mapping from Jira to OpenProject
         # BUG #32 FIX (REGRESSION #3): Only map fields that exist in Journal::WorkPackageJournal
         # BUG #17 FIX: Added timeestimate and timeoriginalestimate mappings
@@ -446,7 +405,7 @@ class IssueTransformer:
             "issuetype": "type_id",
             # "resolution": "resolution",  # NOT a valid Journal::WorkPackageJournal attribute  # noqa: ERA001
             # "labels": "tags",  # NOT a valid Journal::WorkPackageJournal attribute  # noqa: ERA001
-            "Fix Version": "version_id",  # On-the-fly version creation enabled
+            self._FIX_VERSION_FIELD: "version_id",  # On-the-fly version creation enabled
             # "component": "category_id",  # Requires category_mapping - falls through to Bug #16 notes for now
             "reporter": "author_id",
             # BUG #17 FIX: Time estimate fields (Jira stores in seconds, OpenProject in hours)
@@ -455,171 +414,58 @@ class IssueTransformer:
         }
 
         # BUG #32 FIX (REGRESSION #3): Skip unmapped fields to prevent invalid Journal::WorkPackageJournal attributes
-        if field not in field_mappings:
+        if not field or field not in field_mappings:
             return None
 
         op_field = field_mappings[field]
 
-        # Get values from changelog item
-        from_value = item.get("fromString") or item.get("from")
-        to_value = item.get("toString") or item.get("to")
-
-        # Special handling for user fields (assignee, reporter)
-        if field in ["assignee", "reporter"]:
-            # BUG #20 FIX: Use 'from'/'to' (username) not 'fromString'/'toString' (display name)
-            # Jira changelog provides:
-            #   - from/to: username (e.g., "enrico.tischendorf")
-            #   - fromString/toString: display name (e.g., "Enrico Tischendorf")
-            # Our user_mapping is keyed by username, so we must use from/to
-            from_username = item.get("from")
-            to_username = item.get("to")
-
-            # Map usernames to OpenProject IDs
-            from_id = None
-            to_id = None
-
-            if from_username and owner.user_mapping:
-                user_dict = owner.user_mapping.get(from_username)
-                from_id = user_dict.get("openproject_id") if user_dict else None
-                if not user_dict:
-                    self.logger.debug(f"[BUG20] User not found in mapping: {from_username}")
-
-            if to_username and owner.user_mapping:
-                user_dict = owner.user_mapping.get(to_username)
-                to_id = user_dict.get("openproject_id") if user_dict else None
-                if not user_dict:
-                    self.logger.debug(f"[BUG20] User not found in mapping: {to_username}")
-
-            # BUG #19 FIX: Skip no-change mappings (from == to, including both None)
-            # This prevents "retracted" phantom journals from operations with no actual change
-            if from_id == to_id:
-                return None
-
-            return {op_field: [from_id, to_id]}
-
-        # BUG #11 FIX: Map Jira IDs to OpenProject IDs for status, issuetype
-        # The progressive state building needs OpenProject integer IDs, not Jira string values
-        if field == "issuetype":
-            # Get Jira type IDs (not string names)
-            from_jira_id = item.get("from")  # e.g., "3" for Task
-            to_jira_id = item.get("to")  # e.g., "10404" for Access
-
-            # Map to OpenProject type IDs
-            from_op_id = None
-            to_op_id = None
-
-            if from_jira_id and owner.issue_type_id_mapping:
-                from_op_id = owner.issue_type_id_mapping.get(str(from_jira_id))
-            if to_jira_id and owner.issue_type_id_mapping:
-                to_op_id = owner.issue_type_id_mapping.get(str(to_jira_id))
-
-            # BUG #11 DEBUG: Log type mapping results
-            self.logger.info(
-                f"[BUG11-TYPE] issuetype change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}",
-            )
-
-            # BUG #19 FIX: Skip no-change mappings
-            if from_op_id == to_op_id:
-                return None
-
-            return {op_field: [from_op_id, to_op_id]}
-
-        if field == "status":
-            # Get Jira status IDs (not string names)
-            from_jira_id = item.get("from")  # e.g., "1" for Open
-            to_jira_id = item.get("to")  # e.g., "6" for Closed
-
-            # Map to OpenProject status IDs
-            from_op_id = None
-            to_op_id = None
-
-            if from_jira_id and owner.status_mapping:
-                mapping = owner.status_mapping.get(str(from_jira_id))
-                from_op_id = mapping.get("openproject_id") if mapping else None
-            if to_jira_id and owner.status_mapping:
-                mapping = owner.status_mapping.get(str(to_jira_id))
-                to_op_id = mapping.get("openproject_id") if mapping else None
-
-            # BUG #11 DEBUG: Log status mapping results
-            self.logger.info(
-                f"[BUG11-STATUS] status change: from_jira={from_jira_id} -> from_op={from_op_id}, to_jira={to_jira_id} -> to_op={to_op_id}",
-            )
-
-            # BUG #19 FIX: Skip no-change mappings
-            if from_op_id == to_op_id:
-                return None
-
-            return {op_field: [from_op_id, to_op_id]}
-
-        # Handle Fix Version -> version_id with on-the-fly version creation
-        if field == "Fix Version":
-            # Version names are in fromString/toString (like user display names)
-            from_version_name = item.get("fromString")
-            to_version_name = item.get("toString")
-
-            # Map to OpenProject version IDs (create if needed)
-            from_version_id = None
-            to_version_id = None
-
-            if owner._current_project_id:
-                if from_version_name:
-                    from_version_id = owner._get_or_create_version(from_version_name, owner._current_project_id)
-                if to_version_name:
-                    to_version_id = owner._get_or_create_version(to_version_name, owner._current_project_id)
-
-            self.logger.info(
-                f"[FIXVERSION] project_id={owner._current_project_id}, from='{from_version_name}' -> {from_version_id}, to='{to_version_name}' -> {to_version_id}",
-            )
-
-            # Skip no-change mappings
-            if from_version_id == to_version_id:
-                return None
-
-            return {op_field: [from_version_id, to_version_id]}
-
-        # For priority, keep string values for now (mapping not critical for journals)
-        if field == "priority":
-            # BUG #19 FIX: Skip no-change mappings
-            if from_value == to_value:
-                return None
-            return {op_field: [from_value, to_value]}
-
-        # BUG #17 FIX: Handle time estimate fields - convert Jira seconds to OpenProject hours
-        if field in ["timeestimate", "timeoriginalestimate"]:
-            from_seconds = item.get("from")
-            to_seconds = item.get("to")
-
-            def seconds_to_hours(seconds_str: str | None) -> float | None:
-                """Convert Jira time (seconds) to OpenProject hours."""
-                if not seconds_str:
-                    return None
-                try:
-                    seconds = int(seconds_str)
-                    return round(seconds / 3600, 2)  # Convert to hours with 2 decimal places
-                except (
-                    ValueError,
-                    TypeError,
-                ):
-                    return None
-
-            from_hours = seconds_to_hours(from_seconds)
-            to_hours = seconds_to_hours(to_seconds)
-
-            self.logger.info(
-                f"[BUG17-TIME] {field} change: from={from_seconds}s ({from_hours}h) -> to={to_seconds}s ({to_hours}h)",
-            )
-
-            # BUG #19 FIX: Skip no-change mappings
-            if from_hours == to_hours:
-                return None
-
-            return {op_field: [from_hours, to_hours]}
-
-        # Generic field change (subject, description, etc.)
-        # BUG #19 FIX: Skip no-change mappings
-        if from_value == to_value:
+        old = self._journal_value(field, item.get("from"), item.get("fromString"))
+        new = self._journal_value(field, item.get("to"), item.get("toString"))
+        if field in ("issuetype", "status", self._FIX_VERSION_FIELD, "timeestimate", "timeoriginalestimate"):
+            self.logger.info("Mapped Jira %s change to %s: %r -> %r", field, op_field, old, new)
+        if old == new:
             return None
-        return {op_field: [from_value, to_value]}
+        return {op_field: [old, new]}
+
+    def _journal_value(self, field: str, raw: Any, display: Any) -> Any:
+        """Choose the original Jira field representation appropriate for the journal column."""
+        owner = self._owner
+        if field in ("assignee", "reporter"):
+            return self._journal_user_id(raw)
+        if field == "issuetype":
+            return owner.issue_type_id_mapping.get(str(raw)) if raw and owner.issue_type_id_mapping else None
+        if field == "status":
+            return self._journal_status_id(raw)
+        if field == self._FIX_VERSION_FIELD:
+            if display and owner._current_project_id:
+                return owner._get_or_create_version(display, owner._current_project_id)
+            return None
+        if field in ("timeestimate", "timeoriginalestimate"):
+            return self._hours_from_seconds(raw)
+        return display or raw
+
+    def _journal_status_id(self, raw: Any) -> Any:
+        mapping = self._owner.status_mapping.get(str(raw)) if raw and self._owner.status_mapping else None
+        return (mapping or {}).get("openproject_id")
+
+    def _journal_user_id(self, username: Any) -> Any:
+        mapping = self._owner.user_mapping
+        if not username or not mapping:
+            return None
+        user = mapping.get(username)
+        if not user:
+            self.logger.debug("[BUG20] User not found in mapping: %s", username)
+            return None
+        return user.get("openproject_id")
+
+    @staticmethod
+    def _hours_from_seconds(raw: Any) -> float | None:
+        if not raw:
+            return None
+        try:
+            return round(int(raw) / 3600, 2)
+        except TypeError, ValueError:
+            return None
 
     @staticmethod
     def extract_changelog_histories(issue: Any) -> list[Any]:
@@ -676,89 +522,87 @@ class IssueTransformer:
             start_date = self.resolve_start_date(issue)
             if start_date:
                 meta["start_date"] = start_date
-            # Handle jira.Issue style
             if hasattr(issue, "key") and hasattr(issue, "fields"):
-                f = getattr(issue, "fields", None)
-                meta["jira_key"] = getattr(issue, "key", None)
-                meta["jira_id"] = getattr(issue, "id", None)
-                if f is not None:
-
-                    def _name(obj: Any) -> Any:
-                        try:
-                            return getattr(obj, "name", None)
-                        except Exception:
-                            return None
-
-                    meta["issuetype_id"] = getattr(getattr(f, "issuetype", None), "id", None)
-                    meta["issuetype_name"] = _name(getattr(f, "issuetype", None))
-                    meta["status_id"] = getattr(getattr(f, "status", None), "id", None)
-                    meta["status_name"] = _name(getattr(f, "status", None))
-                    meta["priority_id"] = getattr(getattr(f, "priority", None), "id", None)
-                    meta["priority_name"] = _name(getattr(f, "priority", None))
-                    meta["reporter"] = getattr(getattr(f, "reporter", None), "name", None)
-                    meta["assignee"] = getattr(getattr(f, "assignee", None), "name", None)
-                    meta["created"] = getattr(f, "created", None)
-                    meta["updated"] = getattr(f, "updated", None)
-                    meta["duedate"] = getattr(f, "duedate", None)
-                    try:
-                        labels = list(getattr(f, "labels", []) or [])
-                    except Exception:
-                        labels = []
-                    meta["labels"] = labels
-                    try:
-                        comps = getattr(f, "components", []) or []
-                        meta["components"] = [getattr(c, "name", None) for c in comps if c]
-                    except Exception:
-                        meta["components"] = []
-                    # Optional relations
-                    try:
-                        parent = getattr(f, "parent", None)
-                        if parent is not None:
-                            meta["parent_key"] = getattr(parent, "key", None)
-                    except Exception:
-                        pass
+                self._object_issue_meta(issue, meta)
             else:
-                # Dict-like payloads (tests / fallback)
-                d = issue or {}
-                fields = d.get("fields") if isinstance(d, dict) else {}
-                meta["jira_key"] = d.get("key") if isinstance(d, dict) else None
-                meta["jira_id"] = d.get("id") if isinstance(d, dict) else None
-
-                def _get(path_keys: list[str]) -> Any:
-                    cur: Any = fields if isinstance(fields, dict) else {}
-                    for k in path_keys:
-                        if not isinstance(cur, dict):
-                            return None
-                        cur = cur.get(k)
-                    return cur
-
-                meta["issuetype_id"] = _get(["issuetype", "id"])
-                meta["issuetype_name"] = _get(["issuetype", "name"])
-                meta["status_id"] = _get(["status", "id"])
-                meta["status_name"] = _get(["status", "name"])
-                meta["priority_id"] = _get(["priority", "id"])
-                meta["priority_name"] = _get(["priority", "name"])
-                meta["reporter"] = _get(["reporter", "name"]) or _get(["reporter", "displayName"])
-                meta["assignee"] = _get(["assignee", "name"]) or _get(["assignee", "displayName"])
-                meta["created"] = _get(["created"]) or d.get("created")
-                meta["updated"] = _get(["updated"]) or d.get("updated")
-                meta["duedate"] = _get(["duedate"]) or d.get("duedate")
-                labels = _get(["labels"]) or []
-                if not isinstance(labels, list):
-                    labels = []
-                meta["labels"] = labels
-                comps = _get(["components"]) or []
-                if isinstance(comps, list):
-                    meta["components"] = [c.get("name") for c in comps if isinstance(c, dict)]
-                else:
-                    meta["components"] = []
-                parent = _get(["parent"]) or {}
-                if isinstance(parent, dict):
-                    meta["parent_key"] = parent.get("key")
+                self._mapping_issue_meta(issue, meta)
         except Exception:
             # Never fail migration because of meta extraction
             pass
         return meta
+
+    @staticmethod
+    def _object_issue_meta(issue: Any, meta: dict[str, Any]) -> None:
+        f = getattr(issue, "fields", None)
+        meta["jira_key"] = getattr(issue, "key", None)
+        meta["jira_id"] = getattr(issue, "id", None)
+        if f is None:
+            return
+
+        def _name(obj: Any) -> Any:
+            try:
+                return getattr(obj, "name", None)
+            except Exception:
+                return None
+
+        meta["issuetype_id"] = getattr(getattr(f, "issuetype", None), "id", None)
+        meta["issuetype_name"] = _name(getattr(f, "issuetype", None))
+        meta["status_id"] = getattr(getattr(f, "status", None), "id", None)
+        meta["status_name"] = _name(getattr(f, "status", None))
+        meta["priority_id"] = getattr(getattr(f, "priority", None), "id", None)
+        meta["priority_name"] = _name(getattr(f, "priority", None))
+        meta["reporter"] = getattr(getattr(f, "reporter", None), "name", None)
+        meta["assignee"] = getattr(getattr(f, "assignee", None), "name", None)
+        meta["created"] = getattr(f, "created", None)
+        meta["updated"] = getattr(f, "updated", None)
+        meta["duedate"] = getattr(f, "duedate", None)
+        try:
+            labels = list(getattr(f, "labels", []) or [])
+        except Exception:
+            labels = []
+        meta["labels"] = labels
+        try:
+            comps = getattr(f, "components", []) or []
+            meta["components"] = [getattr(c, "name", None) for c in comps if c]
+        except Exception:
+            meta["components"] = []
+        # Optional relations
+        try:
+            parent = getattr(f, "parent", None)
+            if parent is not None:
+                meta["parent_key"] = getattr(parent, "key", None)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _mapping_issue_meta(issue: Any, meta: dict[str, Any]) -> None:
+        # Dict-like payloads (tests / fallback)
+        d = issue or {}
+        record = _dict_fields(d)
+        fields = _dict_fields(record.get("fields"))
+        meta["jira_key"] = record.get("key")
+        meta["jira_id"] = record.get("id")
+        for name in ("issuetype", "status", "priority"):
+            obj = _dict_fields(fields.get(name))
+            meta[f"{name}_id"] = obj.get("id")
+            meta[f"{name}_name"] = obj.get("name")
+        for name in ("reporter", "assignee"):
+            obj = _dict_fields(fields.get(name))
+            meta[name] = obj.get("name") or obj.get("displayName")
+        for name in ("created", "updated", "duedate"):
+            meta[name] = fields.get(name) or d.get(name)
+        labels = fields.get("labels") or []
+        if not isinstance(labels, list):
+            labels = []
+        meta["labels"] = labels
+        comps = fields.get("components") or []
+        if isinstance(comps, list):
+            meta["components"] = [c.get("name") for c in comps if isinstance(c, dict)]
+        else:
+            meta["components"] = []
+        parent = fields.get("parent") or {}
+        if isinstance(parent, dict):
+            meta["parent_key"] = parent.get("key")
 
     # ------------------------------------------------------------------ #
     # Issue-type / status mapping
@@ -834,42 +678,17 @@ class IssueTransformer:
         - Remove the _links key entirely to avoid unknown attribute errors.
         - Ensure string fields are properly escaped.
         """
-        # Ensure string values for certain fields
-        if "subject" in wp:
-            try:
-                wp["subject"] = str(wp["subject"]).replace('"', '\\"').replace("'", "\\'")
-            except Exception:
-                wp["subject"] = str(wp.get("subject", ""))
-        if "description" in wp:
-            try:
-                wp["description"] = str(wp["description"]).replace('"', '\\"').replace("'", "\\'")
-            except Exception:
-                wp["description"] = str(wp.get("description", ""))
+        for field in ("subject", "description"):
+            if field in wp:
+                try:
+                    wp[field] = str(wp[field]).replace('"', '\\"').replace("'", "\\'")
+                except Exception:
+                    wp[field] = str(wp.get(field, ""))
 
-        # Sanitize OpenProject API-style links that are not valid AR attributes
         links = wp.get("_links")
         if isinstance(links, dict):
-            # Extract type_id from links if present and not already provided
-            try:
-                if "type_id" not in wp and isinstance(links.get("type"), dict):
-                    href = links["type"].get("href")
-                    if isinstance(href, str) and href.strip():
-                        type_id_str = href.rstrip("/").split("/")[-1]
-                        if type_id_str.isdigit():
-                            wp["type_id"] = int(type_id_str)
-            except Exception:
-                pass
-
-            # Extract status_id from links if present and not already provided
-            try:
-                if "status_id" not in wp and isinstance(links.get("status"), dict):
-                    href = links["status"].get("href")
-                    if isinstance(href, str) and href.strip():
-                        status_id_str = href.rstrip("/").split("/")[-1]
-                        if status_id_str.isdigit():
-                            wp["status_id"] = int(status_id_str)
-            except Exception:
-                pass
+            for relation in ("type", "status"):
+                IssueTransformer._copy_link_id(wp, links, relation)
 
         # Remove _links entirely to avoid AR unknown attribute errors
         wp.pop("_links", None)
@@ -878,6 +697,22 @@ class IssueTransformer:
         wp.pop("jira_id", None)
         wp.pop("jira_key", None)
         wp.pop("type_name", None)
+
+    @staticmethod
+    def _copy_link_id(wp: dict[str, Any], links: dict, relation: str) -> None:
+        key = f"{relation}_id"
+        link = links.get(relation)
+        if key in wp or not isinstance(link, dict):
+            return
+        href = link.get("href")
+        if not isinstance(href, str):
+            return
+        identifier = href.rstrip("/").rsplit("/", 1)[-1]
+        if identifier.isdigit():
+            try:
+                wp[key] = int(identifier)
+            except ValueError:
+                pass
 
 
 __all__ = ["IssueTransformer"]

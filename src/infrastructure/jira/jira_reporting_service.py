@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from requests import exceptions
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraConnectionError,
@@ -49,47 +50,47 @@ class JiraReportingService:
 
     # ── reads ────────────────────────────────────────────────────────────
 
+    def _fetch_favourites(self) -> list[dict[str, Any]]:
+        fav_resp = self._client.jira._session.get(
+            f"{self._client.base_url}/rest/api/2/filter/favourite",
+        )
+        fav_resp.raise_for_status()
+        fav_payload = fav_resp.json()
+        return fav_payload if isinstance(fav_payload, list) else []
+
+    @staticmethod
+    def _extract_status_from_error(exc: BaseException | None) -> int | None:
+        # Walk the cause chain looking for an HTTP status. Try
+        # ``status_code`` directly on the exception (set by
+        # ``AtlassianJIRAError``), then fall back to the
+        # response-attached ``status_code`` (set by
+        # ``HTTPError`` and friends). The previous shape had a
+        # second copy of the response-status lookup nested
+        # inside the ``AtlassianJIRAError`` branch — dead code
+        # because the same lookup always ran one block down.
+        current: BaseException | None = exc
+        while current:
+            direct_status = getattr(current, "status_code", None)
+            if direct_status is not None:
+                return int(direct_status)
+            response = getattr(current, "response", None)
+            if response is not None:
+                response_status = getattr(response, "status_code", None)
+                if response_status is not None:
+                    return int(response_status)
+            current = getattr(current, "__cause__", None)
+        return None
+
     def get_filters(self) -> list[dict[str, Any]]:
         """Return Jira filters visible to the authenticated user."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         self._logger.info("Fetching Jira filters")
         filters: list[dict[str, Any]] = []
 
         try:
-
-            def _fetch_favourites() -> list[dict[str, Any]]:
-                fav_resp = self._client.jira._session.get(
-                    f"{self._client.base_url}/rest/api/2/filter/favourite",
-                )
-                fav_resp.raise_for_status()
-                fav_payload = fav_resp.json()
-                return fav_payload if isinstance(fav_payload, list) else []
-
-            def _extract_status_from_error(exc: BaseException | None) -> int | None:
-                # Walk the cause chain looking for an HTTP status. Try
-                # ``status_code`` directly on the exception (set by
-                # ``AtlassianJIRAError``), then fall back to the
-                # response-attached ``status_code`` (set by
-                # ``HTTPError`` and friends). The previous shape had a
-                # second copy of the response-status lookup nested
-                # inside the ``AtlassianJIRAError`` branch — dead code
-                # because the same lookup always ran one block down.
-                current: BaseException | None = exc
-                while current:
-                    direct_status = getattr(current, "status_code", None)
-                    if direct_status is not None:
-                        return int(direct_status)
-                    response = getattr(current, "response", None)
-                    if response is not None:
-                        response_status = getattr(response, "status_code", None)
-                        if response_status is not None:
-                            return int(response_status)
-                    current = getattr(current, "__cause__", None)
-                return None
-
             try:
                 response = self._client.jira._session.get(
                     f"{self._client.base_url}/rest/api/2/filter/search",
@@ -99,13 +100,13 @@ class JiraReportingService:
                 # ``_extract_status_from_error`` already walks the
                 # ``__cause__`` chain, so a single call covers both
                 # the immediate exception and any wrapped HTTP error.
-                status = _extract_status_from_error(exc)
+                status = self._extract_status_from_error(exc)
                 if status in (404, 405):
                     self._logger.warning(
                         "Filter search endpoint (status %s) not available; falling back to favourites list",
                         status,
                     )
-                    filters = _fetch_favourites()
+                    filters = self._fetch_favourites()
                     self._logger.info("Retrieved %s Jira filters (favourites fallback)", len(filters))
                     return filters
                 raise
@@ -127,13 +128,13 @@ class JiraReportingService:
                 # (see the ``TYPE_CHECKING`` else-branch in
                 # ``jira_client``), so this clause already swallows
                 # ``JiraApiError``. Removed it.
-                status = _extract_status_from_error(exc)
+                status = self._extract_status_from_error(exc)
                 if status in (404, 405):
                     self._logger.warning(
                         "Filter search endpoint (status %s) not available; falling back to favourites list",
                         status,
                     )
-                    filters = _fetch_favourites()
+                    filters = self._fetch_favourites()
                 else:
                     raise
 
@@ -147,7 +148,7 @@ class JiraReportingService:
     def get_dashboards(self) -> list[dict[str, Any]]:
         """Return Jira dashboards visible to the authenticated user."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         url = f"{self._client.base_url}/rest/api/2/dashboard"
@@ -169,7 +170,7 @@ class JiraReportingService:
     def get_dashboard_details(self, dashboard_id: int) -> dict[str, Any]:
         """Return details for a specific Jira dashboard."""
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         url = f"{self._client.base_url}/rest/api/2/dashboard/{dashboard_id}"

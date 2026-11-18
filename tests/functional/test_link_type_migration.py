@@ -606,23 +606,19 @@ class TestLinkTypeMigration(unittest.TestCase):
         ]
 
         # Call method - this should not raise AttributeError due to None guards
-        try:
-            result = migration.create_link_type_mapping()
-            # If we get here, the None guards worked
-            assert result is not None
-            assert len(result) == 3  # Should have processed all 3 link types
+        result = migration.create_link_type_mapping()
+        # If we get here, the None guards worked
+        assert result is not None
+        assert len(result) == 3  # Should have processed all 3 link types
 
-            # The key test is that no AttributeError was raised when dealing with None values
-            # The matching logic may still find some matches through similarity, which is fine
-            # We just need to verify that each entry has valid data structure
-            for jira_id, mapping in result.items():
-                assert mapping["jira_id"] == jira_id
-                assert "matched_by" in mapping
-                assert "status" in mapping
-                # None guards should ensure the processing completed without AttributeError
-        except AttributeError as e:
-            # If we get AttributeError, the None guards failed
-            self.fail(f"None guards failed to prevent AttributeError: {e}")
+        # The key test is that no AttributeError was raised when dealing with None values
+        # The matching logic may still find some matches through similarity, which is fine
+        # We just need to verify that each entry has valid data structure
+        for jira_id, mapping in result.items():
+            assert mapping["jira_id"] == jira_id
+            assert "matched_by" in mapping
+            assert "status" in mapping
+            # None guards should ensure the processing completed without AttributeError
 
 
 # Define testing steps for link type migration validation

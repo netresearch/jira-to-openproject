@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     HTTP_OK,
     JiraApiError,
@@ -56,7 +57,7 @@ class JiraSearchService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -92,7 +93,7 @@ class JiraSearchService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -171,7 +172,7 @@ class JiraSearchService:
 
         """
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:
@@ -209,7 +210,7 @@ class JiraSearchService:
         # the standard message instead of being wrapped as
         # ``JiraApiError`` by the catch-all below.
         if not self._client.jira:
-            msg = "Jira client is not initialized"
+            msg = CLIENT_NOT_INITIALIZED
             raise JiraConnectionError(msg)
 
         try:

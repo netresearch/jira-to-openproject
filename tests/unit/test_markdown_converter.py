@@ -1163,3 +1163,19 @@ class TestStrikethroughCLIFlagFalsePositives:
         converter = MarkdownConverter()
         result = converter.convert("(this -is also- removed)")
         assert result == "(this ~~is also~~ removed)"
+
+
+def test_empty_markup_prefixes_keep_the_next_line_separate():
+    converter = MarkdownConverter()
+    assert converter._convert_headings("h1.   \nPlain") == "h1.   \nPlain"
+    assert converter._convert_block_quotes("bq.  \nPlain") == "bq.  \nPlain"
+    assert converter._convert_lists("*  \nPlain") == "*  \nPlain"
+
+
+def test_mention_label_with_punctuation_round_trips_into_html():
+    from html import unescape
+
+    converter = MarkdownConverter(user_mapping={"reader": {"op_id": 7, "op_login": 'A & "B"'}})
+    markup = converter._convert_user_mentions("[~reader]")
+    assert 'data-text="@A &amp; &quot;B&quot;"' in markup
+    assert unescape(markup.split(">", 1)[1].split("<", 1)[0]) == '@A & "B"'
