@@ -897,3 +897,49 @@ def test_assign_project_lead_role_fallback_and_error_logging(
         field_format="user",
     )
     assert any("Failed to assign project lead" in str(call.args[0]) for call in mock_logger.debug.call_args_list)
+
+
+def test_mixed_project_batch_keeps_existing_and_uses_each_sources_own_provenance(project_migration, monkeypatch):
+    from unittest.mock import Mock
+
+    project_migration.jira_projects = [
+        {"key": key, "id": source_id, "name": key.title(), "lead": key.lower()}
+        for source_id, key in enumerate(["EXISTING", "FIRST", "SECOND"], 11)
+    ]
+    project_migration.op_projects = [{"id": 9, "identifier": "existing", "name": "Existing"}]
+    monkeypatch.setattr(project_migration, "_load_project_sources", lambda: None)
+    monkeypatch.setattr(project_migration, "_populate_additional_metadata", lambda row: None)
+    monkeypatch.setattr(project_migration, "_extract_jira_lead", lambda row: (row["lead"], row["lead"].title()))
+    monkeypatch.setattr(project_migration, "_get_existing_project_details", lambda identifier: None)
+    monkeypatch.setattr(project_migration, "find_parent_company_for_project", lambda jira: None)
+    monkeypatch.setattr(project_migration, "_bulk_post_project_setup", Mock())
+    monkeypatch.setattr(project_migration, "extract_openproject_projects", Mock())
+    monkeypatch.setattr(
+        project_migration, "_save_project_mapping", lambda values: setattr(project_migration, "project_mapping", values)
+    )
+    monkeypatch.setitem(config.migration_config, "dry_run", False)
+    project_migration.project_mapping = {"OTHER": {"openproject_id": 27}}
+    project_migration.cf_jira_project_key_id = 31
+    project_migration.cf_jira_project_id_id = 32
+    queries = []
+
+    def create(script):
+        queries.append(script)
+        name = "FIRST" if len(queries) == 1 else "SECOND"
+        return {"id": 10 + len(queries), "name": name.title(), "identifier": name.lower(), "created_new": True}
+
+    project_migration.op_client.execute_query_to_json_file.side_effect = create
+    result = project_migration.bulk_migrate_projects()
+    assert result.success
+    assert {key: value["openproject_id"] for key, value in project_migration.project_mapping.items()} == {
+        "OTHER": 27,
+        "EXISTING": 9,
+        "FIRST": 11,
+        "SECOND": 12,
+    }
+    assert "['Jira Project Key', 31, 'FIRST']" in queries[0]
+    assert "['Jira Project ID', 32, '12']" in queries[0]
+    assert "['Jira Project Key', 31, 'SECOND']" in queries[1]
+    assert "['Jira Project ID', 32, '13']" in queries[1]
+    assert project_migration.project_mapping["FIRST"]["jira_lead"] == "first"
+    assert project_migration.project_mapping["SECOND"]["jira_lead"] == "second"
