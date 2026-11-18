@@ -503,7 +503,7 @@ async def resume_migration_background() -> None:
         logger.exception("Error resuming migration")
 
 
-@app.get("/api/progress")
+@app.get("/api/progress", responses={500: {"description": "Migration progress unavailable"}})
 async def get_progress(migration_id: str | None = None) -> JSONResponse:
     """Get current migration progress."""
     try:
@@ -546,7 +546,7 @@ async def get_progress(migration_id: str | None = None) -> JSONResponse:
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@app.get("/api/metrics")
+@app.get("/api/metrics", responses={500: {"description": "Migration metrics unavailable"}})
 async def get_metrics(migration_id: str | None = None) -> JSONResponse:
     """Get current migration metrics."""
     try:
@@ -587,7 +587,7 @@ async def get_metrics(migration_id: str | None = None) -> JSONResponse:
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@app.get("/api/metrics/csv")
+@app.get("/api/metrics/csv", responses={500: {"description": "Metrics export failed"}})
 async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
     """Export metrics as CSV."""
     try:
@@ -617,7 +617,7 @@ async def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@app.get("/api/migration/status")
+@app.get("/api/migration/status", responses={500: {"description": "Migration status unavailable"}})
 async def get_migration_status() -> JSONResponse:
     """Get current migration status."""
     try:
@@ -638,16 +638,22 @@ async def get_migration_status() -> JSONResponse:
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@app.post("/api/migration/start")
+@app.post(
+    "/api/migration/start",
+    responses={
+        400: {"description": "A migration is already running"},
+        500: {"description": "Could not schedule the migration start"},
+    },
+)
 async def start_migration(
     control: MigrationControl,
     background_tasks: BackgroundTasks,
 ) -> JSONResponse:
     """Start migration with specified configuration."""
-    try:
-        if migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="Migration is already running")
+    if migration_state["is_running"]:
+        raise HTTPException(status_code=400, detail="Migration is already running")
 
+    try:
         # Start migration in background
         background_tasks.add_task(start_migration_background, control.config or {})
 
@@ -663,13 +669,19 @@ async def start_migration(
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@app.post("/api/migration/stop")
+@app.post(
+    "/api/migration/stop",
+    responses={
+        400: {"description": "There is no running migration"},
+        500: {"description": "Could not schedule the migration stop"},
+    },
+)
 async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Stop current migration."""
-    try:
-        if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
+    if not migration_state["is_running"]:
+        raise HTTPException(status_code=400, detail="No migration is running")
 
+    try:
         # Stop migration in background
         background_tasks.add_task(stop_migration_background)
 
@@ -680,16 +692,22 @@ async def stop_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@app.post("/api/migration/pause")
+@app.post(
+    "/api/migration/pause",
+    responses={
+        400: {"description": "There is no active migration to pause"},
+        500: {"description": "Could not schedule the migration pause"},
+    },
+)
 async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Pause current migration."""
+    if not migration_state["is_running"]:
+        raise HTTPException(status_code=400, detail="No migration is running")
+
+    if migration_state["pause_time"]:
+        raise HTTPException(status_code=400, detail="Migration is already paused")
+
     try:
-        if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
-
-        if migration_state["pause_time"]:
-            raise HTTPException(status_code=400, detail="Migration is already paused")
-
         # Pause migration in background
         background_tasks.add_task(pause_migration_background)
 
@@ -700,16 +718,22 @@ async def pause_migration(background_tasks: BackgroundTasks) -> JSONResponse:
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@app.post("/api/migration/resume")
+@app.post(
+    "/api/migration/resume",
+    responses={
+        400: {"description": "There is no paused migration to resume"},
+        500: {"description": "Could not schedule the migration resume"},
+    },
+)
 async def resume_migration(background_tasks: BackgroundTasks) -> JSONResponse:
     """Resume paused migration."""
+    if not migration_state["is_running"]:
+        raise HTTPException(status_code=400, detail="No migration is running")
+
+    if not migration_state["pause_time"]:
+        raise HTTPException(status_code=400, detail="Migration is not paused")
+
     try:
-        if not migration_state["is_running"]:
-            raise HTTPException(status_code=400, detail="No migration is running")
-
-        if not migration_state["pause_time"]:
-            raise HTTPException(status_code=400, detail="Migration is not paused")
-
         # Resume migration in background
         background_tasks.add_task(resume_migration_background)
 

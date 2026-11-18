@@ -57,3 +57,16 @@ async def test_dashboard_api() -> None:
         assert client.get("/").status_code == 200
         assert client.get("/api/migration/status").status_code == 200
         assert client.get("/api/metrics").status_code == 200
+
+
+@pytest.mark.parametrize("action", ["stop", "pause", "resume"])
+def test_invalid_controls_report_client_error(action, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from src.dashboard.app import app, migration_state
+
+    monkeypatch.setitem(migration_state, "is_running", False)
+    with TestClient(app) as client:
+        response = client.post(f"/api/migration/{action}")
+        assert response.status_code == 400
+        assert "400" in client.get("/openapi.json").json()["paths"][f"/api/migration/{action}"]["post"]["responses"]
