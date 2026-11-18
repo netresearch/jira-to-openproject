@@ -205,7 +205,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
         super().__init__(jira_client, op_client)
 
         # File paths
-        self.work_package_mapping_file = self.data_dir / self.WORK_PACKAGE_MAPPING_FILE
+        self.work_package_mapping_file = self.data_dir / self.WORK_PACKAGE_MAPPING_FILENAME
 
         # Data storage
         self.work_package_mapping: dict[str, dict[str, Any]] = {}

@@ -224,8 +224,8 @@ class BaseMigration:
     DRY_RUN_SAFE: ClassVar[bool] = False
 
     # Canonical mapping filenames shared by work-package migration phases.
-    WORK_PACKAGE_MAPPING_FILE = "work_package_mapping.json"
-    ATTACHMENT_MAPPING_FILE = "attachment_mapping.json"
+    WORK_PACKAGE_MAPPING_FILENAME = "work_package_mapping.json"
+    ATTACHMENT_MAPPING_FILENAME = "attachment_mapping.json"
 
     def __init__(
         self,
