@@ -67,16 +67,25 @@ def mock_config():
 
 
 @pytest.fixture
-def mock_clients():
+def mock_clients(tmp_path):
     """Fixture to create mock clients for dependency injection."""
     ssh_client = MagicMock()
     # Configure ssh_client.execute_command to return a valid (stdout, stderr, returncode) tuple by default
     # Return valid JSON to prevent retry loops (code checks: if returncode == 0 and stdout)
     ssh_client.execute_command.return_value = ("[]", "", 0)
 
+    docker = MagicMock()
+    stages = iter(f"j2o-stage.{n:010d}" for n in range(100))
+
+    def execute(command, **kwargs):
+        if "mktemp -d" in command:
+            return str(tmp_path / next(stages)), "", 0
+        return "", "", 0
+
+    docker.execute_command.side_effect = execute
     return {
         "ssh_client": ssh_client,
-        "docker_client": MagicMock(),
+        "docker_client": docker,
         "rails_client": MagicMock(),
     }
 
@@ -296,10 +305,10 @@ open-project(prod)>
         # Assert
         assert users == [{"id": 1, "login": "test.user"}]
         mock_rails_client.execute.assert_called_once()
-        mock_ssh_client.execute_command.assert_called_once_with(
-            "docker exec test_container cat /tmp/users.json",
-            check=False,
-        )
+        command = mock_ssh_client.execute_command.call_args.args[0]
+        assert "j2o-stage." in command
+        assert Path(command.split()[-1]).name.startswith("users_")
+        mock_ssh_client.execute_command.assert_called_once_with(command, check=False)
 
         # Verify caching
         mock_rails_client.reset_mock()
@@ -394,8 +403,9 @@ class TestQueryModificationEdgeCases:
         op_client._users_cache = None  # Clear cache to force re-read
         users_2 = op_client.get_users()
 
-        # Assert: Data corruption due to static filename
-        assert users_1 != users_2  # Different results from same query!
+        first, second = mock_clients["ssh_client"].execute_command.call_args_list
+        assert first.args[0] != second.args[0]
+        assert users_1 != users_2
         assert users_1 == [{"id": 1, "login": "user1"}]
         assert users_2 == [{"id": 2, "login": "user2"}]
 
@@ -417,7 +427,7 @@ class TestResourceLeakPrevention:
         )
 
         # Act: Cleanup should not raise exception
-        op_client._cleanup_script_files(["test_script.rb"])
+        op_client._cleanup_script_files(None, Path("/private/test_script.rb"))
 
         # Assert: Should attempt cleanup despite failures
         mock_clients["ssh_client"].execute_command.assert_called()
@@ -439,7 +449,7 @@ class TestResourceLeakPrevention:
         # Act: Multiple operations with failed cleanup
         for i in range(10):
             try:
-                op_client._cleanup_script_files([f"script_{i}.rb"])
+                op_client._cleanup_script_files(None, Path("/private") / f"script_{i}.rb")
             except Exception:
                 pass  # Cleanup failures are suppressed
 

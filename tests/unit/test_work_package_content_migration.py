@@ -55,8 +55,8 @@ def _build_mig(tmp_path: Path):
     mig = WorkPackageContentMigration(jira_client=jira, op_client=op)
     # Redirect file paths to tmp_path; need to also re-load now-empty state.
     mig.data_dir = tmp_path
-    mig.work_package_mapping_file = tmp_path / mig.WORK_PACKAGE_MAPPING_FILE
-    mig.attachment_mapping_file = tmp_path / mig.ATTACHMENT_MAPPING_FILE
+    mig.work_package_mapping_file = tmp_path / mig.WORK_PACKAGE_MAPPING_FILENAME
+    mig.attachment_mapping_file = tmp_path / mig.ATTACHMENT_MAPPING_FILENAME
     return mig
 
 

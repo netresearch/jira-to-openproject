@@ -23,7 +23,7 @@ Algorithm per work package
    investigate).
 4. Zip the two lists by position.  For each pair validate that the Jira
    comment author (resolved via ``user_mapping``) matches the OP journal's
-   ``user_id``.  If any pair mismatches → SKIP + WARNING.
+   ``user_id``.  The public source text must also match the journal.
 5. For safe WPs: append the provenance marker to each journal's notes using
    ``Journal.update_columns(notes: ...)`` — this bypasses ActiveRecord
    callbacks so no new journal version is created.
@@ -46,6 +46,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import re
@@ -231,6 +232,9 @@ def _pair_journals_with_comments(
             )
         pairs.append((op_j, jira_c))
 
+    for journal, comment in pairs:
+        if journal["notes"] != comment.get("body"):
+            return [], f"source text differs for journal #{journal['id']}; marker left untouched"
     return pairs, None
 
 
@@ -244,11 +248,9 @@ def _build_fetch_journals_script(wp_id: int) -> str:
     return f"""
 require 'json'
 wp_id = {int(wp_id)}
-journals = Journal
-  .where(journable_type: 'WorkPackage', journable_id: wp_id)
-  .where.not(notes: [nil, ''])
-  .where("notes NOT LIKE '%j2o:jira-comment-id:%'")
-  .order(:created_at)
+notes = Journal.where(journable_type: 'WorkPackage', journable_id: wp_id).where.not(notes: [nil, ''])
+journals = notes.where(restricted: false)
+  .order(:created_at, :id)
   .pluck(:id, :journable_id, :user_id, :notes, :created_at)
   .map {{|id, wid, user_id, notes, created_at|
     {{
@@ -259,12 +261,12 @@ journals = Journal
       created_at: created_at
     }}
   }}
-{{journals: journals}}
+{{journals: journals, restricted_notes: notes.where(restricted: true).exists?}}
 """
 
 
 def _build_update_markers_script(
-    updates: list[tuple[int, str]],
+    updates: list[dict[str, Any]],
 ) -> str:
     """Ruby script: patch journal notes in bulk using update_columns.
 
@@ -273,32 +275,46 @@ def _build_update_markers_script(
     data_type are left intact.
 
     Args:
-        updates: List of ``(journal_id, new_notes_with_marker)`` tuples.
+        updates: Journal IDs, proposed markers and hashes of the original notes.
     """
-    data = [{"id": jid, "notes": notes} for jid, notes in updates]
-    data_json = json.dumps(data, ensure_ascii=False)
+    data_json = json.dumps(updates, ensure_ascii=False)
     return f"""
 require 'json'
+require 'digest'
 data = JSON.parse(<<-'J2O_DATA'
 {data_json}
 J2O_DATA
 )
 
 updated = 0
+already_applied = 0
 data.each do |item|
-  j = Journal.find_by(id: item['id'])
-  if j
-    j.update_columns(notes: item['notes'])
-    updated += 1
+  Journal.transaction do
+    journal = Journal.lock.find_by(id: item['id'], journable_type: 'WorkPackage', journable_id: item['wp_id'],
+                                   user_id: item['user_id'], restricted: false)
+    next unless journal
+    notes = journal.notes.to_s
+    suffix = "\n" + item['marker']
+    if notes.end_with?(suffix) && Digest::SHA256.hexdigest(notes.delete_suffix(suffix)) == item['digest']
+      already_applied += 1
+    elsif Digest::SHA256.hexdigest(notes) == item['digest']
+      next if Journal.where(journable: journal.journable, restricted: true).where.not(notes: [nil, '']).exists?
+      journal.update_columns(notes: notes + suffix)
+      updated += 1
+    end
   end
 end
-{{updated: updated}}
+{{updated: updated, already_applied: already_applied}}
 """
 
 
 # ---------------------------------------------------------------------------
 # Jira comment fetching
 # ---------------------------------------------------------------------------
+
+
+class CommentAudiencePolicyError(ValueError):
+    """No complete, public source sequence is available for positional backfill."""
 
 
 def _make_jira_fetcher(jira_client: Any) -> Any:
@@ -315,13 +331,19 @@ def _make_jira_fetcher(jira_client: Any) -> Any:
     """
 
     def _fetch(jira_issue_key: str) -> list[dict[str, Any]]:
-        raw_comments = jira_client.jira.comments(jira_issue_key)
+        selection = jira_client.select_comments_for_migration(jira_issue_key)
+        if selection.held:
+            msg = (
+                "Cannot pair public journals by position when Jira has comments with unverified or restricted audiences"
+            )
+            raise CommentAudiencePolicyError(msg)
+        raw_comments = selection.comments
         result = []
         for c in raw_comments:
             author = getattr(c, "author", None)
             entry: dict[str, Any] = {
                 "id": getattr(c, "id", ""),
-                "body": getattr(c, "body", ""),
+                "body": getattr(c, "body", None),
             }
             for internal, attr in _COMMENT_AUTHOR_FIELDS:
                 entry[internal] = (getattr(author, attr, "") or "") if author is not None else ""
@@ -349,6 +371,109 @@ def _default_fetch_jira_comments(jira_issue_key: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Core run() function
 # ---------------------------------------------------------------------------
+
+
+def _plan_work_package_markers(entry, user_mapping, fetch_jira_comments, op_client, *, dry_run, logger, stats):
+    jira_key: str = entry["jira_key"]
+    op_wp_id: int = int(entry["openproject_id"])
+
+    # --- Fetch OP journals (unmarked) ---
+    try:
+        fetch_result = op_client.execute_query_to_json_file(_build_fetch_journals_script(op_wp_id))
+    except Exception as exc:
+        logger.warning("WP#%d (%s): Rails fetch failed (%s)", op_wp_id, jira_key, type(exc).__name__)
+        stats["errors"] += 1
+        return []
+
+    if not isinstance(fetch_result, dict) or not isinstance(fetch_result.get("journals"), list):
+        logger.error("WP#%d (%s): incomplete journal inventory", op_wp_id, jira_key)
+        stats["errors"] += 1
+        return []
+
+    op_journals = fetch_result["journals"]
+    if all(_MARKER_RE.search(j["notes"]) for j in op_journals):
+        stats["wps_processed"] += 1
+        return []
+    if fetch_result.get("restricted_notes") is not False:
+        logger.warning("WP#%d (%s): cannot verify a complete public journal sequence", op_wp_id, jira_key)
+        stats["wps_skipped"] += 1
+        return []
+
+    # --- Fetch Jira comments ---
+    try:
+        jira_comments: list[dict[str, Any]] = fetch_jira_comments(jira_key)
+    except CommentAudiencePolicyError as exc:
+        logger.warning("WP#%d (%s): %s", op_wp_id, jira_key, exc)
+        stats["errors"] += 1
+        return []
+    except Exception as exc:
+        logger.warning("WP#%d (%s): Jira fetch failed (%s)", op_wp_id, jira_key, type(exc).__name__)
+        stats["errors"] += 1
+        return []
+
+    # --- Pair journals with comments ---
+    pairs, skip_reason = _pair_journals_with_comments(
+        op_journals=op_journals,
+        jira_comments=jira_comments,
+        user_mapping=user_mapping,
+    )
+
+    if skip_reason is not None:
+        logger.warning(
+            "WP#%d (%s): SKIP — %s",
+            op_wp_id,
+            jira_key,
+            skip_reason,
+        )
+        stats["wps_skipped"] += 1
+        return []
+
+    # --- Compute updates ---
+    updates: list[dict[str, Any]] = []
+    for op_j, jira_c in pairs:
+        marker = _COMMENT_PROVENANCE_MARKER.format(jira_comment_id=jira_c["id"])
+        digest = hashlib.sha256(op_j["notes"].encode("utf-8")).hexdigest()
+        updates.append(
+            {"id": op_j["id"], "wp_id": op_wp_id, "user_id": op_j["user_id"], "marker": marker, "digest": digest}
+        )
+        logger.info(
+            "  [%s] WP#%d  Journal#%d  jira_comment_id=%s  marker=j2o:jira-comment-id:%s",
+            "UPDATE" if not dry_run else "WOULD UPDATE",
+            op_wp_id,
+            op_j["id"],
+            jira_c["id"],
+            jira_c["id"],
+        )
+
+    stats["wps_processed"] += 1
+
+    return updates
+
+
+def _apply_marker_batches(all_updates, op_client, logger, stats):
+    _batch_size = 200
+    for i in range(0, len(all_updates), _batch_size):
+        batch = all_updates[i : i + _batch_size]
+        update_script = _build_update_markers_script(batch)
+        try:
+            update_result = op_client.execute_query_to_json_file(update_script)
+            n = update_result.get("updated", 0) if isinstance(update_result, dict) else 0
+            stats["updated"] += n
+            already = update_result.get("already_applied", 0) if isinstance(update_result, dict) else 0
+            if n + already != len(batch):
+                logger.error(
+                    "Journal batch changed after planning: confirmed %d of %d markers", n + already, len(batch)
+                )
+                stats["errors"] += 1
+            logger.info(
+                "Batch update %d–%d: updated %d journal(s)",
+                i + 1,
+                i + len(batch),
+                n,
+            )
+        except Exception as exc:
+            logger.warning("Batch update %d–%d failed (%s)", i + 1, i + len(batch), type(exc).__name__)
+            stats["errors"] += 1
 
 
 def run(
@@ -389,104 +514,25 @@ def run(
         "errors": 0,
     }
 
-    # Accumulate all (journal_id, new_notes) pairs across WPs for a single
+    # Accumulate journal IDs, markers and content hashes across WPs for a single
     # batched Rails write at the end (issue #4 — reduce Rails round-trips).
-    all_updates: list[tuple[int, str]] = []
+    all_updates: list[dict[str, Any]] = []
 
     for entry in wp_mapping:
-        jira_key: str = entry["jira_key"]
-        op_wp_id: int = int(entry["openproject_id"])
-
-        # --- Fetch OP journals (unmarked) ---
-        try:
-            fetch_result = op_client.execute_query_to_json_file(_build_fetch_journals_script(op_wp_id))
-        except Exception as exc:
-            logger.error("WP#%d (%s): Rails fetch failed: %s", op_wp_id, jira_key, exc)
-            stats["errors"] += 1
-            continue
-
-        if not isinstance(fetch_result, dict):
-            logger.error("WP#%d (%s): unexpected fetch result type %r", op_wp_id, jira_key, type(fetch_result))
-            stats["errors"] += 1
-            continue
-
-        op_journals: list[dict[str, Any]] = fetch_result.get("journals", [])
-
-        # --- Fetch Jira comments ---
-        try:
-            jira_comments: list[dict[str, Any]] = fetch_jira_comments(jira_key)
-        except Exception as exc:
-            logger.error("WP#%d (%s): Jira fetch failed: %s", op_wp_id, jira_key, exc)
-            stats["errors"] += 1
-            continue
-
-        # --- Pair journals with comments ---
-        pairs, skip_reason = _pair_journals_with_comments(
-            op_journals=op_journals,
-            jira_comments=jira_comments,
-            user_mapping=user_mapping,
+        updates = _plan_work_package_markers(
+            entry,
+            user_mapping,
+            fetch_jira_comments,
+            op_client,
+            dry_run=dry_run,
+            logger=logger,
+            stats=stats,
         )
-
-        if skip_reason is not None:
-            logger.warning(
-                "WP#%d (%s): SKIP — %s",
-                op_wp_id,
-                jira_key,
-                skip_reason,
-            )
-            stats["wps_skipped"] += 1
-            continue
-
-        if not pairs:
-            # All journals already marked — clean, nothing to do.
-            logger.debug("WP#%d (%s): all journals already marked — no-op", op_wp_id, jira_key)
-            stats["wps_processed"] += 1
-            continue
-
-        # --- Compute updates ---
-        updates: list[tuple[int, str]] = []
-        for op_j, jira_c in pairs:
-            new_notes = op_j["notes"] + "\n" + _COMMENT_PROVENANCE_MARKER.format(jira_comment_id=jira_c["id"])
-            updates.append((op_j["id"], new_notes))
-            logger.info(
-                "  [%s] WP#%d  Journal#%d  jira_comment_id=%s  marker=j2o:jira-comment-id:%s",
-                "UPDATE" if not dry_run else "WOULD UPDATE",
-                op_wp_id,
-                op_j["id"],
-                jira_c["id"],
-                jira_c["id"],
-            )
-
-        stats["wps_processed"] += 1
-
         if dry_run:
             stats["would_update"] += len(updates)
-            continue
-
-        # Accumulate updates for a batched Rails write (see below).
-        all_updates.extend(updates)
-
-    # --- Apply accumulated updates in one batched Rails call ---
-    # Batching reduces the number of Rails console round-trips from O(WPs) to
-    # O(ceil(total_journals / batch_size)).
-    if not dry_run and all_updates:
-        _batch_size = 200
-        for i in range(0, len(all_updates), _batch_size):
-            batch = all_updates[i : i + _batch_size]
-            update_script = _build_update_markers_script(batch)
-            try:
-                update_result = op_client.execute_query_to_json_file(update_script)
-                n = update_result.get("updated", 0) if isinstance(update_result, dict) else 0
-                stats["updated"] += n
-                logger.info(
-                    "Batch update %d–%d: updated %d journal(s)",
-                    i + 1,
-                    i + len(batch),
-                    n,
-                )
-            except Exception as exc:
-                logger.error("Batch update %d–%d failed: %s", i + 1, i + len(batch), exc)
-                stats["errors"] += 1
+        else:
+            all_updates.extend(updates)
+    _apply_marker_batches(all_updates, op_client, logger, stats)
 
     logger.info(
         "Done.  processed=%d  skipped=%d  would_update=%d  updated=%d  errors=%d",
@@ -685,11 +731,11 @@ def main(argv: list[str] | None = None) -> int:
             logger=logger,
         )
     except Exception as exc:
-        logger.error("Fatal: %s", exc)
+        logger.warning("Comment repair stopped (%s)", type(exc).__name__)
         return 1
 
     print(json.dumps(stats, indent=2))
-    return 0
+    return int(bool(stats["errors"]))
 
 
 if __name__ == "__main__":

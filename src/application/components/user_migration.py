@@ -817,6 +817,11 @@ class UserMigration(BaseMigration):
         if not jira_key:
             return None
 
+        # A stale mapping must never attach another account's image.
+        if jira_user.get("key") and str(jira_user["key"]) != str(jira_key):
+            return None
+        if op_user and op_user.get("id") is not None and str(op_user["id"]) != str(op_id_int):
+            return None
         cache_entry = self._avatar_cache.get(str(jira_key)) or {}
         return {
             "jira_key": str(jira_key),

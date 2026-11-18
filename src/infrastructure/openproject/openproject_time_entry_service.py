@@ -228,7 +228,7 @@ class OpenProjectTimeEntryService:
 
         try:
             # Use a unique container file to avoid collisions across concurrent calls
-            unique_name = f"/tmp/j2o_time_entries_{os.getpid()}_{int(time.time())}_{os.urandom(2).hex()}.json"
+            unique_name = f"j2o_time_entries_{os.getpid()}_{int(time.time())}_{os.urandom(2).hex()}.json"
             result = self._client.execute_large_query_to_json_file(
                 query,
                 container_file=unique_name,

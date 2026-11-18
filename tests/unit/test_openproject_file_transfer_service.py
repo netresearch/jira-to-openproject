@@ -83,14 +83,6 @@ class TestCleanupScriptFilesMode2:
         )
 
 
-class TestCleanupScriptFilesMode1:
-    """Mode 1 (list-of-filenames) was already correct; smoke-test it stays that way."""
-
-    def test_list_mode_uses_docker_exec(self, service: OpenProjectFileTransferService) -> None:
-        service.cleanup_script_files(["script1.rb", "script2.rb"])
-        calls = service._client.ssh_client.execute_command.call_args_list
-        assert len(calls) == 2
-        for call in calls:
-            cmd = call[0][0]
-            assert cmd.startswith("docker exec "), f"list-mode must use docker exec; got: {cmd!r}"
-            assert "rm -f" in cmd
+def test_name_only_cleanup_skips_untracked_remote_files(service: OpenProjectFileTransferService) -> None:
+    service.cleanup_script_files(["script1.rb", "script2.rb"])
+    service._client.ssh_client.execute_command.assert_not_called()

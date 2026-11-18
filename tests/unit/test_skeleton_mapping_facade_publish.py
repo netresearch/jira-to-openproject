@@ -44,7 +44,7 @@ def _build_skeleton(tmp_path: Path):
 
     mig = WorkPackageSkeletonMigration(jira_client=MagicMock(), op_client=MagicMock())
     mig.data_dir = tmp_path
-    mig.work_package_mapping_file = tmp_path / mig.WORK_PACKAGE_MAPPING_FILE
+    mig.work_package_mapping_file = tmp_path / mig.WORK_PACKAGE_MAPPING_FILENAME
     return mig
 
 

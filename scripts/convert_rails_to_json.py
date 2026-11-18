@@ -12,6 +12,47 @@ import re
 import sys
 from pathlib import Path
 
+if __package__:
+    from .operator_files import read_operator_text, write_operator_json
+else:
+    from operator_files import read_operator_text, write_operator_json
+
+
+_WORD = re.compile(r"\w+")
+_SYMBOL_ROCKET = re.compile(r":(\w++)\s*+=>")
+
+
+def _json_tokens(source: str) -> str:
+    """Translate Ruby hash delimiters and nil while preserving quoted JSON strings."""
+    output = []
+    decoder = json.JSONDecoder()
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if char == '"':
+            _, end = decoder.raw_decode(source, index)
+            output.append(source[index:end])
+        elif symbol := _SYMBOL_ROCKET.match(source, index):
+            output.append(json.dumps(symbol[1]) + ":")
+            end = symbol.end()
+        elif word := _WORD.match(source, index):
+            value = word[0]
+            end = word.end()
+            if source.startswith(":", end):
+                output.append(json.dumps(value))
+            elif value == "nil":
+                output.append("null")
+            else:
+                output.append(value)
+        elif source.startswith("=>", index):
+            output.append(":")
+            end = index + 2
+        else:
+            output.append(char)
+            end = index + 1
+        index = end
+    return "".join(output)
+
 
 def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
     """Convert Ruby hash syntax to valid JSON.
@@ -22,8 +63,7 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
 
     """
     # Read the input file
-    with Path(input_file).open() as f:
-        ruby_str = f.read()
+    ruby_str = read_operator_text(Path(input_file))
 
     # Extract the array portion
     start = ruby_str.find("[{")
@@ -32,23 +72,11 @@ def convert_ruby_to_json(input_file: str, output_file: str) -> bool:
         print("Could not find array in input file")
         return False
 
-    ruby_array = ruby_str[start : end + 2]
-
-    # Convert Ruby syntax to JSON
-
-    # First replace Ruby hash keys (symbol: value) with JSON format ("symbol": value)
-    json_str = re.sub(r"(\w+):", r'"\1":', ruby_array)
-
-    # Replace nil with null
-    json_str = json_str.replace("nil", "null")
-
     try:
-        # Parse to validate and pretty-print
-        data = json.loads(json_str)
+        data = json.loads(_json_tokens(ruby_str[start : end + 2]))
 
         # Write to output file
-        with Path(output_file).open("w") as f:
-            json.dump(data, f, indent=2)
+        write_operator_json(Path(output_file), data)
 
         print(f"Successfully converted {len(data)} records to JSON")
         print(f"Saved to {output_file}")

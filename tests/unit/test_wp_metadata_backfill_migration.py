@@ -289,6 +289,8 @@ def test_rails_envelope_error_status_records_skip_reason():
     assert result.updated == 0
     # And the skip reason is recorded so an operator can see WHY.
     assert result.details["skip_reasons"].get("rails_status_not_success") == 1
+    assert not result.success
+    assert result.failed_count == 1
 
 
 def test_empty_wp_mapping_fails_loud():
@@ -353,6 +355,8 @@ def test_jira_batch_fetch_failure_records_skip_reason():
     assert op.script_calls == []
     # Skip reason recorded.
     assert result.details["skip_reasons"].get("jira_batch_failed") == 1
+    assert not result.success
+    assert result.failed_count == 1
 
 
 def test_legacy_int_mixed_with_dict_rows_skips_only_int_rows():
@@ -382,3 +386,32 @@ def test_legacy_int_mixed_with_dict_rows_skips_only_int_rows():
     _, payload = op.script_calls[0]
     assert len(payload) == 1
     assert payload[0]["work_package_id"] == 501
+
+
+def test_missing_source_record_fails_backfill_without_target_write():
+    op = _DummyOpClient()
+    migration = _make_migration(_DummyJiraClient({}), op)
+    migration.mappings.set_mapping("work_package", {"1001": {"jira_key": "PROJ-1", "openproject_id": 501}})
+    result = migration.run()
+    assert not result.success
+    assert result.failed_count == 1
+    assert result.details["skip_reasons"] == {"jira_issue_missing": 1}
+    assert not op.script_calls
+
+
+@pytest.mark.parametrize("counter", [None, False, -1, "0", 1])
+def test_missing_target_and_unusable_target_counters_fail_the_record(counter, monkeypatch):
+    issue = _DummyJiraIssue("PROJ-1", assignee=None)
+    op = _DummyOpClient()
+    counters = {"updated_assignee": 0, "updated_cf": 0, "failed": 0, "skipped": 0, "wp_missing": counter}
+    monkeypatch.setattr(op, "execute_script_with_data", lambda *args: {"status": "success", "data": counters})
+    migration = _make_migration(_DummyJiraClient({"PROJ-1": issue}), op)
+    migration.mappings.set_mapping("work_package", {"PROJ-1": {"openproject_id": 501}})
+    result = migration.run()
+    assert not result.success
+    assert result.failed_count == 1
+    assert result.updated == 0
+    if counter == 1:
+        assert result.details["wp_missing"] == 1
+    else:
+        assert result.details["skip_reasons"] == {"rails_envelope_malformed": 1}

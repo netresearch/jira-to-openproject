@@ -35,10 +35,12 @@ from __future__ import annotations
 import os
 import secrets
 import shlex
-import time
+from contextlib import ExitStack
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
+from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
 
@@ -48,22 +50,13 @@ class OpenProjectFileTransferService:
     def __init__(self, client: OpenProjectClient) -> None:
         self._client = client
         self._logger = client.logger
+        self._staged_scripts: dict[Path, ExitStack] = {}
 
     # ── local temp file management ────────────────────────────────────────
 
     def generate_unique_temp_filename(self, base_name: str) -> str:
-        """Generate a temporary filename; stable for tests, unique in prod.
-
-        In normal runs we include timestamp/pid/random for uniqueness.
-        Under unit tests (detected via PYTEST_CURRENT_TEST), we return
-        deterministic ``/tmp/{base_name}.json`` to match test expectations.
-        """
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return f"/tmp/{base_name}.json"
-        timestamp = int(time.time())
-        pid = os.getpid()
-        random_suffix = secrets.token_hex(3)
-        return f"/tmp/{base_name}_{timestamp}_{pid}_{random_suffix}.json"
+        """Name a query result within the private directory created by the runner."""
+        return f"{Path(base_name).name}_{secrets.token_hex(8)}.json"
 
     def create_script_file(self, script_content: str) -> Path:
         """Create a temporary file with the given Ruby script content.
@@ -83,28 +76,25 @@ class OpenProjectFileTransferService:
             temp_dir = Path(self._client.file_manager.data_dir) / "temp_scripts"
             temp_dir.mkdir(parents=True, exist_ok=True)
 
-            filename = f"openproject_script_{os.urandom(4).hex()}.rb"
-            file_path = temp_dir / filename
-
-            with file_path.open("w", encoding="utf-8") as f:
-                f.write(script_content)
+            with NamedTemporaryFile(
+                mode="w", dir=temp_dir, prefix="openproject_script_", suffix=".rb", encoding="utf-8", delete=False
+            ) as script:
+                file_path = Path(script.name)
+                script.write(script_content)
 
             self._logger.debug("Created temporary script file: %s", file_path.as_posix())
-        except OSError:
+        except Exception as exc:
+            if file_path is not None:
+                file_path.unlink(missing_ok=True)
             error_msg = f"Failed to create script file: {file_path}"
-            self._logger.exception(error_msg)
-            raise OSError(error_msg) from None
-        except Exception:
-            error_msg = f"Failed to create script file: {file_path}"
-            self._logger.exception(error_msg)
-            raise OSError(error_msg) from None
+            raise OSError(error_msg) from exc
         else:
             return file_path
 
     # ── container transfer ────────────────────────────────────────────────
 
     def transfer_rails_script(self, local_path: Path | str) -> Path:
-        """Transfer a Ruby script from a local path into the container under /tmp.
+        """Stage a Ruby script in an owner-only directory until cleanup.
 
         Returns the resulting container path.
 
@@ -122,9 +112,11 @@ class OpenProjectFileTransferService:
             abs_path = local_path.absolute()
             self._logger.debug("Transferring script from: %s", abs_path)
 
-            container_path = Path("/tmp") / local_path.name
-
-            self._client.docker_client.transfer_file_to_container(abs_path, container_path)
+            with ExitStack() as stack:
+                directory = stack.enter_context(private_container_directory(self._client.docker_client))
+                container_path = directory / local_path.name
+                self._client.docker_client.transfer_file_to_container(abs_path, container_path)
+                self._staged_scripts[container_path] = stack.pop_all()
 
             self._logger.debug(
                 "Successfully transferred file to container at %s",
@@ -204,20 +196,11 @@ class OpenProjectFileTransferService:
         * ``files_or_local`` is a ``Path`` and ``remote_path`` is a ``Path`` —
           remove the local file then the remote file.
         """
-        # Mode 1: list of remote filenames. Run rm as root: files transferred
-        # via ``docker cp`` carry the host uid, which the container's default
-        # user can't delete under ``/tmp``'s sticky bit.
         if isinstance(files_or_local, (list, tuple)):
-            for name in files_or_local:
-                try:
-                    remote_file = name if isinstance(name, str) else getattr(name, "name", str(name))
-                    cmd = (
-                        f"docker exec -u root {shlex.quote(self._client.container_name)} "
-                        f"rm -f {shlex.quote(f'/tmp/{Path(remote_file).name}')}"
-                    )
-                    self._client.ssh_client.execute_command(cmd)
-                except Exception as e:
-                    self._logger.warning("Cleanup failed for %s: %s", name, e)
+            names = {Path(name).name for name in files_or_local}
+            for path in tuple(self._staged_scripts):
+                if path.name in names:
+                    self._staged_scripts.pop(path).close()
             return
 
         # Mode 2: explicit local/remote Path cleanup
@@ -231,13 +214,11 @@ class OpenProjectFileTransferService:
 
         try:
             if isinstance(remote_path, Path):
-                # ``remote_path`` is a *container* path (callers like
-                # ``execute_script_with_data`` write ``/tmp/...`` inside the
-                # container). The previous bare ``ssh exec rm -f /path``
-                # ran on the *host*, so container temp files would never
-                # be cleaned up. Mirror mode 1 above and route through
-                # ``docker exec``.
-                # Run as root for the same reason as mode 1.
+                owned = self._staged_scripts.pop(remote_path, None)
+                if owned is not None:
+                    owned.close()
+                    return
+                # Older callers can pass the exact path of their own container artifact.
                 cmd = (
                     f"docker exec -u root {shlex.quote(self._client.container_name)} "
                     f"rm -f {shlex.quote(remote_path.as_posix())}"
