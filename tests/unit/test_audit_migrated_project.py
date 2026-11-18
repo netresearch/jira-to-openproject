@@ -1311,7 +1311,8 @@ def test_breakdown_emits_odd_raw_diagnostic(monkeypatch, capsys) -> None:
 
     audit_mod._fetch_jira_relation_breakdown("NRS")
     captured = capsys.readouterr()
-    assert "odd" in captured.err.lower() and "(3)" in captured.err, captured.err
+    assert "odd" in captured.err.lower(), captured.err
+    assert "(3)" in captured.err, captured.err
 
 
 def test_breakdown_failure_falls_back_to_legacy_count(monkeypatch) -> None:

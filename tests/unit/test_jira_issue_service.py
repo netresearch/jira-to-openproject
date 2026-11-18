@@ -393,9 +393,8 @@ def test_auth_failure_is_not_labelled_url_length(raiser: Any, caplog: pytest.Log
         service._fetch_single_chunk(["TK-1", "TK-2"], chunk_index=0, batch_num=3)
 
     combined = "\n".join(r.getMessage() for r in caplog.records).lower()
-    assert "url-length" not in combined and "url length" not in combined, (
-        f"401 must not be mislabeled as a URL-length issue: {combined!r}"
-    )
+    assert "url-length" not in combined, f"401 must not be mislabeled as a URL-length issue: {combined!r}"
+    assert "url length" not in combined, f"401 must not be mislabeled as a URL-length issue: {combined!r}"
     assert "auth" in combined, f"401 must be identified as an auth failure: {combined!r}"
 
 
@@ -442,7 +441,8 @@ def test_persistent_401_dropped_after_retry(caplog: pytest.LogCaptureFixture) ->
     # initial attempt + exactly one retry
     assert client.jira.search_issues.call_count == 2
     combined = "\n".join(r.getMessage() for r in caplog.records).lower()
-    assert "url-length" not in combined and "url length" not in combined
+    assert "url-length" not in combined
+    assert "url length" not in combined
     assert "auth" in combined
 
 

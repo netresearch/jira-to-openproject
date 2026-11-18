@@ -86,7 +86,8 @@ class TestDryRunBanner:
         assert level == "warning"
         body = " ".join(lines).lower()
         assert "dry run" in body
-        assert "projects" in body and "companies" in body
+        assert "projects" in body
+        assert "companies" in body
         # The honest-warning case may say "no changes will be made" — but
         # it must scope that claim to the listed components, not blanket
         # the whole run as the original buggy banner did.
