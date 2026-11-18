@@ -937,7 +937,9 @@ def test_mixed_project_batch_keeps_existing_and_uses_each_sources_own_provenance
         "FIRST": 11,
         "SECOND": 12,
     }
-    assert "['Jira Project Key', 31, 'FIRST']" in queries[0] and "['Jira Project ID', 32, '12']" in queries[0]
-    assert "['Jira Project Key', 31, 'SECOND']" in queries[1] and "['Jira Project ID', 32, '13']" in queries[1]
+    assert "['Jira Project Key', 31, 'FIRST']" in queries[0]
+    assert "['Jira Project ID', 32, '12']" in queries[0]
+    assert "['Jira Project Key', 31, 'SECOND']" in queries[1]
+    assert "['Jira Project ID', 32, '13']" in queries[1]
     assert project_migration.project_mapping["FIRST"]["jira_lead"] == "first"
     assert project_migration.project_mapping["SECOND"]["jira_lead"] == "second"
