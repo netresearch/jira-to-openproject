@@ -660,7 +660,7 @@ class BaseMigration:
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Load phase - override in subclass."""
-        msg = f"{self.__class__.__name__} must implement _load()"
+        msg = f"{self.__class__.__name__} must implement _load() for its {mapped.total_count} mapped records"
         raise NotImplementedError(msg)
 
     def run(self) -> ComponentResult:
