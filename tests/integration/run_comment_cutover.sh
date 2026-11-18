@@ -37,4 +37,6 @@ export J2O_TEST_OPENPROJECT_CONTAINER="$app" J2O_OPENPROJECT_CONTAINER="$app"
 export J2O_OPENPROJECT_SERVER=localhost J2O_RUN_INTEGRATION=true J2O_ENABLE_DOCKER=true
 uv sync --python 3.14 --frozen --no-build --no-install-project --extra test --extra dev
 uv run --no-sync python -m pytest -o addopts='' -q \
-    tests/integration/test_protected_comment_cutover.py
+    tests/integration/test_protected_comment_cutover.py \
+    tests/integration/test_openproject_agile_roundtrip.py \
+    tests/integration/test_membership_file_roundtrip.py

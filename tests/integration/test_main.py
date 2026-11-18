@@ -5,6 +5,7 @@
 
 import argparse
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,10 +31,15 @@ class TestMainEntryPoint:
         mock_env_get: MagicMock,
         mock_validate_db: MagicMock,
         mock_run_migration: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test the main migration command."""
         from src.models.component_results import ComponentResult
         from src.models.migration_results import MigrationResult
+
+        # Each CLI invocation acquires a real process lock relative to the working directory.
+        monkeypatch.chdir(tmp_path)
 
         # Mock database configuration validation to pass
         mock_validate_db.return_value = None
@@ -74,11 +80,10 @@ class TestMainEntryPoint:
 
         # Test main function with mocked command line args and exit
         with patch("sys.argv", ["j2o", "migrate", "--components", "users,projects"]):
-            with patch("sys.exit") as mock_exit:
+            with pytest.raises(SystemExit) as exit_info:
                 main()
-
-                # Check that sys.exit was called with 0 (success)
-                mock_exit.assert_called_once_with(0)
+            assert exit_info.value.code == 0
+            mock_run_migration.assert_called_once()
 
     @patch("src.main.argparse.ArgumentParser.parse_args")
     @patch("src.main.argparse.ArgumentParser.print_help")
