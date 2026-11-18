@@ -81,19 +81,12 @@ class ResolutionMigration(BaseMigration):  # noqa: D101
             entry = self._work_package_entry(jira_key, wp_map.get(jira_key))
             if entry is None:
                 continue
-            wp_id = int(entry.openproject_id)
-
-            # Track project ID for selective CF enablement
-            if entry.openproject_project_id is not None:
-                projects_with_values.add(int(entry.openproject_project_id))
-
             try:
-                result = self._write_work_package_custom_value(wp_id, cf_id, res_name, return_project=True)
+                result = self._write_work_package_custom_value(
+                    entry, cf_id, res_name, projects_with_values, return_project=True
+                )
                 if result:
                     updated += 1
-                    # Also track project from WP response if not in mapping
-                    if isinstance(result, int) and result > 0:
-                        projects_with_values.add(result)
             except Exception:
                 logger.exception("Failed to apply resolution for %s", jira_key)
                 failed += 1
