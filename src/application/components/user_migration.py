@@ -55,8 +55,9 @@ import mimetypes
 import re
 import uuid
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.parse import quote
 
@@ -67,12 +68,31 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.display import ProgressTracker
 from src.domain import provenance_fields
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.container_staging import private_container_directory
-from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 from src.models import ComponentResult, JiraUser, MigrationError
 
 _JIRA_USERS_FILE = "jira_users.json"
 _OP_USERS_FILE = "op_users.json"
+
+
+def _printable_name(value: str, fallback: str) -> str:
+    import re
+
+    printable = "".join(char for char in value if char.isprintable()).strip() or fallback
+    return re.sub(r"[^\w\s\-']", "", printable).strip() or fallback
+
+
+def _find_mapped_user(entry: dict, op_client: Any) -> dict | None:
+    for probe in (entry.get("jira_name"), entry.get("jira_email")):
+        if not probe:
+            continue
+        try:
+            user = op_client.get_user(probe)
+        except Exception:
+            continue
+        if isinstance(user, dict) and user.get("id"):
+            return user
+    return None
 
 
 def _backfill_unmapped_users_from_op(
@@ -93,26 +113,9 @@ def _backfill_unmapped_users_from_op(
     """
     n = 0
     for entry in user_mapping.values():
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or entry.get("openproject_id") or entry.get("matched_by") != "none":
             continue
-        if entry.get("openproject_id"):
-            continue
-        if entry.get("matched_by") != "none":
-            continue
-        login = entry.get("jira_name")
-        email = entry.get("jira_email")
-
-        existing: dict[str, Any] | None = None
-        for probe in (login, email):
-            if not probe:
-                continue
-            try:
-                existing = op_client.get_user(probe)
-            except Exception:
-                existing = None
-            if isinstance(existing, dict) and existing.get("id"):
-                break
-            existing = None
+        existing = _find_mapped_user(entry, op_client)
         if not existing:
             continue
         entry["openproject_id"] = int(existing["id"])
@@ -261,33 +264,7 @@ class UserMigration(BaseMigration):
         # loss class. Discovered users get mapped + provisioned
         # BEFORE watcher_migration tries to resolve them.
         discovered = self._discover_users_from_cached_issues()
-        if discovered:
-            existing_ids = {self._stable_user_id(u) for u in self.jira_users if self._stable_user_id(u)}
-            added = 0
-            for raw in discovered:
-                stable_id = self._stable_user_id(raw)
-                if not stable_id or stable_id in existing_ids:
-                    continue
-                # CRITICAL: ``create_user_mapping`` skips users
-                # without a ``key`` (line 497 in this file). Watcher
-                # responses don't carry ``key`` — only ``accountId``,
-                # ``name``, etc. Synthesize a ``key`` from the
-                # stable identity so the discovered user actually
-                # makes it through mapping + creation. Without this
-                # fallback the entire discovery pass silently
-                # dropped through.
-                if not raw.get("key"):
-                    raw["key"] = raw.get("accountId") or raw.get("name") or stable_id
-                self.jira_users.append(raw)
-                existing_ids.add(stable_id)
-                added += 1
-            if added:
-                self.logger.info(
-                    "Discovered %d additional users from cached issues (watchers/"
-                    "assignee/reporter/comments) — total now %d",
-                    added,
-                    len(self.jira_users),
-                )
+        self._merge_discovered_users(discovered)
 
         self._save_to_json(self.jira_users, Path(_JIRA_USERS_FILE))
 
@@ -376,22 +353,8 @@ class UserMigration(BaseMigration):
             discovered.append(raw)
 
         for issue in issues.values():
-            if not isinstance(issue, dict):
-                continue
-            fields = issue.get("fields") or {}
-            if not isinstance(fields, dict):
-                continue
-            watches = fields.get("watches") or {}
-            if isinstance(watches, dict):
-                for w in watches.get("watchers") or []:
-                    _add(w)
-            _add(fields.get("assignee"))
-            _add(fields.get("reporter"))
-            comment = fields.get("comment") or {}
-            if isinstance(comment, dict):
-                for c in comment.get("comments") or []:
-                    if isinstance(c, dict):
-                        _add(c.get("author"))
+            for candidate in self._cached_issue_users(issue):
+                _add(candidate)
 
         if dropped_no_identity:
             self.logger.info(
@@ -402,6 +365,20 @@ class UserMigration(BaseMigration):
             )
 
         return discovered
+
+    @staticmethod
+    def _cached_issue_users(issue: Any) -> Iterator[Any]:
+        """Yield the identities carried by the standard fields on a cached issue."""
+        if not isinstance(issue, dict) or not isinstance(fields := issue.get("fields"), dict):
+            return
+        watches = fields.get("watches") or {}
+        if isinstance(watches, dict):
+            yield from watches.get("watchers") or []
+        yield fields.get("assignee")
+        yield fields.get("reporter")
+        comments = fields.get("comment") or {}
+        if isinstance(comments, dict):
+            yield from (c.get("author") for c in comments.get("comments") or [] if isinstance(c, dict))
 
     def extract_openproject_users(self, *, force: bool = False) -> list[dict[str, Any]]:
         """Extract users from OpenProject.
@@ -460,51 +437,9 @@ class UserMigration(BaseMigration):
         if not self.op_users:
             self.extract_openproject_users()
 
-        # Debug: Check what type of data we're getting
-        self.logger.debug("OpenProject users data type: %s", type(self.op_users))
-        if self.op_users:
-            self.logger.debug("First user data type: %s", type(self.op_users[0]))
-            self.logger.debug("First user content: %s", str(self.op_users[0])[:200])
+        self._validate_openproject_users()
 
-        # Ensure we have a list of dictionaries
-        if not isinstance(self.op_users, list):
-            msg = f"Expected list of users, got {type(self.op_users)}"
-            raise MigrationError(msg)
-
-        # Filter out any non-dictionary items
-        valid_users = []
-        for i, user in enumerate(self.op_users):
-            if isinstance(user, dict):
-                valid_users.append(user)
-            else:
-                self.logger.warning(
-                    "Skipping invalid user data at index %d: %s (type: %s)",
-                    i,
-                    str(user)[:100],
-                    type(user),
-                )
-
-        self.op_users = valid_users
-        self.logger.info("Filtered to %d valid user records", len(self.op_users))
-
-        op_users_by_username = {user.get("login", "").lower(): user for user in self.op_users if user.get("login")}
-        # Prefer deterministic mapping via J2O provenance custom fields
-        op_users_by_origin_key: dict[str, dict[str, Any]] = {}
-        op_users_by_origin_id: dict[str, dict[str, Any]] = {}
-        # OpenProject user email field is 'mail'; fall back to 'email' if present
-        op_users_by_email: dict[str, dict[str, Any]] = {}
-        for user in self.op_users:
-            op_mail = (user.get("mail") or user.get("email") or "").lower()
-            if op_mail:
-                op_users_by_email[op_mail] = user
-
-            origin_key = (user.get("j2o_user_key") or user.get("jira_user_key") or "").lower()
-            if origin_key:
-                op_users_by_origin_key[origin_key] = user
-
-            origin_id = (user.get("j2o_user_id") or "").lower()
-            if origin_id:
-                op_users_by_origin_id[origin_id] = user
+        indices = self._target_users_by_identity()
 
         mapping: dict[str, Any] = {}
 
@@ -525,66 +460,18 @@ class UserMigration(BaseMigration):
                 jira_name = (jira_user.get("name") or "").lower()
                 jira_email = (jira_user.get("emailAddress") or "").lower()
                 jira_display_name = jira_user.get("displayName", "")
-                jira_account_id = (origin_meta.get("user_id") or "").lower()
-                origin_key_lower = (origin_meta.get("user_key") or "").lower()
-
                 tracker.update_description(f"Mapping user: {jira_display_name}")
-
-                matched_by = "none"
-                op_user: dict[str, Any] | None = None
-
-                # 1) Provenance key match (strongest)
-                if origin_key_lower and origin_key_lower in op_users_by_origin_key:
-                    op_user = op_users_by_origin_key[origin_key_lower]
-                    matched_by = "j2o_user_key_cf"
-                # 2) Provenance ID (Jira accountId) match
-                elif jira_account_id and jira_account_id in op_users_by_origin_key:
-                    op_user = op_users_by_origin_key[jira_account_id]
-                    matched_by = "j2o_user_key_cf"
-                elif jira_account_id and jira_account_id in op_users_by_origin_id:
-                    op_user = op_users_by_origin_id[jira_account_id]
-                    matched_by = "j2o_user_id_cf"
-                # 3) Username match
-                elif jira_name in op_users_by_username:
-                    op_user = op_users_by_username[jira_name]
-                    matched_by = "username"
-                # 4) Email match
-                elif jira_email and jira_email in op_users_by_email:
-                    op_user = op_users_by_email[jira_email]
-                    matched_by = "email"
-
-                if op_user:
-                    mapping[jira_key] = {
-                        "jira_key": jira_key,
-                        "jira_name": jira_name,
-                        "jira_email": jira_email,
-                        "jira_display_name": jira_display_name,
-                        "openproject_id": op_user.get("id"),
-                        "openproject_login": op_user.get("login"),
-                        "openproject_email": op_user.get("mail") or op_user.get("email"),
-                        "matched_by": matched_by,
-                        "j2o_origin_system": origin_meta.get("origin_system"),
-                        "j2o_user_id": origin_meta.get("user_id"),
-                        "j2o_user_key": origin_meta.get("user_key"),
-                        "j2o_external_url": origin_meta.get("external_url"),
-                        "time_zone": origin_meta.get("time_zone"),
-                        "locale": origin_meta.get("locale"),
-                        "avatar_url": origin_meta.get("avatar_url"),
-                    }
-                    tracker.add_log_item(
-                        f"Matched by {matched_by}: {jira_display_name} → {op_user.get('login')}",
-                    )
-                    tracker.increment()
-                    continue
+                op_user, matched_by = self._match_user(indices, origin_meta, jira_name, jira_email)
+                target = op_user or {}
                 mapping[jira_key] = {
                     "jira_key": jira_key,
                     "jira_name": jira_name,
                     "jira_email": jira_email,
                     "jira_display_name": jira_display_name,
-                    "openproject_id": None,
-                    "openproject_login": None,
-                    "openproject_email": None,
-                    "matched_by": "none",
+                    "openproject_id": target.get("id"),
+                    "openproject_login": target.get("login"),
+                    "openproject_email": target.get("mail") or target.get("email"),
+                    "matched_by": matched_by,
                     "j2o_origin_system": origin_meta.get("origin_system"),
                     "j2o_user_id": origin_meta.get("user_id"),
                     "j2o_user_key": origin_meta.get("user_key"),
@@ -593,7 +480,10 @@ class UserMigration(BaseMigration):
                     "locale": origin_meta.get("locale"),
                     "avatar_url": origin_meta.get("avatar_url"),
                 }
-                tracker.add_log_item(f"No match found: {jira_display_name}")
+                if op_user:
+                    tracker.add_log_item(f"Matched by {matched_by}: {jira_display_name} → {op_user.get('login')}")
+                else:
+                    tracker.add_log_item(f"No match found: {jira_display_name}")
                 tracker.increment()
 
         # Save the mapping via controller only
@@ -602,8 +492,7 @@ class UserMigration(BaseMigration):
 
         # Persist the refreshed OpenProject user snapshot with provenance values
         for user in self.op_users:
-            if isinstance(user, dict):
-                user.pop("jira_user_key", None)
+            user.pop("jira_user_key", None)
         self._save_to_json(self.op_users, Path(_OP_USERS_FILE))
 
         return mapping
@@ -980,13 +869,101 @@ class UserMigration(BaseMigration):
         avatar_dir.mkdir(parents=True, exist_ok=True)
 
         uploaded = 0
+        # Track *why* each avatar was skipped, mirroring the relation
+        # and watcher migrations (PR #190). The aggregate ``skipped``
+        # in the returned dict is preserved for backward compat; the
+        # ``skip_reasons`` breakdown distinguishes "expected"
+        # (``cached_digest_match`` — idempotent re-run, NOT a real
+        # loss) from "real" failures (download / persist / transfer /
+        # set-API).
         skip_reasons: Counter[str] = Counter()
+
         for job in jobs:
-            reason = self._sync_avatar(job, avatar_dir)
-            if reason:
-                skip_reasons[reason] += 1
-            else:
+            jira_key = job["jira_key"]
+            avatar_url = job["avatar_url"]
+            cache_entry = job.get("cache") or {}
+
+            download = self.jira_client.download_user_avatar(avatar_url)
+            if not download:
+                skip_reasons["download_failed"] += 1
+                continue
+
+            data, content_type = download
+            digest = hashlib.sha256(data).hexdigest()
+
+            cached_digest = str(cache_entry.get("digest")) if cache_entry else ""
+            cached_url = str(cache_entry.get("url")) if cache_entry else ""
+            if digest == cached_digest and avatar_url == cached_url:
+                self._avatar_cache[jira_key] = cache_entry
+                self.logger.debug(
+                    "Skipping avatar upload for %s (digest match)",
+                    jira_key,
+                )
+                skip_reasons["cached_digest_match"] += 1
+                continue
+
+            ext = self._guess_avatar_extension(content_type, avatar_url)
+            filename = f"{jira_key}.{ext}"
+            local_path = avatar_dir / filename
+            try:
+                with local_path.open("wb") as handle:
+                    handle.write(data)
+            except Exception as exc:
+                self.logger.warning("Failed to persist avatar for %s: %s", jira_key, exc)
+                skip_reasons["local_persist_failed"] += 1
+                continue
+
+            container_name = f"j2o_avatar_{job['openproject_id']}_{uuid.uuid4().hex}.{ext}"
+            container_path = Path("/tmp") / container_name
+            try:
+                self.op_client.transfer_file_to_container(local_path, container_path)
+            except Exception as exc:
+                self.logger.warning("Failed to copy avatar for %s to container: %s", jira_key, exc)
+                skip_reasons["container_transfer_failed"] += 1
+                with suppress(OSError):
+                    local_path.unlink()
+                continue
+
+            api_raised = False
+            try:
+                result = self.op_client.set_user_avatar(
+                    user_id=job["openproject_id"],
+                    container_path=container_path,
+                    filename=filename,
+                    content_type=content_type,
+                )
+            except Exception as exc:
+                self.logger.warning("Failed to set avatar for %s: %s", jira_key, exc)
+                skip_reasons["set_avatar_api_raised"] += 1
+                api_raised = True
+                result = {"success": False}
+            finally:
+                try:
+                    self.op_client.docker_client.execute_command(
+                        f"rm -f {container_path.as_posix()}",
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+
+            with suppress(OSError):
+                local_path.unlink()
+
+            if result.get("success"):
                 uploaded += 1
+                self._avatar_cache[jira_key] = {
+                    "digest": digest,
+                    "url": avatar_url,
+                }
+            elif not api_raised:
+                # ``api_raised=False`` here means the API call returned
+                # cleanly with ``success=False`` — distinct from the
+                # raised case (already counted above as
+                # ``set_avatar_api_raised``). The pre-#190 code
+                # incremented ``skipped`` in both branches, double-
+                # counting raised calls; the ``api_raised`` guard
+                # corrects that.
+                skip_reasons["set_avatar_api_returned_false"] += 1
 
         skipped = sum(skip_reasons.values())
         if skipped:
@@ -1003,56 +980,6 @@ class UserMigration(BaseMigration):
             "skip_reasons": dict(skip_reasons),
         }
 
-    def _sync_avatar(self, job: dict[str, Any], avatar_dir: Path) -> str | None:
-        """Upload one changed avatar, returning the reason for any skip."""
-        jira_key = job["jira_key"]
-        url = job["avatar_url"]
-        download = self.jira_client.download_user_avatar(url)
-        if not download:
-            return "download_failed"
-        data, content_type = download
-        digest = hashlib.sha256(data).hexdigest()
-        cache_entry = job.get("cache") or {}
-        if digest == str(cache_entry.get("digest")) and url == str(cache_entry.get("url")):
-            self._avatar_cache[jira_key] = cache_entry
-            self.logger.debug("Skipping avatar upload for %s (digest match)", jira_key)
-            return "cached_digest_match"
-
-        ext = self._guess_avatar_extension(content_type, url)
-        try:
-            with TemporaryDirectory(dir=avatar_dir) as tmp:
-                # Keep the original display name separate from both filesystem paths.
-                local_path = Path(tmp) / f"avatar.{ext}"
-                local_path.write_bytes(data)
-                reason = self._upload_avatar(job, content_type, local_path)
-        except OSError as exc:
-            self.logger.warning("Failed to persist avatar for %s: %s", jira_key, exc)
-            return "local_persist_failed"
-        if reason is None:
-            self._avatar_cache[jira_key] = {"digest": digest, "url": url}
-        return reason
-
-    def _upload_avatar(self, job: dict[str, Any], content_type: str, local_path: Path) -> str | None:
-        jira_key = job["jira_key"]
-        try:
-            with private_container_directory(self.op_client.docker_client) as directory:
-                target = directory / local_path.name
-                self.op_client.transfer_file_to_container(local_path, target)
-                try:
-                    result = self.op_client.set_user_avatar(
-                        user_id=job["openproject_id"],
-                        container_path=target,
-                        filename=f"{jira_key}{local_path.suffix}",
-                        content_type=content_type,
-                    )
-                except Exception as exc:
-                    self.logger.warning("Failed to set avatar for %s: %s", jira_key, exc)
-                    return "set_avatar_api_raised"
-        except Exception as exc:
-            self.logger.warning("Failed to stage avatar for %s: %s", jira_key, exc)
-            return "container_transfer_failed"
-        return None if result.get("success") else "set_avatar_api_returned_false"
-
     def _guess_avatar_extension(self, content_type: str, avatar_url: str) -> str:
         candidate = ""
         if content_type:
@@ -1061,7 +988,9 @@ class UserMigration(BaseMigration):
             path_ext = avatar_url.split("?", maxsplit=1)[0].rsplit(".", 1)
             if len(path_ext) == 2:
                 candidate = path_ext[1]
-        return candidate.lower() if re.fullmatch(r"[A-Za-z0-9]{1,12}", candidate) else "png"
+        if not candidate:
+            candidate = "png"
+        return candidate.lower()
 
     def _save_avatar_cache(self) -> None:
         try:
@@ -1165,15 +1094,7 @@ class UserMigration(BaseMigration):
             or display_name_candidate
         )
 
-        base_url = self._get_jira_base_url()
-        external_url = ""
-        if base_url and jira_key:
-            if account_id:
-                external_url = f"{base_url}/secure/ViewProfile.jspa?accountId={quote(str(account_id))}"
-            elif name_candidate:
-                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(name_candidate))}"
-            else:
-                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(jira_key))}"
+        external_url = self._profile_url(jira_key, account_id, name_candidate)
 
         # Probe canonical Jira REST keys first (``timeZone``), then the
         # non-canonical lowercase/capital legacy fallbacks for parity.
@@ -1181,20 +1102,7 @@ class UserMigration(BaseMigration):
         locale = user.locale or jira_user.get("locale") or jira_user.get("Locale")
         avatar_urls = user.avatar_urls or jira_user.get("avatarUrls") or {}
 
-        avatar_url = ""
-        if isinstance(avatar_urls, dict):
-            for size_key in ("128x128", "72x72", "48x48", "32x32", "16x16"):
-                candidate = avatar_urls.get(size_key)
-                if candidate:
-                    avatar_url = str(candidate)
-                    break
-            if not avatar_url:
-                # pick any value deterministically (sorted)
-                for key in sorted(avatar_urls):
-                    candidate = avatar_urls.get(key)
-                    if candidate:
-                        avatar_url = str(candidate)
-                        break
+        avatar_url = self._preferred_avatar_url(avatar_urls)
 
         return {
             "origin_system": origin_system,
@@ -1258,11 +1166,7 @@ class UserMigration(BaseMigration):
             )
 
         # Collect existing emails to prevent collisions
-        existing_emails = set()
-        if self.op_users:
-            for op_user in self.op_users:
-                if isinstance(op_user, dict) and "mail" in op_user:
-                    existing_emails.add(op_user["mail"])
+        existing_emails = {user["mail"] for user in self.op_users or [] if isinstance(user, dict) and "mail" in user}
 
         cf_ids = self._get_user_origin_cf_ids()
         jira_index = self._get_jira_user_index()
@@ -1277,276 +1181,20 @@ class UserMigration(BaseMigration):
                     batch = missing_users[i : i + batch_size]
 
                     # Prepare data for user creation
-                    users_to_create = []
-                    for user in batch:
-                        # Split display name into first and last name - handle empty display names
-                        display_name = user["jira_display_name"].strip() if user["jira_display_name"] else ""
-                        names = ["User", user["jira_name"]] if not display_name else display_name.split(" ", 1)
-
-                        first_name = names[0].strip() or "User"
-                        last_name = names[1].strip() if len(names) > 1 and names[1].strip() else user["jira_name"]
-
-                        # Ensure first_name and last_name are valid (non-empty, alphanumeric start)
-                        # OpenProject requires at least 1 character for names
-                        if not first_name or not first_name.strip():
-                            first_name = "User"
-                        if not last_name or not last_name.strip():
-                            # Use jira_name as fallback, or "Unknown" if that's also empty
-                            last_name = (
-                                user["jira_name"].strip()
-                                if user["jira_name"] and user["jira_name"].strip()
-                                else "Unknown"
-                            )
-
-                        # Remove organization suffixes in brackets (e.g., "[DMK]", "[Tiracon]")
-                        # These are common in Jira display names but OpenProject rejects square brackets
-                        import re as _re
-
-                        last_name = _re.sub(r"\s*\[.*?\]\s*$", "", last_name).strip()
-                        last_name = _re.sub(r"\s*\(.*?\)\s*$", "", last_name).strip()  # Also parentheses
-
-                        # Remove any control characters or problematic unicode
-                        first_name = "".join(c for c in first_name if c.isprintable()).strip() or "User"
-                        last_name = "".join(c for c in last_name if c.isprintable()).strip() or "Unknown"
-
-                        # Final validation: ensure names only contain allowed characters
-                        # OpenProject allows letters, numbers, spaces, hyphens, apostrophes
-                        first_name = _re.sub(r"[^\w\s\-']", "", first_name).strip() or "User"
-                        last_name = _re.sub(r"[^\w\s\-']", "", last_name).strip() or "Unknown"
-
-                        # Handle missing or empty email addresses with fallback
-                        email = user["jira_email"]
-                        if not email or email.strip() == "":
-                            # Generate safe, unique fallback email
-                            email = self._build_fallback_email(
-                                user["jira_name"],
-                                existing_emails,
-                            )
-                            existing_emails.add(email)  # Track newly generated email
-                            self.logger.info(
-                                f"Using fallback email for user {user['jira_name']}: {email}",
-                            )
-
-                        jira_payload = jira_index.get(str(user.get("jira_key")))
-                        if not jira_payload:
-                            jira_payload = {
-                                "key": user.get("jira_key"),
-                                "name": user.get("jira_name"),
-                                "emailAddress": user.get("jira_email"),
-                                "displayName": user.get("jira_display_name"),
-                            }
-                        origin_meta = self._build_user_origin_metadata(jira_payload)
-
-                        cf_payload: list[dict[str, Any]] = []
-                        if origin_meta.get("origin_system") and cf_ids.get(provenance_fields.ORIGIN_SYSTEM):
-                            cf_payload.append(
-                                {
-                                    "id": cf_ids[provenance_fields.ORIGIN_SYSTEM],
-                                    "value": origin_meta["origin_system"],
-                                },
-                            )
-                        if origin_meta.get("user_id") and cf_ids.get(provenance_fields.USER_ID):
-                            cf_payload.append(
-                                {
-                                    "id": cf_ids[provenance_fields.USER_ID],
-                                    "value": origin_meta["user_id"],
-                                },
-                            )
-                        if origin_meta.get("user_key") and cf_ids.get(provenance_fields.USER_KEY):
-                            cf_payload.append(
-                                {
-                                    "id": cf_ids[provenance_fields.USER_KEY],
-                                    "value": origin_meta["user_key"],
-                                },
-                            )
-                        if origin_meta.get("external_url") and cf_ids.get(provenance_fields.EXTERNAL_URL):
-                            cf_payload.append(
-                                {
-                                    "id": cf_ids[provenance_fields.EXTERNAL_URL],
-                                    "value": origin_meta["external_url"],
-                                },
-                            )
-
-                        user_record: dict[str, Any] = {
-                            "login": user["jira_name"],
-                            "firstname": first_name,
-                            "lastname": last_name,
-                            "mail": email,
-                            "admin": False,
-                            "status": "active",
-                        }
-                        if cf_payload:
-                            user_record["custom_fields"] = cf_payload
-                        if origin_meta.get("time_zone"):
-                            user_record["pref_attributes"] = {"time_zone": origin_meta["time_zone"]}
-
-                        users_to_create.append(user_record)
+                    users_to_create = [
+                        self._new_user_record(user, existing_emails, jira_index, cf_ids) for user in batch
+                    ]
 
                     batch_users = [user["jira_name"] for user in batch]
                     tracker.update_description(f"Creating users: {', '.join(batch_users)}")
 
                     # Use generic bulk create helper
                     try:
-                        self.logger.info(f"Creating {len(users_to_create)} users via bulk_create_records")
-                        # Build records for User model
-                        records: list[dict[str, Any]] = []
-                        meta: list[dict[str, Any]] = []
-                        for u in users_to_create:
-                            meta.append({"login": u.get("login"), "mail": u.get("mail")})
-                            record: dict[str, Any] = {
-                                "login": u.get("login"),
-                                "firstname": u.get("firstname"),
-                                "lastname": u.get("lastname"),
-                                "mail": u.get("mail"),
-                                "admin": bool(u.get("admin", False)),
-                                "status": (u.get("status") or "active"),
-                            }
-                            if u.get("custom_fields"):
-                                record["custom_fields"] = u["custom_fields"]
-                            if u.get("pref_attributes"):
-                                record["pref_attributes"] = u["pref_attributes"]
-                            records.append(record)
-
-                        result = self.op_client.bulk_create_records(
-                            model="User",
-                            records=records,
-                            timeout=getattr(config, "USER_CREATION_TIMEOUT", 120),
-                            result_basename="j2o_user_bulk_result.json",
+                        batch_created, batch_failed = self._submit_user_batch(
+                            users_to_create, batch, jira_index, created_users
                         )
-
-                        if not isinstance(result, dict) or result.get("status") != "success":
-                            raise MigrationError(result.get("message", "Bulk user creation failed"))
-
-                        created_list = result.get("created", []) or []
-                        error_list = result.get("errors", []) or []
-
-                        batch_created = len(created_list)
                         created += batch_created
-
-                        resolved_errors = 0
-                        unresolved_indices: set[int] = set()
-                        for err in error_list:
-                            try:
-                                idx = int(err.get("index"))
-                            except Exception:
-                                idx = -1
-                            if idx < 0 or idx >= len(batch):
-                                continue
-                            messages = [str(m).lower() for m in err.get("errors", [])]
-                            duplicate_violation = any(
-                                "username has already been taken" in msg or "email has already been taken" in msg
-                                for msg in messages
-                            )
-                            if not duplicate_violation:
-                                unresolved_indices.add(idx)
-                                continue
-
-                            target_mapping = batch[idx]
-                            jira_key = target_mapping.get("jira_key")
-                            jira_user = jira_index.get(str(jira_key)) if jira_key else None
-                            origin_meta = self._build_user_origin_metadata(jira_user) if jira_user else {}
-
-                            existing_op_user: dict[str, Any] | None = None
-                            login_candidate = target_mapping.get("jira_name") or target_mapping.get("jira_display_name")
-                            email_candidate = target_mapping.get("jira_email")
-                            try:
-                                if login_candidate:
-                                    existing_op_user = self.op_client.get_user(login_candidate)
-                            except Exception:
-                                existing_op_user = None
-                            if (not existing_op_user) and email_candidate:
-                                try:
-                                    existing_op_user = self.op_client.get_user(email_candidate)
-                                except Exception:
-                                    existing_op_user = None
-
-                            if (not existing_op_user) and login_candidate:
-                                try:
-                                    ruby_expr = f"user = User.find_by(login: {json.dumps(login_candidate)}); user && user.as_json.merge({{ 'mail' => user.mail }})"
-                                    existing_op_user = self.op_client.execute_json_query(ruby_expr)
-                                except Exception:
-                                    existing_op_user = None
-
-                            if existing_op_user and existing_op_user.get("id"):
-                                resolved_errors += 1
-                                op_id = int(existing_op_user["id"])  # type: ignore[arg-type]
-                                target_mapping["openproject_id"] = op_id
-                                target_mapping["openproject_login"] = existing_op_user.get("login")
-                                target_mapping["openproject_email"] = existing_op_user.get(
-                                    "mail",
-                                ) or existing_op_user.get(
-                                    "email",
-                                )
-                                target_mapping["matched_by"] = "username_existing"
-
-                                # Merge provenance data into cached OpenProject users
-                                def _apply_provenance(
-                                    op_user: dict[str, Any],
-                                    meta: dict[str, Any] = origin_meta,
-                                ) -> None:
-                                    if meta.get("origin_system"):
-                                        op_user["j2o_origin_system"] = meta.get("origin_system")
-                                    if meta.get("user_id"):
-                                        op_user["j2o_user_id"] = meta.get("user_id")
-                                    if meta.get("user_key"):
-                                        op_user["j2o_user_key"] = meta.get("user_key")
-                                    if meta.get("external_url"):
-                                        op_user["j2o_external_url"] = meta.get("external_url")
-                                    if meta.get("time_zone"):
-                                        op_user["time_zone"] = meta.get("time_zone")
-                                    op_user.pop("jira_user_key", None)
-
-                                existing_entry = next(
-                                    (u for u in self.op_users if isinstance(u, dict) and u.get("id") == op_id),
-                                    None,
-                                )
-                                if isinstance(existing_entry, dict):
-                                    _apply_provenance(existing_entry)
-                                elif isinstance(existing_op_user, dict):
-                                    record = dict(existing_op_user)
-                                    _apply_provenance(record)
-                                    self.op_users.append(record)
-
-                                self.logger.info(
-                                    "Resolved duplicate for Jira user %s by linking to existing OpenProject account %s",
-                                    jira_key,
-                                    existing_op_user.get("login"),
-                                )
-                            else:
-                                unresolved_indices.add(idx)
-
-                        failed += len(unresolved_indices)
-
-                        # Write the new OP id back to the mapping for each
-                        # freshly-created user. Without this, downstream
-                        # ``_map_user`` lookups in the WP migration treat
-                        # these users as un-mapped (the file still has
-                        # ``openproject_id: None`` from the initial probe)
-                        # and silently drop ~half of all assignees.
-                        _apply_created_user_ids_to_mapping(batch, meta, created_list)
-
-                        # Build created_users payload to retain for summary (limited fields, no PII beyond login/mail)
-                        for item in created_list:
-                            idx = item.get("index")
-                            if isinstance(idx, int) and 0 <= idx < len(meta):
-                                m = meta[idx]
-                                created_users.append(
-                                    {
-                                        "status": "success",
-                                        "login": m.get("login"),
-                                        "mail": m.get("mail"),
-                                        "id": item.get("id"),
-                                    },
-                                )
-
-                        # Log a few errors safely
-                        if error_list and self.logger.isEnabledFor(logging.DEBUG):
-                            for err in error_list[:3]:
-                                idx = err.get("index")
-                                safe_login = (
-                                    meta[idx]["login"] if isinstance(idx, int) and 0 <= idx < len(meta) else "unknown"
-                                )
-                                self.logger.debug("User creation error: %s -> %s", safe_login, err.get("errors", []))
+                        failed += batch_failed
 
                         tracker.add_log_item(
                             f"Created {batch_created}/{len(batch)} users in batch",
@@ -1605,13 +1253,7 @@ class UserMigration(BaseMigration):
             self.logger.warning("User origin custom fields missing; skipping backfill")
             return {"updated": 0, "errors": 1}
 
-        op_users_by_id: dict[int, dict[str, Any]] = {}
-        for op_user in self.op_users:
-            try:
-                uid = int(op_user.get("id"))
-            except Exception:
-                continue
-            op_users_by_id[uid] = op_user
+        op_users_by_id = self._target_users_by_id()
 
         jira_index = self._get_jira_user_index()
 
@@ -1637,62 +1279,9 @@ class UserMigration(BaseMigration):
             if not any(meta.values()):
                 continue
 
-            custom_fields: list[dict[str, Any]] = []
-            existing_origin_system = (op_user or {}).get("j2o_origin_system") if op_user else None
-            if (
-                meta["origin_system"]
-                and meta["origin_system"] != existing_origin_system
-                and cf_ids.get(provenance_fields.ORIGIN_SYSTEM)
-            ):
-                custom_fields.append({"id": cf_ids[provenance_fields.ORIGIN_SYSTEM], "value": meta["origin_system"]})
-
-            existing_user_id = (op_user or {}).get("j2o_user_id") if op_user else None
-            if meta["user_id"] and meta["user_id"] != existing_user_id and cf_ids.get(provenance_fields.USER_ID):
-                custom_fields.append({"id": cf_ids[provenance_fields.USER_ID], "value": meta["user_id"]})
-
-            existing_user_key = (op_user or {}).get("j2o_user_key") if op_user else None
-            if meta["user_key"] and meta["user_key"] != existing_user_key and cf_ids.get(provenance_fields.USER_KEY):
-                custom_fields.append({"id": cf_ids[provenance_fields.USER_KEY], "value": meta["user_key"]})
-
-            existing_url = (op_user or {}).get("j2o_external_url") if op_user else None
-            if (
-                meta["external_url"]
-                and meta["external_url"] != existing_url
-                and cf_ids.get(provenance_fields.EXTERNAL_URL)
-            ):
-                custom_fields.append({"id": cf_ids[provenance_fields.EXTERNAL_URL], "value": meta["external_url"]})
-
-            pref_payload = {}
-            existing_tz = (op_user or {}).get("time_zone") if op_user else None
-            user_type = str((op_user or {}).get("type", "")) if op_user else ""
-            if meta["time_zone"] and meta["time_zone"] != existing_tz:
-                if user_type not in {"DeletedUser", "SystemUser"}:
-                    pref_payload = {"time_zone": meta["time_zone"]}
-
-            language_code = self._map_locale_to_language(meta.get("locale"))
-            existing_lang = (op_user or {}).get("language") if op_user else None
-            if language_code and language_code != existing_lang:
-                pref_payload = {**pref_payload, "language": language_code}
-
-            avatar_job = self._prepare_avatar_job(
-                jira_user=jira_user,
-                op_user=op_user,
-                mapping=mapping,
-                meta=meta,
+            self._collect_origin_update(
+                mapping, jira_user, op_user, meta, cf_ids=cf_ids, rows=rows, avatar_jobs=avatar_jobs
             )
-            if avatar_job:
-                avatar_jobs.append(avatar_job)
-
-            if not custom_fields and not pref_payload:
-                continue
-
-            row: dict[str, Any] = {"id": op_id_int}
-            if custom_fields:
-                row["custom_fields"] = custom_fields
-            if pref_payload:
-                row["pref"] = pref_payload
-
-            rows.append(row)
 
         if not rows:
             avatar_result = self._sync_user_avatars(avatar_jobs)
@@ -1921,3 +1510,400 @@ class UserMigration(BaseMigration):
                 message=f"User migration failed: {e}",
                 data={"error": str(e)},
             )
+
+    @staticmethod
+    def _origin_field_changes(meta: dict, cf_ids: dict, current: dict) -> list[dict]:
+        fields = (
+            ("origin_system", provenance_fields.ORIGIN_SYSTEM, "j2o_origin_system"),
+            ("user_id", provenance_fields.USER_ID, "j2o_user_id"),
+            ("user_key", provenance_fields.USER_KEY, "j2o_user_key"),
+            ("external_url", provenance_fields.EXTERNAL_URL, "j2o_external_url"),
+        )
+        return [
+            {"id": cf_ids[label], "value": meta[key]}
+            for key, label, existing_key in fields
+            if meta.get(key) and cf_ids.get(label) and meta[key] != current.get(existing_key)
+        ]
+
+    @staticmethod
+    def _user_names(user: dict) -> tuple[str, str]:
+        display = (user["jira_display_name"] or "").strip()
+        first, _, last = display.partition(" ")
+        first = first or "User"
+        last = last.strip() or (user["jira_name"] or "").strip() or "Unknown"
+        for opening, closing in (("[", "]"), ("(", ")")):
+            last = last.rstrip()
+            if last.endswith(closing):
+                # A suffix cannot span a newline in Jira display names.
+                start = last.find(opening, last.rfind("\n") + 1)
+                if start != -1:
+                    last = last[:start].strip()
+        return _printable_name(first, "User"), _printable_name(last, "Unknown")
+
+    def _new_user_record(self, user: dict, existing_emails: set, jira_index: dict, cf_ids: dict) -> dict:
+        first_name, last_name = self._user_names(user)
+        email = user["jira_email"]
+        if not email or email.strip() == "":
+            # Generate safe, unique fallback email
+            email = self._build_fallback_email(
+                user["jira_name"],
+                existing_emails,
+            )
+            existing_emails.add(email)  # Track newly generated email
+            self.logger.info(
+                f"Using fallback email for user {user['jira_name']}: {email}",
+            )
+
+        jira_payload = jira_index.get(str(user.get("jira_key")))
+        if not jira_payload:
+            jira_payload = {
+                "key": user.get("jira_key"),
+                "name": user.get("jira_name"),
+                "emailAddress": user.get("jira_email"),
+                "displayName": user.get("jira_display_name"),
+            }
+        origin_meta = self._build_user_origin_metadata(jira_payload)
+
+        cf_payload = self._origin_field_changes(origin_meta, cf_ids, {})
+        user_record: dict[str, Any] = {
+            "login": user["jira_name"],
+            "firstname": first_name,
+            "lastname": last_name,
+            "mail": email,
+            "admin": False,
+            "status": "active",
+        }
+        if cf_payload:
+            user_record["custom_fields"] = cf_payload
+        if origin_meta.get("time_zone"):
+            user_record["pref_attributes"] = {"time_zone": origin_meta["time_zone"]}
+        return user_record
+
+    def _preference_updates(self, meta: dict, user: dict) -> dict:
+        updates = {}
+        zone = meta["time_zone"]
+        if zone and zone != user.get("time_zone") and user.get("type") not in {"SystemUser", "DeletedUser"}:
+            updates["time_zone"] = zone
+        language = self._map_locale_to_language(meta.get("locale"))
+        if language and language != user.get("language"):
+            updates["language"] = language
+        return updates
+
+    def _unresolved_user_errors(self, errors: list, batch: list, jira_index: dict) -> set[int]:
+        unresolved = set()
+        for err in errors:
+            try:
+                index = int(err.get("index"))
+            except TypeError, ValueError, OverflowError:
+                continue
+            if not 0 <= index < len(batch):
+                continue
+            messages = [str(message).lower() for message in err.get("errors", [])]
+            duplicate = any(
+                "username has already been taken" in m or "email has already been taken" in m for m in messages
+            )
+            if not duplicate or not self._link_existing_user(batch[index], jira_index):
+                unresolved.add(index)
+        return unresolved
+
+    def _existing_user_for_mapping(self, mapping: dict) -> dict | None:
+        existing_op_user = None
+        login_candidate = mapping.get("jira_name") or mapping.get("jira_display_name")
+        email_candidate = mapping.get("jira_email")
+        try:
+            if login_candidate:
+                existing_op_user = self.op_client.get_user(login_candidate)
+        except Exception:
+            existing_op_user = None
+        if (not existing_op_user) and email_candidate:
+            try:
+                existing_op_user = self.op_client.get_user(email_candidate)
+            except Exception:
+                existing_op_user = None
+
+        if (not existing_op_user) and login_candidate:
+            try:
+                ruby_expr = f"user = User.find_by(login: '{escape_ruby_single_quoted(login_candidate)}'); user && user.as_json.merge({{ 'mail' => user.mail }})"
+                existing_op_user = self.op_client.execute_json_query(ruby_expr)
+            except Exception:
+                existing_op_user = None
+        return existing_op_user
+
+    def _link_existing_user(self, target_mapping: dict, jira_index: dict) -> bool:
+        jira_key = target_mapping.get("jira_key")
+        jira_user = jira_index.get(str(jira_key)) if jira_key else None
+        origin_meta = self._build_user_origin_metadata(jira_user) if jira_user else {}
+        existing_op_user = self._existing_user_for_mapping(target_mapping)
+        if not existing_op_user or not existing_op_user.get("id"):
+            return False
+        op_id = int(existing_op_user["id"])  # type: ignore[arg-type]
+        target_mapping["openproject_id"] = op_id
+        target_mapping["openproject_login"] = existing_op_user.get("login")
+        target_mapping["openproject_email"] = existing_op_user.get(
+            "mail",
+        ) or existing_op_user.get(
+            "email",
+        )
+        target_mapping["matched_by"] = "username_existing"
+        record = next((u for u in self.op_users if isinstance(u, dict) and u.get("id") == op_id), None)
+        if record is None:
+            record = dict(existing_op_user)
+            self.op_users.append(record)
+        for key in ("origin_system", "user_id", "user_key", "external_url", "time_zone"):
+            if origin_meta.get(key):
+                record[key if key == "time_zone" else f"j2o_{key}"] = origin_meta[key]
+        record.pop("jira_user_key", None)
+        self.logger.info(
+            "Resolved duplicate for Jira user %s by linking to existing OpenProject account %s",
+            jira_key,
+            existing_op_user.get("login"),
+        )
+        return True
+
+    @staticmethod
+    def _created_user_rows(created_list: list, meta: list) -> list:
+        created_users = []
+        for item in created_list:
+            idx = item.get("index")
+            if isinstance(idx, int) and 0 <= idx < len(meta):
+                m = meta[idx]
+                created_users.append(
+                    {
+                        "status": "success",
+                        "login": m.get("login"),
+                        "mail": m.get("mail"),
+                        "id": item.get("id"),
+                    },
+                )
+        return created_users
+
+    def _log_user_creation_errors(self, error_list: list, meta: list) -> None:
+        if error_list and self.logger.isEnabledFor(logging.DEBUG):
+            for err in error_list[:3]:
+                idx = err.get("index")
+                safe_login = meta[idx]["login"] if isinstance(idx, int) and 0 <= idx < len(meta) else "unknown"
+                self.logger.debug("User creation error: %s -> %s", safe_login, err.get("errors", []))
+
+    def _merge_discovered_users(self, discovered: list) -> None:
+        """Augment the directory with issue identities missing from its original listing."""
+        if discovered:
+            existing_ids = {self._stable_user_id(u) for u in self.jira_users if self._stable_user_id(u)}
+            added = 0
+            for raw in discovered:
+                stable_id = self._stable_user_id(raw)
+                if not stable_id or stable_id in existing_ids:
+                    continue
+                # CRITICAL: ``create_user_mapping`` skips users
+                # without a ``key`` (line 497 in this file). Watcher
+                # responses don't carry ``key`` — only ``accountId``,
+                # ``name``, etc. Synthesize a ``key`` from the
+                # stable identity so the discovered user actually
+                # makes it through mapping + creation. Without this
+                # fallback the entire discovery pass silently
+                # dropped through.
+                if not raw.get("key"):
+                    raw["key"] = raw.get("accountId") or raw.get("name") or stable_id
+                self.jira_users.append(raw)
+                existing_ids.add(stable_id)
+                added += 1
+            if added:
+                self.logger.info(
+                    "Discovered %d additional users from cached issues (watchers/"
+                    "assignee/reporter/comments) — total now %d",
+                    added,
+                    len(self.jira_users),
+                )
+
+    def _validate_openproject_users(self) -> None:
+        """Filter invalid target user records before indexing their identity fields."""
+        # Debug: Check what type of data we're getting
+        self.logger.debug("OpenProject users data type: %s", type(self.op_users))
+        if self.op_users:
+            self.logger.debug("First user data type: %s", type(self.op_users[0]))
+            self.logger.debug("First user content: %s", str(self.op_users[0])[:200])
+
+        # Ensure we have a list of dictionaries
+        if not isinstance(self.op_users, list):
+            msg = f"Expected list of users, got {type(self.op_users)}"
+            raise MigrationError(msg)
+
+        # Filter out any non-dictionary items
+        valid_users = []
+        for i, user in enumerate(self.op_users):
+            if isinstance(user, dict):
+                valid_users.append(user)
+            else:
+                self.logger.warning(
+                    "Skipping invalid user data at index %d: %s (type: %s)",
+                    i,
+                    str(user)[:100],
+                    type(user),
+                )
+
+        self.op_users = valid_users
+        self.logger.info("Filtered to %d valid user records", len(self.op_users))
+
+    def _target_users_by_identity(self) -> dict[str, dict]:
+        """Build target user indices in their native, case-insensitive matching forms."""
+        op_users_by_username = {user.get("login", "").lower(): user for user in self.op_users if user.get("login")}
+        # Prefer deterministic mapping via J2O provenance custom fields
+        op_users_by_origin_key: dict[str, dict[str, Any]] = {}
+        op_users_by_origin_id: dict[str, dict[str, Any]] = {}
+        # OpenProject user email field is 'mail'; fall back to 'email' if present
+        op_users_by_email: dict[str, dict[str, Any]] = {}
+        for user in self.op_users:
+            op_mail = (user.get("mail") or user.get("email") or "").lower()
+            if op_mail:
+                op_users_by_email[op_mail] = user
+
+            origin_key = (user.get("j2o_user_key") or user.get("jira_user_key") or "").lower()
+            if origin_key:
+                op_users_by_origin_key[origin_key] = user
+
+            origin_id = (user.get("j2o_user_id") or "").lower()
+            if origin_id:
+                op_users_by_origin_id[origin_id] = user
+        return {
+            "key": op_users_by_origin_key,
+            "id": op_users_by_origin_id,
+            "login": op_users_by_username,
+            "email": op_users_by_email,
+        }
+
+    def _profile_url(self, jira_key: str, account_id: str, name_candidate: str) -> str:
+        """Build a profile link using the source identity that is available."""
+        base_url = self._get_jira_base_url()
+        external_url = ""
+        if base_url and jira_key:
+            if account_id:
+                external_url = f"{base_url}/secure/ViewProfile.jspa?accountId={quote(str(account_id))}"
+            elif name_candidate:
+                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(name_candidate))}"
+            else:
+                external_url = f"{base_url}/secure/ViewProfile.jspa?name={quote(str(jira_key))}"
+        return external_url
+
+    @staticmethod
+    def _preferred_avatar_url(avatar_urls: dict) -> str:
+        """Select the highest preferred avatar size before considering other URLs."""
+        avatar_url = ""
+        if isinstance(avatar_urls, dict):
+            for size_key in ("128x128", "72x72", "48x48", "32x32", "16x16"):
+                candidate = avatar_urls.get(size_key)
+                if candidate:
+                    avatar_url = str(candidate)
+                    break
+            if not avatar_url:
+                # pick any value deterministically (sorted)
+                for key in sorted(avatar_urls):
+                    candidate = avatar_urls.get(key)
+                    if candidate:
+                        avatar_url = str(candidate)
+                        break
+        return avatar_url
+
+    def _submit_user_batch(
+        self, users_to_create: list, batch: list, jira_index: dict, created_users: list
+    ) -> tuple[int, int]:
+        """Create users and reconcile their confirmed target identities."""
+        self.logger.info(f"Creating {len(users_to_create)} users via bulk_create_records")
+        # Build records for User model
+        records = users_to_create
+        meta = [{"login": user["login"], "mail": user["mail"]} for user in records]
+
+        result = self.op_client.bulk_create_records(
+            model="User",
+            records=records,
+            timeout=getattr(config, "USER_CREATION_TIMEOUT", 120),
+            result_basename="j2o_user_bulk_result.json",
+        )
+
+        if not isinstance(result, dict) or result.get("status") != "success":
+            raise MigrationError(result.get("message", "Bulk user creation failed"))
+
+        created_list = result.get("created", []) or []
+        error_list = result.get("errors", []) or []
+
+        batch_created = len(created_list)
+        failed = len(self._unresolved_user_errors(error_list, batch, jira_index))
+
+        # Write the new OP id back to the mapping for each
+        # freshly-created user. Without this, downstream
+        # ``_map_user`` lookups in the WP migration treat
+        # these users as un-mapped (the file still has
+        # ``openproject_id: None`` from the initial probe)
+        # and silently drop ~half of all assignees.
+        _apply_created_user_ids_to_mapping(batch, meta, created_list)
+
+        # Build created_users payload to retain for summary (limited fields, no PII beyond login/mail)
+        created_users.extend(self._created_user_rows(created_list, meta))
+
+        # Log a few errors safely
+        self._log_user_creation_errors(error_list, meta)
+        return batch_created, failed
+
+    def _target_users_by_id(self) -> dict[int, dict]:
+        """Index existing users by a valid target ID."""
+        op_users_by_id: dict[int, dict[str, Any]] = {}
+        for op_user in self.op_users:
+            try:
+                uid = int(op_user.get("id"))
+            except Exception:
+                continue
+            op_users_by_id[uid] = op_user
+        return op_users_by_id
+
+    def _collect_origin_update(
+        self,
+        mapping: dict,
+        jira_user: dict,
+        op_user: dict | None,
+        meta: dict,
+        *,
+        cf_ids: dict,
+        rows: list,
+        avatar_jobs: list,
+    ) -> None:
+        """Record the preferences, custom fields and avatar changes needed by one user."""
+        op_id_int = int(mapping["openproject_id"])
+        custom_fields = self._origin_field_changes(meta, cf_ids, op_user or {})
+
+        pref_payload = self._preference_updates(meta, op_user or {})
+
+        avatar_job = self._prepare_avatar_job(
+            jira_user=jira_user,
+            op_user=op_user,
+            mapping=mapping,
+            meta=meta,
+        )
+        if avatar_job:
+            avatar_jobs.append(avatar_job)
+
+        if not custom_fields and not pref_payload:
+            return
+
+        row: dict[str, Any] = {"id": op_id_int}
+        if custom_fields:
+            row["custom_fields"] = custom_fields
+        if pref_payload:
+            row["pref"] = pref_payload
+
+        rows.append(row)
+
+    @staticmethod
+    def _match_user(indices: dict, origin_meta: dict, jira_name: str, jira_email: str) -> tuple[dict | None, str]:
+        """Prefer stable provenance keys before trying a target login or email."""
+        jira_account_id = (origin_meta.get("user_id") or "").lower()
+        origin_key_lower = (origin_meta.get("user_key") or "").lower()
+
+        probes = (
+            (origin_key_lower, "key", "j2o_user_key_cf"),
+            (jira_account_id, "key", "j2o_user_key_cf"),
+            (jira_account_id, "id", "j2o_user_id_cf"),
+            (jira_name, "login", "username"),
+            (jira_email, "email", "email"),
+        )
+        return next(
+            ((indices[index][key], reason) for key, index, reason in probes if key and key in indices[index]),
+            (None, "none"),
+        )
