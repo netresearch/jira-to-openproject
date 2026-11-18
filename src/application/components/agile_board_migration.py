@@ -29,93 +29,28 @@ class AgileBoardMigration(BaseMigration):
     # ------------------------------------------------------------------ #
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities from Jira for a specific type.
-
-        This method enables idempotent workflow caching by providing a standard
-        interface for entity retrieval. Called by run_with_change_detection() to fetch data
-        with automatic thread-safe caching.
-
-        Args:
-            entity_type: The type of entities to retrieve (e.g., "agile_boards", "sprints")
-
-        Returns:
-            List containing aggregated board and sprint data
-
-        Raises:
-            ValueError: If entity_type is not supported by this migration
-
-        """
-        # Check if this is one of the entity types we handle
+        """Read one change-detection snapshot of board memberships and owned sprints."""
         if entity_type not in ("agile_boards", "sprints"):
-            msg = (
-                f"AgileBoardMigration does not support entity type: {entity_type}. "
-                f"Supported types: ['agile_boards', 'sprints']"
-            )
+            msg = f"Unsupported agile migration entity type: {entity_type}"
             raise ValueError(msg)
 
-        board_payloads: list[dict[str, Any]] = []
-        sprint_payloads: list[dict[str, Any]] = []
-
-        targets = self._board_work_package_mapping()
-        filters = config.migration_config.get("jira_project_filter") or []
-        selected = (
-            set(self.project_mapping).intersection([filters] if isinstance(filters, str) else filters)
-            if filters
-            else set(self.project_mapping)
-        )
+        board_payloads = []
+        sprint_payloads = []
         read_errors = []
-        for board in self._list_boards(selected if filters else None):
-            board_id = board.get("id")
-            if board_id is None:
-                continue
-
+        targets = self._board_work_package_mapping()
+        configured = config.migration_config.get("jira_project_filter")
+        if isinstance(configured, str):
+            configured = [configured]
+        selected = set(configured) if configured else None
+        for board in self._list_boards(selected):
             try:
-                configuration = self.jira_client.get_board_configuration(board_id)
-                board_sprints = [] if board.get("type") == "kanban" else self.jira_client.get_board_sprints(board_id)
-                project_key, candidates = self._board_project(board, board_id)
-                scoped_keys = selected.intersection(candidates)
-                if filters and not scoped_keys and project_key not in selected:
-                    continue
-                snapshots = {key: self._board_work_package_ids(board_id, key, targets) for key in sorted(scoped_keys)}
+                boards, sprints = self._read_board(board, selected, targets)
             except Exception as exc:
-                self.logger.exception("Failed reading Jira board %s", board_id)
-                read_errors.append({"board_id": board_id, "error": str(exc)})
+                self.logger.exception("Failed reading Jira board %s", board.get("id"))
+                read_errors.append({"board_id": board.get("id"), "error": str(exc)})
                 continue
-
-            statuses = self._column_statuses(configuration)
-
-            query = configuration.get("filter", {}) or {}
-            filter_jql = query.get("query") or query.get("queryString") or ""
-
-            for key, ids in snapshots.items() or ([] if filters else [(project_key, None)]):
-                board_payloads.append(
-                    {
-                        "id": board_id,
-                        "name": board.get("name"),
-                        "type": board.get("type"),
-                        "project_key": key if snapshots else None,
-                        "candidate_projects": candidates or ([project_key] if project_key else []),
-                        "statuses": statuses,
-                        "filter_jql": filter_jql,
-                        "work_package_ids": ids,
-                    },
-                )
-
-            if project_key and project_key not in selected and filters:
-                continue
-            for sprint in self._owned_sprints(board_sprints, board_id):
-                sprint_payloads.append(
-                    {
-                        "board_id": board_id,
-                        "project_key": project_key,
-                        "id": sprint.get("id"),
-                        "name": sprint.get("name"),
-                        "goal": sprint.get("goal"),
-                        "state": sprint.get("state"),
-                        "startDate": sprint.get("startDate"),
-                        "endDate": sprint.get("endDate"),
-                    },
-                )
+            board_payloads.extend(boards)
+            sprint_payloads.extend(sprints)
 
         inventory = {
             "id": "jira-agile-inventory",
@@ -125,6 +60,37 @@ class AgileBoardMigration(BaseMigration):
             "total_count": len(board_payloads),
         }
         return [self._with_targets(inventory)]
+
+    def _read_board(
+        self, board: dict, selected: set[str] | None, targets: dict[str, int]
+    ) -> tuple[list[dict], list[dict]]:
+        board_id = board["id"]
+        home, candidates = self._board_project(board, board_id)
+        allowed = set(self.project_mapping) if selected is None else selected
+        scopes = sorted(allowed.intersection(candidates))
+        configuration = self.jira_client.get_board_configuration(board_id)
+        query = configuration.get("filter") or {}
+        common = {
+            "id": board_id,
+            "name": board.get("name"),
+            "type": board.get("type"),
+            "candidate_projects": candidates,
+            "statuses": self._column_statuses(configuration),
+            "filter_jql": query.get("query") or query.get("queryString") or "",
+        }
+        snapshots = [
+            {**common, "project_key": key, "work_package_ids": self._board_work_package_ids(board_id, key, targets)}
+            for key in scopes
+        ]
+        if not snapshots:
+            snapshots.append({**common, "project_key": None, "work_package_ids": None})
+
+        if board.get("type") == "kanban" or (selected is not None and home and home not in selected):
+            return snapshots, []
+        owned = self._owned_sprints(self.jira_client.get_board_sprints(board_id), board_id)
+        fields = ("id", "name", "goal", "state", "startDate", "endDate")
+        sprints = [{"board_id": board_id, "project_key": home, **{k: s.get(k) for k in fields}} for s in owned]
+        return snapshots, sprints
 
     @staticmethod
     def _owned_sprints(sprints: list[dict], board_id: int) -> list[dict]:

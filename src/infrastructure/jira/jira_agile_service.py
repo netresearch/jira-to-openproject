@@ -81,17 +81,21 @@ class JiraAgileService:
                 msg = "Board membership changed while paging"
                 raise JiraApiError(msg)
             total = int(page["total"])
-            for issue in page["issues"]:
-                if issue["fields"]["project"]["key"] != project_key or not issue["key"].startswith(project_key + "-"):
-                    msg = "Board returned an issue outside the selected project"
-                    raise JiraApiError(msg)
-                keys.append(issue["key"])
+            keys.extend(self._project_issue_key(issue, project_key) for issue in page["issues"])
             if not page["issues"]:
                 break
         if len(keys) != total or len(set(keys)) != len(keys):
             msg = "Incomplete or duplicate Jira board issue keys"
             raise JiraApiError(msg)
         return keys
+
+    @staticmethod
+    def _project_issue_key(issue: dict, project_key: str) -> str:
+        key = str(issue["key"])
+        if issue["fields"]["project"]["key"] != project_key or not key.startswith(project_key + "-"):
+            msg = "Board returned an issue outside the selected project"
+            raise JiraApiError(msg)
+        return key
 
     def _paged_values(self, resource: str, **scope: str) -> list[dict[str, Any]]:
         client = self._client
