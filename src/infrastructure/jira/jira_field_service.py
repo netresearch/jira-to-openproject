@@ -52,7 +52,7 @@ class JiraFieldService:
 
         path = f"/rest/api/2/issue/{quote(issue_key, safe='')}/properties/{quote(property_key, safe='')}"
         try:
-            response = self._client._make_request(path, timeout=15)
+            response = self._client._make_request(path)
         except JiraResourceNotFoundError:
             return None
         except JiraApiError as exc:
