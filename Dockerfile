@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.29
 
 # ===== Stage 1: build =====
-FROM python:3.15-slim AS build
+FROM python:3.15.2-slim AS build
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -37,7 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
 
 # ===== Stage 2: runtime =====
-FROM python:3.15-slim AS runtime
+FROM python:3.15.2-slim AS runtime
 
 LABEL maintainer="Netresearch DTT GmbH <sebastian.mendel@netresearch.de>" \
       org.opencontainers.image.title="jira-to-openproject" \

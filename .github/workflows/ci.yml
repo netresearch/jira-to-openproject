@@ -30,7 +30,7 @@ jobs:
       id-token: write
     with:
       package-manager: uv
-      python-versions: '["3.14"]'
+      python-versions: '["3.14", "3.15"]'
       # tests/conftest.py auto-loads .env.test, which is not tracked in git.
       # Export the same surface via $GITHUB_ENV (persists to the pytest step)
       # so client constructors that demand env-supplied values work in CI.

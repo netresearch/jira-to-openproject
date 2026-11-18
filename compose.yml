@@ -54,7 +54,7 @@ services:
 
   # Mock Jira API server
   mock-jira:
-    image: stoplight/prism:5
+    image: stoplight/prism:5.15.10
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     profiles:
       - test
@@ -75,7 +75,7 @@ services:
 
   # Mock OpenProject API server
   mock-openproject:
-    image: stoplight/prism:5
+    image: stoplight/prism:5.15.10
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     profiles:
       - test
@@ -96,7 +96,7 @@ services:
 
   # Redis for caching and task queues
   redis:
-    image: redis:8-alpine
+    image: redis:8.10.3-alpine
     # SECURITY: No port exposure needed - internal service only
     # NOTE: Redis Alpine runs as dedicated 'redis' user (not root) by default - no custom user needed
     volumes:
@@ -114,7 +114,7 @@ services:
 
   # PostgreSQL for data storage
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18.7-alpine
     # SECURITY: No port exposure needed - internal service only
     # NOTE: PostgreSQL Alpine runs as dedicated 'postgres' user (not root) by default - no custom user needed
     env_file:
@@ -127,6 +127,8 @@ services:
       # When POSTGRES_PASSWORD is set, it takes precedence over POSTGRES_PASSWORD_FILE
       # POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Reuse the legacy mount explicitly. PostgreSQL rejects an unupgraded 17 cluster.
+      PGDATA: /var/lib/postgresql/data
       PGUSER: ${POSTGRES_USER:-postgres}
     # secrets:
     #   - postgres_password
