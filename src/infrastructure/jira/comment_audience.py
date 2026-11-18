@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -75,8 +76,57 @@ _HISTORY_FIELDS = frozenset(
 )
 
 
-def may_copy_history_item(item: dict[str, Any]) -> bool:
-    """Require a recognized non-comment field before replaying old or translated text."""
+def _record_fields(record: object) -> Mapping[str, Any] | None:
+    """Read a REST mapping or the attributes of an SDK resource without running properties."""
+    if isinstance(record, Mapping):
+        return record
+    return getattr(record, "__dict__", None)
+
+
+def _explicit_audience(fields: Mapping[str, Any]) -> bool:
+    # Even a JSM "public" reply can be restricted to request participants.
+    if any(key in fields for key in ("internal", "isInternal", "public", "jsdPublic")):
+        return True
+    scope_keys = ("visibility", "roleLevel", "groupLevel", "audience", "restrictions", "restrictedTo")
+    if any(fields.get(key) is not None for key in scope_keys):
+        return True
+    return "properties" in fields and fields["properties"] != []
+
+
+def has_comment_audience(record: object) -> bool:
+    """Withhold restricted or unrecognized audience metadata on an item or its history.
+
+    Inspect the SDK's original response and Jira's metadata envelopes. Sibling
+    items have independent audiences and are checked individually by the caller.
+    """
+    pending = [record]
+    seen = set()
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        fields = _record_fields(value)
+        if fields is None or _explicit_audience(fields):
+            return True
+        pending.extend(fields[key] for key in ("raw", "historyMetadata", "extraData") if fields.get(key) is not None)
+    return False
+
+
+def may_copy_history_item(item: object, history: object | None = None) -> bool:
+    """Require both a recognized field and unrestricted history and item metadata."""
+    if has_comment_audience(item) or (history is not None and has_comment_audience(history)):
+        return False
+    fields = _record_fields(item)
+    if fields is None:
+        return False
+    raw = _record_fields(fields.get("raw")) or {}
+    if any(key in fields and key in raw and fields[key] != raw[key] for key in ("field", "fieldId", "fieldtype")):
+        return False
+    return _recognized_history_field({**raw, **fields})
+
+
+def _recognized_history_field(item: Mapping[str, Any]) -> bool:
     field = str(item.get("field") or "").strip().casefold()
     field_id = str(item.get("fieldId") or "").strip().casefold()
     if field in {"comment", "comments"} or field_id in {"comment", "comments"}:
@@ -102,7 +152,7 @@ def issue_without_comments(raw: dict[str, Any]) -> dict[str, Any]:
             "histories": [
                 {**entry, "items": items}
                 for entry in history["histories"]
-                if (items := [item for item in entry.get("items", []) if may_copy_history_item(item)])
+                if (items := [item for item in entry.get("items", []) if may_copy_history_item(item, entry)])
             ],
         }
     return clean
