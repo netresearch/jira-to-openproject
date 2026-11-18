@@ -42,6 +42,9 @@ from src.infrastructure.jira.jira_client import (
 from src.utils.timezone import UTC
 
 
+_RESTRICTED_WORKLOG = "Cannot expose audience-restricted Tempo work logs."
+
+
 class JiraTempoService:
     """Tempo-plugin queries for ``JiraClient``."""
 
@@ -258,7 +261,7 @@ class JiraTempoService:
             enhanced_work_logs = []
             for work_log in work_logs:
                 if has_comment_audience(work_log):
-                    msg = "Cannot expose audience-restricted Tempo work logs."
+                    msg = _RESTRICTED_WORKLOG
                     raise JiraApiError(msg)
                 enhanced_work_log = {
                     "tempo_worklog_id": work_log.get("tempoWorklogId"),
@@ -411,7 +414,7 @@ class JiraTempoService:
                 # Process batch and add to results
                 for work_log in work_logs_batch:
                     if has_comment_audience(work_log):
-                        msg = "Cannot expose audience-restricted Tempo work logs."
+                        msg = _RESTRICTED_WORKLOG
                         raise JiraApiError(msg)
                     enhanced_work_log = {
                         "tempo_worklog_id": work_log.get("tempoWorklogId"),
@@ -504,7 +507,7 @@ class JiraTempoService:
             work_log = response.json()
 
             if has_comment_audience(work_log):
-                msg = "Cannot expose audience-restricted Tempo work logs."
+                msg = _RESTRICTED_WORKLOG
                 raise JiraApiError(msg)
 
             # Return enhanced work log data
