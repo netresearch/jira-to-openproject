@@ -95,21 +95,24 @@ class PriorityMigration(BaseMigration):
                 continue
             op_id = name_to_id.get(name)
             if not op_id:
-                try:
-                    created_rec = self.op_client.create_issue_priority(name)
-                    op_id = int(created_rec.get("id")) if created_rec.get("id") else None
-                    if op_id:
-                        name_to_id[name] = op_id
-                        created += 1
-                except Exception:
-                    logger.exception("Failed creating IssuePriority %s", name)
-                    continue
+                op_id = self._create_priority(name)
+                if op_id:
+                    name_to_id[name] = op_id
+                    created += 1
             if op_id:
                 mapping[name] = op_id
 
         # Persist mapping
         self.mappings.set_mapping("priority", mapping)
         return ComponentResult(success=True, created_types=created, data={"mapping": mapping})
+
+    def _create_priority(self, name: str) -> int | None:
+        try:
+            record = self.op_client.create_issue_priority(name)
+            return int(record["id"]) if record.get("id") else None
+        except Exception:
+            logger.exception("Failed creating IssuePriority %s", name)
+            return None
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Set priority on work packages using the mapping if missing or different."""
@@ -134,29 +137,9 @@ class PriorityMigration(BaseMigration):
 
         for key, wp_entry in wp_map.items():
             try:
-                wp_id = None
-                if isinstance(wp_entry, dict):
-                    wp_id = wp_entry.get("openproject_id")
-                elif isinstance(wp_entry, int):
-                    wp_id = wp_entry
-                if not wp_id:
-                    continue
-
-                # The outer key may be a numeric Jira ID; iss_map is keyed by
-                # the human-readable Jira key returned by the API.
-                jira_key = self._inner_jira_key(key, wp_entry) or key
-                issue = iss_map.get(jira_key)
-                if not issue:
-                    continue
-                fields = JiraIssueFields.from_issue_any(issue)
-                pr_name = fields.priority.name if fields.priority else None
-                if not pr_name:
-                    continue
-                pr_id = mapping.get(pr_name)
-                if not pr_id:
-                    continue
-
-                updates.append({"id": int(wp_id), "priority_id": int(pr_id)})
+                assignment = self._priority_assignment(key, wp_entry, iss_map, mapping)
+                if assignment:
+                    updates.append(assignment)
             except Exception:
                 failed += 1
 
@@ -171,3 +154,20 @@ class PriorityMigration(BaseMigration):
             failed += len(updates)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+
+    def _priority_assignment(
+        self, key: str, entry: Any, issues: dict, priorities: dict[str, int]
+    ) -> dict[str, int] | None:
+        if not isinstance(entry, (dict, int)):
+            return None
+        wp_id = entry.get("openproject_id") if isinstance(entry, dict) else entry
+        if not wp_id:
+            return None
+        issue = issues.get(self._inner_jira_key(key, entry) or key)
+        if not issue:
+            return None
+        fields = JiraIssueFields.from_issue_any(issue)
+        if not fields.priority or not fields.priority.name:
+            return None
+        priority_id = priorities.get(fields.priority.name)
+        return {"id": int(wp_id), "priority_id": int(priority_id)} if priority_id else None

@@ -79,25 +79,6 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
         data = extracted.data or {}
         extracted_map: dict[str, Any] = data.get("extracted", {}) if isinstance(data, dict) else {}
 
-        def to_markdown(tasks: list[dict[str, Any]]) -> str:
-            lines: list[str] = []
-            for t in tasks or []:
-                title = str(t.get("title") or t.get("text") or "").strip()
-                checked = bool(t.get("checked") or t.get("done") or False)
-                due = t.get("dueDate") or t.get("due")
-                labels = t.get("labels") or t.get("tags")
-                mandatory = t.get("mandatory")
-                suffix_parts: list[str] = []
-                if due:
-                    suffix_parts.append(f"due: {due}")
-                if labels:
-                    suffix_parts.append(f"labels: {', '.join(labels) if isinstance(labels, list) else labels}")
-                if mandatory:
-                    suffix_parts.append("mandatory")
-                suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
-                lines.append(f"- [{'x' if checked else ' '}] {title}{suffix}")
-            return "\n".join(lines)
-
         markdown_by_issue: dict[str, str] = {}
         for jira_key, payload in extracted_map.items():
             tasks = []
@@ -109,9 +90,27 @@ class SimpleTasksMigration(BaseMigration):  # noqa: D101
                     tasks = payload["value"]  # type: ignore[assignment]
             elif isinstance(payload, list):
                 tasks = payload
-            markdown_by_issue[jira_key] = to_markdown(tasks)
+            markdown_by_issue[jira_key] = "\n".join(self._checklist_row(t) for t in tasks)
 
         return ComponentResult(success=True, data={"markdown": markdown_by_issue})
+
+    @staticmethod
+    def _checklist_row(t: dict[str, Any]) -> str:
+        """Format one task with its completion state and optional details."""
+        title = str(t.get("title") or t.get("text") or "").strip()
+        checked = bool(t.get("checked") or t.get("done") or False)
+        due = t.get("dueDate") or t.get("due")
+        labels = t.get("labels") or t.get("tags")
+        mandatory = t.get("mandatory")
+        suffix_parts: list[str] = []
+        if due:
+            suffix_parts.append(f"due: {due}")
+        if labels:
+            suffix_parts.append(f"labels: {', '.join(labels) if isinstance(labels, list) else labels}")
+        if mandatory:
+            suffix_parts.append("mandatory")
+        suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
+        return f"- [{'x' if checked else ' '}] {title}{suffix}"
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         """Upsert checklist section into WP descriptions."""

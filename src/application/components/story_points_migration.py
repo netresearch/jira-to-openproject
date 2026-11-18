@@ -32,7 +32,7 @@ from typing import Any
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 
 STORY_POINTS_CF_NAME = "Story Points"
@@ -151,10 +151,9 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         for outer_key, raw_entry in wp_map.items():
             inner_jira_key = raw_entry.get("jira_key") if isinstance(raw_entry, dict) else None
             key_for_legacy = str(inner_jira_key or outer_key)
-            try:
-                entries_by_jira_key[key_for_legacy] = WorkPackageMappingEntry.from_legacy(key_for_legacy, raw_entry)
-            except ValueError:
-                continue
+            entry = self._work_package_entry(key_for_legacy, raw_entry)
+            if entry is not None:
+                entries_by_jira_key[key_for_legacy] = entry
 
         for jira_key, text in text_by_key.items():
             if text is None or text == "0":
@@ -167,14 +166,8 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
             if entry.openproject_project_id is not None:
                 projects_with_values.add(int(entry.openproject_project_id))
             try:
-                val = escape_ruby_single_quoted(str(text))
-                set_script = (
-                    "wp = WorkPackage.find(%d); cf = CustomField.find(%d); "
-                    "cv = wp.custom_value_for(cf); if cv; cv.value = '%s'; cv.save; else; wp.custom_field_values = { cf.id => '%s' }; end; wp.save!; true"
-                    % (wp_id, cf_id, val, val)
-                )
-                ok = self.op_client.execute_query(set_script)
-                if ok:
+                result = self._write_work_package_custom_value(wp_id, cf_id, str(text), return_project=False)
+                if result:
                     updated += 1
                 else:
                     failed += 1
