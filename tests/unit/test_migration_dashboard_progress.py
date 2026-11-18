@@ -269,3 +269,71 @@ def test_only_a_terminal_io_failure_retries_the_same_report(
     assert len(terminal_timestamps) == expected_attempts
     assert len(set(terminal_timestamps)) == 1
     assert read_progress(local_run.target).status == expected_file_status
+
+
+def test_cli_comparison_requires_complete_scope_and_replaces_previous_attempt(local_run):
+    results = iter(
+        [
+            {"DEMO": {"source": 2, "target": 2}, "OTHER": {"source": 1, "target": 1}},
+            {"DEMO": {"source": 2, "target": 2}, "OTHER": {"source": 1, "actor": "private-text"}},
+        ]
+    )
+    label = "Jira worklogs on selected issues"
+    local_run.factories["time_entries"] = lambda: SimpleNamespace(
+        run=lambda: ComponentResult(success=True, success_count=99, details={"comparison_by_project": next(results)})
+    )
+    local_run.factories["attachments"] = lambda: SimpleNamespace(
+        run=lambda: ComponentResult(
+            success=True, updated=99, details={"comparison_by_project": {"DEMO": {"source": 0}, "OTHER": {}}}
+        )
+    )
+    assert run_command("time_entries", "attachments", "time_entries") == 0
+    result = read_progress(local_run.target)
+    assert result.comparison_counts[label].source == 3
+    assert result.comparison_counts[label].target is None
+    assert result.project_comparisons["DEMO"][label].target == 2
+    assert result.project_comparisons["OTHER"][label].target is None
+    attachment_label = "Attachments on selected issues (target SHA-256 verified)"
+    assert attachment_label not in result.comparison_counts
+    assert result.project_comparisons["DEMO"][attachment_label].source == 0
+    assert result.project_comparisons["DEMO"][attachment_label].target is None
+    assert "private-text" not in local_run.target.read_text()
+
+
+def test_cli_dry_result_never_publishes_comparisons(local_run):
+    local_run.factories["time_entries"] = lambda: SimpleNamespace(
+        run=lambda: ComponentResult(
+            success=True, dry_run=True, details={"comparison_by_project": {"DEMO": {"source": 6, "target": 6}}}
+        )
+    )
+    assert run_command("time_entries") == 0
+    result = read_progress(local_run.target)
+    assert result.comparison_counts == {}
+    assert result.project_comparisons == {}
+
+
+def test_receipts_exclude_target_collisions_across_projects():
+    from src.utils.scoped_receipts import ScopedReceipts
+
+    observed = ScopedReceipts(["ONE-1", "TWO-1"])
+    observed.observe("ONE-1", ["1"])
+    observed.observe("TWO-1", ["2"])
+    observed.confirm("ONE-1", "1", 7)
+    observed.confirm("TWO-1", "2", 7)
+    assert observed.counts() == {"ONE": {"source": 1}, "TWO": {"source": 1}}
+
+
+def test_cli_global_dry_run_never_publishes_source_or_target(local_run, monkeypatch):
+    monkeypatch.setattr(
+        migration.config, "migration_config", {"dry_run": True, "no_backup": True, "allow_unsafe_dry_run": True}
+    )
+    local_run.factories["time_entries"] = lambda: SimpleNamespace(
+        run=lambda: ComponentResult(
+            success=True, details={"comparison_by_project": {"DEMO": {"source": 6, "target": 6}}}
+        )
+    )
+    assert run_command("time_entries") == 0
+    result = read_progress(local_run.target)
+    assert result.migration_id.startswith("dry-run-")
+    assert result.comparison_counts == {}
+    assert result.project_comparisons == {}

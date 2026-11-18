@@ -47,6 +47,7 @@ from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
+from src.utils.scoped_receipts import ScopedReceipts
 
 
 def compute_wp_lookup_by_jira_key(mappings: Any) -> dict[str, int]:
@@ -92,6 +93,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
     # by :meth:`_wp_lookup_by_jira_key`; reset to ``None`` whenever the
     # migration runs against a fresh mappings instance.
     _wp_lookup_cache: dict[str, int] | None
+    _receipts: ScopedReceipts | None = None
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
@@ -185,6 +187,8 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             try:
                 fields = getattr(issue, "fields", None)
                 atts = getattr(fields, "attachment", None)
+                if self._receipts is not None and isinstance(atts, list):
+                    self._receipts.observe(key, [getattr(attachment, "id", None) for attachment in atts])
                 if not isinstance(atts, list) or not atts:
                     continue
                 items = self._attachment_records(atts)
@@ -274,7 +278,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         replaced = url.replace("%2F", "%252F").replace("%2C", "%252C")
         return replaced if replaced != url else None
 
-    def _download_attachment(self, url: str, dest_path: Path) -> Path:
+    def _download_attachment(self, url: str, dest_path: Path) -> Path | None:
         """Download attachment from Jira to dest_path; return local path.
 
         Uses Jira client's authenticated session to download.
@@ -306,6 +310,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         )
             if not retried:
                 logger.warning("Attachment download failed for %s: %s", url, e)
+                return None
         return dest_path
 
     def _fetch_attachment(self, target_url: str, dest_path: Path) -> None:
@@ -426,14 +431,15 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         # in the *caller* still catches anything truly unexpected
         # and routes it to ``map_per_item_exception``. Per PR #225
         # review.
-        self._download_attachment(url, local_path)
-        if not local_path.exists():
+        downloaded = self._download_attachment(url, local_path)
+        if downloaded is None or not local_path.exists():
             self._loss_counters["map_download_failed"] += 1
             return None
         digest = self._sha256_of(local_path)
         return {
             "jira_key": jira_key,
             "work_package_id": int(work_package_id),
+            "jira_attachment_id": aid,
             "local_path": local_path.as_posix(),
             "filename": filename,
             "digest": digest,
@@ -517,6 +523,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                         "filename": filename,
                         "container_path": container_path.as_posix(),
                         "digest": op.get("digest"),
+                        "jira_attachment_id": op.get("jira_attachment_id"),
                     },
                 )
             except Exception:
@@ -585,10 +592,12 @@ result = begin
       end
       att.reload
       raise "Stored attachment filename differs" unless att.filename == name
-      unless att.filesize == size && Digest::SHA256.file(att.diskfile.path).hexdigest == digest
+      stored_digest = Digest::SHA256.file(att.diskfile.path).hexdigest
+      unless att.filesize == size && stored_digest == digest
         raise "Stored attachment bytes differ"
       end
-      results << { jira_key: op.fetch("jira_key"), filename: name, attachment_id: att.id, existed: existed }
+      results << { jira_key: op.fetch("jira_key"), filename: name, attachment_id: att.id, existed: existed,
+                   verified_sha256: stored_digest }
     rescue => e
       errors << { jira_key: op["jira_key"], filename: op["filename"], error: e.message }
     end
@@ -619,6 +628,7 @@ puts end_marker
                 self._loss_counters["load_rails_malformed_data"] += len(container_ops)
                 logger.warning("_load: Rails did not acknowledge the requested attachment identities")
                 return ComponentResult(success=False, failed=len(container_ops), data={"attachment_mapping": {}})
+            self._confirm_attachment_digests(container_ops, results)
             for result in results:
                 attachment_mapping.setdefault(result["jira_key"], {})[result["filename"]] = result["attachment_id"]
                 if not result.get("existed"):
@@ -639,6 +649,17 @@ puts end_marker
             failed=failed,
             data={"attachment_mapping": attachment_mapping},
         )
+
+    def _confirm_attachment_digests(self, ops: list[dict], results: list[dict]) -> None:
+        if self._receipts is None:
+            return
+        by_name = {(op["jira_key"], op["filename"]): op for op in ops}
+        if len(by_name) != len(ops):
+            return
+        for row in results:
+            op = by_name[row["jira_key"], row["filename"]]
+            if op.get("jira_attachment_id") and op.get("digest") and op["digest"] == row.get("verified_sha256"):
+                self._receipts.confirm(row["jira_key"], op["jira_attachment_id"], row["attachment_id"])
 
     @staticmethod
     def _attachment_acknowledgements_match(ops: list, results: list, errors: list) -> bool:
@@ -928,6 +949,7 @@ puts end_marker
         # the resolved Jira keys by project for batch-friendly processing.
         # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
         key_to_wp_id = self._wp_lookup_by_jira_key()
+        self._receipts = ScopedReceipts(key_to_wp_id)
         if not key_to_wp_id:
             return self._missing_work_package_mapping()
 
@@ -1100,7 +1122,10 @@ puts end_marker
             failed=total_failed,
             data={"attachment_mapping": all_mappings},
             message=f"Processed {total_updated} attachments, {total_failed} failures",
-            details={"loss_counters": loss_counters},
+            details={
+                "loss_counters": loss_counters,
+                "comparison_by_project": self._receipts.counts() if self._receipts else {},
+            },
         )
 
     def run_legacy(self) -> ComponentResult:

@@ -44,6 +44,8 @@ TimeEntry.transaction do
     raise unless result.values_at('created', 'reused', 'failed') == [1, 1, 2]
     first, second, conflict, wrong_project = result.fetch('results')
     raise unless first.fetch('id') == second.fetch('id') && second.fetch('reused')
+    raise unless [first, second].all? { |receipt| receipt.fetch('verified_worklog_key') == key }
+    raise if [conflict, wrong_project].any? { |receipt| receipt.key?('verified_worklog_key') }
     raise unless !conflict.fetch('success') && !wrong_project.fetch('success')
     te = TimeEntry.find(first.fetch('id'))
     raise unless te.entity == wp && te.user == user && te.logged_by_id == user.id

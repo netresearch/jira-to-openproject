@@ -26,6 +26,7 @@ from src.infrastructure.jira.comment_audience import has_comment_audience
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models.migration_error import MigrationError
+from src.utils.scoped_receipts import ScopedReceipts
 from src.utils.time_entry_transformer import TimeEntryTransformer
 
 # Get logger from config
@@ -153,6 +154,7 @@ class TimeEntryMigrator:
         self.transformed_time_entries: list[dict[str, Any]] = []
 
         # Migration mappings
+        self._worklog_receipts = ScopedReceipts([])
         self._failed_worklog_issues: set[str] = set()
         self._tempo_read_failed = False
         self._requested_issues: set[str] | None = None
@@ -361,6 +363,8 @@ class TimeEntryMigrator:
                 batch_result = self.op_client.batch_create_time_entries(chunk)
                 chunk_elapsed = time.time() - chunk_start_time
 
+                for receipt in batch_result.get("results", []):
+                    self._confirm_worklog(receipt)
                 created = int(batch_result.get("created", 0))
                 failed = int(batch_result.get("failed", 0))
                 migration_summary["skipped_entries"] += int(batch_result.get("reused", 0))
@@ -472,6 +476,12 @@ class TimeEntryMigrator:
                     outcome = ("failed", None, str(exc))
                 yield None, outcome
 
+    def _confirm_worklog(self, receipt: dict[str, Any]) -> None:
+        origin = receipt.get("verified_worklog_key")
+        if isinstance(origin, str) and receipt.get("success") is True:
+            issue, _, identifier = origin.partition(":")
+            self._worklog_receipts.confirm(issue, identifier, receipt.get("id"))
+
     def _create_time_entry(self, entry: dict[str, Any], *, parallel: bool) -> EntryOutcome:
         valid, reason = self._validate_time_entry_with_reason(entry)
         if not valid:
@@ -479,6 +489,7 @@ class TimeEntryMigrator:
         try:
             response = self.op_client.create_time_entry(entry)
             if isinstance(response, dict) and response.get("id"):
+                self._confirm_worklog(response)
                 if response.get("reused"):
                     return "skipped", None, "verified_existing_worklog"
                 identifier = response["id"]
@@ -631,6 +642,7 @@ class TimeEntryMigrator:
         )
         start_time = datetime.now(tz=UTC)
 
+        self._worklog_receipts = ScopedReceipts(issue_keys)
         self._requested_issues = set(issue_keys)
         self._failed_worklog_issues.clear()
         extracted_logs = {}
@@ -651,6 +663,9 @@ class TimeEntryMigrator:
                     )
                 else:
                     self.logger.debug("No work logs found for %s", issue_key)
+
+                if isinstance(work_logs, list):
+                    self._worklog_receipts.observe(issue_key, [row.get("id") for row in work_logs])
 
             except Exception as e:
                 self._failed_worklog_issues.add(issue_key)
@@ -1029,6 +1044,7 @@ class TimeEntryMigrator:
                 status = "partial_success" if migrated_count else "failed"
             return {
                 "status": status,
+                "comparison_by_project": self._worklog_receipts.counts(),
                 "jira_work_logs": {
                     "discovered": jira_discovered,
                     "unreadable_issues": len(self._failed_worklog_issues),

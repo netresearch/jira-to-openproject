@@ -811,3 +811,48 @@ def test_writer_withholds_mapping_when_an_acknowledgement_is_missing_or_differen
     assert result.failed == 1
     assert result.updated == 0
     assert result.data == {"attachment_mapping": {}}
+
+
+def test_attachment_comparison_uses_issue_inventory_and_confirmed_digest():
+    from types import SimpleNamespace
+
+    from src.utils.scoped_receipts import ScopedReceipts
+
+    jira = DummyJira()
+    jira.jira = SimpleNamespace(search_issues=lambda *a, **k: list(jira.issues.values()))
+    mig = AttachmentsMigration(jira_client=jira, op_client=DummyOp())
+    mig._receipts = ScopedReceipts(jira.issues)
+    mig._extract_batch(list(jira.issues))
+    assert mig._receipts.counts() == {"PRJ": {"source": 3}}
+    uploads = [
+        {"jira_key": key, "filename": a.filename, "digest": "d" * 64, "jira_attachment_id": a.id}
+        for key, issue in jira.issues.items()
+        for a in issue.fields.attachment
+    ]
+    confirmations = [
+        {"jira_key": row["jira_key"], "filename": row["filename"], "attachment_id": i + 1}
+        for i, row in enumerate(uploads)
+    ]
+    mig._confirm_attachment_digests(uploads, confirmations)
+    assert mig._receipts.counts() == {"PRJ": {"source": 3}}
+    for row in confirmations:
+        row["verified_sha256"] = "d" * 64
+    mig._confirm_attachment_digests(uploads, confirmations[:1])
+    assert mig._receipts.counts() == {"PRJ": {"source": 3}}
+    mig._confirm_attachment_digests(uploads, confirmations)
+    mig._confirm_attachment_digests(uploads, confirmations)
+    assert mig._receipts.counts() == {"PRJ": {"source": 3, "target": 3}}
+
+
+def test_failed_source_refresh_cannot_turn_cached_bytes_into_a_digest_receipt(monkeypatch):
+    mig = AttachmentsMigration(jira_client=DummyJira(), op_client=DummyOp())
+    cached = mig.attachment_dir / "7_cached.txt"
+    cached.write_bytes(b"previous source")
+    monkeypatch.setattr(mig, "_download_attachment", lambda *_: None)
+    op = mig._prepare_op_from_item(
+        item={"id": "7", "filename": "cached.txt", "url": "https://jira.invalid/attachment/7"},
+        jira_key="PRJ-1",
+        work_package_id=1,
+    )
+    assert op is None
+    assert cached.read_bytes() == b"previous source"

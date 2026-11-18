@@ -81,6 +81,7 @@ entries.each do |row|
       end
       raise source_mismatch, 'Work log differs from target provenance' unless values.all? { |id,v| record.custom_values.where(custom_field_id: id).sole.value == v }
       result = { index: row[:index], success: true, reused: existing, id: record.id }
+      result[:verified_worklog_key] = row[:jira_worklog_key] if row[:jira_started]
       if row[:return_record]
         result.merge!(work_package_id: record.entity_id, user_id: record.user_id, activity_id: record.activity_id,
                       hours: record.hours, spent_on: record.spent_on.to_s, comments: record.comments,
