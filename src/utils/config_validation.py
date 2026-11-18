@@ -111,8 +111,12 @@ class SecurityValidator:
         re.compile(r"\b(?:CAST|CONVERT|CHAR|NCHAR|ASCII|SUBSTRING)\b\s*\(", re.IGNORECASE),
         re.compile(r"0x[0-9a-f]+", re.IGNORECASE),
     )
-    SQL_COMMANDS = frozenset(["union", "select", "insert", "delete", "drop", "exec", "execute", "alter", "create", "truncate", "update"])
-    SQL_TARGETS = frozenset(["select", "from", "where", "insert", "update", "delete", "drop", "table", "database", "schema"])
+    SQL_COMMANDS = frozenset(
+        ["union", "select", "insert", "delete", "drop", "exec", "execute", "alter", "create", "truncate", "update"]
+    )
+    SQL_TARGETS = frozenset(
+        ["select", "from", "where", "insert", "update", "delete", "drop", "table", "database", "schema"]
+    )
     SQL_WORD = re.compile(r"\w+")
 
     @classmethod
