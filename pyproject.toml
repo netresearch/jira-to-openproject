@@ -83,6 +83,7 @@ dev = [
 j2o = "src.main:main"
 j2o-history = "src.operator_history:main"
 j2o-comments = "src.comment_archive.cli:main"
+j2o-references = "src.deferred_references_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]

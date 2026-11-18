@@ -134,6 +134,10 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 5. **Reset state**: restore snapshots or wipe the rehearsal OpenProject instance before the next run.
 6. **Production cutover**: swap `.env` to production credentials and rerun the migration without `--dry-run`.
 
+### Migrating projects in stages
+
+[Capture unresolved Jira issue links and epic references](docs/deferred-references.md) before retiring Jira. The operator can restore the encrypted snapshot and apply native links when both endpoints have been migrated.
+
 ### Metadata Validation Checklist
 
 - Run `uv run --active --no-cache python scripts/data_qa.py --projects <KEY>` after rehearsals. Investigate any `⚠️` warnings about missing project modules or zero start-date coverage—rerun `migrate --components projects`/`work_packages` to refresh caches when needed.
