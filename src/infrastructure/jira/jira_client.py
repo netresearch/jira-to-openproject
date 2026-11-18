@@ -86,6 +86,22 @@ class JiraServiceUnavailableError(JiraError):
     fail the whole migration component.
     """
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def http_status_from_error(error: BaseException | None) -> int | None:
+    """Read the HTTP status from a client, SDK or requests exception and its causes."""
+    while error is not None:
+        status = getattr(error, "status_code", None)
+        if status is None:
+            status = getattr(getattr(error, "response", None), "status_code", None)
+        if status is not None:
+            return int(status)
+        error = error.__cause__
+    return None
+
 
 def _header_value(response: Response, name: str) -> str | None:
     """Case-insensitive header lookup tolerant of mock-style test doubles.
@@ -146,7 +162,7 @@ def _assert_json_response(response: Response, *, path: str) -> None:
         "a reverse proxy intercepted the request; or a CAPTCHA / "
         "WebSudo challenge is active."
     )
-    raise JiraServiceUnavailableError(msg)
+    raise JiraServiceUnavailableError(msg, status_code=response.status_code)
 
 
 def _remove_local_jira_stub() -> None:
@@ -530,7 +546,7 @@ class JiraClient:
                     "the login page; a reverse proxy intercepted the "
                     "request; or a CAPTCHA / WebSudo challenge is active."
                 )
-                raise JiraServiceUnavailableError(msg) from None
+                raise JiraServiceUnavailableError(msg, status_code=response.status_code) from None
 
             error_msg = f"HTTP Error {response.status_code}: {response.reason}"
             try:

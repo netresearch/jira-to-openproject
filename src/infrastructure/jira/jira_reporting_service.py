@@ -25,6 +25,7 @@ from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
     JiraApiError,
     JiraConnectionError,
+    http_status_from_error,
 )
 
 if TYPE_CHECKING:
@@ -58,29 +59,6 @@ class JiraReportingService:
         fav_payload = fav_resp.json()
         return fav_payload if isinstance(fav_payload, list) else []
 
-    @staticmethod
-    def _extract_status_from_error(exc: BaseException | None) -> int | None:
-        # Walk the cause chain looking for an HTTP status. Try
-        # ``status_code`` directly on the exception (set by
-        # ``AtlassianJIRAError``), then fall back to the
-        # response-attached ``status_code`` (set by
-        # ``HTTPError`` and friends). The previous shape had a
-        # second copy of the response-status lookup nested
-        # inside the ``AtlassianJIRAError`` branch — dead code
-        # because the same lookup always ran one block down.
-        current: BaseException | None = exc
-        while current:
-            direct_status = getattr(current, "status_code", None)
-            if direct_status is not None:
-                return int(direct_status)
-            response = getattr(current, "response", None)
-            if response is not None:
-                response_status = getattr(response, "status_code", None)
-                if response_status is not None:
-                    return int(response_status)
-            current = getattr(current, "__cause__", None)
-        return None
-
     def get_filters(self) -> list[dict[str, Any]]:
         """Return Jira filters visible to the authenticated user."""
         if not self._client.jira:
@@ -97,10 +75,10 @@ class JiraReportingService:
                     params={"startAt": 0, "maxResults": 1000},
                 )
             except JiraApiError as exc:
-                # ``_extract_status_from_error`` already walks the
+                # ``http_status_from_error`` already walks the
                 # ``__cause__`` chain, so a single call covers both
                 # the immediate exception and any wrapped HTTP error.
-                status = self._extract_status_from_error(exc)
+                status = http_status_from_error(exc)
                 if status in (404, 405):
                     self._logger.warning(
                         "Filter search endpoint (status %s) not available; falling back to favourites list",
@@ -128,7 +106,7 @@ class JiraReportingService:
                 # (see the ``TYPE_CHECKING`` else-branch in
                 # ``jira_client``), so this clause already swallows
                 # ``JiraApiError``. Removed it.
-                status = self._extract_status_from_error(exc)
+                status = http_status_from_error(exc)
                 if status in (404, 405):
                     self._logger.warning(
                         "Filter search endpoint (status %s) not available; falling back to favourites list",
