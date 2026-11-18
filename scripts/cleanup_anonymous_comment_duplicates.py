@@ -287,7 +287,10 @@ def _collect_deletions(journals_raw, *, apply, also_delete_orphan_anonymous, log
     for wp_id, journals in by_wp.items():
         _, duplicates = _plan_deletions(journals)
         duplicate_groups += len({_strip_marker(row["notes"]) for row in duplicates})
-        reasons = {row["id"]: "duplicate" for row in duplicates}
+        reasons = {
+            row["id"]: ("Anonymous-author duplicate" if row["user_id"] == ANONYMOUS_USER_ID else "duplicate")
+            for row in duplicates
+        }
         candidates = list(duplicates)
         if also_delete_orphan_anonymous:
             candidates.extend(_plan_orphan_anonymous_deletions(journals))
@@ -297,8 +300,6 @@ def _collect_deletions(journals_raw, *, apply, also_delete_orphan_anonymous, log
                 continue
             seen.add(journal_id)
             reason = reasons.get(journal_id, "Anonymous-orphan (WP also has real-author journals)")
-            if journal_id in reasons and journal["user_id"] == ANONYMOUS_USER_ID:
-                reason = "Anonymous-author duplicate"
             logger.info(
                 "  [%s] WP#%d  Journal#%d  user_id=%d  created_at=%s  reason=%s",
                 "DELETE" if apply else "WOULD DELETE",

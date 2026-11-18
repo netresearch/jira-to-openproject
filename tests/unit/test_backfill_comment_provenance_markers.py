@@ -959,5 +959,6 @@ def test_held_jira_comments_block_positional_backfill():
 
     client = MagicMock()
     client.select_comments_for_migration.return_value = CommentSelection([], 1)
+    fetch = _import_module()._make_jira_fetcher(client)
     with pytest.raises(ValueError, match="restricted audiences"):
-        _import_module()._make_jira_fetcher(client)("QA-1")
+        fetch("QA-1")
