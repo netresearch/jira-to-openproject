@@ -26,6 +26,9 @@ import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
+import requests
+
+from src.config import logger
 from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import (
@@ -528,3 +531,85 @@ class JiraIssueService:
                 msg = f"Issue {issue_key} not found"
                 raise JiraResourceNotFoundError(msg) from e
             raise JiraApiError(error_msg) from e
+
+
+def _page_retry_reason(exc: Exception) -> str | None:
+    """Classify the original Jira SDK or requests failure preserved by the client."""
+    cause = (exc.__cause__ or exc) if isinstance(exc, JiraApiError) else exc
+    if isinstance(cause, (requests.RequestException, JiraApiError)) or isinstance(
+        getattr(cause, "status_code", None), int
+    ):
+        status = JiraIssueService._extract_http_status(cause)
+        if status is not None:
+            return "HTTP 429" if status == 429 else None
+        if isinstance(cause, (requests.Timeout, requests.ConnectionError)):
+            return "transport failure"
+    return None
+
+
+def fetch_issue_page_with_retry(
+    jira_client: JiraClient,
+    *,
+    jql: str,
+    start_at: int,
+    max_results: int,
+    fields: str | None,
+    expand: str | None,
+    project_key: str,
+) -> list[Issue]:
+    """Fetch issues with exponential backoff for rate limiting.
+
+    Args:
+        jql: JQL query string
+        start_at: Starting index for pagination
+        max_results: Maximum results per page
+        fields: Fields to retrieve
+        expand: Expand options
+        project_key: Project key for logging
+
+    Returns:
+        List of issues for this page
+
+    Raises:
+        Exception: If all retries are exhausted
+
+    """
+    max_retries = 5
+    attempt = 0
+    while True:
+        logger.debug(
+            "Fetching issues for %s: startAt=%s, maxResults=%s (attempt %s)",
+            project_key,
+            start_at,
+            max_results,
+            attempt + 1,
+        )
+        try:
+            return jira_client.jira.search_issues(
+                jql,
+                startAt=start_at,
+                maxResults=max_results,
+                fields=fields,
+                expand=expand,
+                json_result=False,
+            )
+        except Exception as exc:
+            reason = _page_retry_reason(exc)
+            if reason is None or attempt >= max_retries:
+                if isinstance(exc, (requests.RequestException, JiraApiError)):
+                    raise
+                msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {exc!s}"
+                logger.exception(msg)
+                raise JiraApiError(msg) from exc
+            delay = 2**attempt
+            attempt += 1
+            logger.warning(
+                "Retrying Jira page for %s at startAt=%s after %ss (retry %s/%s, %s)",
+                project_key,
+                start_at,
+                delay,
+                attempt,
+                max_retries,
+                reason,
+            )
+            time.sleep(delay)

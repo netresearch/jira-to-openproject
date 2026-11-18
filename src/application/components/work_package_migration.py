@@ -11,13 +11,11 @@ import contextlib
 import json
 import os
 import sqlite3
-import time
 from collections.abc import Iterable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import requests
 from pydantic import ValidationError
 
 from jira import Issue
@@ -39,8 +37,8 @@ from src.domain import provenance_fields
 from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.comment_audience import issue_without_comments
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
-from src.infrastructure.jira.jira_client import JiraApiError, JiraClient
-from src.infrastructure.jira.jira_issue_service import JiraIssueService
+from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
 from src.infrastructure.openproject.openproject_bulk_create_service import (
     LegacyJournalReplayError,
     reject_legacy_journal_operations,
@@ -971,20 +969,6 @@ class WorkPackageMigration(BaseMigration):
             self.logger.debug("Failed to inspect existing work packages for %s: %s", project_key, exc)
         return timestamp, existing
 
-    @staticmethod
-    def _page_retry_reason(exc: Exception) -> str | None:
-        """Classify the original Jira SDK or requests failure preserved by the client."""
-        cause = (exc.__cause__ or exc) if isinstance(exc, JiraApiError) else exc
-        if isinstance(cause, (requests.RequestException, JiraApiError)) or isinstance(
-            getattr(cause, "status_code", None), int
-        ):
-            status = JiraIssueService._extract_http_status(cause)
-            if status is not None:
-                return "HTTP 429" if status == 429 else None
-            if isinstance(cause, (requests.Timeout, requests.ConnectionError)):
-                return "transport failure"
-        return None
-
     def _fetch_issues_with_retry(
         self,
         *,
@@ -995,62 +979,15 @@ class WorkPackageMigration(BaseMigration):
         expand: str | None,
         project_key: str,
     ) -> list[Issue]:
-        """Fetch issues with exponential backoff for rate limiting.
-
-        Args:
-            jql: JQL query string
-            start_at: Starting index for pagination
-            max_results: Maximum results per page
-            fields: Fields to retrieve
-            expand: Expand options
-            project_key: Project key for logging
-
-        Returns:
-            List of issues for this page
-
-        Raises:
-            Exception: If all retries are exhausted
-
-        """
-        max_retries = 5
-        attempt = 0
-        while True:
-            logger.debug(
-                "Fetching issues for %s: startAt=%s, maxResults=%s (attempt %s)",
-                project_key,
-                start_at,
-                max_results,
-                attempt + 1,
-            )
-            try:
-                return self.jira_client.jira.search_issues(
-                    jql,
-                    startAt=start_at,
-                    maxResults=max_results,
-                    fields=fields,
-                    expand=expand,
-                    json_result=False,
-                )
-            except Exception as exc:
-                reason = self._page_retry_reason(exc)
-                if reason is None or attempt >= max_retries:
-                    if isinstance(exc, (requests.RequestException, JiraApiError)):
-                        raise
-                    msg = f"Failed to get issues page for project {project_key} at startAt={start_at}: {exc!s}"
-                    logger.exception(msg)
-                    raise JiraApiError(msg) from exc
-                delay = 2**attempt
-                attempt += 1
-                logger.warning(
-                    "Retrying Jira page for %s at startAt=%s after %ss (retry %s/%s, %s)",
-                    project_key,
-                    start_at,
-                    delay,
-                    attempt,
-                    max_retries,
-                    reason,
-                )
-                time.sleep(delay)
+        return fetch_issue_page_with_retry(
+            self.jira_client,
+            jql=jql,
+            start_at=start_at,
+            max_results=max_results,
+            fields=fields,
+            expand=expand,
+            project_key=project_key,
+        )
 
     def _get_project_total_issues(self, project_key: str) -> int | None:
         """Return total number of issues in a Jira project using search metadata.
@@ -1775,7 +1712,7 @@ class WorkPackageMigration(BaseMigration):
 
     def _migrate_project_issues(self, project_key: str, project_id: int, batch_size: int) -> tuple[int, int]:
         existing = self._get_existing_work_packages(project_id)
-        known = mapped_project_issues(project_key, self.work_package_mapping) | existing.keys()
+        known = mapped_project_issues(project_key, self.work_package_mapping, existing)
         warn_if_restricted_mappings(self.jira_client, project_key, known, self.logger)
         created = issues = 0
         records: list[dict[str, Any]] = []

@@ -9,6 +9,7 @@ from inspect import getattr_static
 from typing import Any
 
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
+from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
 
 
 def unrestricted_project_jql(project_key: str) -> str:
@@ -29,15 +30,26 @@ def permits_unrestricted_result(issue: Any) -> bool:
     return getattr_static(fields, "security", None) is None
 
 
-def mapped_project_issues(project_key: str, mapping: Mapping) -> set[str]:
-    """Select source IDs/keys from both current and historical work-package mappings."""
-    known = set()
+def mapped_project_issues(project_key: str, mapping: Mapping, existing: Mapping | None = None) -> set[str]:
+    """Prefer immutable source IDs and retain legacy Jira keys when the ID is unknown."""
+    keys: set[str] = set()
+    ids_by_key: dict[str, set[str]] = {}
     prefix = project_key.upper() + "-"
     for source, value in mapping.items():
-        key = str(value.get("jira_key") or source) if isinstance(value, Mapping) else str(source)
-        if key.upper().startswith(prefix) or (isinstance(value, Mapping) and value.get("project_key") == project_key):
-            known.add(key)
-    return known
+        row = value if isinstance(value, Mapping) else {}
+        key = str(row.get("jira_key") or source)
+        if key.upper().startswith(prefix) or row.get("project_key") == project_key:
+            keys.add(key)
+            if str(source).isdecimal():
+                ids_by_key.setdefault(key, set()).add(str(source))
+
+    for key, target in (existing or {}).items():
+        keys.add(key)
+        source_id = target.get("jira_source_id") if isinstance(target, Mapping) else None
+        if source_id is not None and str(source_id).isdecimal():
+            ids_by_key.setdefault(key, set()).add(str(source_id))
+
+    return {identity for key in keys for identity in ids_by_key.get(key, {key})}
 
 
 def warn_if_restricted_mappings(jira_client: Any, project_key: str, known: Collection[str], logger: Any) -> None:
@@ -50,7 +62,15 @@ def warn_if_restricted_mappings(jira_client: Any, project_key: str, known: Colle
     query = f"{unrestricted_project_jql(project_key)} ORDER BY id"
 
     def fetch_page(offset: int, size: int) -> list:
-        return jira_client.jira.search_issues(query, startAt=offset, maxResults=size, fields="security")
+        return fetch_issue_page_with_retry(
+            jira_client,
+            jql=query,
+            start_at=offset,
+            max_results=size,
+            fields="security",
+            expand=None,
+            project_key=project_key,
+        )
 
     for issue in iter_issue_pages(project_key, fetch_page, 100):
         if permits_unrestricted_result(issue):

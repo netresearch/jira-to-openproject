@@ -3,10 +3,12 @@
 
 """Positive Jira scope and existing-work-package reconciliation."""
 
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 from src.application.components.issue_security import (
     mapped_project_issues,
@@ -63,10 +65,28 @@ def test_previous_mappings_must_still_be_confirmed_in_project():
         "APP",
         {"101": {"project_key": "APP", "jira_key": "APP-1"}, "APP-2": 22, "102": {"project_key": "APP"}, "ELSE-3": 3},
     )
-    assert known == {"APP-1", "APP-2", "102"}
+    assert known == {"101", "APP-2", "102"}
     jira = Mock()
-    jira.jira.search_issues.side_effect = [[issue(1), issue(2, security={"id": 9})], []]
+    jira.jira.search_issues.side_effect = [[issue(101), issue(2, security={"id": 9})], []]
     log = Mock()
     warn_if_restricted_mappings(jira, "APP", known, log)
     assert jira.jira.search_issues.call_args.args[0] == 'project = "APP" AND level IS EMPTY ORDER BY id'
     assert log.warning.call_args.args[1:] == (2, "APP")
+
+
+def test_rekeyed_target_is_reconciled_by_stable_id_after_rate_limit(monkeypatch):
+    mapping = {"101": {"jira_key": "APP-1"}, "APP-2": 20}
+    snapshot = {"APP-1": {"id": 9}, "APP-2": {"id": 20, "jira_source_id": "102"}}
+    known = mapped_project_issues("APP", mapping, snapshot)
+    assert known == {"101", "102"}
+    response = requests.Response()
+    response.status_code = 429
+    jira, log, sleep = Mock(), Mock(), Mock()
+    monkeypatch.setattr(time, "sleep", sleep)
+    jira.jira.search_issues.side_effect = [requests.HTTPError(response=response), [issue(101), issue(102)]]
+    warn_if_restricted_mappings(jira, "APP", known, log)
+    assert jira.jira.search_issues.call_count == 2
+    first, second = jira.jira.search_issues.call_args_list
+    assert first == second
+    sleep.assert_called_once_with(1)
+    log.warning.assert_not_called()
