@@ -42,3 +42,12 @@ def test_simple_export_contains_only_requested_metadata(tmp_path: Path, monkeypa
     assert get_custom_fields_simple.main() == 0
     assert json.loads(exported.read_text(encoding="utf-8")) == [field]
     assert list(tmp_path.iterdir()) == [exported]
+
+
+def test_ruby_hash_conversion_preserves_quoted_content_and_handles_hash_rockets(tmp_path: Path) -> None:
+    source = tmp_path / "rails.txt"
+    destination = tmp_path / "fields.json"
+    text = 'vanilla: service https://example.invalid/ says "nil"'
+    source.write_text("=> [{:id => 8, name: " + json.dumps(text) + ', "optional"=>nil}]', encoding="utf-8")
+    assert convert_rails_to_json.convert_ruby_to_json(str(source), str(destination))
+    assert json.loads(destination.read_text(encoding="utf-8")) == [{"id": 8, "name": text, "optional": None}]
