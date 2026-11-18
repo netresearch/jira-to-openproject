@@ -56,8 +56,8 @@ import re
 import uuid
 from collections import Counter
 from collections.abc import Iterator
-from contextlib import suppress
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.parse import quote
 
@@ -68,6 +68,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.display import ProgressTracker
 from src.domain import provenance_fields
 from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
 from src.models import ComponentResult, JiraUser, MigrationError
 
@@ -869,101 +870,13 @@ class UserMigration(BaseMigration):
         avatar_dir.mkdir(parents=True, exist_ok=True)
 
         uploaded = 0
-        # Track *why* each avatar was skipped, mirroring the relation
-        # and watcher migrations (PR #190). The aggregate ``skipped``
-        # in the returned dict is preserved for backward compat; the
-        # ``skip_reasons`` breakdown distinguishes "expected"
-        # (``cached_digest_match`` — idempotent re-run, NOT a real
-        # loss) from "real" failures (download / persist / transfer /
-        # set-API).
         skip_reasons: Counter[str] = Counter()
-
         for job in jobs:
-            jira_key = job["jira_key"]
-            avatar_url = job["avatar_url"]
-            cache_entry = job.get("cache") or {}
-
-            download = self.jira_client.download_user_avatar(avatar_url)
-            if not download:
-                skip_reasons["download_failed"] += 1
-                continue
-
-            data, content_type = download
-            digest = hashlib.sha256(data).hexdigest()
-
-            cached_digest = str(cache_entry.get("digest")) if cache_entry else ""
-            cached_url = str(cache_entry.get("url")) if cache_entry else ""
-            if digest == cached_digest and avatar_url == cached_url:
-                self._avatar_cache[jira_key] = cache_entry
-                self.logger.debug(
-                    "Skipping avatar upload for %s (digest match)",
-                    jira_key,
-                )
-                skip_reasons["cached_digest_match"] += 1
-                continue
-
-            ext = self._guess_avatar_extension(content_type, avatar_url)
-            filename = f"{jira_key}.{ext}"
-            local_path = avatar_dir / filename
-            try:
-                with local_path.open("wb") as handle:
-                    handle.write(data)
-            except Exception as exc:
-                self.logger.warning("Failed to persist avatar for %s: %s", jira_key, exc)
-                skip_reasons["local_persist_failed"] += 1
-                continue
-
-            container_name = f"j2o_avatar_{job['openproject_id']}_{uuid.uuid4().hex}.{ext}"
-            container_path = Path("/tmp") / container_name
-            try:
-                self.op_client.transfer_file_to_container(local_path, container_path)
-            except Exception as exc:
-                self.logger.warning("Failed to copy avatar for %s to container: %s", jira_key, exc)
-                skip_reasons["container_transfer_failed"] += 1
-                with suppress(OSError):
-                    local_path.unlink()
-                continue
-
-            api_raised = False
-            try:
-                result = self.op_client.set_user_avatar(
-                    user_id=job["openproject_id"],
-                    container_path=container_path,
-                    filename=filename,
-                    content_type=content_type,
-                )
-            except Exception as exc:
-                self.logger.warning("Failed to set avatar for %s: %s", jira_key, exc)
-                skip_reasons["set_avatar_api_raised"] += 1
-                api_raised = True
-                result = {"success": False}
-            finally:
-                try:
-                    self.op_client.docker_client.execute_command(
-                        f"rm -f {container_path.as_posix()}",
-                        timeout=10,
-                    )
-                except Exception:
-                    pass
-
-            with suppress(OSError):
-                local_path.unlink()
-
-            if result.get("success"):
+            reason = self._sync_avatar(job, avatar_dir)
+            if reason:
+                skip_reasons[reason] += 1
+            else:
                 uploaded += 1
-                self._avatar_cache[jira_key] = {
-                    "digest": digest,
-                    "url": avatar_url,
-                }
-            elif not api_raised:
-                # ``api_raised=False`` here means the API call returned
-                # cleanly with ``success=False`` — distinct from the
-                # raised case (already counted above as
-                # ``set_avatar_api_raised``). The pre-#190 code
-                # incremented ``skipped`` in both branches, double-
-                # counting raised calls; the ``api_raised`` guard
-                # corrects that.
-                skip_reasons["set_avatar_api_returned_false"] += 1
 
         skipped = sum(skip_reasons.values())
         if skipped:
@@ -980,6 +893,56 @@ class UserMigration(BaseMigration):
             "skip_reasons": dict(skip_reasons),
         }
 
+    def _sync_avatar(self, job: dict[str, Any], avatar_dir: Path) -> str | None:
+        """Upload one changed avatar, returning the reason for any skip."""
+        jira_key = job["jira_key"]
+        url = job["avatar_url"]
+        download = self.jira_client.download_user_avatar(url)
+        if not download:
+            return "download_failed"
+        data, content_type = download
+        digest = hashlib.sha256(data).hexdigest()
+        cache_entry = job.get("cache") or {}
+        if digest == str(cache_entry.get("digest")) and url == str(cache_entry.get("url")):
+            self._avatar_cache[jira_key] = cache_entry
+            self.logger.debug("Skipping avatar upload for %s (digest match)", jira_key)
+            return "cached_digest_match"
+
+        ext = self._guess_avatar_extension(content_type, url)
+        try:
+            with TemporaryDirectory(dir=avatar_dir) as tmp:
+                # Keep the original display name separate from both filesystem paths.
+                local_path = Path(tmp) / f"avatar.{ext}"
+                local_path.write_bytes(data)
+                reason = self._upload_avatar(job, content_type, local_path)
+        except OSError as exc:
+            self.logger.warning("Failed to persist avatar for %s: %s", jira_key, exc)
+            return "local_persist_failed"
+        if reason is None:
+            self._avatar_cache[jira_key] = {"digest": digest, "url": url}
+        return reason
+
+    def _upload_avatar(self, job: dict[str, Any], content_type: str, local_path: Path) -> str | None:
+        jira_key = job["jira_key"]
+        try:
+            with private_container_directory(self.op_client.docker_client) as directory:
+                target = directory / local_path.name
+                self.op_client.transfer_file_to_container(local_path, target)
+                try:
+                    result = self.op_client.set_user_avatar(
+                        user_id=job["openproject_id"],
+                        container_path=target,
+                        filename=f"{jira_key}{local_path.suffix}",
+                        content_type=content_type,
+                    )
+                except Exception as exc:
+                    self.logger.warning("Failed to set avatar for %s: %s", jira_key, exc)
+                    return "set_avatar_api_raised"
+        except Exception as exc:
+            self.logger.warning("Failed to stage avatar for %s: %s", jira_key, exc)
+            return "container_transfer_failed"
+        return None if result.get("success") else "set_avatar_api_returned_false"
+
     def _guess_avatar_extension(self, content_type: str, avatar_url: str) -> str:
         candidate = ""
         if content_type:
@@ -988,9 +951,7 @@ class UserMigration(BaseMigration):
             path_ext = avatar_url.split("?", maxsplit=1)[0].rsplit(".", 1)
             if len(path_ext) == 2:
                 candidate = path_ext[1]
-        if not candidate:
-            candidate = "png"
-        return candidate.lower()
+        return candidate.lower() if re.fullmatch(r"[A-Za-z0-9]{1,12}", candidate) else "png"
 
     def _save_avatar_cache(self) -> None:
         try:
