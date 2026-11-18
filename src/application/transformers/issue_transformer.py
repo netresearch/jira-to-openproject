@@ -37,6 +37,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from src.infrastructure.jira.comment_audience import may_copy_history_item
+
 if TYPE_CHECKING:
     from src.domain.enums import JournalEntryType
 
@@ -209,7 +211,7 @@ class IssueTransformer:
             workflow_changes = [
                 (getattr(history, "created", ""), name)
                 for history in histories
-                for item in getattr(history, "items", [])
+                for item in self._copyable_history_items(history)
                 if self.get_attr(item, "field") == "Workflow" and (name := self.get_attr(item, "toString"))
             ]
             if workflow_changes:
@@ -351,7 +353,7 @@ class IssueTransformer:
         normalized_histories.sort(key=lambda pair: pair[0])
 
         for normalized, history in normalized_histories:
-            items = self.get_attr(history, "items") or []
+            items = self._copyable_history_items(history)
             if any(self._enters_in_progress(item) for item in items):
                 return normalized.split("T", 1)[0]
         return None
@@ -366,6 +368,10 @@ class IssueTransformer:
         if not category and status_name:
             category = owner.status_category_by_name.get(status_name)
         return self.is_in_progress_category(category or {})
+
+    def _copyable_history_items(self, history: Any) -> list[Any]:
+        """Keep the original audience available when deriving historical values."""
+        return [item for item in self.get_attr(history, "items") or [] if may_copy_history_item(item, history)]
 
     @staticmethod
     def get_attr(obj: Any, key: str) -> Any:
@@ -391,6 +397,8 @@ class IssueTransformer:
             Dictionary mapping OpenProject field names to [old_value, new_value] or None.
 
         """
+        if not may_copy_history_item(item):
+            return None
         field = item.get("field")
         # Field mapping from Jira to OpenProject
         # BUG #32 FIX (REGRESSION #3): Only map fields that exist in Journal::WorkPackageJournal

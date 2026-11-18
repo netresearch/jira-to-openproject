@@ -34,13 +34,13 @@ class _RecordingLogger:
         self.warning_calls: list[str] = []
 
     def debug(self, msg: object, *args: object, **kwargs: object) -> None:
-        self.debug_calls.append(str(msg))
+        self.debug_calls.append(str(msg) % args if args else str(msg))
 
     def info(self, msg: object, *args: object, **kwargs: object) -> None:
-        self.info_calls.append(str(msg))
+        self.info_calls.append(str(msg) % args if args else str(msg))
 
     def warning(self, msg: object, *args: object, **kwargs: object) -> None:
-        self.warning_calls.append(str(msg))
+        self.warning_calls.append(str(msg) % args if args else str(msg))
 
 
 class _IdentityNormalizer:
@@ -827,3 +827,40 @@ def test_work_package_migration_delegates_via_lazy_transformer() -> None:
     # Instance-bound delegate (accesses ``self.start_date_fields``)
     issue = {"fields": {"customfield_18690": "2024-07-01T00:00:00+00:00"}}
     assert migration._resolve_start_date(issue) == "2024-07-01"
+
+
+@pytest.mark.parametrize("restricted", [{"visibility": {"type": "role", "value": "Agents"}}, {"jsdPublic": True}])
+@pytest.mark.parametrize("scope", ["parent", "item"])
+def test_derived_fields_exclude_restricted_history(scope, restricted):
+    private_value = "restricted-workflow-marker"
+    items = [
+        SimpleNamespace(field="Workflow", toString=private_value),
+        SimpleNamespace(field="status", to="5"),
+    ]
+    history = SimpleNamespace(created="2024-01-01T12:00:00Z", items=items)
+    for record in [history] if scope == "parent" else items:
+        vars(record).update(restricted)
+    public_history = SimpleNamespace(
+        created="2024-02-01T12:00:00Z", items=[SimpleNamespace(field="Workflow", toString="Public")]
+    )
+    issue = SimpleNamespace(changelog=SimpleNamespace(histories=[public_history, history]))
+    owner = _make_owner(status_category_by_id={"5": {"key": "indeterminate"}})
+    transformer = IssueTransformer(owner)
+    assert transformer.resolve_start_date_from_history(issue) is None
+    assert transformer.extract_final_workflow(issue) == "Public"
+    issue.changelog.histories = [history]
+    assert transformer.extract_final_workflow(issue) is None
+    assert private_value not in repr(vars(owner.logger))
+
+
+def test_direct_restricted_field_change_is_not_mapped_or_logged():
+    owner = _make_owner()
+    transformer = IssueTransformer(owner)
+    marker = "hidden-description"
+    assert (
+        transformer.process_changelog_item(
+            {"field": "description", "fromString": marker, "internal": True},
+        )
+        is None
+    )
+    assert marker not in repr(vars(owner.logger))
