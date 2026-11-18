@@ -155,3 +155,19 @@ def test_missing_subtask_parent_is_actionable(migration):
     assert not result.success
     assert result.details["unresolved_parents"] == {"DEMO-2": "DEMO-99"}
     assert result.details["parent_links"] == 0
+
+
+def test_recovers_missing_work_package_mapping_from_project_origin_keys(migration):
+    mig, mappings = migration
+    mappings["work_package"].clear()
+    mig.op_client.get_project_wp_cf_snapshot.return_value = [
+        {"id": 10, "jira_issue_key": "DEMO-1"},
+        {"id": 20, "jira_issue_key": "DEMO-2"},
+        {"id": 90, "jira_issue_key": None},
+    ]
+    result = mig.run()
+    assert result.success and result.updated == 3
+    assert not mappings["work_package"]  # A key-only recovery cannot replace the shared Jira ID mapping.
+    mig.op_client.get_project_wp_cf_snapshot.assert_called_once_with(4)
+    mig.op_client.get_project_wp_cf_snapshot.return_value.append({"id": 11, "jira_issue_key": "DEMO-1"})
+    assert not mig.run().success

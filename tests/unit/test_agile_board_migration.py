@@ -205,3 +205,21 @@ def test_ambiguous_board_projects_are_reported(_mock_mappings, monkeypatch):
     assert result.details["unresolved_projects"][0]["board_id"] == 1
     assert result.details["unresolved_projects"][0]["candidate_projects"] == ["A", "B"]
     assert not op.created_queries
+
+
+def test_next_run_sees_sprint_edit_during_load(_mock_mappings, monkeypatch, tmp_path):
+    sprint = {"id": 42, "name": "April", "goal": "First goal"}
+    jira = DummyJira(boards=[{"id": 2, "location": {"projectKey": "PROJ"}}], sprints_by_board={2: [sprint]})
+    op = DummyOp()
+
+    def write_version(**payload):
+        op.created_versions.append(payload)
+        sprint["goal"] = "Edited during load"
+        return {"success": True, "id": 42}
+
+    monkeypatch.setattr(op, "ensure_project_version", write_version)
+    mig = AgileBoardMigration(jira_client=jira, op_client=op)
+    mig.change_detector = ChangeDetector(tmp_path)
+    for _ in range(3):
+        assert mig.run_with_change_detection("agile_boards").success
+    assert [v["description"] for v in op.created_versions] == ["First goal", "Edited during load"]

@@ -24,6 +24,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
+from src.utils.change_aware_runner import ChangeAwareRunner
 
 
 @register_entity_types("agile_boards", "sprints")
@@ -133,26 +134,35 @@ class AgileBoardMigration(BaseMigration):
                     },
                 )
 
-        # Return aggregated data structure
-        return [
-            {
-                "id": "jira-agile-inventory",
-                "read_errors": read_errors,
-                "sprint_targets": {str(s["id"]): self.sprint_mapping.get(str(s["id"])) for s in sprint_payloads},
-                "project_targets": {
-                    str(b["project_key"]): self.project_mapping.get(b["project_key"]) for b in board_payloads
-                },
-                "boards": board_payloads,
-                "sprints": sprint_payloads,
-                "total_count": len(board_payloads),
+        inventory = {
+            "id": "jira-agile-inventory",
+            "read_errors": read_errors,
+            "boards": board_payloads,
+            "sprints": sprint_payloads,
+            "total_count": len(board_payloads),
+        }
+        return [self._with_targets(inventory)]
+
+    def _with_targets(self, inventory: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **inventory,
+            "sprint_targets": {str(s["id"]): self.sprint_mapping.get(str(s["id"])) for s in inventory["sprints"]},
+            "project_targets": {
+                str(b["project_key"]): self.project_mapping.get(b["project_key"]) for b in inventory["boards"]
             },
-        ]
+        }
+
+    def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
+        # After writing versions, refresh their target IDs on the exact source
+        # inventory passed to _map. A fresh Jira read can include unapplied edits.
+        return ChangeAwareRunner(self).run(entity_type, snapshot_entities=lambda: [self._with_targets(self._inventory)])
 
     def _extract(self) -> ComponentResult:
         """Fetch boards, configurations, and sprints from Jira."""
         try:
             data_list = self._get_current_entities_for_type("agile_boards")
-            data = data_list[0] if data_list else {}
+            data = data_list[0]
+            self._inventory = data
             return ComponentResult(
                 success=True,
                 data={

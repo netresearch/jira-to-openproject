@@ -59,7 +59,12 @@ class ChangeAwareRunner:
 
     # ── public API ────────────────────────────────────────────────────────
 
-    def run(self, entity_type: str | None = None) -> ComponentResult:
+    def run(
+        self,
+        entity_type: str | None = None,
+        *,
+        snapshot_entities: Callable[[], list[dict[str, Any]]] | None = None,
+    ) -> ComponentResult:
         """Run the migration with change-detection + entity-caching.
 
         If ``entity_type`` is None, falls back to ``migration.run()`` directly.
@@ -141,7 +146,7 @@ class ChangeAwareRunner:
         # not fail the migration itself).
         if result.success:
             try:
-                current_entities = get_cached_entities(entity_type)
+                current_entities = snapshot_entities() if snapshot_entities else get_cached_entities(entity_type)
                 # Call back through the migration so subclass overrides of
                 # create_snapshot take effect.
                 snapshot_path = self.migration.create_snapshot(current_entities, entity_type)

@@ -10,6 +10,7 @@ from collections.abc import Callable
 from itertools import batched
 from typing import Any
 
+from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.models import ComponentResult, WorkPackageMappingEntry
 
@@ -42,9 +43,41 @@ def _sprint_references(value: Any) -> list[tuple[str, str]]:
 class SprintEpicMigration(BaseMigration):
     """Preserve epic hierarchy, sprint names and the sprint version fallback."""
 
+    def _recover_work_packages(self) -> dict[str, Any]:
+        """Recover locally needed issue keys from their target projects' origin fields."""
+        restored = {}
+        project_filter = config.jira_config.get("projects") or []
+        if isinstance(project_filter, str):
+            project_filter = project_filter.split(",")
+        selected = {str(key).strip().upper() for key in project_filter}
+        for project, mapping in (self.mappings.get_mapping("project") or {}).items():
+            if selected and project.upper() not in selected:
+                continue
+            project_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
+            if not project_id:
+                continue
+            for row in self.op_client.get_project_wp_cf_snapshot(int(project_id)):
+                key = row.get("jira_issue_key")
+                if not key or self._issue_project_key(key) != project:
+                    continue
+                if key in restored:
+                    msg = f"Multiple OpenProject work packages have Jira origin key {key}"
+                    raise ValueError(msg)
+                restored[key] = {"jira_key": key, "openproject_id": row["id"], "openproject_project_id": project_id}
+        return restored
+
     def _extract(self) -> ComponentResult:
         mappings = self.mappings.get_mapping("work_package") or {}
         keys = self._jira_keys_from_wp_map(mappings)
+        if not keys:
+            try:
+                mappings = self._recover_work_packages()
+            except Exception as exc:
+                return ComponentResult(
+                    success=False, failed=1, message=f"Could not read work-package provenance: {exc}"
+                )
+            keys = list(mappings)
+        self._work_package_mapping = mappings
         if not keys:
             return ComponentResult(
                 success=False, failed=1, message="No mapped work packages. Run work_packages_skeleton first."
@@ -72,7 +105,7 @@ class SprintEpicMigration(BaseMigration):
         return ComponentResult(success=True, data=records, details={"missing_issues": missing})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_mapping
         entries = {}
         invalid = []
         for outer, raw in wp_map.items():
