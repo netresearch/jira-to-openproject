@@ -11,22 +11,17 @@ import javax.ws.rs.core.Response
 
 @BaseScript CustomEndpointDelegate delegate
 
-getAllCustomFieldsWithOptions(httpMethod: "GET", groups: ["jira-administrators"]) { MultivaluedMap queryParams ->
+delegate.getAllCustomFieldsWithOptions(httpMethod: "GET", groups: ["jira-administrators"]) { MultivaluedMap queryParams ->
     def customFieldManager = ComponentAccessor.getCustomFieldManager()
-    def fieldManager = ComponentAccessor.getFieldManager()
     def optionsManager = ComponentAccessor.getOptionsManager()
 
     def customFields = customFieldManager.getCustomFieldObjects().collectEntries { CustomField cf ->
-        def field = fieldManager.getField(cf.id)
         def fieldTypeKey = cf.customFieldType.key
 
-        def allOptions = cf.configurationSchemes.collectMany { scheme ->
-            scheme.configs.values().collectMany { FieldConfig fieldConfig ->
-                optionsManager.getOptions(fieldConfig)?.collect { Option option ->
-                    [id: option.optionId, value: option.value]
-                } ?: []
-            }
-        }.unique()
+        def configs = cf.configurationSchemes.collectMany { scheme -> scheme.configs.values().toList() }
+        def allOptions = configs.collectMany { FieldConfig fieldConfig -> optionsManager.getOptions(fieldConfig) ?: [] }
+            .collect { Option option -> [id: option.optionId, value: option.value] }
+            .unique()
 
         [(cf.id): [
             id: cf.id,
