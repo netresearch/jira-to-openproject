@@ -261,10 +261,11 @@ def main() -> None:
     args = parser.parse_args()
 
     # Execute the appropriate command
-    if args.command != "migrate":
+    if args.command == "migrate":
+        _run_migrate_command(args)
+    else:
         parser.print_help()
         sys.exit(1)
-    _run_migrate_command(args)
 
 
 def _run_migrate_command(args: argparse.Namespace) -> None:
