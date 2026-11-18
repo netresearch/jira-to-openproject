@@ -808,4 +808,6 @@ def test_writer_withholds_mapping_when_an_acknowledgement_is_missing_or_differen
     op = {"jira_key": "PRJ-1", "work_package_id": 12, "filename": "source.txt", "container_path": "/private/staged"}
     result = migration._attach_files([op])
     assert not result.success
-    assert result.failed == 1 and result.updated == 0 and result.data == {"attachment_mapping": {}}
+    assert result.failed == 1
+    assert result.updated == 0
+    assert result.data == {"attachment_mapping": {}}

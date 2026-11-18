@@ -176,19 +176,25 @@ def test_attachment_native_filename_download_and_repeat(rails, tmp_path):
             "container_path": str(target),
         }
         create = loader._attach_files([op])
-        assert create.success and create.updated == 1
+        assert create.success
+        assert create.updated == 1
         attachment_id = create.data["attachment_mapping"]["DEMO-1"][required_name]
         again = loader._attach_files([op])
-        assert again.success and again.updated == 0 and again.data == create.data
+        assert again.success
+        assert again.updated == 0
+        assert again.data == create.data
         for unsafe in ("one;other.txt", "../other", "bad\nname"):
             rejected = loader._attach_files([{**op, "filename": unsafe}])
-            assert not rejected.success and rejected.failed == 1
+            assert not rejected.success
+            assert rejected.failed == 1
         mismatched = loader._attach_files([{**op, "digest": "0" * 64}])
-        assert not mismatched.success and mismatched.failed == 1
+        assert not mismatched.success
+        assert mismatched.failed == 1
         source.write_bytes(b"other")
         client.transfer_file_to_container(source, target)
         conflict = loader._attach_files([{**op, "digest": hashlib.sha256(b"other").hexdigest()}])
-        assert not conflict.success and conflict.failed == 1
+        assert not conflict.success
+        assert conflict.failed == 1
 
     seen = query(f"""
       a = Attachment.find({attachment_id})
