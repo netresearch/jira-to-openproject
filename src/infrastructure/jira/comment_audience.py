@@ -158,6 +158,34 @@ def issue_without_comments(raw: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+def _comment_page(
+    page: dict[str, Any],
+    offset: int,
+    expected: int | None,
+    ids: set[str],
+) -> tuple[list[dict[str, Any]], int]:
+    """Validate continuity, total and identity before accepting a page."""
+    batch = page["comments"]
+    total = page["total"]
+    if (
+        not isinstance(batch, list)
+        or type(total) is not int
+        or page.get("startAt") != offset
+        or total < offset + len(batch)
+        or (expected is not None and total != expected)
+        or (not batch and total != offset)
+    ):
+        msg = "Incomplete Jira comment page"
+        raise ValueError(msg)
+    for row in batch:
+        cid = row.get("id")
+        if not isinstance(cid, str) or not cid or cid in ids:
+            msg = "Missing or duplicate Jira comment ID"
+            raise ValueError(msg)
+        ids.add(cid)
+    return batch, total
+
+
 def _pages(get: Callable, *, anonymous: bool = False) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     ids: set[str] = set()
@@ -173,24 +201,7 @@ def _pages(get: Callable, *, anonymous: bool = False) -> list[dict[str, Any]]:
         if anonymous and response.headers.get("X-AUSERNAME", "").lower() != "anonymous":
             return []
         page = response.json()
-        batch = page["comments"]
-        total = page["total"]
-        if (
-            not isinstance(batch, list)
-            or type(total) is not int
-            or page.get("startAt") != len(rows)
-            or total < len(rows) + len(batch)
-            or (expected is not None and total != expected)
-            or (not batch and total != len(rows))
-        ):
-            msg = "Incomplete Jira comment page"
-            raise ValueError(msg)
-        for row in batch:
-            cid = row.get("id")
-            if not isinstance(cid, str) or not cid or cid in ids:
-                msg = "Missing or duplicate Jira comment ID"
-                raise ValueError(msg)
-            ids.add(cid)
+        batch, total = _comment_page(page, len(rows), expected, ids)
         rows.extend(batch)
         if len(rows) == total:
             return rows

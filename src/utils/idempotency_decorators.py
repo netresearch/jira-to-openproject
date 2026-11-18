@@ -11,10 +11,31 @@ import functools
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
+from itertools import chain
 
 from src.utils.idempotency_manager import get_idempotency_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_headers(extractor, args, kwargs):
+    if extractor is None:
+        return None
+    try:
+        return extractor(*args, **kwargs)
+    except Exception as exc:
+        logger.debug("Failed to extract headers: %s", exc)
+        return None
+
+
+def _process_result(processor, result, key):
+    if processor is None:
+        return result
+    try:
+        return processor(result)
+    except Exception as exc:
+        logger.warning("Result processor failed for key %s: %s", key, exc)
+        return result
 
 
 def with_idempotency(
@@ -45,13 +66,7 @@ def with_idempotency(
                 # Fall back to executing function without idempotency
                 return func(*args, **kwargs)
 
-            # Extract headers if available
-            headers = None
-            if header_extractor:
-                try:
-                    headers = header_extractor(*args, **kwargs)
-                except Exception as e:
-                    logger.debug("Failed to extract headers: %s", e)
+            headers = _extract_headers(header_extractor, args, kwargs)
 
             # Parse or generate idempotency key
             idempotency_key = manager.parse_idempotency_key(headers)
@@ -68,20 +83,7 @@ def with_idempotency(
                 )
                 result = func(*args, **kwargs)
 
-                # Process result if needed
-                if result_processor:
-                    try:
-                        processed = result_processor(result)
-                    except Exception as e:
-                        logger.warning(
-                            "Result processor failed for key %s: %s",
-                            idempotency_key,
-                            e,
-                        )
-                        processed = result
-                    return processed
-
-                return result
+                return _process_result(result_processor, result, idempotency_key)
 
             # Use atomic get-or-set to handle race conditions
             cached_result = manager.atomic_get_or_set(
@@ -126,52 +128,29 @@ def extract_headers_from_kwargs(key: str = "headers") -> Callable:
     return extractor
 
 
+def _request_headers(request: object) -> dict[str, str]:
+    headers = getattr(request, "headers", None)
+    if hasattr(headers, "get"):
+        try:
+            if converted := dict(headers):
+                return converted
+        except TypeError, AttributeError:
+            logger.debug("Request headers are not a mapping")
+    meta = getattr(request, "META", {})
+    try:
+        return {key[5:].replace("_", "-").title(): value for key, value in meta.items() if key.startswith("HTTP_")}
+    except TypeError, AttributeError:
+        return {}
+
+
 def extract_headers_from_request() -> Callable:
-    """Extract headers from request object (Flask or Django style)."""
+    """Extract HTTP headers from the first Flask- or Django-style request."""
 
     def extractor(*args: object, **kwargs: object) -> dict[str, str]:
-        # Look for request object in args or kwargs
-        request = None
-        for arg in args:
-            if hasattr(arg, "headers") or hasattr(arg, "META"):
-                request = arg
-                break
-
-        if not request:
-            for value in kwargs.values():
-                if hasattr(value, "headers") or hasattr(value, "META"):
-                    request = value
-                    break
-
-        if not request:
-            return {}
-
-        headers: dict[str, str] = {}
-
-        # Try Flask-style headers first (most common)
-        if hasattr(request, "headers"):
-            try:
-                if hasattr(request.headers, "get"):
-                    # Flask-style headers object
-                    headers = dict(request.headers)
-                elif isinstance(request.headers, dict):
-                    # Already a dict
-                    headers = request.headers
-            except TypeError, AttributeError:
-                pass
-
-        # If no Flask headers found, try Django-style
-        if not headers and hasattr(request, "META"):
-            try:
-                for key, value in request.META.items():
-                    if key.startswith("HTTP_"):
-                        # Convert HTTP_X_IDEMPOTENCY_KEY -> X-Idempotency-Key
-                        header_name = key[5:].replace("_", "-").title()
-                        headers[header_name] = value
-            except TypeError, AttributeError:
-                pass
-
-        return headers
+        for value in chain(args, kwargs.values()):
+            if hasattr(value, "headers") or hasattr(value, "META"):
+                return _request_headers(value)
+        return {}
 
     return extractor
 
