@@ -442,6 +442,7 @@ class TestBackfillRunFunction:
         assert len(update_scripts) == 1
         script = update_scripts[0]
         # Must reference the journal id
+        assert "Björn note" not in script
         assert "101" in script
         # Must embed the Jira comment id in the marker
         assert "jc42" in script
@@ -936,10 +937,11 @@ class TestJiraServerProbeOrder:
         )()
 
         class FakeJiraClient:
-            class jira:
-                @staticmethod
-                def comments(_key: str) -> list[Any]:
-                    return [comment]
+            @staticmethod
+            def select_comments_for_migration(_key: str):
+                from src.infrastructure.jira.comment_audience import CommentSelection
+
+                return CommentSelection([comment], 0)
 
         result = m._make_jira_fetcher(FakeJiraClient())("NRS-207")
         assert len(result) == 1
@@ -951,6 +953,17 @@ class TestJiraServerProbeOrder:
         assert c["author_key"] == "JIRAUSER12345"
         assert c["author_email"] == "bjoern@netresearch.de"
         assert c["author_display_name"] == "Björn Marten"
+
+
+def test_held_jira_comments_block_positional_backfill():
+
+    from src.infrastructure.jira.comment_audience import CommentSelection
+
+    client = MagicMock()
+    client.select_comments_for_migration.return_value = CommentSelection([], 1)
+    fetch = _import_module()._make_jira_fetcher(client)
+    with pytest.raises(ValueError, match="restricted audiences"):
+        fetch("QA-1")
 
 
 @pytest.mark.parametrize("invalid", ["[]", "null"])
