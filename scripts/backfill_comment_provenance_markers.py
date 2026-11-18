@@ -504,32 +504,14 @@ def run(
 # ---------------------------------------------------------------------------
 
 
-def _mapping_path(data_dir: Path, filename: str) -> Path:
-    """Read migration mappings from regular files in the selected local data directory."""
-    root = data_dir.resolve()
-    path = (root / filename).resolve()
-    if not path.is_relative_to(root) or (path.exists() and not path.is_file()):
-        msg = f"Invalid local mapping file: {filename}"
-        raise ValueError(msg)
-    return path
-
-
-def _mapping_object(mapping_path: Path) -> dict[str, Any]:
-    with mapping_path.open(encoding="utf-8") as stream:
-        mapping = json.load(stream)
-    if not isinstance(mapping, dict):
-        msg = f"Expected a JSON object in {mapping_path.name}"
-        raise ValueError(msg)
-    return mapping
-
-
 def _load_wp_mapping(data_dir: Path, project_key: str) -> list[dict[str, Any]]:
     """Load work_package_mapping.json and filter to the given project key."""
-    mapping_path = _mapping_path(data_dir, "work_package_mapping.json")
+    mapping_path = data_dir / "work_package_mapping.json"
     if not mapping_path.exists():
         raise FileNotFoundError(f"Mapping file not found: {mapping_path}")
 
-    raw = _mapping_object(mapping_path)
+    with mapping_path.open("r", encoding="utf-8") as fh:
+        raw: dict[str, Any] = json.load(fh)
 
     result: list[dict[str, Any]] = []
     for outer_key, value in raw.items():
@@ -578,11 +560,12 @@ def _load_user_mapping(data_dir: Path) -> dict[str, int]:
     Later insertions do not overwrite earlier ones so the higher-priority probe
     fields win in the rare case two entries share a secondary field value.
     """
-    mapping_path = _mapping_path(data_dir, "user_mapping.json")
+    mapping_path = data_dir / "user_mapping.json"
     if not mapping_path.exists():
         return {}
 
-    raw = _mapping_object(mapping_path)
+    with mapping_path.open("r", encoding="utf-8") as fh:
+        raw: dict[str, Any] = json.load(fh)
 
     # Probe fields in priority order (mirrors IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS
     # mapped to the user_mapping.json entry field names).
@@ -658,13 +641,16 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         wp_mapping = _load_wp_mapping(data_dir, project_key)
-        user_mapping = _load_user_mapping(data_dir)
-    except OSError, ValueError, TypeError:
-        logger.exception("Cannot load migration mappings")
+    except FileNotFoundError as exc:
+        logger.error("Cannot load work_package_mapping: %s", exc)
+        return 1
+    except Exception as exc:
+        logger.error("Failed to load work_package_mapping: %s", exc)
         return 1
 
     logger.info("Loaded %d WP entries for project %s", len(wp_mapping), project_key)
 
+    user_mapping = _load_user_mapping(data_dir)
     logger.info("Loaded %d user mapping entries", len(user_mapping))
 
     from src.infrastructure.jira.jira_client import JiraClient  # noqa: PLC0415
