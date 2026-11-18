@@ -282,32 +282,7 @@ class EnhancedAuditTrailMigrator:
             if self._has_comment_audience(entry):
                 continue
             try:
-                user_id, user_name = self._audit_author(entry, jira_issue_key)
-
-                # Process each change item in the entry
-                for item in entry.get("items", []) or []:
-                    if self._has_comment_audience(item) or not may_copy_history_item(item):
-                        continue
-                    # Map field changes to OpenProject audit format
-                    changes = self._map_field_changes(item)
-
-                    if changes:
-                        audit_event: AuditEventData = {
-                            "jira_issue_key": jira_issue_key,
-                            "jira_changelog_id": entry.get("id", "unknown"),
-                            "openproject_work_package_id": openproject_work_package_id,
-                            "user_id": user_id,
-                            "user_name": user_name,
-                            "created_at": entry.get("created", "1970-01-01T00:00:00Z"),
-                            "action": "update",
-                            "auditable_type": "WorkPackage",
-                            "auditable_id": openproject_work_package_id,
-                            "version": 1,  # Will be calculated properly during insertion
-                            "comment": self._generate_audit_comment(item),
-                            "changes": changes,
-                        }
-                        audit_events.append(audit_event)
-
+                self._collect_audit_events(entry, jira_issue_key, openproject_work_package_id, audit_events)
             except Exception as e:
                 self.logger.exception(
                     f"Error transforming changelog entry {entry.get('id', 'unknown')} for {jira_issue_key}: {e}",
@@ -317,6 +292,39 @@ class EnhancedAuditTrailMigrator:
                 )
 
         return audit_events
+
+    def _collect_audit_events(
+        self,
+        entry: dict[str, Any],
+        jira_issue_key: str,
+        openproject_work_package_id: int,
+        audit_events: list[AuditEventData],
+    ) -> None:
+        user_id, user_name = self._audit_author(entry, jira_issue_key)
+
+        # Process each change item in the entry
+        for item in entry.get("items", []) or []:
+            if self._has_comment_audience(item) or not may_copy_history_item(item):
+                continue
+            # Map field changes to OpenProject audit format
+            changes = self._map_field_changes(item)
+
+            if changes:
+                audit_event: AuditEventData = {
+                    "jira_issue_key": jira_issue_key,
+                    "jira_changelog_id": entry.get("id", "unknown"),
+                    "openproject_work_package_id": openproject_work_package_id,
+                    "user_id": user_id,
+                    "user_name": user_name,
+                    "created_at": entry.get("created", "1970-01-01T00:00:00Z"),
+                    "action": "update",
+                    "auditable_type": "WorkPackage",
+                    "auditable_id": openproject_work_package_id,
+                    "version": 1,  # Will be calculated properly during insertion
+                    "comment": self._generate_audit_comment(item),
+                    "changes": changes,
+                }
+                audit_events.append(audit_event)
 
     def _map_field_changes(
         self,
