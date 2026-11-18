@@ -382,6 +382,7 @@ def _summary_context(progress: MigrationProgress) -> dict[str, Any]:
         "facts": facts,
         "counts": counts,
         "comparison_counts": progress.comparison_counts,
+        "project_comparisons": progress.project_comparisons,
         "pending_checks": progress.pending_checks,
     }
 
@@ -609,6 +610,10 @@ def get_metrics_csv(migration_id: str | None = None) -> JSONResponse:
     ):
         row(measured, name, data[name])
     row(measured, "pilot_memory_usage_mb", progress.memory_usage_mb)
+    for project, comparisons in progress.project_comparisons.items():
+        for name, pair in comparisons.items():
+            row(measured, f"project_comparisons.{project}.{name}.source", pair.source)
+            row(measured, f"project_comparisons.{project}.{name}.target", pair.target)
     for name, pair in progress.comparison_counts.items():
         row(measured, f"comparison_counts.{name}.source", pair.source)
         row(measured, f"comparison_counts.{name}.target", pair.target)

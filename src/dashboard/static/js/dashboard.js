@@ -73,6 +73,29 @@ function comparisonRow([name, pair]) {
     return row;
 }
 
+function renderComparison(data) {
+    const select = element('comparison-scope');
+    const projects = data.project_comparisons ?? {};
+    const names = Object.keys(projects);
+    const hasTotal = Object.keys(data.comparison_counts ?? {}).length > 0;
+    const scopes = hasTotal ? ['', ...names] : names;
+    const selected = select.value;
+    // Preserve focus and selection when a live update only changes the counts.
+    if (JSON.stringify(Array.from(select.options, option => option.value)) !== JSON.stringify(scopes)) {
+        select.replaceChildren(...scopes.map(name => new Option(name || 'All projects', name)));
+        if (scopes.includes(selected)) select.value = selected;
+    }
+    element('scope-control').hidden = names.length === 0;
+    const rows = select.value ? projects[select.value] : data.comparison_counts;
+    element('comparison-rows').replaceChildren(...Object.entries(rows ?? {}).map(comparisonRow));
+    element('comparison-card').hidden = scopes.length === 0;
+    return scopes.length > 0;
+}
+
+element('comparison-scope').addEventListener('change', () => {
+    if (snapshot) renderComparison(snapshot);
+});
+
 function phaseRow(phase) {
     const item = node('li');
     const heading = node('div', undefined, 'phase-row');
@@ -144,11 +167,9 @@ function renderProgress(data) {
     renderProgressBar(data, phases);
     element('run-times').replaceChildren(...runDetails(data));
     showRows('phases', phases.map(phaseRow), 'phases-empty');
-    const comparisons = Object.entries(data.comparison_counts ?? {});
-    element('comparison-rows').replaceChildren(...comparisons.map(comparisonRow));
-    element('comparison-card').hidden = comparisons.length === 0;
+    const hasComparisons = renderComparison(data);
     const counts = Object.entries(data.verified_counts ?? {});
-    element('counts-card').hidden = comparisons.length > 0 && counts.length === 0;
+    element('counts-card').hidden = hasComparisons && counts.length === 0;
     showRows('verified-counts', counts.map(([key,value]) => stat(label(key), number.format(value))), 'counts-empty');
     const checks = data.pending_checks ?? [];
     element('checks-empty').textContent = idle ? 'Awaiting check results.' : 'No pending checks reported.';

@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Jira to OpenProject · Migration dashboard</title>
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=ebb0df70b9a6">
-    <script defer src="/static/js/dashboard.js?v=ea468cbee28d"></script>
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=1d7313c27a85">
+    <script defer src="/static/js/dashboard.js?v=80c746ca4ee4"></script>
 </head>
 <body>
 <header class="site-header">
@@ -41,7 +41,10 @@
         </section>
 
         <section id="comparison-card" class="card comparison-card" aria-labelledby="comparison-heading" hidden>
-            <h2 id="comparison-heading">Source and target</h2>
+            <div class="card-heading">
+                <h2 id="comparison-heading">Source and target</h2>
+                <label id="scope-control" hidden>Project <select id="comparison-scope"></select></label>
+            </div>
             <table class="comparison" aria-labelledby="comparison-heading">
                 <thead><tr><th scope="col">Data type</th><th scope="col">Jira <small>Source</small></th><th scope="col">OpenProject <small>Target</small></th></tr></thead>
                 <tbody id="comparison-rows"></tbody>
