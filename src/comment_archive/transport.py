@@ -230,12 +230,12 @@ def visible_comments(jira: Endpoint, issue: str, kind: str, *, reader: bool) -> 
 ARCHIVE_NAME = "jira-protected-comments.j2o"
 
 
-def attachments(op: Endpoint, wp: int) -> list[dict]:
+def attachments(op: Endpoint, wp: int, *, filename: str = ARCHIVE_NAME) -> list[dict]:
     """List native attachments without trusting credential-bearing links from the server."""
     page = op.get(f"/api/v3/work_packages/{wp}/attachments")
     files = page["_embedded"]["elements"]
     require(isinstance(files, list) and len(files) == page["total"], "Incomplete target attachment collection")
-    return [item for item in files if item.get("fileName") == ARCHIVE_NAME]
+    return [item for item in files if item.get("fileName") == filename]
 
 
 def download(op: Endpoint, attachment: dict) -> bytes:
@@ -243,19 +243,19 @@ def download(op: Endpoint, attachment: dict) -> bytes:
     return op.request("GET", f"/api/v3/attachments/{int(attachment['id'])}/content").content
 
 
-def publish(op: Endpoint, wp: int, data: bytes | None) -> dict | None:
+def publish(op: Endpoint, wp: int, data: bytes | None, *, filename: str = ARCHIVE_NAME) -> dict | None:
     """Resume an existing identical upload. A differing or duplicate copy blocks cutover."""
-    files = attachments(op, wp)
+    files = attachments(op, wp, filename=filename)
     if data is not None and not files:
         op.request(
             "POST",
             f"/api/v3/work_packages/{wp}/attachments",
             files={
-                "metadata": (None, json.dumps({"fileName": ARCHIVE_NAME}), "application/json"),
-                "file": (ARCHIVE_NAME, data, "application/octet-stream"),
+                "metadata": (None, json.dumps({"fileName": filename}), "application/json"),
+                "file": (filename, data, "application/octet-stream"),
             },
         )
-        files = attachments(op, wp)
+        files = attachments(op, wp, filename=filename)
     require(len(files) == int(data is not None), f"Unexpected existing archive count on work package {wp}")
     if files:
         require(download(op, files[0]) == data, f"Stored archive differs on work package {wp}; keep target closed")
