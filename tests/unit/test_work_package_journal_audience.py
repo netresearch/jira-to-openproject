@@ -74,7 +74,7 @@ def test_confirmed_empty_history_is_a_read_only_rerun():
     assert not migration.op_client.mock_calls
 
 
-@pytest.mark.parametrize("total, comments", [(1, []), (1, [{"body": "private-comment-marker"}])])
+@pytest.mark.parametrize(("total", "comments"), [(1, []), (1, [{"body": "private-comment-marker"}])])
 def test_legacy_create_refuses_comments_before_inspecting_body(total, comments):
     issue = {"fields": {"comment": {"total": total, "comments": comments}}}
     migration = WorkPackageMigration.__new__(WorkPackageMigration)
