@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Jira to OpenProject · Migration dashboard</title>
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=1ba3af633b8f">
-    <script defer src="/static/js/dashboard.js?v=d2bf76a85ece"></script>
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=ebb0df70b9a6">
+    <script defer src="/static/js/dashboard.js?v=ea468cbee28d"></script>
 </head>
 <body>
 <header class="site-header">
@@ -40,6 +40,13 @@
             </div>
         </section>
 
+        <section id="comparison-card" class="card comparison-card" aria-labelledby="comparison-heading" hidden>
+            <h2 id="comparison-heading">Source and target</h2>
+            <table class="comparison" aria-labelledby="comparison-heading">
+                <thead><tr><th scope="col">Data type</th><th scope="col">Jira <small>Source</small></th><th scope="col">OpenProject <small>Target</small></th></tr></thead>
+                <tbody id="comparison-rows"></tbody>
+            </table>
+        </section>
         <div class="columns">
             <div class="lane">
                 <section class="card" aria-labelledby="phases-heading">
@@ -62,7 +69,7 @@
                         <div id="pilot-memory-row" hidden><dt>Pilot process RAM</dt><dd id="pilot-ram">—</dd></div>
                     </dl>
                 </section>
-                <section class="card" aria-labelledby="counts-heading">
+                <section id="counts-card" class="card" aria-labelledby="counts-heading">
                     <div class="card-heading"><h2 id="counts-heading">Verified counts</h2></div>
                     <dl id="verified-counts" class="counts"></dl>
                     <p id="counts-empty" class="empty">No verified counts reported yet.</p>

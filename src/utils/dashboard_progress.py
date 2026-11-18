@@ -28,6 +28,14 @@ class ProgressPhase(BaseModel):
     finished_at: AwareDatetime | None = None
 
 
+class ComparisonCount(BaseModel):
+    """Independent observations for the same population and unit on the two systems."""
+
+    model_config = ConfigDict(extra="forbid")
+    source: Count | None = None
+    target: Count | None = None
+
+
 class MigrationProgress(BaseModel):
     """The values a CLI or pilot explicitly published for its current or latest run."""
 
@@ -39,6 +47,7 @@ class MigrationProgress(BaseModel):
     finished_at: AwareDatetime | None = None
     current_component: Label | None = None
     phases: list[ProgressPhase] = Field(default_factory=list)
+    comparison_counts: dict[Label, ComparisonCount] = Field(default_factory=dict)
     verified_counts: dict[Label, Count] = Field(default_factory=dict)
     pending_checks: list[Label] = Field(default_factory=list)
     memory_usage_mb: float | None = Field(default=None, ge=0)

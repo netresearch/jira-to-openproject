@@ -154,6 +154,7 @@ def test_broken_publication_is_reported_without_echoing_its_contents(progress_pa
 
 def test_root_renders_latest_publication_as_escaped_html_before_javascript(progress_path):
     snapshot = publication("pending")
+    snapshot["comparison_counts"] = {"Files <all>": {"source": 0, "target": None}}
     snapshot["current_component"] = None
     snapshot["phases"][0]["name"] = "Read <closed> & verified"
     snapshot["verified_counts"] = {"Verified <issues>": 1122, "Rejected": 0}
@@ -168,6 +169,10 @@ def test_root_renders_latest_publication_as_escaped_html_before_javascript(progr
         assert "<dd>Read &lt;closed&gt; &amp; verified</dd>" in summary
         assert "<dt>Verified &lt;issues&gt;</dt><dd>1122</dd>" in summary
         assert "<dt>Rejected</dt><dd>0</dd>" in summary
+        assert '<th scope="row">Files &lt;all&gt;</th><td>0</td><td class="unmeasured">Not checked</td>' in summary
+        exported = client.get("/api/metrics/csv").json()["csv_content"]
+        assert "comparison_counts.Files <all>.source,0" in exported
+        assert "comparison_counts.Files <all>.target" not in exported
         assert "Check &lt;mark&gt;result&lt;/mark&gt;" in summary
         assert 'id="live-dashboard" hidden' in response.text
         assert "<script" not in summary
