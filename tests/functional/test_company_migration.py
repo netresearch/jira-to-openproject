@@ -26,10 +26,6 @@ class TestCompanyMigration(unittest.TestCase):
         self.jira_client = MagicMock(spec=JiraClient)
         self.op_client = MagicMock(spec=OpenProjectClient)
 
-        # Create a test data directory
-        self.test_data_dir = Path(__file__).parent / "test_data"
-        self.test_data_dir.mkdir(parents=True, exist_ok=True)
-
         # Initialize the company migration
         self.company_migration = CompanyMigration(
             jira_client=self.jira_client,
@@ -118,18 +114,6 @@ class TestCompanyMigration(unittest.TestCase):
         # Set up the mock return values
         self.jira_client.get_tempo_customers.return_value = self.sample_tempo_companies_api
         self.op_client.get_projects.return_value = self.sample_op_projects
-
-    def tearDown(self) -> None:
-        """Clean up after each test."""
-        # Remove test data files
-        for filename in Path(self.test_data_dir).iterdir():
-            filename.unlink()
-
-        # Remove test data directory if empty
-        if Path(self.test_data_dir).exists() and not list(
-            Path(self.test_data_dir).iterdir(),
-        ):
-            Path(self.test_data_dir).rmdir()
 
     @patch("src.infrastructure.jira.jira_client.JiraClient")
     @patch("src.infrastructure.openproject.openproject_client.OpenProjectClient")
