@@ -25,7 +25,7 @@ This script deduplicates those journals **safely**:
 3. Within each duplicate group keep the journal with a **real** author
    (user_id != 2, i.e. not the Anonymous fallback) — or, if all
    duplicates have the same author, keep the newest.
-4. Delete the others.
+4. Clear the duplicate notes while preserving journal versions and attribute changes.
 5. Log every deletion to stdout AND to
    ``var/logs/cleanup_anonymous_comment_duplicates_<ts>.log``.
 
@@ -40,7 +40,9 @@ renderer produced different text (e.g. ``concourse~~ci`` vs ``concourse-ci``)
 so text-based dedup would not catch the duplicate, while avoiding false
 deletions of legitimate newer Anonymous comments.
 
-Defaults to ``--dry-run``.  Deletion requires explicit ``--apply``.
+The deletion count refers to comments cleared from the journal. Each journal row
+and its recorded attribute changes remain in OpenProject. Clearing notes requires
+explicit ``--apply``. The default is ``--dry-run``.
 ``--also-delete-orphan-anonymous`` is opt-in (not the default).
 
 Usage::
@@ -55,6 +57,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import re
@@ -237,13 +240,45 @@ end
 """
 
 
-def _build_delete_script(journal_ids: list[int]) -> str:
-    """Ruby script to delete a batch of journal IDs."""
-    ids_json = json.dumps(journal_ids)
+def _journal_snapshot(journal):
+    """Identify the exact public journal observed when selecting a keeper."""
+    return {
+        "id": journal["id"],
+        "wp_id": journal["wp_id"],
+        "user_id": journal["user_id"],
+        "created_at": journal["created_at"],
+        "digest": hashlib.sha256(journal["notes"].encode()).hexdigest(),
+    }
+
+
+def _build_delete_script(plans: list[dict[str, Any]]) -> str:
+    """Lock both public journals and recheck their identities before deletion."""
     return f"""
 require 'json'
-ids = {ids_json}
-deleted = Journal.where(id: ids, journable_type: 'WorkPackage', restricted: false).delete_all
+require 'digest'
+plans = JSON.parse(<<'J2O_PLANS')
+{json.dumps(plans)}
+J2O_PLANS
+matches = lambda do |journal, expected|
+  journal && journal.journable_id == expected['wp_id'] && journal.user_id == expected['user_id'] &&
+    journal.created_at.as_json == expected['created_at'] && Digest::SHA256.hexdigest(journal.notes.to_s) == expected['digest']
+end
+deleted = 0
+plans.each do |plan|
+  Journal.transaction do
+    candidate = plan.fetch('candidate')
+    keeper = plan.fetch('keeper')
+    next if candidate['id'] == keeper['id'] || candidate['wp_id'] != keeper['wp_id']
+    public_notes = Journal.where(journable_type: 'WorkPackage', journable_id: candidate['wp_id'], restricted: false)
+    rows = public_notes.where(id: [candidate['id'], keeper['id']]).order(:id).lock.index_by(&:id)
+    next unless matches.call(rows[keeper['id']], keeper) && matches.call(rows[candidate['id']], candidate)
+    if plan['orphan']
+      next if public_notes.where.not(notes: [nil, '']).where.not(user_id: {ANONYMOUS_USER_ID})
+                          .where(created_at: ..rows[candidate['id']].created_at).exists?
+    end
+    deleted += 1 if rows[candidate['id']].update_columns(notes: '')
+  end
+end
 {{deleted: deleted}}
 """
 
@@ -283,43 +318,58 @@ def _collect_deletions(journals_raw, *, apply, also_delete_orphan_anonymous, log
         by_wp.setdefault(journal["wp_id"], []).append(journal)
     all_to_delete = []
     duplicate_groups = 0
-    seen = set()
     for wp_id, journals in by_wp.items():
-        _, duplicates = _plan_deletions(journals)
-        duplicate_groups += len({_strip_marker(row["notes"]) for row in duplicates})
-        reasons = {
-            row["id"]: ("Anonymous-author duplicate" if row["user_id"] == ANONYMOUS_USER_ID else "duplicate")
-            for row in duplicates
-        }
-        candidates = list(duplicates)
-        if also_delete_orphan_anonymous:
-            candidates.extend(_plan_orphan_anonymous_deletions(journals))
-        for journal in candidates:
-            journal_id = journal["id"]
-            if journal_id in seen:
-                continue
-            seen.add(journal_id)
-            reason = reasons.get(journal_id, "Anonymous-orphan (WP also has real-author journals)")
-            logger.info(
-                "  [%s] WP#%d  Journal#%d  user_id=%d  created_at=%s  reason=%s",
-                "DELETE" if apply else "WOULD DELETE",
-                wp_id,
-                journal_id,
-                journal["user_id"],
-                journal["created_at"],
-                reason,
+        plans, groups = _plan_wp_deletions(wp_id, journals, apply, also_delete_orphan_anonymous, logger)
+        duplicate_groups += groups
+        all_to_delete.extend(plans)
+    return all_to_delete, duplicate_groups
+
+
+def _plan_wp_deletions(wp_id, journals, apply, also_delete_orphan_anonymous, logger):
+    seen = set()
+    all_to_delete = []
+    kept, duplicates = _plan_deletions(journals)
+    keepers = {_strip_marker(row["notes"]): row for row in kept}
+    real = [row for row in kept if row["user_id"] != ANONYMOUS_USER_ID]
+    earliest_real = min(real, key=lambda row: row["created_at"], default=None)
+    duplicate_groups = len({_strip_marker(row["notes"]) for row in duplicates})
+    reasons = {
+        row["id"]: ("Anonymous-author duplicate" if row["user_id"] == ANONYMOUS_USER_ID else "duplicate")
+        for row in duplicates
+    }
+    candidates = list(duplicates)
+    if also_delete_orphan_anonymous:
+        candidates.extend(_plan_orphan_anonymous_deletions(journals))
+    for journal in candidates:
+        journal_id = journal["id"]
+        if journal_id in seen:
+            continue
+        seen.add(journal_id)
+        reason = reasons.get(journal_id, "Anonymous-orphan (WP also has real-author journals)")
+        logger.info(
+            "  [%s] WP#%d  Journal#%d  user_id=%d  created_at=%s  reason=%s",
+            "DELETE" if apply else "WOULD DELETE",
+            wp_id,
+            journal_id,
+            journal["user_id"],
+            journal["created_at"],
+            reason,
+        )
+        is_orphan = journal_id not in reasons
+        keeper = earliest_real if is_orphan else keepers[_strip_marker(journal["notes"])]
+        if keeper is not None:
+            all_to_delete.append(
+                {"candidate": _journal_snapshot(journal), "keeper": _journal_snapshot(keeper), "orphan": is_orphan}
             )
-            all_to_delete.append(journal)
     return all_to_delete, duplicate_groups
 
 
 def _delete_batches(all_to_delete, op_client, logger):
     deleted = 0
-    delete_ids = [j["id"] for j in all_to_delete]
     # Delete in batches of 100 to avoid overly large SQL IN clauses
     batch_size = 100
-    for i in range(0, len(delete_ids), batch_size):
-        batch = delete_ids[i : i + batch_size]
+    for i in range(0, len(all_to_delete), batch_size):
+        batch = all_to_delete[i : i + batch_size]
         del_script = _build_delete_script(batch)
         try:
             del_result = op_client.execute_query_to_json_file(del_script)
@@ -379,7 +429,7 @@ def run(
     logger.info(
         "Summary: %d journals scanned, %d WPs with deletions planned, %d journals to delete",
         total_journals,
-        len({j["wp_id"] for j in all_to_delete}),
+        len({plan["candidate"]["wp_id"] for plan in all_to_delete}),
         total_to_delete,
     )
 

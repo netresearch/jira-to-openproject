@@ -98,10 +98,10 @@ class TestPairJournalsWithComments:
             "acc-peter": 400,
         }
         jira_comments = [
-            _jira_comment("c1", "acc-bjoern"),
-            _jira_comment("c2", "acc-mikhail"),
-            _jira_comment("c3", "acc-anna"),
-            _jira_comment("c4", "acc-peter"),
+            _jira_comment("c1", "acc-bjoern", "Comment 1"),
+            _jira_comment("c2", "acc-mikhail", "Comment 2"),
+            _jira_comment("c3", "acc-anna", "Comment 3"),
+            _jira_comment("c4", "acc-peter", "Comment 4"),
         ]
         op_journals = [
             _op_journal(101, 5040, 61, "Comment 1", "2026-05-09T10:01:00Z"),
@@ -219,18 +219,19 @@ class TestBackfillRunFunction:
 
         # Rails returns 4 journals (no markers), Jira returns 4 comments
         mock_op.execute_query_to_json_file.return_value = {
+            "restricted_notes": False,
             "journals": [
                 _op_journal(101, 5040, 61, "B1", "2026-05-09T10:01:00Z"),
                 _op_journal(102, 5040, 281, "B2", "2026-05-09T10:02:00Z"),
                 _op_journal(103, 5040, 61, "B3", "2026-05-09T10:03:00Z"),
                 _op_journal(104, 5040, 281, "B4", "2026-05-09T10:04:00Z"),
-            ]
+            ],
         }
         mock_jira.return_value = [
-            _jira_comment("c1", "acc-bjoern"),
-            _jira_comment("c2", "acc-mikhail"),
-            _jira_comment("c3", "acc-bjoern"),
-            _jira_comment("c4", "acc-mikhail"),
+            _jira_comment("c1", "acc-bjoern", "B1"),
+            _jira_comment("c2", "acc-mikhail", "B2"),
+            _jira_comment("c3", "acc-bjoern", "B3"),
+            _jira_comment("c4", "acc-mikhail", "B4"),
         ]
 
         user_mapping = {"acc-bjoern": 61, "acc-mikhail": 281}
@@ -261,12 +262,13 @@ class TestBackfillRunFunction:
         mock_jira = MagicMock()
 
         fetch_result = {
+            "restricted_notes": False,
             "journals": [
                 _op_journal(101, 5040, 61, "Björn comment 1", "2026-05-09T10:01:00Z"),
                 _op_journal(102, 5040, 281, "Mikhail comment", "2026-05-09T10:02:00Z"),
                 _op_journal(103, 5040, 61, "Björn comment 2", "2026-05-09T10:03:00Z"),
                 _op_journal(104, 5040, 61, "Björn comment 3", "2026-05-09T10:04:00Z"),
-            ]
+            ],
         }
         update_result = {"updated": 4}
 
@@ -278,10 +280,10 @@ class TestBackfillRunFunction:
         mock_op.execute_query_to_json_file.side_effect = side_effect
 
         mock_jira.return_value = [
-            _jira_comment("jc1", "acc-bjoern"),
-            _jira_comment("jc2", "acc-mikhail"),
-            _jira_comment("jc3", "acc-bjoern"),
-            _jira_comment("jc4", "acc-bjoern"),
+            _jira_comment("jc1", "acc-bjoern", "Björn comment 1"),
+            _jira_comment("jc2", "acc-mikhail", "Mikhail comment"),
+            _jira_comment("jc3", "acc-bjoern", "Björn comment 2"),
+            _jira_comment("jc4", "acc-bjoern", "Björn comment 3"),
         ]
 
         user_mapping = {"acc-bjoern": 61, "acc-mikhail": 281}
@@ -309,11 +311,12 @@ class TestBackfillRunFunction:
         mock_jira = MagicMock()
 
         mock_op.execute_query_to_json_file.return_value = {
+            "restricted_notes": False,
             "journals": [
                 _op_journal(101, 5040, 61, "Comment 1"),
                 _op_journal(102, 5040, 61, "Comment 2"),
                 _op_journal(103, 5040, 61, "Comment 3"),
-            ]
+            ],
         }
         # Jira has 4 but OP has 3
         mock_jira.return_value = [
@@ -348,11 +351,12 @@ class TestBackfillRunFunction:
         mock_jira = MagicMock()
 
         mock_op.execute_query_to_json_file.return_value = {
+            "restricted_notes": False,
             "journals": [
                 _op_journal(101, 5040, 61, "Comment 1"),
                 # user_id=999 but Jira comment is by acc-mikhail → op 281
                 _op_journal(102, 5040, 999, "Comment 2"),
-            ]
+            ],
         }
         mock_jira.return_value = [
             _jira_comment("c1", "acc-bjoern"),
@@ -385,7 +389,8 @@ class TestBackfillRunFunction:
         mock_op.execute_query_to_json_file.return_value = {
             # All journals already carry markers — returned as empty by the fetch
             # (the Rails query filters out already-marked journals)
-            "journals": []
+            "restricted_notes": False,
+            "journals": [],
         }
         mock_jira.return_value = [
             _jira_comment("c1", "acc-bjoern"),
@@ -415,9 +420,10 @@ class TestBackfillRunFunction:
         mock_jira = MagicMock()
 
         fetch_result = {
+            "restricted_notes": False,
             "journals": [
                 _op_journal(101, 5040, 61, "Björn note", "2026-05-09T10:01:00Z"),
-            ]
+            ],
         }
 
         captured_scripts: list[str] = []
@@ -429,7 +435,7 @@ class TestBackfillRunFunction:
             return fetch_result
 
         mock_op.execute_query_to_json_file.side_effect = capture_side_effect
-        mock_jira.return_value = [_jira_comment("jc42", "acc-bjoern")]
+        mock_jira.return_value = [_jira_comment("jc42", "acc-bjoern", "Björn note")]
 
         m.run(
             wp_mapping=self._make_wp_mapping(),
@@ -527,12 +533,13 @@ class TestPartialBackfillAllOrNothing:
 
         # 1 of 4 journals already has a marker
         mock_op.execute_query_to_json_file.return_value = {
+            "restricted_notes": False,
             "journals": [
                 _op_journal(101, 5040, 61, "C1\n<!-- j2o:jira-comment-id:c1 -->", "2026-05-09T10:01:00Z"),
                 _op_journal(102, 5040, 281, "C2", "2026-05-09T10:02:00Z"),
                 _op_journal(103, 5040, 300, "C3", "2026-05-09T10:03:00Z"),
                 _op_journal(104, 5040, 400, "C4", "2026-05-09T10:04:00Z"),
-            ]
+            ],
         }
         mock_jira.return_value = [
             _jira_comment("c1", "acc-a"),
@@ -688,7 +695,7 @@ class TestLoadUserMappingSchema:
             user_mapping = m._load_user_mapping(p)
 
         # The Jira comment has author_account_id == jira_key value
-        jira_comments = [_jira_comment("c1", "JIRAUSER18400")]
+        jira_comments = [_jira_comment("c1", "JIRAUSER18400", "Comment body")]
         op_journals = [_op_journal(101, 5040, 48, "Comment body")]
 
         pairs, skip_reason = m._pair_journals_with_comments(
@@ -978,3 +985,32 @@ def test_rejects_non_object_mappings(tmp_path, invalid, filename, loader_name, e
     (tmp_path / filename).write_text(invalid, encoding="utf-8")
     with pytest.raises(ValueError, match="Expected a JSON object"):
         loader(tmp_path, *extra_args)
+
+
+def test_positional_pair_requires_matching_public_text():
+    module = _import_module()
+    journals = [_op_journal(1, 1, 1, "Unrelated public note")]
+    comments = [_jira_comment("42", "person", "Original source")]
+    assert not module._pair_journals_with_comments(journals, comments, {"person": 1})[0]
+
+
+def test_no_source_request_for_marked_or_ambiguous_targets():
+    module = _import_module()
+    fetch_source = MagicMock(side_effect=AssertionError)
+    op = MagicMock()
+    for notes, expected_skips in [("done\n<!-- j2o:jira-comment-id:42 -->", 0), ("public note", 1)]:
+        op.execute_query_to_json_file.return_value = {
+            "restricted_notes": True,
+            "journals": [_op_journal(1, 1, 1, notes)],
+        }
+        stats = module.run(
+            [{"jira_key": "EX-1", "openproject_id": 1}],
+            {},
+            fetch_source,
+            op,
+            dry_run=False,
+            logger=_make_logger(),
+        )
+        assert stats["wps_skipped"] == expected_skips
+        assert stats["errors"] == 0
+    fetch_source.assert_not_called()

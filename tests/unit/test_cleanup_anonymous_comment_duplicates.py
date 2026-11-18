@@ -277,17 +277,10 @@ class TestRunFunction:
         # Fetch + delete calls
         assert mock_op.execute_query_to_json_file.call_count == 2
         delete_call_script: str = mock_op.execute_query_to_json_file.call_args_list[1][0][0]
-        # Journal id=1 (anonymous duplicate) must be in the delete payload
-        assert "1" in delete_call_script
-        # Journal id=2 (real author, keeper) must NOT be in the delete payload
-        # (it should only appear if id=2 is explicitly in the ids list — use full parse)
-        import json as _json
+        import json
 
-        start = delete_call_script.find("[")
-        end = delete_call_script.find("]", start) + 1
-        ids_to_delete = _json.loads(delete_call_script[start:end])
-        assert 1 in ids_to_delete
-        assert 2 not in ids_to_delete
+        plan = json.loads(delete_call_script.split("J2O_PLANS')\n")[1].splitlines()[0])
+        assert [(row["candidate"]["id"], row["keeper"]["id"]) for row in plan] == [(1, 2)]
 
         assert stats["deleted"] == 1
         assert stats["to_delete"] == 1
@@ -348,7 +341,7 @@ class TestRunFunction:
 
         # Mock all subsequent calls (delete batches) to return success
         def side_effect(script: str):
-            if "delete_all" in script:
+            if "update_columns(notes:" in script:
                 return {"deleted": 100}
             return fetch_result
 
@@ -635,14 +628,12 @@ class TestOrphanAnonymousDeletion:
 
         assert stats["to_delete"] == 2
         assert stats["deleted"] == 2
-        # Delete call must contain ids 10 and 11, NOT 12
-        delete_script: str = mock_op.execute_query_to_json_file.call_args_list[1][0][0]
-        import json as _json
+        import json
 
-        start = delete_script.find("[")
-        end = delete_script.find("]", start) + 1
-        ids = _json.loads(delete_script[start:end])
-        assert set(ids) == {10, 11}
+        script = mock_op.execute_query_to_json_file.call_args_list[1][0][0]
+        plans = json.loads(script.split("J2O_PLANS')\n")[1].splitlines()[0])
+        assert {row["candidate"]["id"] for row in plans} == {10, 11}
+        assert all(row["keeper"]["id"] == 12 and row["orphan"] for row in plans)
 
     def test_flag_set_logs_orphan_reason(self) -> None:
         """Orphan deletions must be logged with the reason 'Anonymous-orphan ...'."""
