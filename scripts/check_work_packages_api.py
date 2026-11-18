@@ -22,20 +22,6 @@ def check_work_packages():
     print("CHECKING WORK PACKAGE EXISTENCE")
     print("=" * 70)
 
-    # Test issue keys from the integration test
-    test_keys = [
-        "NRS-171",
-        "NRS-182",
-        "NRS-191",
-        "NRS-198",
-        "NRS-204",
-        "NRS-42",
-        "NRS-59",
-        "NRS-66",
-        "NRS-982",
-        "NRS-4003",
-    ]
-
     # Simple Ruby script using basic string interpolation
     ruby_script = """
 test_keys = ['NRS-171', 'NRS-182', 'NRS-191', 'NRS-198', 'NRS-204', 'NRS-42', 'NRS-59', 'NRS-66', 'NRS-982', 'NRS-4003']
