@@ -1,28 +1,7 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Time entry hours conversion (Bug B).
-
-The audit of the live OP database showed 10,606 time entries summing to
-**106.06 hours total** — every entry stored exactly ``hours = 0.01``,
-~100x too small for typical worklogs.
-
-Root cause was a key-name mismatch between the Jira-side extractor and
-the transformer:
-
-* ``jira_worklog_service.extract_work_logs`` produces snake_case
-  ``time_spent_seconds`` (line 105 in that file).
-* ``time_entry_transformer.transform_jira_work_log`` was reading the
-  camelCase ``timeSpentSeconds`` (the raw Jira REST shape) — so
-  ``work_log.get("timeSpentSeconds", 0)`` always returned ``0``,
-  ``hours = 0/3600 = 0.0``, and the existing min-hours clamp then
-  floored every entry to ``min_time_entry_hours`` (default 0.01).
-
-The clamp expression itself is unchanged. The fix reads both keys
-(snake_case primary, camelCase fallback) so the transformer is robust
-to either upstream shape — both paths now produce realistic hours
-distributions on real data.
-"""
+"""Worklog durations must round-trip to the original positive integer seconds."""
 
 from __future__ import annotations
 
@@ -75,18 +54,10 @@ def test_two_hour_thirty_min_worklog(transformer: TimeEntryTransformer) -> None:
     assert out["hours"] == pytest.approx(2.5)
 
 
-def test_seventeen_second_worklog_clamps_to_min(transformer: TimeEntryTransformer) -> None:
-    """Sub-floor positive worklogs clamp to ``min_time_entry_hours`` (0.01)."""
-    out = transformer.transform_jira_work_log(_worklog(17), "TEST-1")  # 17 s = 0.0047 h
-    assert out["hours"] == pytest.approx(0.01)
-
-
-def test_one_minute_worklog_does_not_clamp(transformer: TimeEntryTransformer) -> None:
-    """A 1-minute worklog (0.0167 h) must survive the rounding logic — it
-    rounds to 0.02, not 0.0, so it's *above* the clamp floor.
-    """
-    out = transformer.transform_jira_work_log(_worklog(60), "TEST-1")  # 60 s = 0.0167 h
-    assert out["hours"] == pytest.approx(0.02)
+@pytest.mark.parametrize("seconds", [1, 17, 60, 3599])
+def test_duration_preserves_seconds(transformer: TimeEntryTransformer, seconds: int) -> None:
+    out = transformer.transform_jira_work_log(_worklog(seconds), "TEST-1")
+    assert out["hours"] * 3600 == pytest.approx(seconds)
 
 
 def test_eight_hour_worklog(transformer: TimeEntryTransformer) -> None:
@@ -95,7 +66,7 @@ def test_eight_hour_worklog(transformer: TimeEntryTransformer) -> None:
     assert out["hours"] == pytest.approx(8.0)
 
 
-def test_zero_seconds_clamps_to_min(transformer: TimeEntryTransformer) -> None:
-    """Zero/negative source clamps to floor (a worklog must store *something*)."""
-    out = transformer.transform_jira_work_log(_worklog(0), "TEST-1")
-    assert out["hours"] == pytest.approx(0.01)
+@pytest.mark.parametrize("seconds", [0, -1])
+def test_nonpositive_duration_is_rejected(transformer: TimeEntryTransformer, seconds: int) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        transformer.transform_jira_work_log(_worklog(seconds), "TEST-1")

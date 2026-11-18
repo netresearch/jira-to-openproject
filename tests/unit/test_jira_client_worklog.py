@@ -70,64 +70,64 @@ class TestJiraClientWorkLog:
 
     def test_get_work_logs_for_issue_success(self, mock_jira_client) -> None:
         """Test successful work log retrieval for an issue."""
-        # Create mock work log objects
-        mock_work_log_1 = Mock()
-        mock_work_log_1.id = "10001"
-        mock_work_log_1.started = "2024-01-15T10:00:00.000+0000"
-        mock_work_log_1.timeSpent = "2h"
-        mock_work_log_1.timeSpentSeconds = 7200
-        mock_work_log_1.comment = "Fixed bug in authentication"
-        mock_work_log_1.created = "2024-01-15T10:00:00.000+0000"
-        mock_work_log_1.updated = "2024-01-15T10:00:00.000+0000"
-
-        # Mock author
-        mock_author = Mock()
-        mock_author.name = "john.doe"
-        mock_author.displayName = "John Doe"
-        mock_author.emailAddress = "john.doe@example.com"
-        mock_author.accountId = "account123"
-        mock_work_log_1.author = mock_author
-
-        # Mock the worklogs method
-        mock_jira_client.jira.worklogs.return_value = [mock_work_log_1]
-
-        # Test the method
+        sdk = mock_jira_client.jira
+        row = {
+            "id": "1",
+            "started": "2024-01-01T23:15:00Z",
+            "timeSpentSeconds": 17,
+            "timeSpent": "17s",
+            "author": {"key": "stable", "name": "renamed"},
+            "updateAuthor": {"key": "editor"},
+            "comment": "A verified note",
+        }
+        sdk._get_json.side_effect = [
+            {"key": "TEST-123", "fields": {"security": None}},
+            {"startAt": 0, "total": 2, "worklogs": [row]},
+            {"key": "stable", "timeZone": "Europe/Berlin"},
+            {"startAt": 1, "total": 2, "worklogs": [{**row, "id": "2"}]},
+        ]
         result = mock_jira_client.get_work_logs_for_issue("TEST-123")
+        assert [r["id"] for r in result] == ["1", "2"]
+        assert result[1]["author"]["time_zone"] == "Europe/Berlin"
+        assert result[1]["author"]["key"] == "stable"
+        assert result[1]["update_author"]["key"] == "editor"
+        assert result[1]["comment"] == row["comment"]
+        calls = sdk._get_json.call_args_list
+        assert [call.args[0] for call in calls] == [
+            "issue/TEST-123",
+            "issue/TEST-123/worklog",
+            "user",
+            "issue/TEST-123/worklog",
+        ]
+        assert calls[2].kwargs["params"] == {"key": "stable"}
+        assert calls[3].kwargs["params"] == {"startAt": 1, "maxResults": 100, "expand": "properties"}
 
-        # Verify the results
-        assert len(result) == 1
-        assert result[0]["id"] == "10001"
-        assert result[0]["issue_key"] == "TEST-123"
-        assert result[0]["time_spent"] == "2h"
-        assert result[0]["time_spent_seconds"] == 7200
-        assert result[0]["comment"] == "Fixed bug in authentication"
-        assert result[0]["author"]["name"] == "john.doe"
-        assert result[0]["author"]["display_name"] == "John Doe"
+    @pytest.mark.parametrize("row", [{"visibility": {"type": "role"}}, {"properties": [{"key": "unknown"}]}])
+    def test_audience_is_checked_before_projection(self, mock_jira_client, row) -> None:
+        row["id"] = "1"
+        mock_jira_client.jira._get_json.side_effect = [
+            {"key": "TEST-1", "fields": {}},
+            {"startAt": 0, "total": 1, "worklogs": [row]},
+        ]
+        with pytest.raises(JiraApiError, match="audience"):
+            mock_jira_client.get_work_logs_for_issue("TEST-1")
 
-        # Verify API was called correctly
-        mock_jira_client.jira.worklogs.assert_called_once_with("TEST-123")
+    def test_stalled_page_is_not_reported_as_empty(self, mock_jira_client) -> None:
+        mock_jira_client.jira._get_json.side_effect = [
+            {"key": "TEST-1", "fields": {}},
+            {"startAt": 0, "total": 1, "worklogs": []},
+        ]
+        with pytest.raises(JiraApiError, match="incomplete"):
+            mock_jira_client.get_work_logs_for_issue("TEST-1")
 
     def test_get_work_logs_for_issue_not_found(self, mock_jira_client) -> None:
-        """Test work log retrieval for non-existent issue."""
-        mock_jira_client.jira.worklogs.side_effect = Exception("Issue does not exist")
-
+        mock_jira_client.jira._get_json.side_effect = Exception("Issue does not exist")
         with pytest.raises(JiraResourceNotFoundError, match="Issue TEST-404 not found"):
             mock_jira_client.get_work_logs_for_issue("TEST-404")
 
     def test_get_work_logs_for_issue_api_error(self, mock_jira_client) -> None:
-        """Test handling of API errors when retrieving work logs."""
-        # Mock the response to raise an exception
-        with (
-            patch.object(
-                mock_jira_client.jira,
-                "worklogs",
-                side_effect=Exception("API Error"),
-            ),
-            pytest.raises(
-                JiraApiError,
-                match="Failed to get work logs for issue TEST-123",
-            ),
-        ):
+        mock_jira_client.jira._get_json.side_effect = Exception("API Error")
+        with pytest.raises(JiraApiError, match="Failed to get work logs for issue TEST-123"):
             mock_jira_client.get_work_logs_for_issue("TEST-123")
 
     def test_get_tempo_work_logs_success(self, mock_jira_client) -> None:

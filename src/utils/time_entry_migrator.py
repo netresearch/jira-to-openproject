@@ -22,6 +22,7 @@ from typing import Any, TypedDict
 
 from src import config
 from src.display import configure_logging
+from src.infrastructure.jira.comment_audience import has_comment_audience
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models.migration_error import MigrationError
@@ -152,6 +153,10 @@ class TimeEntryMigrator:
         self.transformed_time_entries: list[dict[str, Any]] = []
 
         # Migration mappings
+        self._failed_worklog_issues: set[str] = set()
+        self._tempo_read_failed = False
+        self._requested_issues: set[str] | None = None
+        self._target_projects: dict[str, int] = {}
         self.user_mapping: dict[str, int] = {}
         self.work_package_mapping: dict[str, int] = {}
         self.activity_mapping: dict[str, int] = {}
@@ -226,18 +231,27 @@ class TimeEntryMigrator:
     @staticmethod
     def _expanded_user_mapping(user_data: dict[str, Any]) -> dict[str, int]:
         expanded = {}
-        for entry in user_data.values():
+        ambiguous: set[str] = set()
+        for source_key, record in user_data.items():
+            entry = record if isinstance(record, dict) else {"jira_key": source_key, "openproject_id": record}
             op_id = entry.get("openproject_id")
             if op_id:
-                for field in ("jira_username", "jira_name", "jira_key", "jira_email", "jira_display_name"):
-                    if key := entry.get(field):
-                        expanded[str(key)] = op_id
-        return expanded
+                aliases = (
+                    entry.get(k) for k in ("jira_key", "j2o_user_key", "j2o_user_id", "jira_name", "jira_username")
+                )
+                for key in filter(None, aliases):
+                    if key in expanded and expanded[key] != op_id:
+                        ambiguous.add(key)
+                    expanded[key] = op_id
+        return {key: value for key, value in expanded.items() if key not in ambiguous}
 
     def _matching_work_logs(self, issue_key: str, work_logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # Add issue_key to each work log for later processing
         filtered_logs = []
         for log in work_logs:
+            if has_comment_audience(log):
+                msg = "Cannot migrate audience-restricted work logs."
+                raise ValueError(msg)
             log["issue_key"] = issue_key
             # Fast-forward filter
             try:
@@ -349,9 +363,14 @@ class TimeEntryMigrator:
 
                 created = int(batch_result.get("created", 0))
                 failed = int(batch_result.get("failed", 0))
+                migration_summary["skipped_entries"] += int(batch_result.get("reused", 0))
                 migration_summary["successful_migrations"] += created
                 migration_summary["failed_migrations"] += failed
-                ids = [r.get("id") for r in batch_result.get("results", []) if r.get("success") and r.get("id")]
+                ids = [
+                    r.get("id")
+                    for r in batch_result.get("results", [])
+                    if r.get("success") and not r.get("reused") and r.get("id")
+                ]
                 migration_summary["created_time_entry_ids"].extend(ids)
                 processed_count += len(chunk)
 
@@ -460,6 +479,8 @@ class TimeEntryMigrator:
         try:
             response = self.op_client.create_time_entry(entry)
             if isinstance(response, dict) and response.get("id"):
+                if response.get("reused"):
+                    return "skipped", None, "verified_existing_worklog"
                 identifier = response["id"]
                 return "created", int(identifier) if parallel else identifier, None
         except Exception as exc:
@@ -610,6 +631,8 @@ class TimeEntryMigrator:
         )
         start_time = datetime.now(tz=UTC)
 
+        self._requested_issues = set(issue_keys)
+        self._failed_worklog_issues.clear()
         extracted_logs = {}
         total_logs = 0
 
@@ -630,6 +653,7 @@ class TimeEntryMigrator:
                     self.logger.debug("No work logs found for %s", issue_key)
 
             except Exception as e:
+                self._failed_worklog_issues.add(issue_key)
                 error_msg = f"Failed to extract work logs for {issue_key}: {e}"
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)
@@ -653,6 +677,11 @@ class TimeEntryMigrator:
 
         return extracted_logs
 
+    def _tempo_allowed(self, row: dict[str, Any]) -> bool:
+        issue_key = row.get("issue_key") or (row.get("issue") or {}).get("key")
+        selected = self._requested_issues is None or issue_key in self._requested_issues
+        return selected and issue_key not in self._failed_worklog_issues and not has_comment_audience(row)
+
     def extract_tempo_time_entries(
         self,
         project_keys: list[str] | None = None,
@@ -673,6 +702,7 @@ class TimeEntryMigrator:
             List of Tempo time entry dictionaries
 
         """
+        self._tempo_read_failed = False
         self.logger.info("Extracting Tempo time entries")
         start_time = datetime.now(tz=UTC)
 
@@ -699,7 +729,7 @@ class TimeEntryMigrator:
                     created = te.get("created")
                     updated = te.get("updated")
                     try:
-                        if self._ff_accept(created, updated):
+                        if self._tempo_allowed(te) and self._ff_accept(created, updated):
                             filtered.append(te)
                     except Exception:
                         continue
@@ -798,6 +828,10 @@ class TimeEntryMigrator:
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)
 
+        for entry in transformed_entries:
+            meta = entry.setdefault("_meta", {})
+            if project := self._target_projects.get(meta.get("jira_issue_key", "")):
+                meta["target_project_id"] = project
         self.transformed_time_entries = transformed_entries
 
         # Calculate failed transformations
@@ -863,7 +897,7 @@ class TimeEntryMigrator:
         # OP's serialized ``custom_field_values`` shape carries
         # ``custom_field_id`` but NOT ``name``, so we resolve the CF id
         # once and match by id.
-        existing_keys = self._existing_worklog_keys()
+        existing_keys = self._existing_worklog_keys() if dry_run else set()
 
         # Apply dedup filter BEFORE the batch path takes over. Previously
         # only the per-entry fallback applied this filter, so re-runs in
@@ -949,6 +983,7 @@ class TimeEntryMigrator:
             # Extract issue keys for processing
             issue_keys = [issue["jira_key"] for issue in migrated_issues]
 
+            self._target_projects = {r["jira_key"]: r["project_id"] for r in migrated_issues if r.get("project_id")}
             # Update work package mapping from migrated issues
             for issue in migrated_issues:
                 if issue.get("jira_key") and issue.get("work_package_id"):
@@ -982,18 +1017,25 @@ class TimeEntryMigrator:
             tempo_discovered = self.migration_results.get("tempo_entries_extracted", 0)
             migrated_count = self.migration_results.get("successful_migrations", 0)
             failed_count = self.migration_results.get("failed_migrations", 0)
+            failed_count += max(
+                0,
+                self.migration_results.get("failed_transformations", 0)
+                - self.migration_results.get("unmappable_entries", 0),
+            )
 
             unmappable_count = self.migration_results.get("unmappable_entries", 0)
             status = "success"
-            if failed_count:
+            if failed_count or self._failed_worklog_issues or self._tempo_read_failed:
                 status = "partial_success" if migrated_count else "failed"
             return {
                 "status": status,
                 "jira_work_logs": {
                     "discovered": jira_discovered,
+                    "unreadable_issues": len(self._failed_worklog_issues),
                 },
                 "tempo_time_entries": {
                     "discovered": tempo_discovered,
+                    "read_failed": self._tempo_read_failed,
                 },
                 "total_time_entries": {
                     "migrated": migrated_count,
@@ -1051,9 +1093,9 @@ class TimeEntryMigrator:
 
             self.extract_jira_work_logs_for_issues(issue_keys)
 
-            # Step 2: Extract Tempo entries if requested (global; Jira-side filtering happens in transformer)
+            # Read Tempo only within the requested Jira project scopes.
             if include_tempo:
-                self.extract_tempo_time_entries()
+                self.extract_tempo_time_entries(project_keys=sorted({key.rsplit("-", 1)[0] for key in issue_keys}))
 
             # Step 3: Transform all entries
             self.transform_all_time_entries()

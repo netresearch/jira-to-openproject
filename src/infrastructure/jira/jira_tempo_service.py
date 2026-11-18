@@ -26,6 +26,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from src.infrastructure.jira.comment_audience import has_comment_audience
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
     HTTP_OK,
@@ -256,6 +257,9 @@ class JiraTempoService:
             # Enhance work logs with additional metadata
             enhanced_work_logs = []
             for work_log in work_logs:
+                if has_comment_audience(work_log):
+                    msg = "Cannot expose audience-restricted Tempo work logs."
+                    raise JiraApiError(msg)
                 enhanced_work_log = {
                     "tempo_worklog_id": work_log.get("tempoWorklogId"),
                     "jira_worklog_id": work_log.get("jiraWorklogId"),
@@ -263,6 +267,7 @@ class JiraTempoService:
                     "issue_id": work_log.get("issue", {}).get("id"),
                     "author": {
                         "username": work_log.get("author", {}).get("name"),
+                        "key": work_log.get("author", {}).get("key"),
                         "display_name": work_log.get("author", {}).get("displayName"),
                         "account_id": work_log.get("author", {}).get("accountId"),
                     },
@@ -405,6 +410,9 @@ class JiraTempoService:
 
                 # Process batch and add to results
                 for work_log in work_logs_batch:
+                    if has_comment_audience(work_log):
+                        msg = "Cannot expose audience-restricted Tempo work logs."
+                        raise JiraApiError(msg)
                     enhanced_work_log = {
                         "tempo_worklog_id": work_log.get("tempoWorklogId"),
                         "jira_worklog_id": work_log.get("jiraWorklogId"),
@@ -412,6 +420,7 @@ class JiraTempoService:
                         "issue_id": work_log.get("issue", {}).get("id"),
                         "author": {
                             "username": work_log.get("author", {}).get("name"),
+                            "key": work_log.get("author", {}).get("key"),
                             "display_name": work_log.get("author", {}).get(
                                 "displayName",
                             ),
@@ -494,6 +503,10 @@ class JiraTempoService:
 
             work_log = response.json()
 
+            if has_comment_audience(work_log):
+                msg = "Cannot expose audience-restricted Tempo work logs."
+                raise JiraApiError(msg)
+
             # Return enhanced work log data
             return {
                 "tempo_worklog_id": work_log.get("tempoWorklogId"),
@@ -502,6 +515,7 @@ class JiraTempoService:
                 "issue_id": work_log.get("issue", {}).get("id"),
                 "author": {
                     "username": work_log.get("author", {}).get("name"),
+                    "key": work_log.get("author", {}).get("key"),
                     "display_name": work_log.get("author", {}).get("displayName"),
                     "account_id": work_log.get("author", {}).get("accountId"),
                 },

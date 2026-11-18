@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from urllib.parse import quote
 
+from src.infrastructure.jira.comment_audience import has_comment_audience
 from src.infrastructure.jira.jira_client import (
     HTTP_NOT_FOUND,
     HTTP_OK,
@@ -29,11 +31,41 @@ from src.infrastructure.jira.jira_client import (
 )
 
 
+def _worklog_user(user: dict[str, Any]) -> dict[str, Any]:
+    fields = {
+        "key": "key",
+        "name": "name",
+        "display_name": "displayName",
+        "email": "emailAddress",
+        "account_id": "accountId",
+        "time_zone": "timeZone",
+    }
+    return {key: user.get(attr) for key, attr in fields.items()}
+
+
+def _worklog_record(issue_key: str, raw: dict[str, Any]) -> dict[str, Any]:
+    row = {
+        "id": raw["id"],
+        "issue_key": issue_key,
+        "author": _worklog_user(raw["author"]),
+        "started": raw["started"],
+        "time_spent": raw.get("timeSpent"),
+        "time_spent_seconds": raw["timeSpentSeconds"],
+        "comment": raw.get("comment"),
+        "created": raw.get("created"),
+        "updated": raw.get("updated"),
+    }
+    if raw.get("updateAuthor") is not None:
+        row["update_author"] = _worklog_user(raw["updateAuthor"])
+    return row
+
+
 class JiraWorklogService:
     """Worklog-domain queries for ``JiraClient``."""
 
     def __init__(self, client: JiraClient) -> None:
         self._client = client
+        self._author_zones: dict[tuple[str, str], str] = {}
         # ``JiraClient`` uses the module-level ``logger`` from
         # ``src.infrastructure.jira.jira_client`` — pick that up so the service can
         # log through ``self._logger`` like the OpenProject services do.
@@ -74,6 +106,66 @@ class JiraWorklogService:
             self._logger.exception(error_msg)
             raise JiraApiError(error_msg) from e
 
+    def _record_with_author_zone(self, issue_key: str, row: dict[str, Any]) -> dict[str, Any]:
+        record = _worklog_record(issue_key, row)
+        author = record["author"]
+        if author.get("time_zone"):
+            return record
+        field = "accountId" if author.get("account_id") else "key"
+        value = row["author"].get(field)
+        if not value:
+            msg = "Work log author has no stable identity for retrieving the source time zone."
+            raise JiraApiError(msg)
+        cache_key = (field, value)
+        if cache_key not in self._author_zones:
+            profile = self._client.jira._get_json("user", params={field: value})
+            if profile.get(field) != value or not isinstance(profile.get("timeZone"), str) or not profile["timeZone"]:
+                msg = "Jira did not confirm the work log author's identity and time zone."
+                raise JiraApiError(msg)
+            self._author_zones[cache_key] = profile["timeZone"]
+        author["time_zone"] = self._author_zones[cache_key]
+        return record
+
+    def _check_issue_audience(self, issue_key: str) -> None:
+        path = f"issue/{quote(issue_key, safe='')}"
+        issue = self._client.jira._get_json(path, params={"fields": "security"})
+        if issue.get("key") != issue_key or issue["fields"].get("security") is not None:
+            msg = "Issue security cannot be represented on a native time entry."
+            raise JiraApiError(msg)
+
+    def _worklog_pages(self, issue_key: str) -> list[dict[str, Any]]:
+        path = f"issue/{quote(issue_key, safe='')}/worklog"
+        self._check_issue_audience(issue_key)
+        start = 0
+        total = None
+        seen = set()
+        results = []
+        while True:
+            page = self._client.jira._get_json(
+                path, params={"startAt": start, "maxResults": 100, "expand": "properties"}
+            )
+            rows = page["worklogs"]
+            current_total = page["total"]
+            if page["startAt"] != start or (total is not None and total != current_total):
+                msg = "Jira returned an inconsistent work log page."
+                raise JiraApiError(msg)
+            total = current_total
+            ids = {str(row["id"]) for row in rows}
+            if len(ids) != len(rows) or seen & ids:
+                msg = "Jira returned duplicate work log IDs."
+                raise JiraApiError(msg)
+            seen.update(ids)
+            if any(has_comment_audience(row) for row in rows):
+                msg = "Work log audience cannot be represented on a native time entry."
+                raise JiraApiError(msg)
+            results.extend(self._record_with_author_zone(issue_key, row) for row in rows)
+            start += len(rows)
+            if start == total:
+                return results
+            if not rows or start > total:
+                msg = "Jira returned an incomplete work log page."
+                raise JiraApiError(msg)
+
     def get_work_logs_for_issue(self, issue_key: str) -> list[dict[str, Any]]:
         """Get all work logs for a specific issue.
 
@@ -89,43 +181,7 @@ class JiraWorklogService:
 
         """
         try:
-            # Get work logs using the JIRA library's worklog method
-            work_logs = self._client.jira.worklogs(issue_key)
-
-            result = []
-            for work_log in work_logs:
-                work_log_data = {
-                    "id": work_log.id,
-                    "issue_key": issue_key,
-                    "author": {
-                        "name": getattr(work_log.author, "name", None),
-                        "display_name": getattr(work_log.author, "displayName", None),
-                        "email": getattr(work_log.author, "emailAddress", None),
-                        "account_id": getattr(work_log.author, "accountId", None),
-                    },
-                    "started": work_log.started,
-                    "time_spent": work_log.timeSpent,
-                    "time_spent_seconds": work_log.timeSpentSeconds,
-                    "comment": getattr(work_log, "comment", None),
-                    "created": work_log.created,
-                    "updated": work_log.updated,
-                }
-
-                # Add update author if different from original author
-                if hasattr(work_log, "updateAuthor") and work_log.updateAuthor:
-                    work_log_data["update_author"] = {
-                        "name": getattr(work_log.updateAuthor, "name", None),
-                        "display_name": getattr(
-                            work_log.updateAuthor,
-                            "displayName",
-                            None,
-                        ),
-                        "email": getattr(work_log.updateAuthor, "emailAddress", None),
-                        "account_id": getattr(work_log.updateAuthor, "accountId", None),
-                    }
-
-                result.append(work_log_data)
-
+            result = self._worklog_pages(issue_key)
             self._logger.debug(
                 "Retrieved %s work logs for issue %s",
                 len(result),
@@ -261,43 +317,13 @@ class JiraWorklogService:
 
         """
         try:
-            # Use the JIRA library's worklog method to get specific work log
-            work_log = self._client.jira.worklog(issue_key, work_log_id)
-
-            work_log_data = {
-                "id": work_log.id,
-                "issue_key": issue_key,
-                "author": {
-                    "name": getattr(work_log.author, "name", None),
-                    "display_name": getattr(work_log.author, "displayName", None),
-                    "email": getattr(work_log.author, "emailAddress", None),
-                    "account_id": getattr(work_log.author, "accountId", None),
-                },
-                "started": work_log.started,
-                "time_spent": work_log.timeSpent,
-                "time_spent_seconds": work_log.timeSpentSeconds,
-                "comment": getattr(work_log, "comment", None),
-                "created": work_log.created,
-                "updated": work_log.updated,
-            }
-
-            # Add update author if different from original author
-            if hasattr(work_log, "updateAuthor") and work_log.updateAuthor:
-                work_log_data["update_author"] = {
-                    "name": getattr(work_log.updateAuthor, "name", None),
-                    "display_name": getattr(work_log.updateAuthor, "displayName", None),
-                    "email": getattr(work_log.updateAuthor, "emailAddress", None),
-                    "account_id": getattr(work_log.updateAuthor, "accountId", None),
-                }
-
-            # Add visibility restrictions if present
-            if hasattr(work_log, "visibility") and work_log.visibility:
-                work_log_data["visibility"] = {
-                    "type": getattr(work_log.visibility, "type", None),
-                    "value": getattr(work_log.visibility, "value", None),
-                }
-
-            return work_log_data
+            path = f"issue/{quote(issue_key, safe='')}/worklog/{quote(work_log_id, safe='')}"
+            self._check_issue_audience(issue_key)
+            row = self._client.jira._get_json(path, params={"expand": "properties"})
+            if has_comment_audience(row):
+                msg = "This work log has restricted or unrecognized audience metadata."
+                raise JiraApiError(msg)
+            return self._record_with_author_zone(issue_key, row)
 
         except Exception as e:
             error_msg = f"Failed to get work log {work_log_id} for issue {issue_key}: {e!s}"

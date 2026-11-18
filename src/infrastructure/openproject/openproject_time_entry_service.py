@@ -1,30 +1,7 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Time-entry helpers for the OpenProject Rails console.
-
-Phase 2q of ADR-002 continues the openproject_client.py god-class
-decomposition by collecting the four time-entry helpers onto a focused
-service. The service owns:
-
-* **Activities** — ``get_time_entry_activities`` fetches all active
-  ``TimeEntryActivity`` records via a file-based JSON query.
-* **Single write** — ``create_time_entry`` extracts IDs from the
-  OpenProject API-format ``_embedded`` payload, builds a Ruby script
-  with provenance-CF assignment, and calls
-  ``execute_query_to_json_file``.
-* **Reads** — ``get_time_entries`` returns time entries with optional
-  ``work_package_id`` / ``user_id`` filters.
-* **Batch write** — ``batch_create_time_entries`` transfers a JSON
-  payload to the container and runs a Rails runner script that
-  creates ``TimeEntry`` records in bulk, writing structured results
-  to a result file. Per-entry failures are captured in the result
-  rather than raising, so partial success is the normal shape.
-
-``OpenProjectClient`` exposes the service via ``self.time_entries``
-and keeps thin delegators for the same method names so existing
-callers work unchanged.
-"""
+"""Read and write OpenProject time entries through Rails with Jira worklog provenance."""
 
 from __future__ import annotations
 
@@ -40,82 +17,85 @@ from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
-# Bulk entries use the same Jira worklog key field as individual writes and lookups.
 _BULK_TIME_ENTRY_BODY = """\
-begin; Rails.logger.level = Logger::WARN; rescue; end
-begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end
-begin; GoodJob.logger = Logger.new(nil); rescue; end
 entries = JSON.parse(File.read(data_path), symbolize_names: true)
 results = []
-created_count = 0
-failed_count = 0
-entries.each do |entry|
-  begin
-    te = TimeEntry.new(
-      activity_id: entry[:activity_id],
-      hours: entry[:hours],
-      spent_on: Date.parse(entry[:spent_on]),
-      comments: entry[:comments],
-      entity_id: entry[:work_package_id],
-      entity_type: 'WorkPackage'
-    )
-    begin
-      wp = WorkPackage.find_by(id: entry[:work_package_id])
-      if wp.nil?
-        failed_count += 1
-        results << { index: entry[:index], success: false, error: 'WorkPackage not found: ' + entry[:work_package_id].to_s }
-        next
+source_mismatch = Class.new(StandardError)
+field_names = {
+  jira_worklog_key: 'J2O Origin Worklog Key',
+  jira_started: 'J2O Source Worklog Started',
+  jira_update_author_id: 'J2O Worklog Update Author ID'
+}
+fields_for = lambda do |row|
+  field_names.each_with_object({}) do |(key, name), values|
+    next if row[key].nil? || row[key].to_s.empty?
+    field = TimeEntryCustomField.find_by(name: name)
+    unless field
+      TimeEntry.connection.select_value('SELECT pg_advisory_xact_lock(124481108, 0)')
+      field = TimeEntryCustomField.find_or_create_by!(name: name) do |f|
+        f.assign_attributes(field_format: 'string', is_required: false, is_for_all: false, admin_only: true)
       end
-      te.entity = wp
-      te.project = wp.project
-    rescue => e
-      failed_count += 1
-      results << { index: entry[:index], success: false, error: 'WorkPackage lookup failed: ' + e.message }
-      next
     end
-    begin
-      user = User.find_by(id: entry[:user_id])
-      if user.nil?
-        failed_count += 1
-        results << { index: entry[:index], success: false, error: 'User not found: ' + entry[:user_id].to_s }
-        next
-      end
-      te.user = user
-      te.user_id = entry[:user_id]
-      te.logged_by_id = entry[:user_id]
-    rescue => e
-      failed_count += 1
-      results << { index: entry[:index], success: false, error: 'User lookup failed: ' + e.message }
-      next
-    end
-    begin
-      key = entry[:jira_worklog_key]
-      if !key.nil? && !key.to_s.empty?
-        cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
-        if !cf
-          cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string', is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
-          cf.save
-        end
-        begin
-          te.custom_field_values = { cf.id => key }
-        rescue => e
-        end
-      end
-    rescue => e
-    end
-    if te.save
-      created_count += 1
-      results << { index: entry[:index], success: true, id: te.id }
-    else
-      failed_count += 1
-      results << { index: entry[:index], success: false, errors: te.errors.full_messages }
-    end
-  rescue => e
-    failed_count += 1
-    results << { index: entry[:index], success: false, error: e.message }
+    raise source_mismatch, 'Incompatible source field' unless field.field_format == 'string'
+    raise source_mismatch, 'Source metadata field must be private' unless key == :jira_worklog_key || field.admin_only?
+    values[field.id] = row[key].to_s
   end
 end
-File.write(result_path, JSON.generate({ created: created_count, failed: failed_count, results: results }))
+entries.each do |row|
+  begin
+    outcome = TimeEntry.transaction(requires_new: true) do
+      wp = WorkPackage.find(row.fetch(:work_package_id))
+      raise source_mismatch, 'Work package in a different project' if row[:target_project_id] && wp.project_id != row[:target_project_id]
+      activity = TimeEntryActivity.find(row.fetch(:activity_id))
+      raise source_mismatch, 'Activity in a different project' if activity.project_id && activity.project_id != wp.project_id
+      user = User.find(row.fetch(:user_id))
+      User.find(row[:jira_update_author_id]) if row[:jira_update_author_id]
+      attrs = { entity: wp, project: wp.project, user: user, logged_by_id: user.id,
+                hours: row.fetch(:hours).to_f, spent_on: Date.iso8601(row.fetch(:spent_on)),
+                activity_id: row.fetch(:activity_id), comments: row.fetch(:comments) }
+      if row[:jira_time_zone]
+        attrs.merge!(time_zone: row[:jira_time_zone], start_time: row[:jira_start_minute])
+      end
+      attrs[:created_at] = Time.iso8601(row[:jira_created_at]) if row[:jira_created_at]
+      attrs[:updated_at] = Time.iso8601(row[:jira_updated_at]) if row[:jira_updated_at]
+      values = fields_for.call(row)
+      record = nil
+      if row[:jira_worklog_key].present?
+        connection = TimeEntry.connection
+        lock_sql = TimeEntry.sanitize_sql_array(["SELECT pg_advisory_xact_lock(124481109, hashtext(?))", row[:jira_worklog_key]])
+        connection.select_value(lock_sql)
+        field = TimeEntryCustomField.find_sole_by(name: field_names.fetch(:jira_worklog_key))
+        matches = CustomValue.where(customized_type: 'TimeEntry', custom_field_id: field.id, value: row[:jira_worklog_key])
+        record = TimeEntry.find(matches.sole.customized_id) if matches.exists?
+      end
+      existing = !record.nil?
+      unless existing
+        record = TimeEntry.new(attrs)
+        record.custom_field_values = values if values.any?
+        record.save!
+      end
+      record.reload
+      raise source_mismatch, 'Work log differs from target attributes' unless attrs.all? { |k,v| record.public_send(k) == v }
+      if row[:jira_start_minute] && record.start_timestamp.to_time.utc != Time.iso8601(row.fetch(:jira_started)).utc
+        raise source_mismatch, 'Native work log start differs from the source instant'
+      end
+      raise source_mismatch, 'Work log differs from target provenance' unless values.all? { |id,v| record.custom_values.where(custom_field_id: id).sole.value == v }
+      result = { index: row[:index], success: true, reused: existing, id: record.id }
+      if row[:return_record]
+        result.merge!(work_package_id: record.entity_id, user_id: record.user_id, activity_id: record.activity_id,
+                      hours: record.hours, spent_on: record.spent_on.to_s, comments: record.comments,
+                      created_at: record.created_at.to_s, updated_at: record.updated_at.to_s)
+      end
+      result
+    end
+    results << outcome
+  rescue => e
+    results << { index: row[:index], success: false, error: e.is_a?(source_mismatch) ? e.message : e.class.name }
+  end
+end
+created = results.count { |r| r[:success] && !r[:reused] }
+reused = results.count { |r| r[:reused] }
+File.write(result_path, JSON.generate({ created: created, reused: reused, failed: results.size - created - reused, results: results }))
 """
 
 
@@ -137,8 +117,8 @@ def _time_entry_ids(entry: dict[str, Any]) -> tuple[int | None, int | None, int 
 def _comment_text(entry: dict[str, Any]) -> str:
     comment = entry.get("comment", "")
     if isinstance(comment, dict):
-        return comment.get("raw") or comment.get("text") or str(comment)
-    return str(comment)
+        return comment.get("raw", comment.get("text", ""))
+    return str(comment or "")
 
 
 class OpenProjectTimeEntryService:
@@ -204,26 +184,26 @@ class OpenProjectTimeEntryService:
         """
         conditions = []
         if work_package_id:
-            conditions.append(f"work_package_id: {work_package_id}")
+            conditions.append(f"entity_id: {int(work_package_id)}, entity_type: 'WorkPackage'")
         if user_id:
-            conditions.append(f"user_id: {user_id}")
+            conditions.append(f"user_id: {int(user_id)}")
 
         where_clause = f".where({', '.join(conditions)})" if conditions else ""
 
         # Build Ruby expression that avoids relying on a 'work_package' association (use explicit lookup)
         query = (
-            f"TimeEntry{where_clause}.limit({limit})"
+            f"TimeEntry{where_clause}.limit({int(limit)})"
             ".map do |entry| "
-            "wp = (begin WorkPackage.find_by(id: entry.work_package_id); rescue; nil end); "
+            "wp = entry.entity if entry.entity_type == 'WorkPackage'; "
             "act = (begin entry.activity; rescue; nil end); usr = (begin entry.user; rescue; nil end); "
             "{ id: entry.id, "
-            "work_package_id: entry.work_package_id, "
+            "work_package_id: wp&.id, "
             "work_package_subject: (wp ? wp.subject : nil), "
             "user_id: entry.user_id, user_name: (usr ? usr.name : nil), "
             "activity_id: entry.activity_id, activity_name: (act ? act.name : nil), "
             "hours: entry.hours.to_f, spent_on: entry.spent_on.to_s, "
             "comments: entry.comments, created_at: entry.created_at.to_s, updated_at: entry.updated_at.to_s, "
-            "custom_fields: (begin cf = entry.custom_field_values; cf.respond_to?(:to_json) ? cf : {}; rescue; {} end) } end"
+            "custom_fields: entry.custom_values.as_json(only: [:custom_field_id, :value]) } end"
         )
 
         try:
@@ -258,118 +238,41 @@ class OpenProjectTimeEntryService:
             ValueError: If the embedded payload is missing required IDs
 
         """
-        # Lazy import: ``escape_ruby_single_quoted`` lives on
-        # openproject_client; lazy keeps the service ↔ client cycle out
-        # of module-load time.
-        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+        row = self._entry_row(time_entry_data, 0)
+        row["return_record"] = True
+        result = self._submit_rows([row], [])["results"][0]
+        return result if result.get("success") else None
 
-        work_package_id, user_id, activity_id = _time_entry_ids(time_entry_data)
-
-        if not all([work_package_id, user_id, activity_id]):
-            msg = (
-                f"Missing required IDs: work_package_id={work_package_id}, user_id={user_id}, activity_id={activity_id}"
-            )
-            raise ValueError(
-                msg,
-            )
-
-        comment_str = _comment_text(time_entry_data)
-
-        # Prepare the script with proper Ruby syntax
-        script = f"""
-        begin
-          require 'logger'
-          begin; Rails.logger.level = Logger::WARN; rescue; end
-          begin; ActiveJob::Base.logger = Logger.new(nil); rescue; end
-          begin; GoodJob.logger = Logger.new(nil); rescue; end
-          time_entry = TimeEntry.new(
-            entity_id: {work_package_id},
-            entity_type: 'WorkPackage',
-            user_id: {user_id},
-            logged_by_id: {user_id},
-            activity_id: {activity_id},
-            hours: {float(time_entry_data.get("hours", 0))},
-            spent_on: Date.parse('{escape_ruby_single_quoted(time_entry_data.get("spentOn", ""))}'),
-            comments: '{escape_ruby_single_quoted(comment_str)}'
-          )
-
-          # Ensure project is set from associated work package to satisfy validations
-          begin
-            wp = WorkPackage.find_by(id: {work_package_id})
-            if wp
-              time_entry.entity = wp
-              time_entry.project = wp.project
-            end
-          rescue => e
-            # ignore association errors here; validations will surface below
-          end
-
-          # Provenance CF for time entries: J2O Origin Worklog Key
-          begin
-            key = '{escape_ruby_single_quoted(str(time_entry_data.get("_meta", {}).get("jira_worklog_key") or ""))}'
-            # Empty strings are truthy in Ruby — skip CF assignment
-            # explicitly when the key is missing/blank so we don't
-            # create or set provenance for entries without a worklog
-            # source.
-            if !key.nil? && !key.strip.empty?
-              cf = CustomField.find_by(type: 'TimeEntryCustomField', name: 'J2O Origin Worklog Key')
-              if !cf
-                cf = CustomField.new(name: 'J2O Origin Worklog Key', field_format: 'string',
-                  is_required: false, is_for_all: true, type: 'TimeEntryCustomField')
-                cf.save
-              end
-              begin
-                time_entry.custom_field_values = {{ cf.id => key }}
-              rescue => e
-                # ignore CF assignment errors
-              end
-            end
-          rescue => e
-            # ignore provenance CF errors
-          end
-
-          if time_entry.save
-            {{
-              id: time_entry.id,
-              work_package_id: time_entry.entity_id,
-              user_id: time_entry.user_id,
-              activity_id: time_entry.activity_id,
-              hours: time_entry.hours.to_f,
-              spent_on: time_entry.spent_on.to_s,
-              comments: time_entry.comments,
-              created_at: time_entry.created_at.to_s,
-              updated_at: time_entry.updated_at.to_s
-            }}
-          else
-            {{
-              error: "Validation failed",
-              errors: time_entry.errors.full_messages
-            }}
-          end
-        rescue => e
-          {{
-            error: "Creation failed",
-            message: e.message,
-            backtrace: e.backtrace.first(3)
-          }}
-        end
-        """
-
-        try:
-            result = self._client.execute_query_to_json_file(script)
-
-            if isinstance(result, dict):
-                if result.get("error"):
-                    self._logger.warning("Time entry creation failed: %s", result)
-                    return None
-                return result
-
-            self._logger.warning("Unexpected time entry creation result: %s", result)
-            return None
-
-        except Exception as e:
-            msg = f"Failed to create time entry: {e}"
-            raise QueryExecutionError(msg) from e
+    @staticmethod
+    def _entry_row(entry: dict[str, Any], index: int) -> dict[str, Any]:
+        wp, user, activity = _time_entry_ids(entry)
+        if not all((wp, user, activity)):
+            msg = f"Missing required IDs: work_package_id={wp}, user_id={user}, activity_id={activity}"
+            raise ValueError(msg)
+        meta = entry.get("_meta") or {}
+        if ("jira_work_log_id" in meta or "tempo_worklog_id" in meta) and not meta.get("jira_worklog_key"):
+            msg = "The source work log has no origin key."
+            raise ValueError(msg)
+        keys = (
+            "target_project_id",
+            "jira_worklog_key",
+            "jira_started",
+            "jira_update_author_id",
+            "jira_time_zone",
+            "jira_start_minute",
+            "jira_created_at",
+            "jira_updated_at",
+        )
+        return {
+            "index": index,
+            "work_package_id": wp,
+            "user_id": user,
+            "activity_id": activity,
+            "hours": entry.get("hours"),
+            "spent_on": entry.get("spentOn"),
+            "comments": _comment_text(entry),
+            **{key: meta[key] for key in keys if meta.get(key) is not None},
+        }
 
     def batch_create_time_entries(
         self,
@@ -399,47 +302,13 @@ class OpenProjectTimeEntryService:
         if not time_entries:
             return {"created": 0, "failed": 0, "results": []}
 
-        client = self._client
-
-        # Build entries data with necessary fields and ID extraction.
-        # Track skipped (malformed) entries explicitly so the returned
-        # summary reflects every input index, not just the ones that
-        # made it into the Ruby payload — callers can then reconcile
-        # input list ↔ output ``results`` 1:1.
-        entries_data: list[dict[str, Any]] = []
-        skipped_results: list[dict[str, Any]] = []
-        for i, entry_data in enumerate(time_entries):
-            work_package_id, user_id, activity_id = _time_entry_ids(entry_data)
-
-            if not all([work_package_id, user_id, activity_id]):
-                # Record a structured failure for the caller — preserves
-                # the 1:1 input/output mapping the bulk callers rely on.
-                skipped_results.append(
-                    {
-                        "index": i,
-                        "success": False,
-                        "error": (
-                            "Missing required IDs: "
-                            f"work_package_id={work_package_id}, user_id={user_id}, activity_id={activity_id}"
-                        ),
-                    },
-                )
-                continue
-
-            comment_str = _comment_text(entry_data)
-
-            entries_data.append(
-                {
-                    "index": i,
-                    "work_package_id": work_package_id,
-                    "user_id": user_id,
-                    "activity_id": activity_id,
-                    "hours": entry_data.get("hours", 0),
-                    "spent_on": entry_data.get("spentOn", ""),
-                    "comments": comment_str,
-                    "jira_worklog_key": (entry_data.get("_meta", {}) or {}).get("jira_worklog_key"),
-                },
-            )
+        entries_data = []
+        skipped_results = []
+        for i, entry in enumerate(time_entries):
+            try:
+                entries_data.append(self._entry_row(entry, i))
+            except ValueError as exc:
+                skipped_results.append({"index": i, "success": False, "error": str(exc)})
 
         if not entries_data:
             return {
@@ -448,6 +317,10 @@ class OpenProjectTimeEntryService:
                 "results": skipped_results,
             }
 
+        return self._submit_rows(entries_data, skipped_results)
+
+    def _submit_rows(self, entries_data: list[dict], skipped_results: list[dict]) -> dict[str, Any]:
+        client = self._client
         temp_root = Path(client.file_manager.data_dir) / "bulk_create"
         temp_root.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(dir=temp_root) as local, private_container_directory(client.docker_client) as directory:
@@ -470,9 +343,11 @@ class OpenProjectTimeEntryService:
         local_result = temp_dir / container_result.name
 
         # Build Ruby runner that writes results JSON to file via helper assembly
+        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+
         header_lines = [
-            f"data_path = '{container_json.as_posix()}'",
-            f"result_path = '{container_result.as_posix()}'",
+            f"data_path = '{escape_ruby_single_quoted(container_json.as_posix())}'",
+            f"result_path = '{escape_ruby_single_quoted(container_result.as_posix())}'",
         ]
         ruby_lines = _BULK_TIME_ENTRY_BODY.splitlines()
         # Wrap the body in an outer ``begin/rescue/ensure`` so any
