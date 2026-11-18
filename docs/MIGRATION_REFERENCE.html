@@ -454,7 +454,10 @@
             background: var(--light-gray);
             color: var(--mid-gray);
             font-size: 0.75rem;
-            transition: transform 0.2s;
+        }
+
+        @media (prefers-reduced-motion: no-preference) {
+            .accordion-toggle { transition: transform 0.2s; }
         }
 
         .accordion[open] > .accordion-header .accordion-toggle {
