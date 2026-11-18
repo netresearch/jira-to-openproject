@@ -64,3 +64,19 @@ def test_catalog_exports_use_private_staging(tmp_path, monkeypatch):
     value, stage = structured["data"]
     assert value == {"name": "wrapped [text]"}
     assert not client.docker_client.check_file_exists_in_container(stage)
+
+    # Simulate a lost acknowledgement after the first process has committed its output.
+    monkeypatch.delenv("J2O_FORCE_RAILS_RUNNER")
+    monkeypatch.setenv("J2O_SCRIPT_LOAD_MODE", "console")
+
+    def lose_acknowledgement(command, **kwargs):
+        path = command.removeprefix("load '").removesuffix("'")
+        client.rails_runner._run_staged_query(path, 90)
+        raise ConnectionError("console response lost")
+
+    client.rails_client.execute.side_effect = lose_acknowledgement
+    result = client.rails_runner.execute_large_query_to_json_file(
+        "counter = File.join(File.dirname(__FILE__), 'count'); "
+        "n = File.exist?(counter) ? File.read(counter).to_i + 1 : 1; File.write(counter, n.to_s); n"
+    )
+    assert result == 1

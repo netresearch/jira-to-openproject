@@ -508,6 +508,25 @@ class OpenProjectRailsRunnerService:
             shutil.rmtree(local)
             return result
 
+    @staticmethod
+    def _once_per_directory(script: str, directory: Path) -> str:
+        """Keep a runner fallback from repeating work already dispatched to the console."""
+        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+
+        state = escape_ruby_single_quoted((directory / "execution.state").as_posix())
+        return (
+            f"File.open('{state}', File::RDWR | File::CREAT, 0600) do |j2o_lock|\n"
+            "  j2o_lock.flock(File::LOCK_EX)\n"
+            "  case j2o_lock.read\n"
+            "  when 'done'\n    nil\n"
+            "  when ''\n"
+            "    j2o_lock.write('started'); j2o_lock.flush; j2o_lock.fsync\n"
+            f"{script}\n"
+            "    j2o_lock.rewind; j2o_lock.write('done'); j2o_lock.truncate(4); j2o_lock.flush; j2o_lock.fsync\n"
+            "  else\n    raise 'Previous Rails execution did not finish; verify the target before retrying'\n"
+            "  end\nend\n"
+        )
+
     def _run_structured_script(
         self, script_content: str, data: Any, timeout: int | None, local: Path, remote: Path
     ) -> dict[str, Any]:
@@ -536,7 +555,7 @@ class OpenProjectRailsRunnerService:
             "  end\nend\n"
         )
         script_path = local / "structured.rb"
-        script_path.write_text(script, encoding="utf-8")
+        script_path.write_text(self._once_per_directory(script, remote), encoding="utf-8")
         self._client.transfer_file_to_container(input_path, remote / input_path.name)
         remote_script = (remote / script_path.name).as_posix()
         self._client.transfer_file_to_container(script_path, Path(remote_script))
@@ -623,7 +642,7 @@ class OpenProjectRailsRunnerService:
             destination = Path(container_file or "result.json")
             if not destination.is_absolute():
                 destination = directory / destination.name
-            script = self._json_export_script(query, destination)
+            script = self._once_per_directory(self._json_export_script(query, destination), directory)
             self._run_json_script(script, directory, timeout)
             return self._read_query_result(str(destination))
 
@@ -631,7 +650,7 @@ class OpenProjectRailsRunnerService:
         """Read a complete catalog using the persistent console and configured fallback policy."""
         with private_container_directory(self._client.docker_client) as directory:
             destination = directory / "result.json"
-            script = self._json_export_script(query, destination)
+            script = self._once_per_directory(self._json_export_script(query, destination), directory)
             if os.getenv("J2O_FORCE_RAILS_RUNNER"):
                 self._run_query_file(script, directory, None)
             else:
