@@ -115,9 +115,10 @@ class AttachmentRecoveryMigration(BaseMigration):
         paired = 0
         # Index by normalized form to find matches in O(n).
         missing_by_norm: dict[str, list[str]] = {}
-        for fn in list(missing.elements()):
+        for fn in missing.elements():
             missing_by_norm.setdefault(cls._normalize_filename(fn), []).append(fn)
-        for fn in list(extra.elements()):
+        # Matching decrements the live counter, so iterate its original multiplicities.
+        for fn in extra.copy().elements():
             norm = cls._normalize_filename(fn)
             candidates = missing_by_norm.get(norm)
             if not candidates:

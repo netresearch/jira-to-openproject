@@ -383,7 +383,7 @@ class IssueTypeMigration(BaseMigration):
             normal_types[jira_type_name] = type_data
 
         # Process all sub-types and map them to normal types
-        for jira_type_name, type_data in list(normalized_mapping.items()):
+        for jira_type_name in normalized_mapping:
             if not (jira_type_name.startswith(("Sub:", "Sub-"))):
                 continue
 

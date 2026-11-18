@@ -570,9 +570,13 @@ class CheckpointManager:
             del self._progress_trackers[migration_record_id]
 
         # Move active checkpoints to completed
-        for checkpoint_id, checkpoint in list(self._active_checkpoints.items()):
-            if checkpoint["migration_record_id"] == migration_record_id:
-                self._move_checkpoint_to_completed(checkpoint_id)
+        completed_ids = [
+            checkpoint_id
+            for checkpoint_id, checkpoint in self._active_checkpoints.items()
+            if checkpoint["migration_record_id"] == migration_record_id
+        ]
+        for checkpoint_id in completed_ids:
+            self._move_checkpoint_to_completed(checkpoint_id)
 
         self.logger.debug(
             "Cleaned up tracking data for migration %s",
