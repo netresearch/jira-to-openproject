@@ -83,32 +83,18 @@ class TestJiraClientIntegration(unittest.TestCase):
         """Test the JiraClient can connect to a Jira instance."""
         print(f"\n=== Testing Jira Client Connection to {self.__class__.jira_url} ===")
 
-        try:
-            # Initialize client
-            jira_client = JiraClient()
+        # Initialize client
+        jira_client = JiraClient()
 
-            # Verify client is initialized
-            assert jira_client.jira is not None
-            print("✅ Successfully connected to Jira instance")
+        # Verify client is initialized
+        assert jira_client.jira is not None
+        print("✅ Successfully connected to Jira instance")
 
-            # Get server info to ensure connection works
-            if jira_client.jira:  # Type guard for the linter
-                server_info = jira_client.jira.server_info()
-                print(f"Jira Server Version: {server_info.get('version')}")
-                print(f"Jira Base URL: {server_info.get('baseUrl')}")
-
-        except JiraAuthenticationError as e:
-            print(f"❌ Authentication failed: {e}")
-            self.fail(f"Jira authentication failed: {e}")
-        except JiraConnectionError as e:
-            print(f"❌ Connection failed: {e}")
-            self.fail(f"Jira connection failed: {e}")
-        except JiraApiError as e:
-            print(f"❌ API error: {e}")
-            self.fail(f"Jira API error: {e}")
-        except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-            self.fail(f"Unexpected error: {e}")
+        # Get server info to ensure connection works
+        if jira_client.jira:  # Type guard for the linter
+            server_info = jira_client.jira.server_info()
+            print(f"Jira Server Version: {server_info.get('version')}")
+            print(f"Jira Base URL: {server_info.get('baseUrl')}")
 
     def test_error_handling(self) -> None:
         """Test that JiraClient properly handles error responses."""
