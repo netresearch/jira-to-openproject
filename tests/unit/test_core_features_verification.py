@@ -20,6 +20,7 @@ of the feature is present and working.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -226,16 +227,32 @@ class TestJ2O1MetadataPreservation:
         migration.op_client.ensure_custom_field.assert_not_called()
 
     def test_user_associations_preserved(self):
-        """Verify user associations (assignee, reporter, watchers) are preserved."""
-        wp_migration_file = (
-            Path(__file__).parent.parent.parent / "src" / "application" / "components" / "work_package_migration.py"
-        )
-        wp_source = wp_migration_file.read_text()
+        """The issue projection keeps the association migrator's reporter, assignee and watchers."""
+        from src.application.components.work_package_migration import WorkPackageMigration
 
-        # Verify user association logic
-        assert "assignee" in wp_source
-        assert "reporter" in wp_source or "creator" in wp_source
-        assert "watchers" in wp_source or "watcher" in wp_source
+        issue = SimpleNamespace(
+            id="101",
+            key="SYNTH-1",
+            raw={"fields": {}},
+            fields=SimpleNamespace(issuetype=SimpleNamespace(id="1", name="Task"), summary="Synthetic"),
+        )
+        migration = WorkPackageMigration.__new__(WorkPackageMigration)
+        migration.issue_type_id_mapping = {"1": 7}
+        migration._ensure_provenance_field_ids = Mock()
+        migration._resolve_start_date = Mock(return_value=None)
+        migration.enhanced_timestamp_migrator = Mock()
+        migration.enhanced_timestamp_migrator.migrate_timestamps.return_value = {"warnings": [], "errors": []}
+        migration.enhanced_user_migrator = Mock()
+        associations = {"author_id": 81, "assigned_to_id": 82, "watcher_ids": [83, 84]}
+
+        def associate(jira_issue, work_package_data, **_kwargs):
+            assert jira_issue is issue
+            work_package_data.update(associations)
+            return {"warnings": []}
+
+        migration.enhanced_user_migrator.migrate_user_associations.side_effect = associate
+        result = migration.prepare_work_package(issue, 9)
+        assert {key: result[key] for key in associations} == associations
 
     def test_enhanced_user_association_migrator_used(self):
         """Verify EnhancedUserAssociationMigrator is used for user mapping."""
@@ -265,19 +282,17 @@ class TestJ2O1MetadataPreservation:
         assert hasattr(wp_migration, "enhanced_timestamp_migrator")
         assert wp_migration.enhanced_timestamp_migrator is not None
 
-    def test_enhanced_audit_trail_migrator_used(self):
-        """Verify EnhancedAuditTrailMigrator is used for comments/history."""
+    def test_work_package_journal_replay_requires_the_supported_import(self):
+        """History-bearing inputs fail before modifying the target."""
         from src.application.components.work_package_migration import WorkPackageMigration
+        from src.infrastructure.openproject.openproject_bulk_create_service import LegacyJournalReplayError
 
-        jira_client = Mock()
-        op_client = Mock()
-        op_client.rails_client = Mock()
-
-        wp_migration = WorkPackageMigration(jira_client, op_client)
-
-        # Verify enhanced audit trail migrator is instantiated
-        assert hasattr(wp_migration, "enhanced_audit_trail_migrator")
-        assert wp_migration.enhanced_audit_trail_migrator is not None
+        migration = WorkPackageMigration.__new__(WorkPackageMigration)
+        migration.op_client = Mock()
+        issue = {"key": "SYNTH-1", "changelog": {"total": 1, "histories": [{"items": []}]}}
+        with pytest.raises(LegacyJournalReplayError, match="work_packages_content"):
+            migration.prepare_work_package(issue, 9)
+        assert not migration.op_client.mock_calls
 
     def test_metadata_completeness(self):
         """Verify comprehensive metadata fields are extracted."""
