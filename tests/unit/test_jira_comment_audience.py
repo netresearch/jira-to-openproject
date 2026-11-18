@@ -111,3 +111,16 @@ def test_issue_cache_omits_embedded_rendered_and_historical_comments():
     cleaned = issue_without_comments(raw)
     assert "private" not in str(cleaned) and "private" in str(raw)
     assert cleaned["changelog"]["histories"] == [{"items": [{"field": "status", "toString": "Done"}]}]
+
+
+def test_legacy_history_requires_an_identifiable_non_comment_field():
+    from src.infrastructure.jira.comment_audience import issue_without_comments
+
+    history = [
+        {"field": "Kommentar", "toString": "confidential revision"},
+        {"field": "Texte du journal", "fieldtype": "jira", "fromString": "another private revision"},
+        {"field": "Status", "toString": "Done"},
+        {"field": "Team", "fieldId": "customfield_10400", "toString": "Platform"},
+    ]
+    result = issue_without_comments({"changelog": {"histories": [{"items": history}]}})
+    assert result["changelog"]["histories"][0]["items"] == history[2:]

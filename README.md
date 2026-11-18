@@ -122,7 +122,7 @@ Use a fresh, private OpenProject target and freeze Jira writes and permission ch
 
 For an internet-public Jira, set `J2O_COPY_PUBLIC_COMMENTS=1` to copy comments that Jira also returns over HTTPS to a credential-free request identified as anonymous. Each copied ID and text must match both reads. Use the default if a VPN, network allowlist or authenticating proxy limits Jira access. Group, role, internal Service Management and unknown comment restrictions stay at source. Project membership alone does not establish equivalent access.
 
-Before opening the target, run the content step against the frozen source. It stops if previously marked target comments differ from the currently approved texts. Earlier imports could write unmarked journals. Restore a clean pre-import snapshot before using this version on such a target. A completed copy is a snapshot of Jira permissions at cutover. Later permission changes in Jira do not revoke an OpenProject journal.
+Historical field changes without an identifiable non-comment field stay in Jira as well. Before opening the target, run the content step against the frozen source. It stops if previously marked target comments differ from the currently approved texts. Earlier imports could write unmarked journals. Restore a clean pre-import snapshot before using this version on such a target. A completed copy is a snapshot of Jira permissions at cutover. Later permission changes in Jira do not revoke an OpenProject journal.
 
 Compare counts for issues, copied and retained comments, attachments and logged hours. Repeat the import on the private target and check for duplicates and reported field mapping failures.
 
