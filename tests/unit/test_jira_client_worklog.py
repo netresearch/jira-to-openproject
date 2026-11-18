@@ -106,7 +106,7 @@ class TestJiraClientWorkLog:
     def test_audience_is_checked_before_projection(self, mock_jira_client, row) -> None:
         row["id"] = "1"
         mock_jira_client.jira._get_json.side_effect = [
-            {"key": "TEST-1", "fields": {}},
+            {"key": "TEST-1", "fields": {"security": None}},
             {"startAt": 0, "total": 1, "worklogs": [row]},
         ]
         with pytest.raises(JiraApiError, match="audience"):
@@ -114,11 +114,26 @@ class TestJiraClientWorkLog:
 
     def test_stalled_page_is_not_reported_as_empty(self, mock_jira_client) -> None:
         mock_jira_client.jira._get_json.side_effect = [
-            {"key": "TEST-1", "fields": {}},
+            {"key": "TEST-1", "fields": {"security": None}},
             {"startAt": 0, "total": 1, "worklogs": []},
         ]
         with pytest.raises(JiraApiError, match="incomplete"):
             mock_jira_client.get_work_logs_for_issue("TEST-1")
+
+    @pytest.mark.parametrize("matched", [True, False])
+    def test_missing_security_field_requires_positive_empty_level_match(self, mock_jira_client, matched) -> None:
+        sdk = mock_jira_client.jira
+        sdk._get_json.side_effect = [
+            {"id": "42", "key": "TEST-1"},
+            {"startAt": 0, "total": 0, "worklogs": []},
+        ]
+        sdk.search_issues.return_value = [Mock(id="42")] if matched else []
+        if matched:
+            assert mock_jira_client.get_work_logs_for_issue("TEST-1") == []
+        else:
+            with pytest.raises(JiraApiError, match="Issue security"):
+                mock_jira_client.get_work_logs_for_issue("TEST-1")
+        sdk.search_issues.assert_called_once_with("id = 42 AND level IS EMPTY", fields="id", maxResults=1)
 
     def test_get_work_logs_for_issue_not_found(self, mock_jira_client) -> None:
         mock_jira_client.jira._get_json.side_effect = Exception("Issue does not exist")

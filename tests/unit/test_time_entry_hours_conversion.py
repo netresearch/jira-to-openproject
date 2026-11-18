@@ -68,5 +68,6 @@ def test_eight_hour_worklog(transformer: TimeEntryTransformer) -> None:
 
 @pytest.mark.parametrize("seconds", [0, -1])
 def test_nonpositive_duration_is_rejected(transformer: TimeEntryTransformer, seconds: int) -> None:
+    worklog = _worklog(seconds)
     with pytest.raises(ValueError, match="positive integer"):
-        transformer.transform_jira_work_log(_worklog(seconds), "TEST-1")
+        transformer.transform_jira_work_log(worklog, "TEST-1")

@@ -42,6 +42,38 @@ from src.infrastructure.jira.jira_client import (
 from src.utils.timezone import UTC
 
 
+def _visible_tempo_record(work_log: dict[str, Any]) -> dict[str, Any]:
+    if has_comment_audience(work_log):
+        msg = "Cannot expose audience-restricted Tempo work logs."
+        raise JiraApiError(msg)
+
+    return {
+        "tempo_worklog_id": work_log.get("tempoWorklogId"),
+        "jira_worklog_id": work_log.get("jiraWorklogId"),
+        "issue_key": work_log.get("issue", {}).get("key"),
+        "issue_id": work_log.get("issue", {}).get("id"),
+        "author": {
+            "username": work_log.get("author", {}).get("name"),
+            "key": work_log.get("author", {}).get("key"),
+            "display_name": work_log.get("author", {}).get("displayName"),
+            "account_id": work_log.get("author", {}).get("accountId"),
+        },
+        "time_spent_seconds": work_log.get("timeSpentSeconds"),
+        "billable_seconds": work_log.get("billableSeconds"),
+        "date_started": work_log.get("dateStarted"),
+        "time_started": work_log.get("timeStarted"),
+        "comment": work_log.get("comment"),
+        "created": work_log.get("created"),
+        "updated": work_log.get("updated"),
+        "work_attributes": work_log.get("workAttributes", []),
+        "account": work_log.get("account", {}),
+        "approval_status": work_log.get("approvalStatus"),
+        "external_hours": work_log.get("externalHours"),
+        "external_id": work_log.get("externalId"),
+        "origin_task_id": work_log.get("originTaskId"),
+    }
+
+
 class JiraTempoService:
     """Tempo-plugin queries for ``JiraClient``."""
 
@@ -254,40 +286,7 @@ class JiraTempoService:
             work_logs = response.json()
             self._logger.info("Successfully retrieved %s Tempo work logs", len(work_logs))
 
-            # Enhance work logs with additional metadata
-            enhanced_work_logs = []
-            for work_log in work_logs:
-                if has_comment_audience(work_log):
-                    msg = "Cannot expose audience-restricted Tempo work logs."
-                    raise JiraApiError(msg)
-                enhanced_work_log = {
-                    "tempo_worklog_id": work_log.get("tempoWorklogId"),
-                    "jira_worklog_id": work_log.get("jiraWorklogId"),
-                    "issue_key": work_log.get("issue", {}).get("key"),
-                    "issue_id": work_log.get("issue", {}).get("id"),
-                    "author": {
-                        "username": work_log.get("author", {}).get("name"),
-                        "key": work_log.get("author", {}).get("key"),
-                        "display_name": work_log.get("author", {}).get("displayName"),
-                        "account_id": work_log.get("author", {}).get("accountId"),
-                    },
-                    "time_spent_seconds": work_log.get("timeSpentSeconds"),
-                    "billable_seconds": work_log.get("billableSeconds"),
-                    "date_started": work_log.get("dateStarted"),
-                    "time_started": work_log.get("timeStarted"),
-                    "comment": work_log.get("comment"),
-                    "created": work_log.get("created"),
-                    "updated": work_log.get("updated"),
-                    "work_attributes": work_log.get("workAttributes", []),
-                    "account": work_log.get("account", {}),
-                    "approval_status": work_log.get("approvalStatus"),
-                    "external_hours": work_log.get("externalHours"),
-                    "external_id": work_log.get("externalId"),
-                    "origin_task_id": work_log.get("originTaskId"),
-                }
-                enhanced_work_logs.append(enhanced_work_log)
-
-            return enhanced_work_logs
+            return [_visible_tempo_record(row) for row in work_logs]
 
         except JiraServiceUnavailableError as e:
             self._logger.warning(
@@ -408,39 +407,7 @@ class JiraTempoService:
                 if not work_logs_batch:
                     break
 
-                # Process batch and add to results
-                for work_log in work_logs_batch:
-                    if has_comment_audience(work_log):
-                        msg = "Cannot expose audience-restricted Tempo work logs."
-                        raise JiraApiError(msg)
-                    enhanced_work_log = {
-                        "tempo_worklog_id": work_log.get("tempoWorklogId"),
-                        "jira_worklog_id": work_log.get("jiraWorklogId"),
-                        "issue_key": work_log.get("issue", {}).get("key"),
-                        "issue_id": work_log.get("issue", {}).get("id"),
-                        "author": {
-                            "username": work_log.get("author", {}).get("name"),
-                            "key": work_log.get("author", {}).get("key"),
-                            "display_name": work_log.get("author", {}).get(
-                                "displayName",
-                            ),
-                            "account_id": work_log.get("author", {}).get("accountId"),
-                        },
-                        "time_spent_seconds": work_log.get("timeSpentSeconds"),
-                        "billable_seconds": work_log.get("billableSeconds"),
-                        "date_started": work_log.get("dateStarted"),
-                        "time_started": work_log.get("timeStarted"),
-                        "comment": work_log.get("comment"),
-                        "created": work_log.get("created"),
-                        "updated": work_log.get("updated"),
-                        "work_attributes": work_log.get("workAttributes", []),
-                        "account": work_log.get("account", {}),
-                        "approval_status": work_log.get("approvalStatus"),
-                        "external_hours": work_log.get("externalHours"),
-                        "external_id": work_log.get("externalId"),
-                        "origin_task_id": work_log.get("originTaskId"),
-                    }
-                    all_work_logs.append(enhanced_work_log)
+                all_work_logs.extend(_visible_tempo_record(row) for row in work_logs_batch)
 
                 # Check if we've reached the end
                 if len(work_logs_batch) < limit:
@@ -501,38 +468,7 @@ class JiraTempoService:
                 self._logger.error(msg)
                 raise JiraApiError(msg)
 
-            work_log = response.json()
-
-            if has_comment_audience(work_log):
-                msg = "Cannot expose audience-restricted Tempo work logs."
-                raise JiraApiError(msg)
-
-            # Return enhanced work log data
-            return {
-                "tempo_worklog_id": work_log.get("tempoWorklogId"),
-                "jira_worklog_id": work_log.get("jiraWorklogId"),
-                "issue_key": work_log.get("issue", {}).get("key"),
-                "issue_id": work_log.get("issue", {}).get("id"),
-                "author": {
-                    "username": work_log.get("author", {}).get("name"),
-                    "key": work_log.get("author", {}).get("key"),
-                    "display_name": work_log.get("author", {}).get("displayName"),
-                    "account_id": work_log.get("author", {}).get("accountId"),
-                },
-                "time_spent_seconds": work_log.get("timeSpentSeconds"),
-                "billable_seconds": work_log.get("billableSeconds"),
-                "date_started": work_log.get("dateStarted"),
-                "time_started": work_log.get("timeStarted"),
-                "comment": work_log.get("comment"),
-                "created": work_log.get("created"),
-                "updated": work_log.get("updated"),
-                "work_attributes": work_log.get("workAttributes", []),
-                "account": work_log.get("account", {}),
-                "approval_status": work_log.get("approvalStatus"),
-                "external_hours": work_log.get("externalHours"),
-                "external_id": work_log.get("externalId"),
-                "origin_task_id": work_log.get("originTaskId"),
-            }
+            return _visible_tempo_record(response.json())
 
         except Exception as e:
             if "not found" in str(e).lower():

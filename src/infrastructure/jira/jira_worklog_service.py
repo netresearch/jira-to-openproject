@@ -128,10 +128,21 @@ class JiraWorklogService:
 
     def _check_issue_audience(self, issue_key: str) -> None:
         path = f"issue/{quote(issue_key, safe='')}"
-        issue = self._client.jira._get_json(path, params={"fields": "security"})
-        if issue.get("key") != issue_key or issue["fields"].get("security") is not None:
+        issue = self._client.jira._get_json(path, params={"fields": "project,security"})
+        allowed = issue.get("key") == issue_key and self._has_no_security_level(issue)
+        if not allowed:
             msg = "Issue security cannot be represented on a native time entry."
             raise JiraApiError(msg)
+
+    def _has_no_security_level(self, issue: dict[str, Any]) -> bool:
+        fields = issue.get("fields") or {}
+        if "security" in fields:
+            return fields["security"] is None
+        # Jira Server may omit a null field, even when explicitly requested.
+        # Positively match the same immutable issue under the empty-level condition.
+        issue_id = int(issue["id"])
+        matches = self._client.jira.search_issues(f"id = {issue_id} AND level IS EMPTY", fields="id", maxResults=1)
+        return len(matches) == 1 and str(matches[0].id) == str(issue_id)
 
     def _worklog_pages(self, issue_key: str) -> list[dict[str, Any]]:
         path = f"issue/{quote(issue_key, safe='')}/worklog"
