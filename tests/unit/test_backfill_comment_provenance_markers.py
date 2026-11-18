@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Helpers – minimal fake objects that mimic the data shapes the script uses.
 # ---------------------------------------------------------------------------
@@ -949,3 +951,15 @@ class TestJiraServerProbeOrder:
         assert c["author_key"] == "JIRAUSER12345"
         assert c["author_email"] == "bjoern@netresearch.de"
         assert c["author_display_name"] == "Björn Marten"
+
+
+@pytest.mark.parametrize("invalid", ["[]", "null"])
+@pytest.mark.parametrize("filename", ["work_package_mapping.json", "user_mapping.json"])
+def test_rejects_non_object_mappings(tmp_path, invalid, filename):
+    module = _import_module()
+    (tmp_path / filename).write_text(invalid, encoding="utf-8")
+    with pytest.raises(ValueError, match="Expected a JSON object"):
+        if filename == "user_mapping.json":
+            module._load_user_mapping(tmp_path)
+        else:
+            module._load_wp_mapping(tmp_path, "TEST")

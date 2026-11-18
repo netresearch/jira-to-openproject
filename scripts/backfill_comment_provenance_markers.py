@@ -514,14 +514,22 @@ def _mapping_path(data_dir: Path, filename: str) -> Path:
     return path
 
 
+def _mapping_object(mapping_path: Path) -> dict[str, Any]:
+    with mapping_path.open(encoding="utf-8") as stream:
+        mapping = json.load(stream)
+    if not isinstance(mapping, dict):
+        msg = f"Expected a JSON object in {mapping_path.name}"
+        raise ValueError(msg)
+    return mapping
+
+
 def _load_wp_mapping(data_dir: Path, project_key: str) -> list[dict[str, Any]]:
     """Load work_package_mapping.json and filter to the given project key."""
     mapping_path = _mapping_path(data_dir, "work_package_mapping.json")
     if not mapping_path.exists():
         raise FileNotFoundError(f"Mapping file not found: {mapping_path}")
 
-    with mapping_path.open("r", encoding="utf-8") as fh:
-        raw: dict[str, Any] = json.load(fh)
+    raw = _mapping_object(mapping_path)
 
     result: list[dict[str, Any]] = []
     for outer_key, value in raw.items():
@@ -574,8 +582,7 @@ def _load_user_mapping(data_dir: Path) -> dict[str, int]:
     if not mapping_path.exists():
         return {}
 
-    with mapping_path.open("r", encoding="utf-8") as fh:
-        raw: dict[str, Any] = json.load(fh)
+    raw = _mapping_object(mapping_path)
 
     # Probe fields in priority order (mirrors IssueTransformer._JOURNAL_AUTHOR_PROBE_KEYS
     # mapped to the user_mapping.json entry field names).
