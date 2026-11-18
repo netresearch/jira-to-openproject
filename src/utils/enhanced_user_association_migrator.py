@@ -349,7 +349,7 @@ class EnhancedUserAssociationMigrator:
             return ""
         return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").lower().strip()
 
-    def _index_user_mapping(self, jira_key, entry):
+    def _index_user_mapping(self, jira_key: str, entry: int | dict[str, Any]) -> None:
         # user_mapping is keyed by Jira user key; entries now also carry J2O provenance data
         if isinstance(entry, int):
             # Legacy format: just the OpenProject ID
@@ -392,7 +392,7 @@ class EnhancedUserAssociationMigrator:
         if jira_username and jira_username != jira_key:
             self.enhanced_user_mappings[jira_username] = mapping
 
-    def _first_jira_match(self, data, username, is_stale):
+    def _first_jira_match(self, data: Any, username: str, is_stale: bool) -> dict[str, Any] | None:
         if not isinstance(data, list) or not data:
             return None
         if is_stale and not getattr(self, "_in_refresh_call", False):
@@ -413,7 +413,7 @@ class EnhancedUserAssociationMigrator:
             "active": user.get("active", True) if isinstance(user, dict) else getattr(user, "active", True),
         }
 
-    def _collect_watchers(self, jira_issue):
+    def _collect_watchers(self, jira_issue: Any) -> list[dict[str, Any]]:
         watches = getattr(jira_issue.fields, "watches", None)
         if not watches:
             return []
@@ -439,7 +439,7 @@ class EnhancedUserAssociationMigrator:
         return watchers
 
     @staticmethod
-    def _is_active_assignee(mapping) -> bool:
+    def _is_active_assignee(mapping: UserAssociationMapping | None) -> bool:
         if not mapping or not mapping.get("openproject_user_id") or mapping.get("mapping_status") != "mapped":
             return False
         metadata = mapping.get("metadata", {})
@@ -447,7 +447,9 @@ class EnhancedUserAssociationMigrator:
             metadata.get(key) is True or metadata.get(key) is None for key in ("jira_active", "openproject_active")
         )
 
-    def _fallback_association(self, role, username, reason, work_package, result):
+    def _fallback_association(
+        self, role: str, username: str, reason: str, work_package: dict[str, Any], result: dict[str, Any]
+    ) -> None:
         fallback = self._get_fallback_user(role)
         if fallback:
             field = "assigned_to_id" if role == "assignee" else "author_id"
@@ -457,7 +459,7 @@ class EnhancedUserAssociationMigrator:
             message = f"{role.title()} {username} {reason} and no fallback available"
         result["warnings"].append(message)
 
-    def _author_mapping(self, username):
+    def _author_mapping(self, username: str) -> UserAssociationMapping | None:
         cached_mapping = self.enhanced_user_mappings.get(username)
         try:
             # Record staleness detection metrics/logs regardless of cache presence
@@ -476,7 +478,14 @@ class EnhancedUserAssociationMigrator:
             mapping = self.get_mapping_with_staleness_check(username, auto_refresh=False)
         return mapping
 
-    def _assign_author(self, mapping, username, work_package_data, preserve_via_rails, author_data):
+    def _assign_author(
+        self,
+        mapping: UserAssociationMapping,
+        username: str,
+        work_package_data: dict[str, Any],
+        preserve_via_rails: bool,
+        author_data: dict[str, Any],
+    ) -> None:
         # Check if we need Rails console for immutable field preservation
         if preserve_via_rails and mapping["mapping_status"] == "mapped":
             # Queue Rails operation for later execution
@@ -512,7 +521,7 @@ class EnhancedUserAssociationMigrator:
                     username,
                 )
 
-    def _collect_mapped_watcher(self, username, valid_watcher_ids, result):
+    def _collect_mapped_watcher(self, username: str, valid_watcher_ids: list[int], result: dict[str, Any]) -> None:
         try:
             # For watchers: prefer cache; auto-refresh only when Jira client supports HTTP get (E2E)
             mapping = self.enhanced_user_mappings.get(username)
@@ -554,7 +563,7 @@ class EnhancedUserAssociationMigrator:
             )
             result["warnings"].append(f"Error processing watcher {username}: {e}")
 
-    def _stale_reason(self, username, current_time):
+    def _stale_reason(self, username: str, current_time: datetime) -> str:
         mapping = self.enhanced_user_mappings.get(username)
         if not mapping:
             return "Mapping does not exist"
@@ -566,7 +575,7 @@ class EnhancedUserAssociationMigrator:
             return "Invalid lastRefreshed timestamp"
         return f"Age {age:.0f}s exceeds TTL {self.refresh_interval_seconds}s"
 
-    def _refresh_batch_user(self, username, stale_reason, max_retries, results):
+    def _refresh_batch_user(self, username: str, stale_reason: str, max_retries: int, results: dict[str, Any]) -> None:
         last_error = None
         attempts = max_retries + 1
         for attempt in range(1, max_retries + 2):
@@ -604,7 +613,7 @@ class EnhancedUserAssociationMigrator:
         self.logger.debug("Batch refresh failed for %s after %d attempts: %s", username, attempts, last_error)
         results["errors"].append(f"{username}: {last_error}")
 
-    def _lookup_user_once(self, username, request_timeout, attempt):
+    def _lookup_user_once(self, username: str, request_timeout: float, attempt: int) -> dict[str, Any]:
         # API call with proper timeout (FIXED: timeout parameter applied)
         if hasattr(self.jira_client, "get_user_info_with_timeout"):
             jira_user_data = self.jira_client.get_user_info_with_timeout(
@@ -633,7 +642,7 @@ class EnhancedUserAssociationMigrator:
 
         return jira_user_data
 
-    def _log_lookup_failure(self, username, attempt, retry_limit, e):
+    def _log_lookup_failure(self, username: str, attempt: int, retry_limit: int, e: Exception) -> float:
         # Enhanced error context logging with helper method (YOLO FIX: no duplication)
         sanitized_error_msg = self._sanitize_error_message(str(e))
 
@@ -680,7 +689,7 @@ class EnhancedUserAssociationMigrator:
         )
         return 0
 
-    def _fetch_refresh_data(self, username):
+    def _fetch_refresh_data(self, username: str) -> tuple[dict[str, Any] | None, bool, bool, bool, bool]:
         # Prefer Jira client timeout helper when available (staleness tests)
         retry_callable = getattr(self, "_get_jira_user_with_retry", None)
         has_timeout_helper = hasattr(self.jira_client, "get_user_info_with_timeout")
@@ -734,7 +743,9 @@ class EnhancedUserAssociationMigrator:
                 jira_user_data = None
         return jira_user_data, used_retry_path, used_timeout_path, used_internal_helper, used_direct_helper
 
-    def _enrich_refreshed_mapping(self, username, jira_user_data, refreshed_mapping):
+    def _enrich_refreshed_mapping(
+        self, username: str, jira_user_data: dict[str, Any], refreshed_mapping: dict[str, Any]
+    ) -> None:
         try:
             info = None
             email = jira_user_data.get("emailAddress")
@@ -754,7 +765,9 @@ class EnhancedUserAssociationMigrator:
         except Exception as exc:
             self.logger.debug("Could not enrich OpenProject metadata for %s: %s", username, exc)
 
-    def _freshness_recommendation(self, username, mapping, current_time):
+    def _freshness_recommendation(
+        self, username: str, mapping: UserAssociationMapping, current_time: datetime
+    ) -> dict[str, Any]:
         # Determine staleness reason for recommendation
         last_refreshed = mapping.get("lastRefreshed")
         age_seconds = 0  # Initialize age_seconds outside try block
