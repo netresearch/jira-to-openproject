@@ -110,6 +110,7 @@ J2O_DATA
           wps = WorkPackage.where(id: wp_ids).index_by(&:id)
           cfs = CustomField.where(id: cf_ids).index_by(&:id)
 
+          enabled = Set.new
           data.each do |item|
             begin
               wp_id = item['wp_id']
@@ -119,18 +120,29 @@ J2O_DATA
               wp = wps[wp_id]
               cf = cfs[cf_id]
               if wp && cf
-                cv = wp.custom_value_for(cf)
-                if cv
-                  cv.value = val
-                  # ``save!`` raises into the outer rescue on
-                  # validation failure so the row is counted under
-                  # ``failed`` instead of silently flagged as
-                  # ``updated`` despite the persist not happening.
-                  cv.save!
-                else
-                  wp.custom_field_values = {{ cf.id => val }}
+                raise 'Expected a work package custom field' unless cf.is_a?(WorkPackageCustomField)
+                key = [cf_id, wp.project_id, wp.type_id]
+                unless enabled.include?(key)
+                  cf.with_lock do
+                    owner = if wp.respond_to?(:type_variant)
+                              wp.type_variant.effective_source_for(TypeVariant::FORM_CONFIGURATION)
+                            else
+                              wp.type
+                            end
+                    owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
+                    CustomFieldsProject.find_or_create_by!(custom_field: cf, project_id: wp.project_id) unless cf.is_for_all?
+                  end
+                  enabled.add(key)
                 end
-                wp.save!
+                wp.with_lock do
+                  cv = wp.custom_value_for(cf)
+                  raise 'Field unavailable for work package' unless cv
+                  unless cv.persisted? && cv.value == val
+                    wp.custom_field_values = {{ cf.id => val }}
+                    wp.save!
+                    raise 'Custom value was not persisted' unless CustomValue.exists?(customized: wp, custom_field: cf, value: val)
+                  end
+                end
                 results[:updated] += 1
               else
                 results[:failed] += 1

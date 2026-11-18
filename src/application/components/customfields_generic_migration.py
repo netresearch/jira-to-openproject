@@ -124,6 +124,11 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
 
                 # Map to OP CF name/type using mapping; fallback to using Jira ID as name
                 map_entry = cf_mapping.get(cf_id, {}) if isinstance(cf_mapping, dict) else {}
+                # The content pass writes mapped values in their native format.
+                # Reapplying a flattened label here would overwrite that value.
+                if isinstance(map_entry, int) or (map_entry or {}).get("openproject_id"):
+                    continue
+                map_entry = map_entry or {}
                 op_name = map_entry.get("openproject_name") or map_entry.get("jira_name") or cf_id
                 op_type = map_entry.get("openproject_type", "text")
 

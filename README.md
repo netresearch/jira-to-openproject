@@ -39,7 +39,10 @@ A robust, modular migration toolset for transferring project management data fro
 ### Supported Targets
 
 - Jira Server/Data Center 9.x (validated on 9.11)
-- OpenProject 17.3+ (currently tested against 17.3)
+- OpenProject migration target: **17.9.7**. Database round trips on 17.9.7 and 17.3.0 cover work-package creation, descriptions, mapped fields, comment authors and timestamps, repeat imports, board queries, sprint versions, parent links and workflow transitions.
+
+To repeat this check against a disposable target with OpenProject sample data, run
+`J2O_TEST_OPENPROJECT_CONTAINER=<container> uv run pytest --live-docker tests/integration/test_openproject_agile_roundtrip.py`. The test runs its database writes in a rolled-back transaction.
 
 Earlier or later releases may work, but they are not part of the supported/tested matrix.
 
@@ -114,6 +117,8 @@ uv run python -m src.main migrate --components work_packages --reset-wp-checkpoi
 ```
 
 ### Rehearsal Workflow
+
+Use a private target for the pilot. Jira can restrict a comment to a project role or a group. The work-package content importer writes a regular OpenProject journal entry and does not reproduce that restriction. Before granting project access, verify comment visibility with representative accounts. Compare source and target counts for issues, comments, attachment files and logged hours, then repeat the import and check for duplicates. Inspect any reported field-value or option-mapping failures.
 
 1. **Seed rehearsal data**: snapshot Jira/OpenProject using your existing backup process.
 2. **Configure credentials**: point `.env` at rehearsal endpoints/API tokens.

@@ -1,96 +1,173 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
-from src.application.components.sprint_epic_migration import SPRINT_CF_NAME, SprintEpicMigration
+from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES
+from src.application.components.sprint_epic_migration import SprintEpicMigration
 
 
-class DummyFields:
-    def __init__(self, epic=None, sprint=None):
-        self.customfield_10008 = epic  # Epic Link common
-        self.customfield_10020 = sprint  # Sprint common
-
-
-class DummyIssue:
-    def __init__(self, key: str, epic=None, sprint=None):
-        self.key = key
-        self.fields = DummyFields(epic=epic, sprint=sprint)
-
-
-class DummyJira:
-    def __init__(self) -> None:
-        self.issues = {
-            "EPIC-1": DummyIssue("EPIC-1", epic=None, sprint=[{"name": "Sprint A"}]),
-            "PRJ-1": DummyIssue("PRJ-1", epic="EPIC-1", sprint=[{"name": "Sprint A"}, {"name": "Sprint B"}]),
-            "PRJ-2": DummyIssue("PRJ-2", epic=None, sprint=None),
-        }
-
-    def batch_get_issues(self, keys):
-        return {k: self.issues.get(k) for k in keys}
-
-
-class DummyOp:
-    def __init__(self) -> None:
-        self.updates: list[dict] = []
-        self.queries: list[str] = []
-
-    def batch_update_work_packages(self, updates):
-        self.updates.extend(updates)
-        return {"updated": len(updates), "failed": 0}
-
-    def get_custom_field_by_name(self, name: str):
-        assert name == SPRINT_CF_NAME
-        raise Exception("not found")
-
-    def execute_query(self, script: str):
-        self.queries.append(script)
-        if "cf.id" in script:
-            return 901
-        return True
-
-    def execute_query_to_json_file(self, script: str):
-        """Same behavior as execute_query but returns the result directly."""
-        return self.execute_query(script)
-
-    def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
-        return 901
-
-    def enable_custom_field_for_projects(
-        self,
-        cf_id: int,
-        project_ids: set[int],
-        cf_name: str | None = None,
-    ) -> None:
-        return None
-
-
-@pytest.fixture(autouse=True)
-def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.config as cfg
-
-    class DummyMappings:
-        def __init__(self) -> None:
-            self._m = {
-                "work_package": {
-                    "EPIC-1": {"openproject_id": 12000},
-                    "PRJ-1": {"openproject_id": 12001},
-                    "PRJ-2": {"openproject_id": 12002},
-                },
+@pytest.fixture
+def migration(monkeypatch):
+    mappings = {
+        "work_package": {"111": {"jira_key": "DEMO-1", "openproject_id": 10}, "DEMO-2": 20},
+        "project": {"DEMO": {"openproject_id": 4}},
+        "sprint": {
+            "42": {"openproject_id": 9, "project_id": 4},
+            "Closed, sprint": {"openproject_id": 999, "project_id": 5},
+        },
+    }
+    monkeypatch.setattr("src.config.mappings", SimpleNamespace(get_mapping=mappings.get))
+    jira = Mock()
+    jira.get_custom_fields.return_value = [
+        {"id": "customfield_123", "schema": {"custom": "com.pyxis.greenhopper.jira:gh-sprint"}},
+        {"id": "customfield_456", "schema": {"custom": "com.pyxis.greenhopper.jira:gh-epic-link"}},
+    ]
+    jira.batch_get_issues.return_value = {
+        "DEMO-1": SimpleNamespace(fields=SimpleNamespace()),
+        "DEMO-2": {
+            "fields": {
+                "customfield_456": "DEMO-1",
+                "customfield_123": [
+                    {"id": 42, "name": "Closed, sprint"},
+                    {"id": 43, "name": "Next sprint"},
+                ],
+                "customfield_10008": "WRONG-1",
             }
+        },
+    }
+    op = Mock()
+    op.ensure_wp_custom_field_id.return_value = 101
+    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
+    op.bulk_set_wp_custom_field_values.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
+    return SprintEpicMigration(jira_client=jira, op_client=op), mappings
 
-        def get_mapping(self, name: str):
-            return self._m.get(name, {})
 
-    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
+@pytest.mark.parametrize("sequence", [DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES["full"]])
+def test_cold_run_dependencies(sequence):
+    assert sequence.index("agile_boards") < sequence.index("sprint_epic")
+    assert (
+        sequence.index("work_packages_skeleton")
+        < sequence.index("work_packages_content")
+        < sequence.index("sprint_epic")
+    )
 
 
-def test_sprint_epic_migration_sets_parent_and_sprint_cf():
-    mig = SprintEpicMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
-    ex = mig._extract()
-    mp = mig._map(ex)
-    ld = mig._load(mp)
-    assert ld.success is True
-    # Expect: 1 parent link (PRJ-1 -> EPIC-1) + 2 sprint CF updates (EPIC-1, PRJ-1)
-    # batch_update_work_packages updated=1, CF updates add 2 more -> updated==3
-    assert ld.updated == 3
+def test_real_field_ids_and_confirmed_writes(migration):
+    mig, _ = migration
+    result = mig.run_with_change_detection("sprint_epic")
+    assert result.success, result
+    assert result.updated == 3
+    assert [call.args[0] for call in mig.op_client.batch_update_work_packages.call_args_list] == [
+        [{"id": 20, "parent_id": 10}],
+        [{"id": 20, "version_id": 9}],
+    ]
+    mig.op_client.bulk_set_wp_custom_field_values.assert_called_once_with(
+        [
+            {"work_package_id": 20, "custom_field_id": 101, "value": "Closed, sprint, Next sprint"},
+        ]
+    )
+
+
+def test_missing_issue_parent_and_unconfirmed_writes(migration):
+    mig, _ = migration
+    del mig.jira_client.batch_get_issues.return_value["DEMO-1"]
+    mig.jira_client.batch_get_issues.return_value["DEMO-2"]["fields"]["customfield_456"] = "OTHER-7"
+    mig.op_client.batch_update_work_packages.side_effect = lambda rows: {"updated": 0, "failed": len(rows)}
+    mig.op_client.bulk_set_wp_custom_field_values.side_effect = lambda rows: {}
+    result = mig.run()
+    assert not result.success
+    assert result.failed == 4
+    assert result.updated == 0
+    assert (
+        result.details["parent_links"]
+        == result.details["version_assignments"]
+        == result.details["sprint_cf_updates"]
+        == 0
+    )
+    assert "DEMO-1" in result.details["missing_issues"]
+    assert "OTHER-7" in result.details["unresolved_epics"].values()
+
+
+def test_release_and_sprint_history_coexist(migration):
+    mig, _ = migration
+    fields = mig.jira_client.batch_get_issues.return_value["DEMO-2"]["fields"]
+    fields["fixVersions"] = [{"name": "Release 1"}]
+    result = mig.run()
+    assert result.success
+    assert result.details["version_assignments"] == 0
+    assert result.details["sprint_cf_updates"] == 1
+
+
+def test_unavailable_field_and_missing_version(migration):
+    mig, mappings = migration
+    mappings["sprint"].clear()
+    mig.op_client.ensure_wp_custom_field_id.return_value = 0
+    result = mig.run()
+    assert not result.success
+    assert result.updated == 1
+    assert result.failed == 2
+    assert "DEMO-2" in result.details["unresolved_sprints"]
+    assert result.details["sprint_cf_updates"] == 0
+
+
+def test_unavailable_mapping(migration):
+    mig, mappings = migration
+    mappings["work_package"].clear()
+    result = mig.run()
+    assert not result.success
+    mig.jira_client.batch_get_issues.assert_not_called()
+    mig.op_client.bulk_set_wp_custom_field_values.assert_not_called()
+
+
+def test_serialized_server_sprint_and_sdk_epic(migration):
+    mig, _ = migration
+    mig.jira_client.batch_get_issues.return_value["DEMO-2"] = SimpleNamespace(
+        fields=SimpleNamespace(
+            customfield_456="DEMO-1",
+            customfield_123=[
+                "com.atlassian.greenhopper.service.sprint.Sprint@10ab[id=42,rapidViewId=7,state=CLOSED,name=Closed, sprint,startDate=2026-04-01,endDate=2026-04-15]",
+            ],
+        )
+    )
+    result = mig.run()
+    assert result.updated == 3
+    assert mig.op_client.bulk_set_wp_custom_field_values.call_args.args[0][0]["value"] == "Closed, sprint"
+
+
+def test_subtask_keeps_immediate_parent_instead_of_inherited_epic(migration):
+    mig, mappings = migration
+    mappings["work_package"]["DEMO-3"] = 30
+    mig.jira_client.batch_get_issues.return_value["DEMO-3"] = {"fields": {}}
+    mig.jira_client.batch_get_issues.return_value["DEMO-2"]["fields"]["parent"] = {"key": "DEMO-3"}
+    result = mig.run()
+    assert result.success
+    assert mig.op_client.batch_update_work_packages.call_args_list[0].args[0] == [{"id": 20, "parent_id": 30}]
+
+
+def test_missing_subtask_parent_is_actionable(migration):
+    mig, _ = migration
+    mig.jira_client.batch_get_issues.return_value["DEMO-2"]["fields"]["parent"] = {"key": "DEMO-99"}
+    result = mig.run()
+    assert not result.success
+    assert result.details["unresolved_parents"] == {"DEMO-2": "DEMO-99"}
+    assert result.details["parent_links"] == 0
+
+
+def test_recovers_missing_work_package_mapping_from_project_origin_keys(migration):
+    mig, mappings = migration
+    mappings["work_package"].clear()
+    mig.op_client.get_project_wp_cf_snapshot.return_value = [
+        {"id": 10, "jira_issue_key": "DEMO-1"},
+        {"id": 20, "jira_issue_key": "DEMO-2"},
+        {"id": 90, "jira_issue_key": None},
+    ]
+    result = mig.run()
+    assert result.success and result.updated == 3
+    assert not mappings["work_package"]  # A key-only recovery cannot replace the shared Jira ID mapping.
+    mig.op_client.get_project_wp_cf_snapshot.assert_called_once_with(4)
+    mig.op_client.get_project_wp_cf_snapshot.return_value.append({"id": 11, "jira_issue_key": "DEMO-1"})
+    assert not mig.run().success

@@ -44,42 +44,34 @@ class JiraAgileService:
 
     def get_boards(self) -> list[dict[str, Any]]:
         """Return Jira Software boards (Scrum/Kanban)."""
+        return self._paged_values("board")
+
+    def get_board_projects(self, board_id: int) -> list[dict[str, Any]]:
+        """Return projects covered by a Server/DC board's filter."""
+        return self._paged_values(f"board/{board_id}/project")
+
+    def _paged_values(self, resource: str) -> list[dict[str, Any]]:
         client = self._client
         if not client.jira:
             msg = "Jira client is not initialized"
             raise JiraConnectionError(msg)
-
-        url = f"{client.base_url}/rest/agile/1.0/board"
-        self._logger.info("Fetching Jira boards")
-
+        url = f"{client.base_url}/rest/agile/1.0/{resource}"
+        items: list[dict[str, Any]] = []
         try:
-            start_at = 0
-            max_results = 50
-            boards: list[dict[str, Any]] = []
-
             while True:
-                params = {"startAt": start_at, "maxResults": max_results}
-                response = client.jira._session.get(
-                    url,
-                    params=params,
-                )
+                response = client.jira._session.get(url, params={"startAt": len(items), "maxResults": 50})
                 response.raise_for_status()
-                payload = response.json()
-                values = payload.get("values") if isinstance(payload, dict) else None
-                batch = values if isinstance(values, list) else []
-                boards.extend(batch)
-
-                is_last = payload.get("isLast", False) if isinstance(payload, dict) else True
-                if is_last or not batch:
-                    break
-                start_at += max_results
-
-            self._logger.info("Retrieved %s Jira boards", len(boards))
-            return boards
+                page = response.json()
+                values = page["values"]
+                if not isinstance(values, list):
+                    msg = f"Expected a page of Jira {resource} values"
+                    raise TypeError(msg)
+                items.extend(values)
+                if page.get("isLast") or not values:
+                    return items
         except Exception as exc:
-            error_msg = f"Failed to fetch Jira boards: {exc!s}"
-            self._logger.exception(error_msg)
-            raise JiraApiError(error_msg) from exc
+            msg = f"Failed to fetch Jira {resource}: {exc}"
+            raise JiraApiError(msg) from exc
 
     def get_board_configuration(self, board_id: int) -> dict[str, Any]:
         """Return configuration details for a Jira Software board."""
@@ -159,7 +151,7 @@ class JiraAgileService:
                 is_last = payload.get("isLast", False) if isinstance(payload, dict) else True
                 if is_last or not batch:
                     break
-                start_at += max_results
+                start_at += len(batch)
 
             self._logger.debug("Board %s has %s sprints", board_id, len(sprints))
             return sprints

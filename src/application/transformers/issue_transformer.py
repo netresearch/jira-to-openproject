@@ -57,7 +57,7 @@ class IssueTransformer:
 
     # Probe order for resolving Jira changelog/comment authors against the
     # owner's ``user_mapping``.  Canonical Cloud-first order mirrors
-    # ``_resolve_watcher_user_id`` and ``WorkPackageMigration._map_user``:
+    # ``_resolve_jira_user_id`` and ``WorkPackageMigration._map_user``:
     # accountId (Cloud) → name (Server) → key (Server/DC) → emailAddress → displayName.
     # The user_mapping is augmented with secondary indices on all of these
     # fields so any present raw Jira field resolves to the same OP user.

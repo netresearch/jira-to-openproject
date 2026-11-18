@@ -87,14 +87,6 @@ class OpenProjectCustomFieldService:
         # at module load time.
         from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
 
-        try:
-            cf = self.get_by_name(name)
-            cf_id = int(cf.get("id", 0) or 0) if isinstance(cf, dict) else None
-            if cf_id:
-                return cf_id
-        except RecordNotFoundError:
-            self._logger.info("CF '%s' not found; will create (format=%s)", name, field_format)
-
         escaped = escape_ruby_single_quoted(name)
         escaped_format = escape_ruby_single_quoted(field_format)
         # Route through the isolated JSON path (Ruby writes the result to a
@@ -109,7 +101,7 @@ class OpenProjectCustomFieldService:
           cf = CustomField.find_by(type: 'WorkPackageCustomField', name: '{escaped}')
           if !cf
             cf = CustomField.new(name: '{escaped}', field_format: '{escaped_format}', is_required: false, is_for_all: false, type: 'WorkPackageCustomField')
-            cf.save
+            cf.save!
           end
           cf && cf.as_json(only: [:id])
         """
@@ -313,14 +305,6 @@ class OpenProjectCustomFieldService:
             rescue
             end
             cf.save
-            # For WorkPackageCustomField, explicitly enable for all types
-            if cf.type == 'WorkPackageCustomField' && cf.type_ids.empty?
-              begin
-                cf.type_ids = Type.all.pluck(:id)
-                cf.save
-              rescue
-              end
-            end
           else
             # Update searchable if it doesn't match
             begin
@@ -330,13 +314,12 @@ class OpenProjectCustomFieldService:
               end
             rescue
             end
-            # Ensure WP CFs are enabled for all types
-            if cf.type == 'WorkPackageCustomField' && cf.type_ids.empty?
-              begin
-                cf.type_ids = Type.all.pluck(:id)
-                cf.save
-              rescue
-              end
+          end
+          if cf.is_a?(WorkPackageCustomField)
+            if cf.respond_to?(:type_variant_ids)
+              cf.type_variant_ids = TypeVariant.default_variant.ids if cf.type_variant_ids.empty?
+            elsif cf.type_ids.empty?
+              cf.type_ids = Type.ids
             end
           end
           if cf && cf.type == 'UserCustomField'

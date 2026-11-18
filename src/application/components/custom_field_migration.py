@@ -595,9 +595,9 @@ class CustomFieldMigration(BaseMigration):
               # Make it available for all work package types
               if cf.is_for_all?
                 puts "  Activating for all work package types..."
-                Type.all.each do |type|
-                  type.custom_fields << cf unless type.custom_fields.include?(cf)
-                  type.save!
+                owners = cf.respond_to?(:type_variants) ? TypeVariant.default_variant : Type.all
+                owners.each do |owner|
+                  owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
                 end
               end
             else

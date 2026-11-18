@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
+from src.utils.change_aware_runner import ChangeAwareRunner
 
 
 @register_entity_types("agile_boards", "sprints")
@@ -33,8 +33,8 @@ class AgileBoardMigration(BaseMigration):
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
-        self.project_mapping = config.mappings.get_mapping("project") or {}
-        self.sprint_mapping = config.mappings.get_mapping("sprint") or {}
+        self.project_mapping = self.mappings.get_mapping("project") or {}
+        self.sprint_mapping = self.mappings.get_mapping("sprint") or {}
 
     # ------------------------------------------------------------------ #
     # BaseMigration overrides                                            #
@@ -65,35 +65,32 @@ class AgileBoardMigration(BaseMigration):
             )
             raise ValueError(msg)
 
-        # Fetch boards (API call 1)
-        try:
-            boards = self.jira_client.get_boards()
-        except Exception as exc:
-            self.logger.exception("Failed to fetch Jira boards: %s", exc)
-            return []
-
+        boards = self.jira_client.get_boards()
         board_payloads: list[dict[str, Any]] = []
         sprint_payloads: list[dict[str, Any]] = []
 
+        read_errors = []
         for board in boards:
             board_id = board.get("id")
             if board_id is None:
                 continue
 
-            # Fetch board configuration (API call 2 per board)
+            candidates: list[str] = []
             try:
                 configuration = self.jira_client.get_board_configuration(board_id)
-            except Exception:
-                configuration = {}
-
-            # Fetch board sprints (API call 3 per board)
-            try:
-                board_sprints = self.jira_client.get_board_sprints(board_id)
-            except Exception:
-                board_sprints = []
-
-            location = board.get("location") or {}
-            project_key = location.get("projectKey") or board.get("locationProjectKey")
+                board_sprints = [] if board.get("type") == "kanban" else self.jira_client.get_board_sprints(board_id)
+                location = board.get("location") or {}
+                project_key = location.get("projectKey") or board.get("locationProjectKey")
+                if not project_key:
+                    # A cross-project filter does not identify a single owning project.
+                    projects = self.jira_client.get_board_projects(board_id)
+                    candidates = sorted({p["key"] for p in projects if p.get("key")})
+                    if len(candidates) == 1:
+                        project_key = candidates[0]
+            except Exception as exc:
+                self.logger.exception("Failed reading Jira board %s", board_id)
+                read_errors.append({"board_id": board_id, "error": str(exc)})
+                continue
 
             columns = configuration.get("columnConfig", {}).get("columns", [])
             statuses: list[str] = []
@@ -117,6 +114,7 @@ class AgileBoardMigration(BaseMigration):
                     "name": board.get("name"),
                     "type": board.get("type"),
                     "project_key": project_key,
+                    "candidate_projects": candidates,
                     "statuses": statuses,
                     "filter_jql": filter_jql,
                 },
@@ -136,25 +134,41 @@ class AgileBoardMigration(BaseMigration):
                     },
                 )
 
-        # Return aggregated data structure
-        return [
-            {
-                "boards": board_payloads,
-                "sprints": sprint_payloads,
-                "total_count": len(board_payloads),
+        inventory = {
+            "id": "jira-agile-inventory",
+            "read_errors": read_errors,
+            "boards": board_payloads,
+            "sprints": sprint_payloads,
+            "total_count": len(board_payloads),
+        }
+        return [self._with_targets(inventory)]
+
+    def _with_targets(self, inventory: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **inventory,
+            "sprint_targets": {str(s["id"]): self.sprint_mapping.get(str(s["id"])) for s in inventory["sprints"]},
+            "project_targets": {
+                str(b["project_key"]): self.project_mapping.get(b["project_key"]) for b in inventory["boards"]
             },
-        ]
+        }
+
+    def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
+        # After writing versions, refresh their target IDs on the exact source
+        # inventory passed to _map. A fresh Jira read can include unapplied edits.
+        return ChangeAwareRunner(self).run(entity_type, snapshot_entities=lambda: [self._with_targets(self._inventory)])
 
     def _extract(self) -> ComponentResult:
         """Fetch boards, configurations, and sprints from Jira."""
         try:
             data_list = self._get_current_entities_for_type("agile_boards")
-            data = data_list[0] if data_list else {}
+            data = data_list[0]
+            self._inventory = data
             return ComponentResult(
                 success=True,
                 data={
                     "boards": data.get("boards", []),
                     "sprints": data.get("sprints", []),
+                    "read_errors": data.get("read_errors", []),
                 },
                 total_count=data.get("total_count", 0),
             )
@@ -192,6 +206,7 @@ class AgileBoardMigration(BaseMigration):
                     {
                         "reason": "missing_project_mapping",
                         "board_id": board.get("id"),
+                        "candidate_projects": board.get("candidate_projects", []),
                         "project_key": project_key,
                     },
                 )
@@ -212,7 +227,7 @@ class AgileBoardMigration(BaseMigration):
                     "name": f"[Board] {board.get('name')}",
                     "description": "\n".join(description_parts),
                     "project_id": op_project_id,
-                    "is_public": True,
+                    "is_public": None,  # private on creation; respect subsequent operator sharing decisions
                     "options": {
                         "filters": [],
                         "columns": [],
@@ -250,6 +265,7 @@ class AgileBoardMigration(BaseMigration):
             )
 
         mapped = {
+            "read_errors": extracted.data.get("read_errors", []),
             "queries": query_payloads,
             "versions": version_payloads,
             "skipped_boards": skipped_boards,
@@ -282,7 +298,9 @@ class AgileBoardMigration(BaseMigration):
 
         created_queries = 0
         created_versions = 0
-        errors = 0
+        skipped = mapped.data.get("skipped_boards", []) + mapped.data.get("skipped_sprints", [])
+        read_errors = mapped.data.get("read_errors", [])
+        errors = len(skipped) + len(read_errors)
         sprint_mapping_updates: dict[str, Any] = {}
 
         for payload in queries:
@@ -298,9 +316,11 @@ class AgileBoardMigration(BaseMigration):
                 self.logger.exception("Failed to create query for board %s: %s", payload.get("name"), exc)
 
         for payload in versions:
-            jira_sprint_id = payload.pop("jira_sprint_id", None)
+            jira_sprint_id = payload.get("jira_sprint_id")
             try:
-                result = self.op_client.ensure_project_version(**payload)
+                result = self.op_client.ensure_project_version(
+                    **{k: v for k, v in payload.items() if k != "jira_sprint_id"}
+                )
                 if result.get("success"):
                     if result.get("created"):
                         created_versions += 1
@@ -327,7 +347,8 @@ class AgileBoardMigration(BaseMigration):
         if sprint_mapping_updates:
             updated_mapping = dict(self.sprint_mapping)
             updated_mapping.update(sprint_mapping_updates)
-            config.mappings.set_mapping("sprint", updated_mapping)
+            self.mappings.set_mapping("sprint", updated_mapping)
+            self.sprint_mapping = updated_mapping
 
         return ComponentResult(
             success=errors == 0,
@@ -338,6 +359,8 @@ class AgileBoardMigration(BaseMigration):
                 "queries_created": created_queries,
                 "versions_created": created_versions,
                 "errors": errors,
+                "unresolved_projects": skipped,
+                "board_read_errors": read_errors,
                 "skipped_boards": len(mapped.data.get("skipped_boards", [])),
                 "skipped_sprints": len(mapped.data.get("skipped_sprints", [])),
             },

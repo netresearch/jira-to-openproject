@@ -771,7 +771,7 @@ class OpenProjectClient:
         name: str,
         description: str | None = None,
         project_id: int | None = None,
-        is_public: bool = True,
+        is_public: bool | None = True,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create or update an OpenProject query (saved filter).

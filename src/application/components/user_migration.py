@@ -14,7 +14,7 @@ This migration is the **canonical write side of the** ``user_mapping``
 probes it through the canonical
 ``account_id -> name -> key -> email_address -> display_name`` order
 (see ``work_package_skeleton_migration._map_user``,
-``work_package_content_migration._resolve_watcher_user_id``,
+``work_package_content_migration._resolve_jira_user_id``,
 ``attachment_provenance_migration._author_identifiers``,
 ``category_defaults_migration._resolve_user_id`` and
 ``watcher_migration``). The on-disk storage shape -- a ``dict[str, dict]``
