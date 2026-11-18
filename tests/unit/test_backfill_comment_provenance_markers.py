@@ -954,12 +954,15 @@ class TestJiraServerProbeOrder:
 
 
 @pytest.mark.parametrize("invalid", ["[]", "null"])
-@pytest.mark.parametrize("filename", ["work_package_mapping.json", "user_mapping.json"])
-def test_rejects_non_object_mappings(tmp_path, invalid, filename):
-    module = _import_module()
+@pytest.mark.parametrize(
+    ("filename", "loader_name", "extra_args"),
+    [
+        ("work_package_mapping.json", "_load_wp_mapping", ("TEST",)),
+        ("user_mapping.json", "_load_user_mapping", ()),
+    ],
+)
+def test_rejects_non_object_mappings(tmp_path, invalid, filename, loader_name, extra_args):
+    loader = getattr(_import_module(), loader_name)
     (tmp_path / filename).write_text(invalid, encoding="utf-8")
     with pytest.raises(ValueError, match="Expected a JSON object"):
-        if filename == "user_mapping.json":
-            module._load_user_mapping(tmp_path)
-        else:
-            module._load_wp_mapping(tmp_path, "TEST")
+        loader(tmp_path, *extra_args)
