@@ -180,3 +180,54 @@ def test_sdk_field_identity_disagreement_withholds_history():
 
     item = SimpleNamespace(field="status", raw={"field": "comment"})
     assert not may_copy_history_item(item)
+
+
+@pytest.mark.parametrize("page", ["private marker", ["private marker"], {"histories": {"failure": "private marker"}}])
+def test_cache_drops_unrecognized_changelog_shape(page):
+    from src.infrastructure.jira.comment_audience import issue_without_comments
+
+    assert issue_without_comments({"id": "1", "changelog": page, "renderedFields": "private marker"}) == {"id": "1"}
+
+
+def test_cache_projects_only_known_changelog_data():
+    from src.infrastructure.jira.comment_audience import issue_without_comments
+
+    marker = "private plugin payload"
+    raw = {
+        "changelog": {
+            "unknown": marker,
+            "startAt": 0,
+            "maxResults": [marker],
+            "total": 2,
+            "histories": [
+                marker,
+                {"items": marker},
+                {
+                    "id": "3",
+                    "created": "today",
+                    "pluginComment": marker,
+                    "author": {"key": "A", "unknown": marker, "displayName": {"comment": marker}},
+                    "items": [
+                        marker,
+                        {"field": "status", "toString": "Done", "from": {"raw": marker}, "raw": {"extra": marker}},
+                    ],
+                },
+            ],
+        }
+    }
+    clean = issue_without_comments(raw)
+    assert marker not in str(clean)
+    assert clean["changelog"] == {
+        "startAt": 0,
+        "total": 2,
+        "histories": [
+            {
+                "id": "3",
+                "created": "today",
+                "author": {"key": "A"},
+                "items": [{"field": "status", "toString": "Done"}],
+            }
+        ],
+    }
+    raw["changelog"]["visibility"] = {"type": "role"}
+    assert "changelog" not in issue_without_comments(raw)

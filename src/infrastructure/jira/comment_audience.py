@@ -139,21 +139,52 @@ def _recognized_history_field(item: Mapping[str, Any]) -> bool:
     )
 
 
+def _history_atoms(record: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Keep REST scalar values only. SDK envelopes and plugin payloads can embed comment bodies."""
+    return {
+        key: value
+        for key in keys
+        if key in record and (isinstance(value := record[key], (str, int, float, bool)) or value is None)
+    }
+
+
+def _cache_history(entry: object) -> dict[str, Any] | None:
+    if not isinstance(entry, Mapping) or has_comment_audience(entry):
+        return None
+    source_items = entry.get("items")
+    if not isinstance(source_items, list):
+        return None
+    keys = ("field", "fieldId", "fieldtype", "from", "fromString", "to", "toString")
+    items = [
+        _history_atoms(item, keys) for item in source_items if isinstance(item, Mapping) and may_copy_history_item(item)
+    ]
+    if not items:
+        return None
+    clean = _history_atoms(entry, ("id", "created"))
+    author = entry.get("author")
+    if isinstance(author, Mapping):
+        clean["author"] = _history_atoms(author, ("key", "name", "accountId", "displayName", "emailAddress", "active"))
+    return {**clean, "items": items}
+
+
 def issue_without_comments(raw: dict[str, Any]) -> dict[str, Any]:
-    """Omit comment text and its past revisions from persisted issue inventories."""
-    clean = dict(raw)
+    """Omit comment text, unsupported history shapes and revisions from issue inventories."""
+    clean = {
+        key: value
+        for key, value in raw.items()
+        if key not in {"fields", "renderedFields", "changelog", "comment", "comments"}
+    }
     for field in ("fields", "renderedFields"):
-        if isinstance(raw.get(field), dict):
+        if isinstance(raw.get(field), Mapping):
             clean[field] = {key: value for key, value in raw[field].items() if key not in {"comment", "comments"}}
-    history = raw.get("changelog")
-    if isinstance(history, dict) and isinstance(history.get("histories"), list):
+    page = raw.get("changelog")
+    if isinstance(page, Mapping) and isinstance(page.get("histories"), list) and not has_comment_audience(page):
+        paging = {key: page[key] for key in ("startAt", "maxResults", "total") if type(page.get(key)) is int}
+        if isinstance(page.get("isLast"), bool):
+            paging["isLast"] = page["isLast"]
         clean["changelog"] = {
-            **history,
-            "histories": [
-                {**entry, "items": items}
-                for entry in history["histories"]
-                if (items := [item for item in entry.get("items", []) if may_copy_history_item(item, entry)])
-            ],
+            **paging,
+            "histories": [row for entry in page["histories"] if (row := _cache_history(entry))],
         }
     return clean
 
