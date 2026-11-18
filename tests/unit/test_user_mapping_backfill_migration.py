@@ -684,3 +684,27 @@ def test_run_does_not_clobber_manual_entries(tmp_path: Path) -> None:
     # an existing entry's ``openproject_id``.
     assert user_map["alice"]["openproject_id"] == 999
     assert user_map["alice"]["matched_by"] == "user_mapping_backfill_alias"
+
+
+def test_two_conflicting_manual_targets_do_not_receive_new_aliases(tmp_path: Path) -> None:
+    _write_results(tmp_path, components={"watchers": {"details": {"unmapped_users": ["missing"]}}})
+    jira = _Jira({"missing": {"name": "two", "key": "three"}})
+    manual = {
+        "two": {"openproject_id": 2, "matched_by": "manual"},
+        "three": {"openproject_id": 3, "matched_by": "manual"},
+    }
+    migration = _make_migration(tmp_path, jira, None, user_map=manual)
+    result = migration.run()
+    assert result.details["not_found_in_op_sample"][0]["reason"] == "alias_op_id_conflict"
+    assert result.updated == 0
+    assert migration.mappings.get_mapping("user") == manual
+
+
+def test_non_object_results_file_does_not_hide_valid_older_results(tmp_path: Path) -> None:
+    from src.application.components.user_mapping_backfill_migration import UserMappingBackfillMigration
+
+    (tmp_path / "migration_results_1.json").write_text("[]")
+    (tmp_path / "migration_results_2.json").write_text(
+        json.dumps({"component_results": {"watchers": {"details": {"unmapped_users": [None, " test "]}}}})
+    )
+    assert UserMappingBackfillMigration._names_from_previous_results(tmp_path) == {"test"}
