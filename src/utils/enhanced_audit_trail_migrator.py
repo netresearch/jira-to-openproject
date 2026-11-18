@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from src.display import configure_logging
-from src.infrastructure.jira.comment_audience import is_comment_change
+from src.infrastructure.jira.comment_audience import may_copy_history_item
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.utils.markdown_converter import MarkdownConverter
@@ -200,7 +200,7 @@ class EnhancedAuditTrailMigrator:
                         "to": getattr(item, "to", None),
                         "toString": getattr(item, "toString", None),
                     }
-                    if not is_comment_change(change_item):
+                    if may_copy_history_item(change_item):
                         entry["items"].append(change_item)
 
                 if entry["items"]:
@@ -261,7 +261,7 @@ class EnhancedAuditTrailMigrator:
 
                 # Process each change item in the entry
                 for item in entry.get("items", []) or []:
-                    if is_comment_change(item):
+                    if not may_copy_history_item(item):
                         continue
                     # Map field changes to OpenProject audit format
                     changes = self._map_field_changes(item)

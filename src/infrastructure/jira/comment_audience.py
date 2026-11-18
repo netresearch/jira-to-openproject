@@ -25,9 +25,68 @@ class CommentSelection:
     held: int
 
 
-def is_comment_change(item: dict[str, Any]) -> bool:
-    """Recognize historical comment revisions, including localized field names."""
-    return any(str(item.get(key, "")).strip().casefold() in {"comment", "comments"} for key in ("field", "fieldId"))
+# Older Server responses and caches can omit fieldId. Only built-in fields
+# with known non-comment semantics or identifiable custom fields may contribute
+# historical values. A translated label alone cannot establish the field type.
+_HISTORY_FIELDS = frozenset(
+    {
+        "affects version",
+        "affects versions",
+        "assignee",
+        "attachment",
+        "component",
+        "components",
+        "created",
+        "description",
+        "due date",
+        "duedate",
+        "environment",
+        "epic link",
+        "fix version",
+        "fix versions",
+        "fixversion",
+        "fixversions",
+        "flagged",
+        "issue type",
+        "issuetype",
+        "key",
+        "labels",
+        "link",
+        "parent",
+        "priority",
+        "project",
+        "rank",
+        "reporter",
+        "resolution",
+        "resolutiondate",
+        "security",
+        "sprint",
+        "status",
+        "story points",
+        "summary",
+        "timeestimate",
+        "timeoriginalestimate",
+        "timespent",
+        "updated",
+        "version",
+        "versions",
+        "workflow",
+    }
+)
+
+
+def may_copy_history_item(item: dict[str, Any]) -> bool:
+    """Require a recognized non-comment field before replaying old or translated text."""
+    field = str(item.get("field") or "").strip().casefold()
+    field_id = str(item.get("fieldId") or "").strip().casefold()
+    if field in {"comment", "comments"} or field_id in {"comment", "comments"}:
+        return False
+    key = field_id or field
+    return (
+        key in _HISTORY_FIELDS
+        or (key.startswith("customfield_") and key.removeprefix("customfield_").isdecimal())
+        or (item.get("fieldtype") == "custom" and not field_id and isinstance(item.get("field"), str) and bool(field))
+    )
 
 
 def issue_without_comments(raw: dict[str, Any]) -> dict[str, Any]:
@@ -43,7 +102,7 @@ def issue_without_comments(raw: dict[str, Any]) -> dict[str, Any]:
             "histories": [
                 {**entry, "items": items}
                 for entry in history["histories"]
-                if (items := [item for item in entry.get("items", []) if not is_comment_change(item)])
+                if (items := [item for item in entry.get("items", []) if may_copy_history_item(item)])
             ],
         }
     return clean

@@ -5,6 +5,7 @@
 """Unit tests for EnhancedAuditTrailMigrator."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -120,20 +121,8 @@ class TestEnhancedAuditTrailMigrator:
             else:
                 history.author = None
 
-            # Create items mock
-            items = []
-            for item_data in hist_data["items"]:
-                item = Mock()
-                item.field = item_data["field"]
-                item.fromString = item_data.get("fromString")
-                item.toString = item_data.get("toString")
-                if "from" in item_data:
-                    item.from_ = item_data["from"]
-                if "to" in item_data:
-                    item.to = item_data["to"]
-                items.append(item)
-
-            history.items = items
+            # Jira omits optional field IDs in these historical payloads.
+            history.items = [SimpleNamespace(**item) for item in hist_data["items"]]
             histories.append(history)
 
         # Mock changelog
