@@ -168,6 +168,14 @@ def _print_project_modules(info, modules_by_project_id, warnings):
         warnings.append(warning)
 
 
+def _print_project_lead(info):
+    login = info.get("lead")
+    display = info.get("lead_display") or login
+    if display:
+        suffix = f" ({login})" if login and login != display else ""
+        print(f"  • Jira lead: {display}{suffix}")
+
+
 def _print_project_summary(project, *, wp_total, jira_total, info, modules_by_project_id, start_info, attachment_dir):
     project_warnings: list[str] = []
 
@@ -178,15 +186,7 @@ def _print_project_summary(project, *, wp_total, jira_total, info, modules_by_pr
         print("  • Jira issues (from cache): <unknown>")
     print(f"  • Migrated work packages: {wp_total}")
 
-    lead_display = info.get("lead_display") or info.get("lead")
-    if lead_display:
-        lead_login = info.get("lead")
-        if lead_login and lead_login != lead_display:
-            print(f"  • Jira lead: {lead_display} ({lead_login})")
-        else:
-            print(f"  • Jira lead: {lead_display}")
-    elif info.get("lead"):
-        print(f"  • Jira lead: {info['lead']}")
+    _print_project_lead(info)
     _print_project_modules(info, modules_by_project_id, project_warnings)
     total_start = start_info["total"]
     if total_start:

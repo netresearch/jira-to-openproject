@@ -652,12 +652,7 @@ def _compare_jira_watchers(metrics: dict[str, Any], warnings: list[str]) -> None
             author_auto = _metric_int(metrics, "wp_watcher_author_auto")
             op_watch = op_watch_total - author_auto
             jira_watch_int = int(jira_watch)
-            if jira_watch_int == 0:
-                tolerance_ok = op_watch == 0
-            else:
-                delta_pct = abs(op_watch - jira_watch_int) / jira_watch_int
-                tolerance_ok = delta_pct <= _WATCHER_TOLERANCE
-            if not tolerance_ok:
+            if _count_outside_tolerance(op_watch, jira_watch_int, _WATCHER_TOLERANCE):
                 # See ``_WATCHER_TOLERANCE`` above for why this is a
                 # warning rather than a failure: the comparison has
                 # known noise sources (permission scope on
@@ -680,6 +675,12 @@ def _compare_jira_watchers(metrics: dict[str, Any], warnings: list[str]) -> None
                 )
 
 
+def _count_outside_tolerance(actual: int, expected: int, tolerance: float) -> bool:
+    if expected == 0:
+        return actual != 0
+    return abs(actual - expected) / expected > tolerance
+
+
 def _compare_jira_links(metrics: dict[str, Any], failures: list[str], warnings: list[str]) -> None:
     # Jira source comparison: relation (issue-link) count, ±5%
     # tolerance per spec. Replaces the size-gated "zero-relations
@@ -697,12 +698,7 @@ def _compare_jira_links(metrics: dict[str, Any], failures: list[str], warnings: 
         op_rel = _metric_int(metrics, "relation_total")
         intra_unique = int(breakdown.get("intra_unique") or 0)
         cross = int(breakdown.get("cross") or 0)
-        if intra_unique == 0:
-            tolerance_ok = op_rel == 0
-        else:
-            delta_pct = abs(op_rel - intra_unique) / intra_unique
-            tolerance_ok = delta_pct <= _RELATION_TOLERANCE
-        if not tolerance_ok:
+        if _count_outside_tolerance(op_rel, intra_unique, _RELATION_TOLERANCE):
             failures.append(
                 f"Jira→OP intra-project relation count mismatch beyond ±5%:"
                 f" Jira intra={intra_unique}, OP has {op_rel}"
@@ -726,12 +722,7 @@ def _compare_jira_links(metrics: dict[str, Any], failures: list[str], warnings: 
         # ``jira_relation_count``. Same halving caveat as before.
         jira_rel_int = int(metrics["jira_relation_count"])
         op_rel = _metric_int(metrics, "relation_total")
-        if jira_rel_int == 0:
-            tolerance_ok = op_rel == 0
-        else:
-            delta_pct = abs(op_rel - jira_rel_int) / jira_rel_int
-            tolerance_ok = delta_pct <= _RELATION_TOLERANCE
-        if not tolerance_ok:
+        if _count_outside_tolerance(op_rel, jira_rel_int, _RELATION_TOLERANCE):
             failures.append(
                 f"Jira→OP relation count mismatch beyond ±5%:"
                 f" Jira reports {jira_rel_int}, OP has {op_rel}"
