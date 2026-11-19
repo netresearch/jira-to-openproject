@@ -57,11 +57,11 @@ class ComponentsMigration(BaseMigration):
 
         return iter_issue_pages(key, fetch, 100)
 
-    def _mapped_targets(self) -> dict[str, dict[str, tuple[int, str | None]]]:
+    def _mapped_targets(self, wanted: set[str]) -> dict[str, dict[str, tuple[int, str | None]]]:
         projects: dict[str, dict[str, tuple[int, str | None]]] = {}
         for origin, value in (self.mappings.get_mapping("work_package") or {}).items():
             key = self._inner_jira_key(str(origin), value)
-            if not key:
+            if not key or (wanted and self._issue_project_key(key) not in wanted):
                 continue
             row = WorkPackageMappingEntry.from_legacy(key, value)
             targets = projects.setdefault(self._issue_project_key(key), {})
@@ -75,7 +75,7 @@ class ComponentsMigration(BaseMigration):
         base = self.jira_client.base_url
         selected = config.jira_config.get("projects") or []
         wanted = {k.strip() for k in (selected.split(",") if isinstance(selected, str) else selected)}
-        mapped = self._mapped_targets()
+        mapped = self._mapped_targets(wanted)
         projects = {}
         skipped = 0
         for key, mapping in (self.mappings.get_mapping("project") or {}).items():
@@ -141,13 +141,18 @@ class ComponentsMigration(BaseMigration):
                     "components": _component_refs(fields.get("components"), base),
                 }
             )
-        if any(row["components"] for row in rows):
-            catalogue = _component_refs([item.raw for item in self.jira_client.jira.project_components(key)], base)
-            by_id = {ref["id"]: ref for ref in catalogue}
-            if any(by_id.get(ref["id"]) != ref for row in rows for ref in row["components"]):
-                msg = "Issue component differs from its Jira project catalogue"
-                raise ValueError(msg)
+        self._check_catalogue(key, rows, base)
         return rows, source_pid
+
+    def _check_catalogue(self, key: str, rows: list, base: str) -> None:
+        refs = [ref for row in rows for ref in row["components"]]
+        if not refs:
+            return
+        catalogue = _component_refs([item.raw for item in self.jira_client.jira.project_components(key)], base)
+        by_id = {ref["id"]: ref for ref in catalogue}
+        if any(by_id.get(ref["id"]) != ref for ref in refs):
+            msg = "Issue component differs from its Jira project catalogue"
+            raise ValueError(msg)
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         categories = dict(self.mappings.get_mapping("category") or {})

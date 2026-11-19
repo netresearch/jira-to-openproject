@@ -63,9 +63,13 @@ def test_normal_component_import_checks_visibility_and_preserves_source_order(mi
     apply = Mock(return_value={"updated": 2, "categories": {"Backend": 51, "API": 52}})
     monkeypatch.setattr("src.application.components.components_migration.apply_component_assignments", apply)
     result = _invoke_component("components", migration)
-    assert result.success and result.updated == 2 and result.details["unconfirmed_work_packages"] == 3
+    assert result.success
+    assert result.updated == 2
+    assert result.details["unconfirmed_work_packages"] == 3
     project = apply.call_args.args[1]
-    assert project["key"] == "APP" and project["jira_id"] == "10" and project["project_id"] == 7
+    assert project["key"] == "APP"
+    assert project["jira_id"] == "10"
+    assert project["project_id"] == 7
     assert [r["wp"] for r in project["issues"]] == [10, 12, 16]
     assert [[(ref["id"], ref["name"], ref["url"]) for ref in row["components"]] for row in project["issues"]] == [
         [(a["id"], a["name"], a["self"]), (b["id"], b["name"], b["self"])],
