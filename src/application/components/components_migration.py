@@ -1,171 +1,178 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Migrate Jira components to OpenProject Categories and assign to work packages.
-
-Phase 7d converts the work-package side of this migration to the typed
-pipeline: issues are parsed at the boundary via
-:meth:`JiraIssueFields.from_issue_any`, and the legacy ``wp_map``
-``dict | int`` ladder is normalised through
-:meth:`WorkPackageMappingEntry.from_legacy`. The ``project`` mapping
-ladder uses a separate, unrelated polymorphic shape and is intentionally
-left as-is — phase 7 targets the ``wp_map`` polymorphism only.
-"""
+"""Preserve each ordered Jira component assignment and set the first native category."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
+from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.application.components.project_named_records import apply_work_package_updates, map_project_records, project_id
-from src.config import logger
-from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.application.components.issue_security import permits_unrestricted_result, unrestricted_project_jql
+from src.application.components.project_named_records import project_id
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
+from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
+from src.infrastructure.openproject.component_assignments import apply_component_assignments
 from src.models import ComponentResult, WorkPackageMappingEntry
-from src.models.jira import JiraIssueFields
+
+
+def _component_refs(values: Any, base: str) -> list[dict[str, str]]:
+    if not isinstance(values, list):
+        msg = "Jira did not supply its component list"
+        raise ValueError(msg)
+    found = {}
+    for value in values:
+        sid = str(value["id"])
+        name = value["name"]
+        if not sid.isdecimal() or sid in found or not isinstance(name, str) or not name.strip():
+            msg = "Invalid or duplicate Jira component"
+            raise ValueError(msg)
+        url = f"{base}/rest/api/2/component/{sid}"
+        if value.get("self", url) != url:
+            msg = "Foreign component source URL"
+            raise ValueError(msg)
+        found[sid] = {"id": sid, "name": name, "url": url}
+    return list(found.values())
 
 
 @register_entity_types("components")
-class ComponentsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
-        super().__init__(jira_client=jira_client, op_client=op_client)
+class ComponentsMigration(BaseMigration):
+    """Reconcile source-confirmed component assignments on migrated work packages."""
 
-    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities for transformation.
+    def _source_issues(self, key: str) -> Iterator:
+        jql = f"{unrestricted_project_jql(key)} ORDER BY id"
 
-        This migration performs data transformation on work package mappings
-        rather than fetching directly from Jira. It operates on already-migrated
-        work packages to extract and assign components to Categories.
+        def fetch(offset: int, size: int) -> list:
+            return fetch_issue_page_with_retry(
+                self.jira_client,
+                jql=jql,
+                start_at=offset,
+                max_results=size,
+                fields="project,components,security",
+                expand=None,
+                project_key=key,
+            )
 
-        Args:
-            entity_type: The type of entities requested (e.g., "components")
+        return iter_issue_pages(key, fetch, 100)
 
-        Returns:
-            Empty list (this migration doesn't fetch from Jira directly)
-
-        Raises:
-            ValueError: Always, as this migration doesn't support idempotent workflow
-
-        """
-        msg = (
-            "ComponentsMigration is a transformation-only migration and does not "
-            "support idempotent workflow. It operates on work package mappings."
-        )
-        raise ValueError(msg)
+    def _mapped_targets(self) -> dict[str, dict[str, tuple[int, str | None]]]:
+        projects: dict[str, dict[str, tuple[int, str | None]]] = {}
+        for origin, value in (self.mappings.get_mapping("work_package") or {}).items():
+            key = self._inner_jira_key(str(origin), value)
+            if not key:
+                continue
+            row = WorkPackageMappingEntry.from_legacy(key, value)
+            targets = projects.setdefault(self._issue_project_key(key), {})
+            if key in targets:
+                msg = "Duplicate Jira work-package mapping"
+                raise ValueError(msg)
+            targets[key] = (int(row.openproject_id), str(origin) if str(origin).isdecimal() else None)
+        return projects
 
     def _extract(self) -> ComponentResult:
-        """Collect component names per Jira project from migrated issues.
-
-        Issues are normalised through :meth:`JiraIssueFields.from_issue_any`
-        so the rest of the pipeline reads ``fields.components`` as a typed
-        list of :class:`JiraComponentRef`.
-        """
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        # Production wp_map is keyed by str(jira_id) (numeric) outer with
-        # the human-readable ``jira_key`` stored inside. Prefer the inner
-        # ``jira_key``; fall back to the outer key for legacy/test layouts.
-        jira_keys = [self._component_issue_key(key, entry) for key, entry in wp_map.items()]
-        if not jira_keys:
-            return ComponentResult(success=True, extracted=0, data={"by_project": {}})
-
-        issues: dict[str, Any] = self._merge_batch_issues(jira_keys)
-
-        by_project: dict[str, set[str]] = {}
-        for key, issue in issues.items():
-            pj = self._issue_project_key(key)
-            try:
-                fields = JiraIssueFields.from_issue_any(issue)
-            except Exception:
+        base = self.jira_client.base_url
+        selected = config.jira_config.get("projects") or []
+        wanted = {k.strip() for k in (selected.split(",") if isinstance(selected, str) else selected)}
+        mapped = self._mapped_targets()
+        projects = {}
+        skipped = 0
+        for key, mapping in (self.mappings.get_mapping("project") or {}).items():
+            if wanted and key not in wanted:
                 continue
-            for comp in fields.components:
-                name = comp.name
-                if name and name.strip():
-                    by_project.setdefault(pj, set()).add(name.strip())
-
-        materialized = {k: sorted(v) for k, v in by_project.items() if v}
-        # Cache issues for reuse in _load() to avoid second Jira API call
+            pid = project_id(mapping)
+            if not pid:
+                continue
+            targets = self._target_origins(key, pid, mapped.get(key, {}))
+            if targets:
+                rows, source_pid = self._project_rows(key, targets, base)
+                skipped += len(targets) - len(rows)
+                if rows:
+                    projects[key] = {"project_id": pid, "jira_id": source_pid, "key": key, "jira": base, "issues": rows}
+        warnings = []
+        if skipped:
+            warnings.append(f"Jira could not confirm {skipped} mapped work packages for ordinary component assignment.")
+            self.logger.warning(warnings[0])
         return ComponentResult(
-            success=True,
-            extracted=sum(len(v) for v in materialized.values()),
-            data={"by_project": materialized, "issues": issues},
+            success=True, data=projects, details={"unconfirmed_work_packages": skipped}, warnings=warnings
         )
 
-    def _map(self, extracted: ComponentResult) -> ComponentResult:
-        return map_project_records(self, extracted, "Category")
+    def _target_origins(self, key: str, pid: int, mapped: dict) -> dict:
+        targets = dict(mapped)
+        seen = set()
+        for row in self.op_client.get_project_wp_cf_snapshot(pid):
+            origin = row.get("jira_issue_key")
+            if not origin or self._issue_project_key(origin) != key:
+                continue
+            wp_id, sid = row["id"], row.get("jira_source_id")
+            previous, mapped_sid = targets.get(origin, (wp_id, None))
+            if origin in seen or wp_id != previous or (mapped_sid and sid and mapped_sid != sid):
+                msg = "Duplicate or conflicting target work-package origin"
+                raise ValueError(msg)
+            seen.add(origin)
+            targets[origin] = (wp_id, sid or mapped_sid)
+        return targets
+
+    def _project_rows(self, key: str, targets: dict, base: str) -> tuple[list, str | None]:
+        rows = []
+        source_pid = None
+        for issue in self._source_issues(key):
+            if issue.key not in targets or not permits_unrestricted_result(issue):
+                continue
+            fields = issue.raw["fields"]
+            project = fields["project"]
+            if project.get("projectTypeKey") not in {"software", "business"}:
+                continue  # Customer-facing and unknown project audiences require a separate access check.
+            pid = str(project["id"])
+            if project["key"] != key or not pid.isdecimal() or source_pid not in (None, pid):
+                msg = "Jira returned inconsistent project origins"
+                raise ValueError(msg)
+            source_pid = pid
+            wp_id, expected = targets[issue.key]
+            if not str(issue.id).isdecimal() or (expected is not None and str(issue.id) != str(expected)):
+                msg = "Mapped source ID differs from Jira"
+                raise ValueError(msg)
+            rows.append(
+                {
+                    "id": str(issue.id),
+                    "key": issue.key,
+                    "wp": wp_id,
+                    "components": _component_refs(fields.get("components"), base),
+                }
+            )
+        if any(row["components"] for row in rows):
+            catalogue = _component_refs([item.raw for item in self.jira_client.jira.project_components(key)], base)
+            by_id = {ref["id"]: ref for ref in catalogue}
+            if any(by_id.get(ref["id"]) != ref for row in rows for ref in row["components"]):
+                msg = "Issue component differs from its Jira project catalogue"
+                raise ValueError(msg)
+        return rows, source_pid
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        category_map: dict[str, dict[str, int]] = (mapped.data or {}).get("category_map", {})
-        if not category_map:
-            return ComponentResult(success=True, updated=0)
-
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        proj_map = self.mappings.get_mapping("project") or {}
-
-        # Use cached issues from extract phase to avoid second Jira API call.
-        # Cache keys match the ``jira_key`` form used during ``_extract``
-        # (inner ``jira_key`` when present, outer key otherwise).
-        issues: dict[str, Any] = (mapped.data or {}).get("issues", {})
-        if not issues:
-            logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            fallback_keys = [self._component_issue_key(key, entry) for key, entry in wp_map.items()]
-            issues = self._merge_batch_issues(fallback_keys)
-
-        updates: list[dict[str, Any]] = []
-        failed = 0
-        for outer_key, raw_entry in wp_map.items():
-            jira_key = self._component_issue_key(outer_key, raw_entry)
+        categories = dict(self.mappings.get_mapping("category") or {})
+        updated = failed = 0
+        for project in (mapped.data or {}).values():
+            pid = str(project["project_id"])
             try:
-                entry = WorkPackageMappingEntry.from_legacy(jira_key, raw_entry)
-            except ValueError:
-                continue
-            wp_id = int(entry.openproject_id)
-
-            issue = issues.get(jira_key)
-            if not issue:
-                continue
-            try:
-                fields = JiraIssueFields.from_issue_any(issue)
+                outcome = apply_component_assignments(self.op_client, project, categories.get(pid, {}))
+                updated += outcome["updated"]
+                current = categories.get(pid, {})
+                merged = {**current, **outcome["categories"]}
+                if merged != current:
+                    categories[pid] = merged
+                    self.mappings.set_mapping("category", categories)
             except Exception:
-                failed += 1
-                continue
-            assignment = self._category_assignment(jira_key, wp_id, fields, proj_map, category_map)
-            if assignment:
-                updates.append(assignment)
-
-        return apply_work_package_updates(self, updates, failed)
-
-    @staticmethod
-    def _component_issue_key(outer_key: str, entry: Any) -> str:
-        return str(entry.get("jira_key") or outer_key) if isinstance(entry, dict) else str(outer_key)
-
-    def _category_assignment(
-        self, key: str, wp_id: int, fields: JiraIssueFields, projects: dict, categories: dict
-    ) -> dict | None:
-        if not fields.components or not fields.components[0].name:
-            return None
-        pid = project_id(projects.get(self._issue_project_key(key)))
-        if not pid:
-            return None
-        category_id = categories.get(str(pid), {}).get(str(fields.components[0].name))
-        return {"id": wp_id, "category_id": int(category_id)} if category_id else None
+                self.logger.exception("Could not reconcile component assignments for %s", project["key"])
+                failed += len(project["issues"])
+        return ComponentResult(
+            success=not failed, updated=updated, failed=failed, details=mapped.details, warnings=mapped.warnings
+        )
 
     def run(self) -> ComponentResult:
-        """Execute component migration pipeline."""
-        self.logger.info("Starting components migration")
+        """Check the source and the target on every pass, including retries."""
+        return self._run_etl_pipeline("Components")
 
-        extracted = self._extract()
-        if not extracted.success:
-            self.logger.error("Components extraction failed: %s", extracted.message or extracted.error)
-            return extracted
-
-        mapped = self._map(extracted)
-        if not mapped.success:
-            self.logger.error("Components mapping failed: %s", mapped.message or mapped.error)
-            return mapped
-
-        loaded = self._load(mapped)
-        if loaded.success:
-            self.logger.info("Components migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed)
-        else:
-            self.logger.error("Components migration encountered failures (failed=%s)", loaded.failed)
-        return loaded
+    def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
+        """Target category and origin changes can occur independently of Jira updates."""
+        return self.run()

@@ -765,3 +765,79 @@ def test_native_open_sprints_and_goal_roundtrip(native_sprint_projects, assigned
     query(f"WorkPackage.find({wid}).update_columns(sprint_id: {native_id})")
     query(f'WorkPackage.find({wid}).sprint.goals.sole.update!(text: "Edited locally"); true')
     assert _run_sprints(query, manifest) == "Native sprint changed"
+
+
+def test_component_assignments_are_atomic_project_scoped_and_admin_recoverable(native_sprint_projects):
+    from src.infrastructure.openproject.component_assignments import apply_component_assignments
+
+    query, ((pid, wid, _), _) = native_sprint_projects
+    client = Mock()
+    client.execute_large_query_to_json_file.side_effect = lambda expression: query(f"({expression}).as_json")
+    query(f"""
+        wp = WorkPackage.find({wid})
+        {{"J2O Origin Key"=>"EX-1", "J2O Origin System"=>"Jira"}}.each do |name,val|
+          f=WorkPackageCustomField.find_or_create_by!(name: name) {{ |v| v.field_format="string" }}
+          wp.custom_values.create!(custom_field: f, value: val)
+        end
+        true
+    """)
+    refs = [
+        {"id": sid, "name": name, "url": f"https://jira.example.org/rest/api/2/component/{sid}"}
+        for sid, name in [("33", "Öffentlich"), ("7", "Transport")]
+    ]
+    issue = {"id": "90", "key": "EX-1", "wp": wid, "components": refs}
+    project = {"key": "EX", "jira_id": "80", "project_id": pid, "jira": "https://jira.example.org", "issues": [issue]}
+    first = apply_component_assignments(client, project, {})
+    assert first["updated"] == 1
+    assert apply_component_assignments(client, project, {})["updated"] == 0
+    register = query(f"""
+        p=Project.find({pid}); v=p.custom_values.joins(:custom_field).where(custom_fields: {{name: "Jira component membership origins"}}).sole
+        [WorkPackage.find({wid}).category.name, v.custom_field.admin_only?, JSON.parse(v.value)]
+    """)
+    access = query(f"""
+        project = Project.find({pid})
+        admin = User.admin.first!
+        metrics = nil
+        User.transaction(requires_new: true) do
+          reader, outsider = %w[reader outsider].map do |scope|
+            User.create!(login: "component-#{{scope}}", firstname: "Component", lastname: scope,
+                         mail: "component-#{{scope}}@example.invalid", status: :active)
+          end
+          Member.create!(project: project, principal: reader, roles: [ProjectRole.find_by!(name: "Reader")])
+          property = "customField" + ProjectCustomField.where(name: "Jira component membership origins").sole.id.to_s
+          metrics = [admin, reader, outsider, nil].map do |user|
+            headers = {{"HTTP_HOST"=>"localhost", "HTTP_ACCEPT"=>"application/hal+json"}}
+            if user
+              api_key = Token::API.create!(user: user).plain_value
+              headers["HTTP_AUTHORIZATION"] = ActionController::HttpAuthentication::Basic.encode_credentials("apikey", api_key)
+            end
+            api = Rack::MockRequest.new(Rails.application)
+            project_detail = api.get("/api/v3/projects/{pid}", headers)
+            work_package = api.get("/api/v3/work_packages/{wid}", headers)
+            [project_detail.status, JSON.parse(project_detail.body).key?(property), work_package.status,
+             JSON.parse(work_package.body).dig("_links", "category", "href")]
+          end
+          raise "Missing normal read access" unless reader.allowed_in_project?(:view_project_attributes, project)
+          raise ActiveRecord::Rollback
+        end
+        metrics
+    """)
+    href = f"/api/v3/categories/{first['categories']['Öffentlich']}"
+    assert access == [[200, True, 200, href], [200, False, 200, href], [404, False, 404, None], [401, False, 401, None]]
+    assert register[:2] == ["Öffentlich", True]
+    doc = register[2]
+    ordered = doc["issues"]["90"]["components"]
+    assert [doc["components"][sid]["source"] for sid in ordered] == refs
+    assert [doc["components"][sid]["category"] for sid in ordered] == [first["categories"][ref["name"]] for ref in refs]
+    assert (
+        apply_component_assignments(client, {**project, "issues": [{**issue, "components": refs[1:]}]}, {})["updated"]
+        == 1
+    )
+    assert query(f"WorkPackage.find({wid}).category.name") == refs[1]["name"]
+    assert apply_component_assignments(client, {**project, "issues": [{**issue, "components": []}]}, {})["updated"] == 1
+    assert query(f"WorkPackage.find({wid}).category_id") is None
+    before = query(f"Category.where(project_id: {pid}).count")
+    invalid = {**project, "issues": [issue, {**issue, "id": "999"}]}
+    with pytest.raises(AssertionError, match="Unexpected work package origin"):
+        apply_component_assignments(client, invalid, {})
+    assert query(f"[WorkPackage.find({wid}).category_id, Category.where(project_id: {pid}).count]") == [None, before]

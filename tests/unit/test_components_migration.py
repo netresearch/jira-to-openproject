@@ -1,92 +1,87 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
 from src.application.components.components_migration import ComponentsMigration
+from src.migration import _invoke_component
 
 
-class DummyComp:
-    def __init__(self, name: str) -> None:
-        self.name = name
+def source(number, components, **fields):
+    defaults = {"project": {"key": "APP", "id": "10", "projectTypeKey": "software"}, "components": components}
+    return SimpleNamespace(key=f"APP-{number}", id=str(100 + number), raw={"fields": {**defaults, **fields}})
 
 
-class DummyFields:
-    def __init__(self, components: list[DummyComp]):
-        self.components = components
+def component(sid, name):
+    return {"id": str(sid), "name": name, "self": f"https://jira.example.org/rest/api/2/component/{sid}"}
 
 
-class DummyIssue:
-    def __init__(self, key: str, comps: list[str]) -> None:
-        self.key = key
-        self.fields = DummyFields([DummyComp(n) for n in comps])
+@pytest.fixture
+def migration(monkeypatch):
+    from src import config
+
+    monkeypatch.setitem(config.jira_config, "projects", ["APP"])
+    jira = Mock(base_url="https://jira.example.org")
+    app = ComponentsMigration(jira_client=jira, op_client=Mock())
+    app.op_client.get_project_wp_cf_snapshot.return_value = []
+    maps = {
+        "project": {"APP": 7, "OTHER": 99},
+        "work_package": {
+            "101": {"jira_key": "APP-1", "openproject_id": 10},
+            "APP-2": 12,
+            "APP-3": 13,
+            "APP-4": 14,
+            "APP-5": 15,
+            "APP-6": 16,
+        },
+        "category": {},
+    }
+    app.mappings = Mock()
+    app.mappings.get_mapping.side_effect = maps.get
+    app.mappings.set_mapping.side_effect = maps.__setitem__
+    return app
 
 
-class DummyJira:
-    def __init__(self) -> None:
-        self.issues: dict[str, DummyIssue] = {
-            "PRJ-1": DummyIssue("PRJ-1", ["Backend", "API"]),
-            "PRJ-2": DummyIssue("PRJ-2", ["Backend"]),
-            "ABC-3": DummyIssue("ABC-3", ["Core"]),
-        }
-
-    def batch_get_issues(self, keys):
-        return {k: self.issues[k] for k in keys if k in self.issues}
-
-
-class DummyOp:
-    def __init__(self) -> None:
-        self.created_payloads: list[dict] = []
-
-    def execute_json_query(self, q: str):
-        if "Category.where" in q:
-            return [
-                {"id": 501, "name": rec.get("name"), "project_id": rec.get("project_id")}
-                for rec in self.created_payloads
-            ]
-        return []
-
-    def bulk_create_records(self, model: str, records: list[dict], **_):
-        assert model == "Category"
-        self.created_payloads.extend(records)
-        return {"created_count": len(records)}
-
-    def batch_update_work_packages(self, updates):
-        return {"updated": len(updates)}
-
-
-@pytest.fixture(autouse=True)
-def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    import src.config as cfg
-
-    class DummyMappings:
-        def __init__(self) -> None:
-            self._m = {
-                "work_package": {
-                    "PRJ-1": {"openproject_id": 2001},
-                    "PRJ-2": {"openproject_id": 2002},
-                    "ABC-3": {"openproject_id": 3003},
-                },
-                "project": {
-                    "PRJ": {"openproject_id": 11},
-                    "ABC": {"openproject_id": 22},
-                },
-            }
-
-        def get_mapping(self, name: str):
-            return self._m.get(name, {})
-
-        def set_mapping(self, name: str, mapping):
-            self._m[name] = mapping
-
-    monkeypatch.setattr(cfg, "mappings", DummyMappings(), raising=False)
+def test_normal_component_import_checks_visibility_and_preserves_source_order(migration, monkeypatch):
+    a, b = component(420, "Backend"), component(37, "API")
+    jira = migration.jira_client.jira
+    jira.project_components.return_value = [SimpleNamespace(raw=a), SimpleNamespace(raw=b)]
+    jira.search_issues.side_effect = [
+        [
+            source(1, [a, b]),
+            source(2, [b]),
+            source(3, [a], security={"id": "30"}),
+            source(4, [a], project={"projectTypeKey": "service_desk"}),
+            source(5, [], project={}),
+            source(6, []),
+        ],
+        [],
+    ]
+    apply = Mock(return_value={"updated": 2, "categories": {"Backend": 51, "API": 52}})
+    monkeypatch.setattr("src.application.components.components_migration.apply_component_assignments", apply)
+    result = _invoke_component("components", migration)
+    assert result.success and result.updated == 2 and result.details["unconfirmed_work_packages"] == 3
+    project = apply.call_args.args[1]
+    assert project["key"] == "APP" and project["jira_id"] == "10" and project["project_id"] == 7
+    assert [r["wp"] for r in project["issues"]] == [10, 12, 16]
+    assert [[(ref["id"], ref["name"], ref["url"]) for ref in row["components"]] for row in project["issues"]] == [
+        [(a["id"], a["name"], a["self"]), (b["id"], b["name"], b["self"])],
+        [(b["id"], b["name"], b["self"])],
+        [],
+    ]
+    for call in jira.search_issues.call_args_list:
+        assert call.args[0] == 'project = "APP" AND level IS EMPTY ORDER BY id'
+        assert call.kwargs["fields"] == "project,components,security"
+    assert migration.mappings.get_mapping("category") == {"7": {"Backend": 51, "API": 52}}
 
 
-def test_components_migration_end_to_end():
-    mig = ComponentsMigration(jira_client=DummyJira(), op_client=DummyOp())  # type: ignore[arg-type]
-    ex = mig._extract()
-    mp = mig._map(ex)
-    ld = mig._load(mp)
-    assert mp.success is True
-    assert ld.success is True
-    assert ld.updated >= 1
+@pytest.mark.parametrize(
+    "bad", [None, [component(1, "A"), component(1, "A")], [{"id": "2", "name": "A", "self": "https://other.invalid"}]]
+)
+def test_incomplete_or_inconsistent_component_data_fails_before_writes(migration, bad):
+    migration.jira_client.jira.search_issues.side_effect = [[source(1, bad)], []]
+    assert not _invoke_component("components", migration).success
+    migration.op_client.execute_large_query_to_json_file.assert_not_called()
