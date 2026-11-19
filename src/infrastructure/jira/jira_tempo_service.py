@@ -58,7 +58,7 @@ def _work_attributes(work_log: dict[str, Any]) -> list[dict[str, Any]]:
     if flat and sorted(flat, key=lambda item: item["key"]) != sorted(nested, key=lambda item: item["key"]):
         msg = "Conflicting Tempo work attribute representations."
         raise JiraApiError(msg)
-    return nested
+    return flat or nested
 
 
 def _requested_project(project: str | None, issue: str | None) -> str | None:

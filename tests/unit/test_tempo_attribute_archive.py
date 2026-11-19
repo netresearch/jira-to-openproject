@@ -3,12 +3,14 @@
 
 """Exercise protected Tempo data through the standard time-entry migration and writer receipt."""
 
+import base64
 import json
 from unittest.mock import Mock
 
 import pytest
-from pyrage import x25519
+from pyrage import decrypt, x25519
 
+from src.infrastructure.jira.jira_tempo_service import _visible_tempo_record
 from src.infrastructure.openproject.openproject_time_entry_service import OpenProjectTimeEntryService
 from src.utils.tempo_attribute_archive import KEY_SETTING, seal_values, verify_packets
 from src.utils.time_entry_migrator import TimeEntryMigrator
@@ -107,3 +109,26 @@ def test_standard_migration_seals_before_cache_and_enriches_one_canonical_row(tm
     assert migration._tempo_read_failed
     assert not seal_values({}, "")
     assert "private accounting example" not in (tmp_path / "tempo_time_entries.json").read_text()
+
+
+def test_both_attribute_orders_survive_recovery(identity):
+    flat = [{"key": "first", "value": "one"}, {"key": "second", "value": "two"}]
+    nested = [
+        {"worklogId": 15, "workAttribute": {"key": item["key"]}, "value": item["value"]} for item in reversed(flat)
+    ]
+    raw = {
+        "id": 27,
+        "jiraWorklogId": 15,
+        "issue": {"id": 42, "key": "TEST-1"},
+        "worklogAttributes": flat,
+        "workAttributeValues": nested,
+    }
+    sealed = seal_values(_visible_tempo_record(raw), "https://jira.example.test")
+    document = json.loads(
+        decrypt(
+            base64.b64decode(sealed["tempo_archive"]["packet"], validate=True),
+            [x25519.Identity.from_str(identity.read_text())],
+        )
+    )
+    assert document["worklogAttributes"] == flat
+    assert document["workAttributeValues"] == nested
