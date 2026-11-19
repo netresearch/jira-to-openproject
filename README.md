@@ -161,6 +161,8 @@ uv run uvicorn src.dashboard.app:app --host 127.0.0.1 --port 8001
 
 Open [the local dashboard](http://127.0.0.1:8001/). In the terminal where you run your normal `j2o migrate` command, export the same absolute `J2O_DASHBOARD_PROGRESS_FILE` first. Give each concurrent migration its own file. Only the producer writes it. The dashboard reads completed snapshots and keeps the most recent result available after the process exits. Container processes need a shared volume for this path.
 
+The standard time-entry component compares worklogs carrying Tempo attributes for each selected project. The target count includes entries whose stored attributes the importer decrypted and verified. Missing or duplicate source worklog IDs leave the affected project comparison unmeasured. The dashboard publishes aggregate counts only.
+
 A reconciliation producer can publish per-data-type counts, for example `"comparison_counts": {"Attachments": {"source": 12, "target": 12}, "Comments": {"source": 30}}`. Count the same population and unit on each side. Omit a side until measured. The dashboard shows zero for a measured zero and “Not checked” for a missing observation. Existing `verified_counts` stay available for other measurements. For a multi-project run, publish the same per-data-type structure under `project_comparisons`, keyed by project. The project selector keeps each comparison within its source scope.
 
 

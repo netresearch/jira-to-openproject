@@ -23,8 +23,11 @@ _RESULT_COUNTS = {
     "failed": "Failed operations",
 }
 _COMPARISON_LABELS = {
-    "time_entries": "Jira worklogs on selected issues",
-    "attachments": "Attachments on selected issues (target SHA-256 verified)",
+    "time_entries": {
+        "comparison_by_project": "Jira worklogs on selected issues",
+        "tempo_attributes_by_project": "Worklogs with Tempo attributes (target decrypted and verified)",
+    },
+    "attachments": {"comparison_by_project": "Attachments on selected issues (target SHA-256 verified)"},
 }
 _WORK_PACKAGE_COUNTS = {
     "work_packages_skeleton": {
@@ -47,9 +50,17 @@ _WORK_PACKAGE_COUNTS = {
 
 def _reported_counts(name: str, result: ComponentResult) -> dict[str, int]:
     """Only publish enumerated numeric counters explicitly supplied by this component."""
-    counts = {
-        label: getattr(result, field) for field, label in _RESULT_COUNTS.items() if field in result.model_fields_set
-    }
+    time_entries = result.details.get("total_time_entries")
+    if name == "time_entries" and isinstance(time_entries, dict):
+        counts = {
+            "New time entries": time_entries.get("migrated"),
+            "Skipped time entries": result.details.get("skipped"),
+            "Failed time entries": time_entries.get("failed"),
+        }
+    else:
+        counts = {
+            label: getattr(result, field) for field, label in _RESULT_COUNTS.items() if field in result.model_fields_set
+        }
     for field, label in _WORK_PACKAGE_COUNTS.get(name, {}).items():
         if field in result.details:
             counts[label] = result.details[field]
@@ -62,8 +73,8 @@ def _comparison_sides(value: Any) -> dict[str, int]:
     return {side: value[side] for side in ("source", "target") if type(value.get(side)) is int and value[side] >= 0}
 
 
-def _comparison_projects(result: ComponentResult) -> dict[str, dict[str, int]]:
-    raw = result.details.get("comparison_by_project")
+def _comparison_projects(result: ComponentResult, field: str) -> dict[str, dict[str, int]]:
+    raw = result.details.get(field)
     if not isinstance(raw, dict) or any(not isinstance(k, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", k) for k in raw):
         return {}
     return {project: _comparison_sides(pair) for project, pair in raw.items()}
@@ -115,9 +126,10 @@ class MigrationRunProgress:
             self.active = self.phases[index]
             self.active.update(status="running", started_at=datetime.now(UTC).isoformat())
             self.snapshot["current_component"] = self.active["name"]
-            label = _COMPARISON_LABELS.get(self.active["name"].partition(" (attempt ")[0])
-            if label is not None and self._observations.pop(label, None) is not None:
-                self._publish_comparisons()
+            component = self.active["name"].partition(" (attempt ")[0]
+            for label in _COMPARISON_LABELS.get(component, {}).values():
+                self._observations.pop(label, None)
+            self._publish_comparisons()
             self._publish()
 
     def end_component(self, name: str, result: ComponentResult, status: str) -> None:
@@ -126,9 +138,9 @@ class MigrationRunProgress:
             return
         phase = self.active["name"]
         if not self.dry_run and not result.dry_run:
-            if label := _COMPARISON_LABELS.get(name):
-                self._observations[label] = _comparison_projects(result)
-                self._publish_comparisons()
+            for field, label in _COMPARISON_LABELS.get(name, {}).items():
+                self._observations[label] = _comparison_projects(result, field)
+            self._publish_comparisons()
             counts = _reported_counts(name, result)
             self.snapshot["verified_counts"].update({f"{phase} · {label}": value for label, value in counts.items()})
         self._close_phase(status)
