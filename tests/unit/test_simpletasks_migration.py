@@ -39,8 +39,9 @@ def _raw(source, rendered):
 def test_inconsistent_description_tasks_abort_before_writing(source, rendered):
     from src.infrastructure.jira.description_tasks import description_tasks
 
+    raw = _raw(source, rendered)
     with pytest.raises(ValueError):
-        description_tasks("J-1", _raw(source, rendered))
+        description_tasks("J-1", raw)
 
 
 def test_missing_description_tasks_and_issue_identity():
@@ -205,7 +206,8 @@ def test_source_mismatch_aborts_before_first_write(stage, count):
     ],
 )
 def test_inconsistent_sidebar_identity_aborts_the_write(index, change):
+    rows = _rows()
+    rows[index].update(change)
+    issue = _project_issue()
     with pytest.raises((ValueError, KeyError)):
-        rows = _rows()
-        rows[index].update(change)
-        issue_task_records(_project_issue(), [{"id": "42", "title": "inline", "checked": True}], rows, 3)
+        issue_task_records(issue, [{"id": "42", "title": "inline", "checked": True}], rows, 3)
