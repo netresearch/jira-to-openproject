@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
@@ -147,6 +148,15 @@ def test_published_values_and_system_memory_are_displayed(
     assert '<option value="Project A">Project A</option>' in dom
     assert "<li>Verify comment permissions</li>" in dom
     assert f'aria-valuetext="{expected_progress}"' in dom
+
+
+def test_dashboard_assets_are_included_in_the_wheel_configuration() -> None:
+    project = tomllib.loads((DASHBOARD.parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    patterns = project["tool"]["setuptools"]["package-data"]["src.dashboard"]
+    included = {path for pattern in patterns for path in DASHBOARD.glob(pattern)}
+    for folder in ("templates", "static"):
+        assets = {path for path in (DASHBOARD / folder).rglob("*") if path.is_file()}
+        assert assets <= included
 
 
 def test_template_asset_fingerprints_match_packaged_files() -> None:
