@@ -15,6 +15,7 @@ This module provides complete time tracking data migration capabilities:
 import json
 import os
 import time
+from collections import Counter, defaultdict
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -1071,6 +1072,30 @@ class TimeEntryMigrator:
             return False, "invalid_hours_or_date"
         return True, "ok"
 
+    def _tempo_attribute_comparisons(self, worklog_counts: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+        """Publish counts only where Tempo covered the entire selected Jira worklog inventory."""
+        if self._tempo_read_failed or not hasattr(self.jira_client, "get_tempo_time_entries"):
+            return {}
+        observations: dict[str, Counter[str]] = defaultdict(Counter)
+        for row in self.extracted_tempo_entries:
+            key = row.get("issue_key") or (row.get("issue") or {}).get("key")
+            worklog = row.get("jira_worklog_id", row.get("jiraWorklogId"))
+            if key and worklog is not None:
+                observations[key][str(worklog)] += 1
+        incomplete = {
+            key.rpartition("-")[0]
+            for key, ids in self._worklog_receipts.inventory.items()
+            if observations[key] != Counter(ids)
+        }
+        expected = Counter(origin.partition(":")[0].rpartition("-")[0] for origin in self._expected_attribute_origins)
+        verified = Counter(origin.partition(":")[0].rpartition("-")[0] for origin in self._verified_attribute_origins)
+        return {
+            project: {"source": expected[project], "target": verified[project]}
+            if "source" in counts and project not in incomplete
+            else {}
+            for project, counts in worklog_counts.items()
+        }
+
     def migrate_time_entries_for_issues(
         self,
         migrated_issues: list[dict[str, Any]],
@@ -1141,9 +1166,11 @@ class TimeEntryMigrator:
             missing_attributes = self._expected_attribute_origins - self._verified_attribute_origins
             if failed_count or self._failed_worklog_issues or self._tempo_read_failed or missing_attributes:
                 status = "partial_success" if migrated_count else "failed"
+            worklog_counts = self._worklog_receipts.counts()
             return {
                 "status": status,
-                "comparison_by_project": self._worklog_receipts.counts(),
+                "comparison_by_project": worklog_counts,
+                "tempo_attributes_by_project": self._tempo_attribute_comparisons(worklog_counts),
                 "jira_work_logs": {
                     "discovered": jira_discovered,
                     "unreadable_issues": len(self._failed_worklog_issues),

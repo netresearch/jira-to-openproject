@@ -337,3 +337,36 @@ def test_cli_global_dry_run_never_publishes_source_or_target(local_run, monkeypa
     assert result.migration_id.startswith("dry-run-")
     assert result.comparison_counts == {}
     assert result.project_comparisons == {}
+
+
+def test_cli_displays_tempo_attribute_receipts_and_replaces_incomplete_attempts(local_run):
+    observations = iter(
+        [
+            {"DEMO": {"source": 2, "target": 2}, "EMPTY": {"source": 0, "target": 0}},
+            {"DEMO": {"source": 2, "target": 1}, "EMPTY": {}},
+        ]
+    )
+    local_run.factories["time_entries"] = lambda: SimpleNamespace(
+        run=lambda: ComponentResult(
+            success=True,
+            details={
+                "tempo_attributes_by_project": next(observations),
+                "total_time_entries": {"migrated": 0, "failed": 0},
+                "skipped": 3,
+            },
+        )
+    )
+    label = "Worklogs with Tempo attributes (target decrypted and verified)"
+    assert run_command("time_entries") == 0
+    report = read_progress(local_run.target)
+    assert report.comparison_counts[label].source == report.comparison_counts[label].target == 2
+    assert report.project_comparisons["EMPTY"][label].target == 0
+    assert report.verified_counts == {
+        "time_entries · New time entries": 0,
+        "time_entries · Skipped time entries": 3,
+        "time_entries · Failed time entries": 0,
+    }
+    assert run_command("time_entries") == 0
+    retry = read_progress(local_run.target)
+    assert retry.project_comparisons["DEMO"][label].target == 1
+    assert label not in retry.comparison_counts

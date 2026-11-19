@@ -963,3 +963,28 @@ def test_tempo_uses_observed_issue_ids_and_historical_dates(migrator, mock_jira_
     assert migrator.extract_tempo_time_entries(["ABC"], save_to_file=False) == []
     assert migrator._tempo_read_failed
     assert migrator.extracted_tempo_entries == []
+
+
+def test_dashboard_only_counts_scopes_with_matching_tempo_and_jira_inventories(tmp_path):
+    migration = TimeEntryMigrator(MagicMock(), MagicMock(), tmp_path)
+    for project, ids in {"DEMO": ["1", "2"], "OTHER": ["3"], "EMPTY": [], "DUP": ["4"]}.items():
+        issue = f"{project}-1"
+        migration._worklog_receipts.scope.add(issue)
+        migration._worklog_receipts.observe(issue, ids)
+    migration._worklog_receipts.scope.add("UNREAD-1")
+    migration.extracted_tempo_entries = [
+        {"issue_key": f"{project}-1", "jira_worklog_id": identifier}
+        for project, identifier in [("DEMO", "1"), ("DEMO", "2"), ("DUP", "4"), ("DUP", "4")]
+    ]
+    migration._expected_attribute_origins = {"DEMO-1:1", "DEMO-1:2"}
+    migration._verified_attribute_origins = {"DEMO-1:2"}
+    counts = migration._worklog_receipts.counts()
+    assert migration._tempo_attribute_comparisons(counts) == {
+        "DEMO": {"source": 2, "target": 1},
+        "EMPTY": {"source": 0, "target": 0},
+        "UNREAD": {},
+        "OTHER": {},
+        "DUP": {},
+    }
+    migration._tempo_read_failed = True
+    assert migration._tempo_attribute_comparisons(counts) == {}

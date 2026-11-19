@@ -223,7 +223,9 @@ class TimeEntryMigration(BaseMigration):
                     details={
                         "status": "failed",
                         "reason": "zero_created_with_input",
+                        "total_time_entries": result.get("total_time_entries", {}),
                         "comparison_by_project": result.get("comparison_by_project", {}),
+                        "tempo_attributes_by_project": result.get("tempo_attributes_by_project", {}),
                         "total_discovered": total_discovered,
                         "unmappable": total_unmappable,
                         "skipped": total_skipped,
@@ -242,6 +244,7 @@ class TimeEntryMigration(BaseMigration):
                 details={
                     "status": result.get("status", "unknown"),
                     "comparison_by_project": result.get("comparison_by_project", {}),
+                    "tempo_attributes_by_project": result.get("tempo_attributes_by_project", {}),
                     "jira_work_logs": result.get("jira_work_logs", {}),
                     "tempo_time_entries": result.get("tempo_time_entries", {}),
                     "total_time_entries": result.get("total_time_entries", {}),
