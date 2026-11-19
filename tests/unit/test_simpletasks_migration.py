@@ -149,6 +149,35 @@ def stage(monkeypatch):
     return migration, jira, target
 
 
+def test_full_profile_schedules_tasklists_once_immediately_after_work_package_content():
+    from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES
+
+    for profile in (DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES["full"]):
+        assert profile.count("simpletasks") == 1
+        assert profile.index("simpletasks") == profile.index("work_packages_content") + 1
+
+
+def test_missing_addon_skips_source_issues_and_leaves_existing_target_data_alone(stage):
+    migration, jira, target = stage
+    jira.get_custom_fields.return_value = []
+    result = migration.run()
+    assert result.success
+    assert result.details["source_tasklist_detected"] is False
+    jira.jira.search_issues.assert_not_called()
+    jira.get_issue_property.assert_not_called()
+    target.assert_not_called()
+
+
+def test_unavailable_task_count_does_not_remove_a_previously_imported_checklist(stage):
+    migration, jira, target = stage
+    source = jira.jira.issue.return_value.raw["fields"]
+    source["description"] = None
+    del source["customfield_42"]
+    assert migration.run().success
+    jira.jira.issue.assert_not_called()
+    target.assert_not_called()
+
+
 def test_regular_stage_preserves_the_confirmed_task_order_and_withholds_comment_and_property(stage):
     migration, jira, target = stage
     result = _invoke_component("simpletasks", migration)

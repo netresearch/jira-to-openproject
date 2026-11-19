@@ -546,6 +546,26 @@ def test_migrated_project_allows_native_work_package_creation(rails):
     assert query(f"({types}).count") == 0
 
 
+def test_all_fix_versions_survive_native_readback_and_retry(rails):
+    client, query = rails
+    seed = query("""
+        w = WorkPackage.first!
+        a, b = ["Version A regression", "Version B regression"].map { |name| w.project.versions.create!(name: name) }
+        [w.id, a.id, b.id, w.respond_to?(:target_version_ids_replacements=) && Setting.work_package_multiple_versions?]
+    """)
+    wid, first, second, multiple = seed
+    writer = OpenProjectWorkPackageService(client)
+    assert writer.batch_update_work_packages([{"id": wid, "target_version_ids": [first]}])["failed"] == 0
+    request = [{"id": wid, "target_version_ids": [first, second]}]
+    for _ in range(2):
+        result = writer.batch_update_work_packages(request)
+        assert result["failed"] == int(not multiple)
+    actual = query(
+        f"w=WorkPackage.find({wid});w.respond_to?(:target_version_ids) ? w.target_version_ids.sort : [w.version_id]"
+    )
+    assert actual == ([first, second] if multiple else [first])
+
+
 def test_task_origins_bind_to_the_native_work_package_without_comment_data(native_sprint_projects):
     from src.application.components.simpletasks_migration import _checklist_row
     from src.infrastructure.jira.sidebar_tasks import issue_task_records
@@ -632,26 +652,6 @@ def test_task_origins_bind_to_the_native_work_package_without_comment_data(nativ
     with pytest.raises(AssertionError, match="Previously imported checklist is missing"):
         run(row)
     assert query(f"WorkPackage.find({wid}).description") == "Changed by its owner"
-
-
-def test_all_fix_versions_survive_native_readback_and_retry(rails):
-    client, query = rails
-    seed = query("""
-        w = WorkPackage.first!
-        a, b = ["Version A regression", "Version B regression"].map { |name| w.project.versions.create!(name: name) }
-        [w.id, a.id, b.id, w.respond_to?(:target_version_ids_replacements=) && Setting.work_package_multiple_versions?]
-    """)
-    wid, first, second, multiple = seed
-    writer = OpenProjectWorkPackageService(client)
-    assert writer.batch_update_work_packages([{"id": wid, "target_version_ids": [first]}])["failed"] == 0
-    request = [{"id": wid, "target_version_ids": [first, second]}]
-    for _ in range(2):
-        result = writer.batch_update_work_packages(request)
-        assert result["failed"] == int(not multiple)
-    actual = query(
-        f"w=WorkPackage.find({wid});w.respond_to?(:target_version_ids) ? w.target_version_ids.sort : [w.version_id]"
-    )
-    assert actual == ([first, second] if multiple else [first])
 
 
 @pytest.fixture

@@ -901,6 +901,8 @@ Utility for work package default value application.
 
 ### SimpleTasksMigration
 
+The default and `full` profiles run `simpletasks` immediately after `work_packages_content`. When Jira advertises no Simple Tasklists fields, the stage skips target changes. For installations without these fields, an explicit `simpletasks_property_key` enables the source check.
+
 The `simpletasks` stage selects mapped issues from the configured projects through Jira's empty-security-level search. It compares issue descriptions with their rendered checkboxes. For Jira Software issues with a task count, it also reads the add-on's per-issue list, including lists made entirely of description tasks. Only a matching description task or a directly created sidebar task is eligible. Comment, custom-field and uncorroborated issue-property content stays out of both target representations. Customer-facing projects require separate audience verification. See the [vendor's task location documentation](https://simpletasks.tss.io/faq).
 
 A private project's work package description displays the ordered Markdown checklist with completion and mandatory states. The administrator-only **Jira tasklist origins** project attribute records each issue's Jira ID, key and target work package ID. Each task retains its source ID, text, location and checked state, along with the ordinal, mandatory flag, editing account identifiers, created/changed timestamps and overdue flag when supplied. The source Markdown description order is used for description-only add-on versions without task ordinals.

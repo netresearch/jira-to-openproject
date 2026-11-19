@@ -122,6 +122,7 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "attachment_recovery",
     # === Phase 3: Work Package Content (with resolved attachment URLs) ===
     "work_packages_content",
+    "simpletasks",
     # Board queries require mapped work packages before sprint assignments run.
     "agile_boards",
     "sprint_epic",

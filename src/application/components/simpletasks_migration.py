@@ -46,11 +46,17 @@ class SimpleTasksMigration(BaseMigration):
     """Transfer ordinary task origins through the selected projects' verified issue mappings."""
 
     @cached_property
-    def _task_count_field(self) -> str | None:
+    def _task_fields(self) -> dict[str, str]:
+        fields = {}
         for field in self.jira_client.get_custom_fields():
-            if field.get("schema", {}).get("custom") == "com.topshelfsolution.simpletasklists:all-tasks-count-cftype":
-                return field["id"]
-        return None
+            kind = (field.get("schema") or {}).get("custom") or ""
+            if kind.startswith("com.topshelfsolution.simpletasklists:"):
+                fields[kind] = field["id"]
+        return fields
+
+    @property
+    def _task_count_field(self) -> str | None:
+        return self._task_fields.get("com.topshelfsolution.simpletasklists:all-tasks-count-cftype")
 
     @cached_property
     def _server_tasklist(self) -> bool:
@@ -99,6 +105,9 @@ class SimpleTasksMigration(BaseMigration):
 
     def _project_rows(self, project: str, targets: dict, pid: int) -> tuple[dict, int, int]:
         jql = f"{unrestricted_project_jql(project)} ORDER BY id"
+        fields = "project,security,description"
+        if self._task_count_field:
+            fields += "," + self._task_count_field
 
         def fetch(offset: int, size: int) -> list:
             return fetch_issue_page_with_retry(
@@ -106,7 +115,7 @@ class SimpleTasksMigration(BaseMigration):
                 jql=jql,
                 start_at=offset,
                 max_results=size,
-                fields="project,security",
+                fields=fields,
                 expand=None,
                 project_key=project,
             )
@@ -114,6 +123,7 @@ class SimpleTasksMigration(BaseMigration):
         rows = []
         held = 0
         source_pid = None
+        confirmed = 0
         for issue in iter_issue_pages(project, fetch, 100):
             if issue.key not in targets or not permits_unrestricted_result(issue):
                 continue
@@ -125,25 +135,38 @@ class SimpleTasksMigration(BaseMigration):
                 msg = "Jira tasklist project identity mismatch"
                 raise ValueError(msg)
             source_pid = source_id
+            confirmed += 1
             row, unknown = self._issue_row(issue, targets[issue.key])
-            rows.append(row)
+            if row:
+                rows.append(row)
             held += unknown
         return (
             {"project": pid, "key": project, "source_id": source_pid, "base": self.jira_client.base_url, "rows": rows},
             held,
-            len(targets) - len(rows),
+            len(targets) - confirmed,
         )
 
-    def _issue_row(self, issue: Any, target: tuple[int, str | None]) -> tuple[dict, int]:
+    def _issue_row(self, issue: Any, target: tuple[int, str | None]) -> tuple[dict | None, int]:
+        target_id, source_id = target
+        if source_id is not None and source_id != str(issue.id):
+            msg = "Mapped Jira tasklist issue ID changed"
+            raise ValueError(msg)
+        ref = {"wp": target_id, "id": str(issue.id), "key": issue.key}
+        source = issue.raw["fields"]
+        count = source.get(self._task_count_field)
+        explicit_property = bool(config.migration_config.get("simpletasks_property_key"))
+        if not explicit_property and "{task" not in (source.get("description") or ""):
+            if count is None:
+                return None, 0  # Missing app data does not prove that a previously imported list is empty.
+            if Decimal(str(count)) == 0:
+                return {**ref, "tasks": [], "markdown": ""}, 0
         fields = "project,security,description"
         if self._task_count_field:
             fields += "," + self._task_count_field
         raw = self.jira_client.jira.issue(issue.key, fields=fields, expand="renderedFields").raw
-        target_id, source_id = target
         if (
             raw.get("key") != issue.key
             or str(raw["id"]) != str(issue.id)
-            or source_id not in (None, str(issue.id))
             or raw["fields"]["project"]["id"] != issue.raw["fields"]["project"]["id"]
             or raw["fields"]["project"].get("projectTypeKey") != issue.raw["fields"]["project"].get("projectTypeKey")
             or not permits_unrestricted_result(raw)
@@ -152,14 +175,18 @@ class SimpleTasksMigration(BaseMigration):
             raise ValueError(msg)
         tasks, held = self._confirmed_tasks(raw)
         return {
-            "wp": target_id,
-            "id": str(issue.id),
-            "key": issue.key,
+            **ref,
             "tasks": tasks,
             "markdown": "\n".join(_checklist_row(t) for t in tasks),
         }, held
 
     def _extract(self) -> ComponentResult:
+        if not self._task_fields and not config.migration_config.get("simpletasks_property_key"):
+            return ComponentResult(
+                success=True,
+                data=[],
+                details={"source_tasklist_detected": False, "unverified_task_audience": 0, "unconfirmed_issues": 0},
+            )
         configured = config.jira_config.get("projects") or []
         selected = {k.strip() for k in (configured.split(",") if isinstance(configured, str) else configured)}
         mappings = self.mappings.get_mapping("project") or {}
