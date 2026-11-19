@@ -40,6 +40,7 @@ from src.application.components.inline_refs_migration import InlineRefsMigration
 from src.application.components.issue_type_migration import IssueTypeMigration
 from src.application.components.labels_migration import LabelsMigration
 from src.application.components.link_type_migration import LinkTypeMigration
+from src.application.components.native_boards_migration import NativeBoardsMigration
 from src.application.components.native_tags_migration import NativeTagsMigration
 from src.application.components.priority_migration import PriorityMigration
 from src.application.components.project_migration import ProjectMigration
@@ -468,6 +469,7 @@ def _build_component_factories(
         "accounts": lambda: AccountMigration(jira_client=jira_client, op_client=op_client),
         "workflows": lambda: WorkflowMigration(jira_client=jira_client, op_client=op_client),
         "agile_boards": lambda: AgileBoardMigration(jira_client=jira_client, op_client=op_client),
+        "native_boards": lambda: NativeBoardsMigration(jira_client=jira_client, op_client=op_client),
         "admin_schemes": lambda: AdminSchemeMigration(jira_client=jira_client, op_client=op_client),
         "reporting": lambda: ReportingMigration(jira_client=jira_client, op_client=op_client),
     }

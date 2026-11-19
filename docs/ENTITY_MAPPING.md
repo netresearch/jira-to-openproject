@@ -406,7 +406,11 @@ project, specifying the OpenProject project containing its imported cards.
 uv run j2o-boards --jira-project APP --target-project app --archive-project board-archive
 ```
 
-Run the import from the configured migration directory. Help is available from any directory with `j2o-boards --help`. The command reads each project-scoped board twice, then verifies Jira origin
+Run the import from the configured migration directory. Help is available from any directory with `j2o-boards --help`.
+To run the same import for every migrated project as part of `j2o migrate --profile full`, set
+`native_board_archive_project: board-archive` in the `migration` section of `config/config.yaml`.
+The `native_boards` stage then runs after `wp_metadata_backfill`; without the setting it is skipped.
+The command reads each project-scoped board twice, then verifies Jira origin
 IDs, keys, URLs, and systems on the target work packages. Each native basic
 board preserves the visible cards in Jira order, column names, and the source
 configuration. Shared boards contain only the selected project's cards. The

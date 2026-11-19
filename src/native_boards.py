@@ -44,6 +44,15 @@ def layout(jira: JiraClient, board: dict, project: str) -> dict:
     return {**data, "revision": revision}
 
 
+def capture(jira: JiraClient, board: dict, project: str) -> dict:
+    """Read a board layout twice and refuse a snapshot that moved between the reads."""
+    data = layout(jira, board, project)
+    if data != layout(jira, board, project):
+        msg = "Board changed during capture"
+        raise RuntimeError(msg)
+    return data
+
+
 def main(argv: list[str] | None = None) -> None:
     """Materialize project-scoped board snapshots with the configured migration clients."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -57,11 +66,7 @@ def main(argv: list[str] | None = None) -> None:
 
     jira, target = JiraClient(), OpenProjectClient()
     for board in jira.get_boards_for_project(args.jira_project):
-        data = layout(jira, board, args.jira_project)
-        if data != layout(jira, board, args.jira_project):
-            msg = "Board changed during capture"
-            raise RuntimeError(msg)
-        result = save_layout(target, data, args.target_project, args.archive_project)
+        result = save_layout(target, capture(jira, board, args.jira_project), args.target_project, args.archive_project)
         sys.stdout.write(json.dumps(result) + "\n")
 
 

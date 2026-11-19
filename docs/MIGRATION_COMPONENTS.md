@@ -49,6 +49,7 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 | **Agile** |
 | SprintEpicMigration | `sprint_epic` | Stable | Yes | Sprint/Epic links on WPs |
 | AgileBoardMigration | `agile_boards` | Stable | Yes | Board queries + sprint versions |
+| NativeBoardsMigration | `native_boards` | Stable | Yes | Native board snapshots; needs an archive project |
 | VersionsMigration | `versions` | Stable | Yes | Release tracking |
 | AffectsVersionsMigration | `affects_versions` | Stable | Yes | Version links |
 | **Labels & Tags** |
@@ -530,7 +531,7 @@ per Jira sprint. Handles the entity types `agile_boards` and `sprints`.
 
 After the work-package import, the optional [native sprint runner](native-completed-sprints.md)
 creates planned, active and completed sprints, project-specific goals and work-package
-links on OpenProject 17.9. For native board snapshots see [Entity Mapping §11](ENTITY_MAPPING.md#11-agile-migration).
+links on OpenProject 17.9. For native board snapshots see `NativeBoardsMigration` below.
 
 **Dependencies**: ProjectMigration
 
@@ -538,6 +539,33 @@ links on OpenProject 17.9. For native board snapshots see [Entity Mapping §11](
 ```bash
 uv run python -m src.main migrate --components agile_boards --no-confirm
 ```
+
+---
+
+### NativeBoardsMigration
+
+**Location**: `src/application/components/native_boards_migration.py`
+
+Runs the `j2o-boards` import for every migrated project in the full profile. Each project-scoped Jira board becomes a native basic board in a private archive project, with the columns and the ranked cards of that project. The import code is shared with `j2o-boards`.
+
+The component runs only when `migration.native_board_archive_project` in `config/config.yaml` names an existing private, memberless root project. Without this setting the stage is reported as skipped, so a default run imports no native boards. It is also skipped when no project has been migrated. `--jira-project-filter` limits the projects.
+
+**Features**:
+- Each board is read twice. A board that changes between the reads is counted as failed.
+- An unchanged board is verified in place. A changed board creates a new revision and keeps the earlier one.
+- A failing board or a failing board listing is counted and reported. The remaining boards and projects are still imported.
+- The result reports `created` and `verified` boards. Total, successful and failed counts appear on the dashboard.
+
+**Sequence**: after `wp_metadata_backfill`. The writer matches each card by the J2O Origin ID, key, URL and system of its work package. `work_packages_skeleton` writes these fields and `wp_metadata_backfill` completes them on existing work packages.
+
+**Dependencies**: ProjectMigration, WorkPackageSkeletonMigration, WpMetadataBackfillMigration
+
+**Example Usage**:
+```bash
+uv run python -m src.main migrate --components native_boards --no-confirm
+```
+
+The [native sprint runner](native-completed-sprints.md) and the [deferred reference replay](deferred-references.md) remain separate operator commands. Both require a private project without members, but `projects` adds the mapped Jira project lead as a member. The sprint runner also accepts only one frozen manifest per project, and the reference replay needs the operator's age identity.
 
 ---
 
@@ -958,6 +986,7 @@ UserMigration (foundation)
     │       ├── TimeEntryMigration
     │       ├── SprintEpicMigration
     │       │   └── AgileBoardMigration
+    │       ├── NativeBoardsMigration
     │       ├── VotesMigration
     │       ├── LabelsMigration
     │       ├── InlineRefsMigration

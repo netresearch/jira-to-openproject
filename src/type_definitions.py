@@ -161,6 +161,7 @@ type ComponentName = Literal[
     "resolutions",
     "workflows",
     "agile_boards",
+    "native_boards",
     "work_packages",
     "work_packages_skeleton",
     "work_packages_content",
