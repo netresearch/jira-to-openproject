@@ -38,7 +38,7 @@ def _candidate(actor: dict, mapping: dict, base: str) -> dict | None:
 def _rule(raw: dict, project: dict, base: str, mapping: dict) -> dict:
     sid = str(raw["id"])
     if (
-        not re.fullmatch(r"[1-9][0-9]*", sid)
+        not re.fullmatch(r"[1-9]\d*", sid, re.ASCII)
         or str(raw["projectId"]) != str(project["id"])
         or raw["project"] != project["key"]
         or raw["self"] != f"{base}/rest/api/2/component/{sid}"
@@ -81,7 +81,7 @@ class CategoryDefaultsMigration(BaseMigration):
                 continue
             pid = project_id(value)
             detail = self.jira_client.jira.project(key).raw
-            if not pid or detail["key"] != key or not re.fullmatch(r"[1-9][0-9]*", str(detail["id"])):
+            if not pid or detail["key"] != key or not re.fullmatch(r"[1-9]\d*", str(detail["id"]), re.ASCII):
                 msg = "Unverified project for Jira category defaults"
                 raise ValueError(msg)
             rules = [_rule(item.raw, detail, base, users) for item in self.jira_client.jira.project_components(key)]
