@@ -131,6 +131,10 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     # the audit; idempotent — only sets fields where the OP value is
     # currently null/blank).
     "wp_metadata_backfill",
+    # Native board snapshots need every card's J2O Origin fields, which the
+    # skeleton writes and wp_metadata_backfill completes. Skips unless
+    # migration.native_board_archive_project names a private archive project.
+    "native_boards",
     # === Post-WP Data: Versions, Components, Labels ===
     "versions",
     "components",

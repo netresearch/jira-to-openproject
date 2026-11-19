@@ -60,6 +60,10 @@ migration:
   batch_size: 1000
   skeleton_batch_size: 100  # Batch size for work package skeleton creation (increased from 50)
 
+  # Native board snapshots (native_boards stage of the full profile).
+  # Name an existing private, memberless root project; unset skips the stage.
+  # native_board_archive_project: "board-archive"
+
   # Behavior settings
   skip_existing: true
   enable_rails_meta_writes: true

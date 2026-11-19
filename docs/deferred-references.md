@@ -1,6 +1,6 @@
 # Carry references into a later project cutover
 
-An issue in the selected projects can link to an issue that will be migrated later. At a frozen Jira cutover, capture those edges from the local full-field Jira issue snapshot and all available work-package mappings. Keep the operator identity in private recovery storage. A separate identity for this purpose can be generated with `j2o-comments keygen`.
+An issue in the selected projects can link to an issue that will be migrated later. Links between issues migrated in the same run are created by the `relations` stage of `j2o migrate`. `j2o-references` stays a separate operator command because it needs the operator's private age identity and a later cutover wave. At a frozen Jira cutover, capture those edges from the local full-field Jira issue snapshot and all available work-package mappings. Keep the operator identity in private recovery storage. A separate identity for this purpose can be generated with `j2o-comments keygen`.
 
 ```sh
 j2o-comments keygen --identity /private/recovery/ref.agekey
