@@ -52,7 +52,7 @@ tempo_archive_for = lambda do |row, wp, record|
   title = 'Jira Tempo Work Attribute Values (age)'
   field = TimeEntryCustomField.find_by(name: title)
   unless field
-    TimeEntry.connection.select_value('SELECT pg_advisory_xact_lock(124481108, 0)')
+    TimeEntry.connection.select_value('SELECT pg_advisory_xact_lock(124481108, 1)')
     field = TimeEntryCustomField.find_or_create_by!(name: title) do |f|
       f.assign_attributes(field_format: 'text', admin_only: true, is_for_all: false, is_required: false)
     end
@@ -288,7 +288,7 @@ class OpenProjectTimeEntryService:
                 raise ValueError(msg)
             issue = meta["jira_worklog_key"].partition(":")[0]
             if not archive["issue_url"].endswith("/browse/" + issue) or not re.fullmatch(
-                r"[1-9][0-9]*", archive["issue_id"]
+                r"[1-9]\d*", archive["issue_id"], re.ASCII
             ):
                 msg = "The protected Tempo archive points to a different Jira issue."
                 raise ValueError(msg)
@@ -463,28 +463,31 @@ class OpenProjectTimeEntryService:
 
     @staticmethod
     def _verify_tempo_receipts(rows: list[dict], result: dict) -> None:
-        receipts = result.get("results", [])
+        by_index: dict[int, list[dict]] = {}
+        for receipt in result.get("results", []):
+            by_index.setdefault(receipt["index"], []).append(receipt)
         for row in rows:
-            archive = row.get("tempo_archive")
-            if not archive:
+            if "tempo_archive" not in row:
                 continue
-            matches = [item for item in receipts if item.get("index") == row["index"]]
+            matches = by_index.get(row["index"], [])
             if len(matches) != 1:
                 msg = "Missing or ambiguous Tempo archive receipt."
                 raise QueryExecutionError(msg)
-            receipt = matches[0]
-            if not receipt.get("success"):
-                continue
-            try:
-                if receipt.get("verified_worklog_key") != row["jira_worklog_key"] or not receipt.get("id"):
-                    msg = "Tempo archive receipt has the wrong origin."
-                    raise ValueError(msg)
-                verify_packets(archive["packet"], receipt.pop("tempo_packet", ""), row["jira_worklog_key"])
-            except ValueError as exc:
-                key = "reused" if receipt.get("reused") else "created"
-                result[key] -= 1
-                result["failed"] += 1
-                receipt.clear()
-                receipt.update(index=row["index"], success=False, error=str(exc))
-            else:
-                receipt["tempo_attributes_verified"] = True
+            if matches[0].get("success"):
+                OpenProjectTimeEntryService._verify_tempo_receipt(row, matches[0], result)
+
+    @staticmethod
+    def _verify_tempo_receipt(row: dict, receipt: dict, result: dict) -> None:
+        try:
+            if receipt.get("verified_worklog_key") != row["jira_worklog_key"] or not receipt.get("id"):
+                msg = "Tempo archive receipt has the wrong origin."
+                raise ValueError(msg)
+            verify_packets(row["tempo_archive"]["packet"], receipt.pop("tempo_packet", ""), row["jira_worklog_key"])
+        except ValueError as exc:
+            key = "reused" if receipt.get("reused") else "created"
+            result[key] -= 1
+            result["failed"] += 1
+            receipt.clear()
+            receipt.update(index=row["index"], success=False, error=str(exc))
+        else:
+            receipt["tempo_attributes_verified"] = True

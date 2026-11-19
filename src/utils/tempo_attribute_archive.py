@@ -73,9 +73,9 @@ def seal_values(row: dict[str, Any], jira_url: str) -> dict[str, Any]:
         raise ValueError(msg)
     base = urlsplit(jira_url)
     if not (
-        re.fullmatch(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*", issue)
-        and re.fullmatch(r"[1-9][0-9]*", worklog)
-        and re.fullmatch(r"[1-9][0-9]*", issue_id)
+        re.fullmatch(r"[A-Z][A-Z\d_]*-[1-9]\d*", issue, re.ASCII)
+        and re.fullmatch(r"[1-9]\d*", worklog, re.ASCII)
+        and re.fullmatch(r"[1-9]\d*", issue_id, re.ASCII)
         and base.scheme in {"http", "https"}
         and base.hostname
         and not (base.username or base.password or base.query or base.fragment)

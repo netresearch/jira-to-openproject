@@ -62,11 +62,14 @@ def test_verified_age_packet_and_existing_receipt(identity):
 
     existing = result(original["packet"])
     OpenProjectTimeEntryService._verify_tempo_receipts([row], existing)
-    assert existing["results"][0]["tempo_attributes_verified"] and "tempo_packet" not in existing["results"][0]
+    assert existing["results"][0]["tempo_attributes_verified"]
+    assert "tempo_packet" not in existing["results"][0]
     for packet in (changed["packet"], "broken"):
         conflict = result(packet)
         OpenProjectTimeEntryService._verify_tempo_receipts([row], conflict)
-        assert conflict["failed"] == 1 and conflict["reused"] == 0 and not conflict["results"][0]["success"]
+        assert conflict["failed"] == 1
+        assert conflict["reused"] == 0
+        assert not conflict["results"][0]["success"]
     with pytest.raises(ValueError, match="different|differ"):
         verify_packets(original["packet"], repeated["packet"], "TEST-2:15")
     identity.write_text(str(x25519.Identity.generate()))
@@ -91,15 +94,16 @@ def test_standard_migration_seals_before_cache_and_enriches_one_canonical_row(tm
     migration.extract_jira_work_logs_for_issues(["TEST-1"])
     migration.extract_tempo_time_entries(["TEST"])
     cached = (tmp_path / "tempo_time_entries.json").read_text()
-    assert "private accounting example" not in cached and "work_attribute_values" not in cached
+    assert "private accounting example" not in cached
+    assert "work_attribute_values" not in cached
     (entry,) = migration.transform_all_time_entries()
     row = OpenProjectTimeEntryService._entry_row(entry, 0)
     assert "private accounting example" not in json.dumps(row)
-    assert row["work_package_id"] == 8 and row["target_project_id"] == 3
+    assert row["work_package_id"] == 8
+    assert row["target_project_id"] == 3
     assert row["tempo_archive"]["issue_url"] == "https://jira.example.test/browse/TEST-1"
     monkeypatch.delenv(KEY_SETTING)
-    assert migration.extract_tempo_time_entries(["TEST"]) == [] and migration._tempo_read_failed
-    assert (
-        not seal_values({}, "")
-        and "private accounting example" not in (tmp_path / "tempo_time_entries.json").read_text()
-    )
+    assert migration.extract_tempo_time_entries(["TEST"]) == []
+    assert migration._tempo_read_failed
+    assert not seal_values({}, "")
+    assert "private accounting example" not in (tmp_path / "tempo_time_entries.json").read_text()

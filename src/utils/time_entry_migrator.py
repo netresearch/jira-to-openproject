@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from src import config
+from src.application.components.work_package_files import write_issue_snapshot
 from src.display import configure_logging
 from src.infrastructure.jira.comment_audience import has_comment_audience
 from src.infrastructure.jira.jira_client import JiraClient
@@ -736,26 +737,30 @@ class TimeEntryMigrator:
 
     def _selected_tempo_entries(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         jira_rows = {(issue, str(row["id"])): row for issue, logs in self.extracted_work_logs.items() for row in logs}
-        result = []
+        selected = []
         for row in entries:
-            if not self._tempo_allowed(row):
-                continue
             issue = row.get("issue_key") or (row.get("issue") or {}).get("key")
+            if not self._tempo_allowed(row):
+                if issue in (self._requested_issues or set()) and has_values(row):
+                    self._tempo_read_failed = True
+                continue
             identifier = row.get("jira_worklog_id", row.get("jiraWorklogId"))
             canonical = jira_rows.get((issue, str(identifier)))
-            if canonical is None and self._requested_issues is not None:
-                continue
-            if canonical:
-                row = self._verified_tempo_entry(row, canonical)
-            clock = canonical or row
-            if self._ff_accept(clock.get("created"), clock.get("updated")):
-                if has_values(row):
-                    if not canonical:
-                        msg = "Cannot archive Tempo values without the verified Jira worklog."
-                        raise ValueError(msg)
-                    row = seal_values(row, self.jira_client.base_url)
-                result.append(row)
-        return result
+            if item := self._dated_tempo_entry(row, canonical):
+                selected.append(item)
+        return selected
+
+    def _dated_tempo_entry(self, row: dict, canonical: dict | None) -> dict | None:
+        clock = canonical or row
+        if not self._ff_accept(clock.get("created"), clock.get("updated")):
+            return None
+        if canonical:
+            row = self._verified_tempo_entry(row, canonical)
+            return seal_values(row, self.jira_client.base_url) if has_values(row) else row
+        if has_values(row):
+            msg = "Cannot archive Tempo values without the verified Jira worklog."
+            raise ValueError(msg)
+        return row if self._requested_issues is None else None
 
     def _read_tempo_entries(
         self, project_keys: list[str] | None, date_from: str | None, date_to: str | None
@@ -844,21 +849,21 @@ class TimeEntryMigrator:
         """Attach protected values to the same canonical Jira entry, including on backfill."""
         self._combined_tempo = 0
         remaining = []
-        entries = {}
+        entries: dict[str, list[dict]] = {}
         for entry in transformed:
-            key = (entry.get("_meta") or {}).get("jira_worklog_key")
+            key = entry.get("_meta", {}).get("jira_worklog_key")
             if key:
-                entries[key] = None if key in entries else entry
+                entries.setdefault(key, []).append(entry)
         for row in self.extracted_tempo_entries:
             origin = f"{row.get('issue_key')}:{row.get('jira_worklog_id', row.get('jiraWorklogId'))}"
-            entry = entries.get(origin)
+            matches = entries.get(origin, [])
             archive = row.get("tempo_archive")
             if archive:
-                if entry is None or "tempo_archive" in entry["_meta"]:
+                if len(matches) != 1 or "tempo_archive" in matches[0]["_meta"]:
                     msg = "Tempo attributes have no unique, mapped Jira time entry."
                     raise ValueError(msg)
-                entry["_meta"]["tempo_archive"] = archive
-            elif not (entry and row.get("jira_started")):
+                matches[0]["_meta"]["tempo_archive"] = archive
+            elif not (len(matches) == 1 and row.get("jira_started")):
                 remaining.append(row)
                 continue
             self._combined_tempo += 1
@@ -937,8 +942,8 @@ class TimeEntryMigrator:
 
         for entry in transformed_entries:
             meta = entry.setdefault("_meta", {})
-            issue = meta.get("jira_issue_key") or ""
-            if project := self._target_projects.get(issue) or self.project_mapping.get(issue.rpartition("-")[0]):
+            issue = str(meta.get("jira_issue_key", ""))
+            if project := self._target_projects.get(issue, self.project_mapping.get(issue.rpartition("-")[0])):
                 meta["target_project_id"] = project
         self.transformed_time_entries = transformed_entries
 
@@ -1270,8 +1275,7 @@ class TimeEntryMigrator:
     def _save_extracted_tempo_entries(self) -> None:
         try:
             path = self.data_dir / "tempo_time_entries.json"
-            with open(str(path), "w", encoding="utf-8") as f:
-                json.dump(self.extracted_tempo_entries, f, indent=2)
+            write_issue_snapshot(self.extracted_tempo_entries, path)
         except (OSError, TypeError, ValueError) as e:
             self.logger.warning("Failed to save Tempo time entries: %s", e)
 
