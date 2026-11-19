@@ -1,158 +1,126 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Set default assignee for Categories from Jira Component leads.
-
-For each project, fetch Jira components and their leads, map to OP users, find
-matching Category by name in the corresponding OP project, and set assigned_to.
-"""
+"""Preserve Jira's configured and effective component assignment policies."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import quote
 
+from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.config import logger
-from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
+from src.application.components.project_named_records import project_id
+from src.infrastructure.openproject.category_defaults import apply_category_defaults
 from src.models import ComponentResult
-from src.models.jira import JiraComponentLead, JiraProjectComponent
+
+
+def _actor(raw: dict | None) -> dict | None:
+    if raw is None:
+        return None
+    return {key: raw[key] for key in ("key", "name", "accountId", "active") if key in raw}
+
+
+def _candidate(actor: dict, mapping: dict, base: str) -> dict | None:
+    key, account, name = (actor.get(k) for k in ("key", "accountId", "name"))
+    if actor.get("active") is not True or not (key or account):
+        return None
+    identity = key or name or account
+    mapped = mapping.get(identity) or mapping.get(account)
+    if not isinstance(mapped, dict) or not (target := project_id(mapped)):
+        return None
+    url = f"{base}/secure/ViewProfile.jspa?"
+    url += f"accountId={quote(account)}" if account else f"name={quote(name or key)}"
+    return {"id": target, "user_key": identity, "user_id": account or name or key, "url": url}
+
+
+def _rule(raw: dict, project: dict, base: str, mapping: dict) -> dict:
+    sid = str(raw["id"])
+    if (
+        not re.fullmatch(r"[1-9][0-9]*", sid)
+        or str(raw["projectId"]) != str(project["id"])
+        or raw["project"] != project["key"]
+        or raw["self"] != f"{base}/rest/api/2/component/{sid}"
+        or not isinstance(raw["name"], str)
+        or not raw["name"].strip()
+    ):
+        msg = "Invalid Jira component identity"
+        raise ValueError(msg)
+    policy = {k: raw.get(k) for k in ("assigneeType", "realAssigneeType", "isAssigneeTypeValid", "archived", "deleted")}
+    policy.update({k: _actor(raw.get(k)) for k in ("lead", "assignee", "realAssignee")})
+    source = {"id": sid, "name": raw["name"], "url": raw["self"]}
+    requested = policy["assigneeType"]
+    lead = {"COMPONENT_LEAD": policy["lead"], "PROJECT_LEAD": _actor(project.get("lead"))}.get(requested)
+    candidate = None
+    if (
+        project.get("projectTypeKey") in {"software", "business"}
+        and policy["isAssigneeTypeValid"] is True
+        and requested == policy["realAssigneeType"]
+        and lead
+        and lead == policy["assignee"] == policy["realAssignee"]
+        and not policy["archived"]
+        and not policy["deleted"]
+    ):
+        candidate = _candidate(lead, mapping, base)
+    return {"source": source, "policy": policy, "candidate": candidate}
 
 
 @register_entity_types("category_defaults")
-class CategoryDefaultsMigration(BaseMigration):  # noqa: D101
-    def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
-        super().__init__(jira_client=jira_client, op_client=op_client)
-
-    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities for transformation.
-
-        This migration performs data transformation on project components
-        rather than fetching directly from Jira. It operates on already-fetched
-        project data and component information.
-
-        Args:
-            entity_type: The type of entities requested
-
-        Returns:
-            Empty list (this migration doesn't fetch from Jira directly)
-
-        Raises:
-            ValueError: Always, as this migration doesn't support idempotent workflow
-
-        """
-        msg = (
-            "CategoryDefaultsMigration is a transformation-only migration and does not "
-            "support idempotent workflow. It operates on data from other migrations."
-        )
-        raise ValueError(msg)
+class CategoryDefaultsMigration(BaseMigration):
+    """Translate fixed assignees after confirming the category and user in the target."""
 
     def _extract(self) -> ComponentResult:
-        """Extract per-project component->lead mapping from Jira.
-
-        Each component is parsed at the boundary into a typed
-        :class:`JiraProjectComponent` so downstream code reads
-        ``comp.name`` / ``comp.effective_lead`` rather than juggling
-        dict lookups.
-        """
-        # Expect jira_client.get_project_components(project_key) to yield raw
-        # component shapes (dicts with 'name' and 'lead', or SDK-like objects).
-        proj_map = self.mappings.get_mapping("project") or {}
-        components_by_project: dict[str, list[JiraProjectComponent]] = {}
-        for jira_key in proj_map or {}:
-            try:
-                comps_raw = self.jira_client.get_project_components(jira_key)  # type: ignore[attr-defined]
-            except Exception:
+        selected = config.jira_config.get("projects") or []
+        wanted = {k.strip() for k in (selected.split(",") if isinstance(selected, str) else selected)}
+        users = self.mappings.get_mapping("user") or {}
+        base = self.jira_client.base_url
+        projects = []
+        for key, value in (self.mappings.get_mapping("project") or {}).items():
+            if wanted and key not in wanted:
                 continue
-            if not isinstance(comps_raw, list) or not comps_raw:
-                continue
-            typed: list[JiraProjectComponent] = []
-            for raw in comps_raw:
-                try:
-                    typed.append(JiraProjectComponent.from_any(raw))
-                except Exception:
-                    continue
-            if typed:
-                components_by_project[jira_key] = typed
-        return ComponentResult(success=True, data={"components": components_by_project})
-
-    def _resolve_user_id(self, lead: JiraComponentLead | None) -> int | None:
-        """Map a typed component lead to an OpenProject user id.
-
-        Probes the user mapping using (in order): ``accountId``, ``name``,
-        ``key``, ``emailAddress``. ``None`` is returned when no probe
-        hits — the caller skips silently.
-        """
-        if lead is None:
-            return None
-        try:
-            umap = self.mappings.get_mapping("user") or {}
-            for probe in (lead.account_id, lead.name, lead.key, lead.email_address):
-                if not probe or probe not in umap:
-                    continue
-                rec = umap[probe]
-                if isinstance(rec, dict) and rec.get("openproject_id"):
-                    return int(rec["openproject_id"])  # type: ignore[arg-type]
-        except Exception:
-            return None
-        return None
+            pid = project_id(value)
+            detail = self.jira_client.jira.project(key).raw
+            if not pid or detail["key"] != key or not re.fullmatch(r"[1-9][0-9]*", str(detail["id"])):
+                msg = "Unverified project for Jira category defaults"
+                raise ValueError(msg)
+            rules = [_rule(item.raw, detail, base, users) for item in self.jira_client.jira.project_components(key)]
+            if len({r["source"]["id"] for r in rules}) != len(rules):
+                msg = "Duplicate Jira component identity"
+                raise ValueError(msg)
+            projects.append(
+                {
+                    "project_id": pid,
+                    "source": {"Jira Base URL": base, "Jira Project Key": key, "Jira Project ID": str(detail["id"])},
+                    "project_policy": {
+                        "projectTypeKey": detail.get("projectTypeKey"),
+                        "assigneeType": detail.get("assigneeType"),
+                        "lead": _actor(detail.get("lead")),
+                    },
+                    "rules": rules,
+                }
+            )
+        return ComponentResult(success=True, data=projects)
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        data = mapped.data or {}
-        components_by_project: dict[str, list[JiraProjectComponent]] = (
-            data.get("components", {}) if isinstance(data, dict) else {}
+        counts = {"updated": 0, "native": 0, "held": 0, "preserved": 0}
+        for project in mapped.data or []:
+            totals = apply_category_defaults(self.op_client, project)
+            for key in counts:
+                counts[key] += totals[key]
+        held = counts["held"]
+        return ComponentResult(
+            success=True,
+            updated=counts["updated"],
+            details=counts,
+            warnings=[f"{held} component policies need administrator review."] if held else [],
         )
 
-        proj_map = self.mappings.get_mapping("project") or {}
-        updated = 0
-        failed = 0
-
-        for jira_key, comps in components_by_project.items():
-            proj_entry = proj_map.get(jira_key)
-            if not (isinstance(proj_entry, dict) and proj_entry.get("openproject_id")):
-                continue
-            project_id = int(proj_entry["openproject_id"])  # type: ignore[arg-type]
-
-            assigned, errors = self._apply_project_defaults(jira_key, project_id, comps)
-            updated += assigned
-            failed += errors
-
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
-
-    def _assign_component_lead(self, project_id: int, component: JiraProjectComponent) -> bool | None:
-        """Return None for components with no usable name or assignee."""
-        name = component.name
-        if not isinstance(name, str) or not name.strip():
-            return None
-        user_id = self._resolve_user_id(component.effective_lead)
-        if not user_id:
-            return None
-        script = (
-            "p = Project.find(%d); c = Category.find_by(project: p, name: '%s'); "
-            "if c; c.assigned_to = User.find(%d); c.save!; true; else; false; end"
-            % (project_id, escape_ruby_single_quoted(name), user_id)
-        )
-        return bool(self.op_client.execute_query(script))
+    def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """Run against current source policies and independently verify the target on every invocation."""
+        msg = "Category defaults use their own target-side reconciliation."
+        raise ValueError(msg)
 
     def run(self) -> ComponentResult:
-        """Run Category defaults migration."""
+        """Reconcile project component assignment policies."""
         return self._run_etl_pipeline("Category defaults")
-
-    def _apply_project_defaults(
-        self, jira_key: str, project_id: int, comps: list[JiraProjectComponent]
-    ) -> tuple[int, int]:
-        updated = failed = 0
-        for comp in comps:
-            try:
-                ok = self._assign_component_lead(project_id, comp)
-                if ok is None:
-                    continue
-                if ok:
-                    updated += 1
-                else:
-                    failed += 1
-            except Exception:
-                logger.exception("Failed to set category default for %s/%s", jira_key, comp.name)
-                failed += 1
-
-        return updated, failed
