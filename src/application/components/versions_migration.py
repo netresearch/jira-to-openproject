@@ -1,23 +1,19 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Migrate Jira fixVersions to OpenProject Versions and assign to work packages.
-
-Strategy:
-- Extract: collect fixVersion names per Jira project from issues in work_package mapping.
-- Map: ensure Versions exist per OP project (create missing via bulk_create_records('Version')).
-- Load: assign the complete Jira fixVersions set, with read-back and legacy compatibility.
-"""
+"""Migrate Jira project release catalogues and assign native target versions to work packages."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
-from src.application.components.project_named_records import apply_work_package_updates, map_project_records, project_id
+from src.application.components.project_named_records import apply_work_package_updates, project_id
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.version_catalog import sync_project_versions
 from src.models import ComponentResult
 from src.models.jira import JiraIssueFields
 
@@ -28,68 +24,61 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """Get current entities for transformation.
-
-        This migration performs data transformation on work package mappings
-        rather than fetching directly from Jira. It operates on already-migrated
-        work packages to extract and assign fixVersions to Versions.
-
-        Args:
-            entity_type: The type of entities requested (e.g., "versions")
-
-        Returns:
-            Empty list (this migration doesn't fetch from Jira directly)
-
-        Raises:
-            ValueError: Always, as this migration doesn't support idempotent workflow
-
-        """
-        msg = (
-            "VersionsMigration is a transformation-only migration and does not "
-            "support idempotent workflow. It operates on work package mappings."
-        )
+        """Run the catalogue and issue assignment together through the regular ETL path."""
+        msg = "Version migration requires project catalogues and issue assignments together"
         raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
-        """Extract fixVersion names per Jira project from known work package issues.
-
-        Issues come back from :meth:`_merge_batch_issues` in either the
-        SDK shape (attribute access on ``issue.fields.fixVersions``) or
-        the cached dict shape. :meth:`JiraIssueFields.from_issue_any`
-        normalises both, giving us a typed list of
-        :class:`JiraVersionRef` to iterate.
-        """
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        jira_keys = self._jira_keys_from_wp_map(wp_map)
-        if not jira_keys:
-            return ComponentResult(success=True, extracted=0, data={"by_project": {}})
-
-        issues: dict[str, Any] = self._merge_batch_issues(jira_keys)
-
-        by_project: dict[str, set[str]] = {}
-        for key, issue in issues.items():
-            pj = self._issue_project_key(key)
-            try:
-                fields = JiraIssueFields.from_issue_any(issue)
-                if not fields.fix_versions:
-                    continue
-                for ref in fields.fix_versions:
-                    name = ref.name
-                    if name and name.strip():
-                        by_project.setdefault(pj, set()).add(name.strip())
-            except Exception:
+        """Read every selected, mapped project, including projects with no migrated issues."""
+        mapping = self.mappings.get_mapping("project") or {}
+        configured = config.migration_config.get("jira_project_filter") or []
+        if isinstance(configured, str):
+            configured = [configured]
+        selected = {key.upper() for key in configured}
+        catalogues = {}
+        for key, entry in mapping.items():
+            pid = project_id(entry)
+            if not pid or (selected and key.upper() not in selected):
                 continue
-
-        materialized = {k: sorted(v) for k, v in by_project.items() if v}
-        # Cache issues for reuse in _load() to avoid second Jira API call
+            try:
+                catalogues[key] = (pid, self.jira_client.projects.get_versions(key))
+            except Exception:
+                logger.exception("Could not read the Jira version catalogue for %s", key)
+                return ComponentResult(success=False, failed=1)
+        wp_map = self.mappings.get_mapping("work_package") or {}
+        keys = [key for key in self._jira_keys_from_wp_map(wp_map) if self._issue_project_key(key) in catalogues]
+        issues = {}
+        for key in catalogues:
+            project_keys = [issue_key for issue_key in keys if self._issue_project_key(issue_key) == key]
+            try:
+                issues.update(self.jira_client.projects.unrestricted_version_issues(key, project_keys))
+            except Exception:
+                logger.exception("Could not verify unrestricted Jira issues for %s", key)
+                return ComponentResult(success=False, failed=1)
+        held = len(set(keys) - issues.keys())
         return ComponentResult(
             success=True,
-            extracted=sum(len(v) for v in materialized.values()),
-            data={"by_project": materialized, "issues": issues},
+            extracted=sum(len(v) for _, v in catalogues.values()),
+            data={"catalogues": catalogues, "issues": issues},
+            details={"unconfirmed_issue_mappings": held},
         )
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
-        return map_project_records(self, extracted, "Version")
+        data = extracted.data or {}
+        versions = dict(self.mappings.get_mapping("version") or {})
+        indexed = {}
+        changed = 0
+        for key, (pid, rows) in data["catalogues"].items():
+            try:
+                records, count = sync_project_versions(self.op_client, pid, self.jira_client.base_url, key, rows)
+            except Exception:
+                logger.exception("Could not reconcile the Jira version catalogue for %s", key)
+                return ComponentResult(success=False, failed=1)
+            indexed[str(pid)] = records
+            versions[str(pid)] = records
+            changed += count
+        self.mappings.set_mapping("version", versions)
+        return ComponentResult(success=True, updated=changed, data={"version_map": indexed, "issues": data["issues"]})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
@@ -100,12 +89,6 @@ class VersionsMigration(BaseMigration):  # noqa: D101
 
         wp_map = self.mappings.get_mapping("work_package") or {}
         proj_map = self.mappings.get_mapping("project") or {}
-
-        # Use cached issues from extract phase to avoid second Jira API call
-        if not issues:
-            logger.warning("No cached issues available, fetching from Jira (this may cause timeout)")
-            jira_keys = self._jira_keys_from_wp_map(wp_map)
-            issues = self._merge_batch_issues(jira_keys)
 
         updates: list[dict[str, Any]] = []
         failed = 0
@@ -139,8 +122,19 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         op_pid = project_id(proj_entry)
         records = versions.get(str(op_pid), {})
         # All references must resolve before writing anything for this work package.
-        target_ids = list(dict.fromkeys(int(records[(ref.name or "").strip()]) for ref in fields.fix_versions))
-        return {"id": int(wp_id), "target_version_ids": target_ids}
+        names = [ref.name or "" for ref in fields.fix_versions]
+        target_ids = list(dict.fromkeys(int(records[name if name in records else name.strip()]) for name in names))
+        source_id = str(issue["id"])
+        if not source_id.isdecimal():
+            msg = "Missing Jira issue ID for version assignment"
+            raise ValueError(msg)
+        origin = {
+            "project": op_pid,
+            "id": source_id,
+            "key": jira_key,
+            "url": f"{self.jira_client.base_url.rstrip('/')}/browse/{jira_key}",
+        }
+        return {"id": int(wp_id), "target_version_ids": target_ids, "jira_version_issue_origin": origin}
 
     def run(self) -> ComponentResult:
         """Execute versions migration pipeline."""
@@ -157,6 +151,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             return mapped
 
         loaded = self._load(mapped)
+        loaded.details.update(extracted.details, version_catalogue_changes=mapped.updated)
         if loaded.success:
             self.logger.info("Versions migration completed (updated=%s, failed=%s)", loaded.updated, loaded.failed)
         else:

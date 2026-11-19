@@ -149,6 +149,14 @@ J2O_UPDATES
             wp.with_lock(requires_new: true) do
               attributes = update.except('id', '_rails_operations')
               fields = attributes.extract!(*attributes.keys.grep(/\\AcustomField[0-9]+\\z/))
+              origin = attributes.delete('jira_version_issue_origin')
+              if origin
+                raise "Wrong work package project" unless wp.project_id == origin.fetch('project')
+                {{'J2O Origin ID'=>'id', 'J2O Origin Key'=>'key', 'J2O Origin URL'=>'url'}}.each do |name, key|
+                  field = WorkPackageCustomField.where(name: name).sole
+                  raise "Wrong Jira work package origin" unless wp.custom_values.where(custom_field: field).sole.value == origin.fetch(key)
+                end
+              end
               target_ids = attributes.delete('target_version_ids')
               if target_ids
                 raise "Missing or foreign project version" unless wp.project.versions.where(id: target_ids).count == target_ids.size

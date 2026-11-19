@@ -676,16 +676,17 @@ Migrates Jira components to OpenProject custom field values.
 
 ### VersionsMigration
 
-**Location**: `src/migrations/versions_migration.py`
+The `versions` component imports the complete Jira release catalogue for each mapped project in scope, including versions without work packages. OpenProject stores the description, start date and release date on each native version.
 
-Migrates Jira versions to OpenProject versions.
+| Jira state | OpenProject status |
+| --- | --- |
+| Released (including released and archived) | Closed |
+| Archived and unreleased | Locked |
+| Unreleased and active | Open |
 
-**Features**:
-- Version creation with dates
-- Release/archive status
-- Version description
+The native version custom field `Jira Version Origin` stores the Jira URL, immutable version ID and both source flags. A rerun can update a renamed release by its ID. Earlier name-only imports acquire their source identity. Conflicting pre-existing target metadata stops that project transaction. The component leaves versions that exist only in OpenProject in place.
 
-**Dependencies**: ProjectMigration
+The target project must have matching Jira key, ID and base URL provenance. Work package assignments require a positive unrestricted Jira search result and matching target issue ID, key, URL and project. Shared versions or conflicting origins stop the operation.
 
 ---
 

@@ -16,8 +16,10 @@ there is no Ruby-script escaping to worry about.
 
 from __future__ import annotations
 
+import json
+from itertools import batched
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from src.infrastructure.jira import CLIENT_NOT_INITIALIZED
 from src.infrastructure.jira.jira_client import (
@@ -51,6 +53,65 @@ class JiraProjectService:
         self._logger = logger
 
     # ── reads ────────────────────────────────────────────────────────────
+
+    def get_versions(self, project_key: str) -> list[dict[str, Any]]:
+        """Read the full, unpaginated Jira Server release catalogue, including unused versions."""
+        path = f"/rest/api/2/project/{quote(project_key, safe='')}/versions"
+        response = self._client._make_request(path)
+        response.raise_for_status()
+        _assert_json_response(response, path=path)
+        rows = response.json()
+        if not isinstance(rows, list):
+            msg = "Expected a Jira project version catalogue"
+            raise JiraApiError(msg)
+        return rows
+
+    def unrestricted_version_issues(self, project_key: str, keys: list[str]) -> dict[str, dict]:
+        """Return only issues Jira explicitly includes in the project's unrestricted issue search."""
+        found = {}
+        for batch in batched(keys, 50, strict=False):
+            selected = ", ".join(json.dumps(k) for k in batch)
+            query = f"project = {json.dumps(project_key)} AND level IS EMPTY AND key in ({selected}) ORDER BY id"
+            path = "/rest/api/2/search"
+            offset = 0
+            while True:
+                response = self._client._make_request(
+                    path,
+                    params={
+                        "jql": query,
+                        "fields": "project,security,versions,fixVersions",
+                        "maxResults": len(batch),
+                        "startAt": offset,
+                    },
+                )
+                response.raise_for_status()
+                _assert_json_response(response, path=path)
+                page = response.json()
+                if page["startAt"] != offset or page["total"] > len(batch):
+                    msg = "Inconsistent Jira version issue search"
+                    raise JiraApiError(msg)
+                self._collect_unrestricted_issues(page["issues"], batch, project_key, found)
+                offset += len(page["issues"])
+                if offset == page["total"]:
+                    break
+                if not page["issues"] or offset > page["total"]:
+                    msg = "Incomplete Jira version issue search"
+                    raise JiraApiError(msg)
+        return found
+
+    @staticmethod
+    def _collect_unrestricted_issues(rows: list[dict], batch: tuple[str, ...], project_key: str, found: dict) -> None:
+        for issue in rows:
+            key, fields = issue["key"], issue["fields"]
+            if (
+                key not in batch
+                or key in found
+                or fields["project"]["key"] != project_key
+                or fields.get("security") is not None
+            ):
+                msg = "Unexpected or restricted issue in Jira version search"
+                raise JiraApiError(msg)
+            found[key] = issue
 
     def _project_details(self, project: Any) -> dict[str, Any]:
         client = self._client
