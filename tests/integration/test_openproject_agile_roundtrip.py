@@ -552,12 +552,14 @@ def test_category_policy_preserves_inherited_and_only_assigns_existing_verified_
 
     client, query = rails
     base = "https://category-default.example.invalid"
-    pid, uid, cat, members, users = query("""
+    pid, uid, cat, members, users, notices = query("""
       $p, $u = Member.where.not(project_id: nil).filter_map { |m|
         [m.project, m.principal] if m.principal.is_a?(User) && m.principal.active? && m.project
-      }.first
+      }.min_by { |project, user| user.admin? ? 1 : 0 }
       raise "Seed the disposable target with a project member" unless $p && $u
       $p.update_column(:public, false)
+      policy = ProjectCustomField.find_by(name:"Jira category default policies")
+      $p.custom_values.where(custom_field:policy).delete_all if policy
       section = ProjectCustomFieldSection.find_or_create_by!(name: "J2O Origin")
       origin = {"Jira Project Key"=>"ABC","Jira Project ID"=>"7","Jira Base URL"=>"https://category-default.example.invalid"}
       set_project = lambda do |name,val,fmt,admin|
@@ -578,7 +580,7 @@ def test_category_policy_preserves_inherited_and_only_assigns_existing_verified_
         }
         $u.custom_values.find_or_initialize_by(custom_field:f).update!(value:val)
       end
-      [$p.id,$u.id,$category.id,Member.count,User.count]
+      [$p.id,$u.id,$category.id,Member.count,User.count,Notification.count]
     """)
     actor = {"key": "fixed-key", "name": "policy-login", "active": True}
     details = {"projectTypeKey": "software", "id": "7", "key": "ABC", "lead": actor}
@@ -630,7 +632,7 @@ def test_category_policy_preserves_inherited_and_only_assigns_existing_verified_
         == 1
     )
     assert read_assignee() == f"/api/v3/users/{uid}"
-    assert query("[Member.count,User.count]") == [members, users]
+    assert query("[Member.count,User.count,Notification.count]") == [members, users, notices]
 
 
 def test_all_fix_versions_survive_native_readback_and_retry(rails):
