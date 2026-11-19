@@ -134,7 +134,7 @@ class MigrationRunProgress:
             self._publish_comparisons()
             self._publish()
 
-    def worklog_reads(self, read: int, total: int) -> None:
+    def worklog_reads(self, read: int, total: int, finished: bool) -> None:
         """Show source inventory progress while the native target comparison is still pending."""
         if self.active is None or self.dry_run:
             return
@@ -143,7 +143,7 @@ class MigrationRunProgress:
         counts[f"{phase} · Jira issues selected for worklog reads"] = total
         counts[f"{phase} · Jira issues with worklog IDs checked"] = read
         now = monotonic()
-        if now - self._last_worklog_publish >= 1 or read == total:
+        if finished or now - self._last_worklog_publish >= 1:
             self._last_worklog_publish = now
             self._publish()
 

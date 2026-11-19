@@ -158,7 +158,7 @@ class TimeEntryMigrator:
 
         # Migration mappings
         self._worklog_receipts = ScopedReceipts([])
-        self.on_worklog_read: Callable[[int, int], None] | None = None
+        self.on_worklog_read: Callable[[int, int, bool], None] | None = None
         self._failed_worklog_issues: set[str] = set()
         self._tempo_read_failed = False
         self._combined_tempo = 0
@@ -633,9 +633,9 @@ class TimeEntryMigrator:
                 self.activity_mapping = {}
                 self.default_activity_id = None
 
-    def _report_worklog_reads(self) -> None:
+    def _report_worklog_reads(self, *, finished: bool = False) -> None:
         if self.on_worklog_read is not None:
-            self.on_worklog_read(len(self._worklog_receipts.inventory), len(self._worklog_receipts.scope))
+            self.on_worklog_read(len(self._worklog_receipts.inventory), len(self._worklog_receipts.scope), finished)
 
     def extract_jira_work_logs_for_issues(
         self,
@@ -697,6 +697,7 @@ class TimeEntryMigrator:
                 self.migration_results["errors"].append(error_msg)
                 continue
 
+        self._report_worklog_reads(finished=True)
         self.extracted_work_logs = extracted_logs
         self.migration_results["jira_work_logs_extracted"] = total_logs
         self.migration_results["total_work_logs_found"] += total_logs
