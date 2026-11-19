@@ -1,41 +1,64 @@
 # Copyright (c) 2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Match direct Jira Software sidebar tasks to the ordinary per-issue Simple Tasklists response."""
+"""Reconcile ordinary tasks with the Jira Software issue list without exporting embedded comment content."""
 
 from typing import Any
 
+_METADATA = ("ordinal", "mandatory", "createdDate", "lastChangedDate", "lastChangedBy", "lastChangedByName", "overdue")
 
-def sidebar_tasks(raw: dict, descriptions: list[dict], rows: list[dict], total: int) -> list[dict]:
-    """Read only direct issue tasks. Embedded tasks from comments or other fields stay at their origin."""
+
+def issue_task_records(raw: dict, descriptions: list[dict], rows: list[dict], total: int) -> list[dict]:
+    """Return source-ordered records only for positively identified descriptions and direct sidebar tasks."""
     project = raw["fields"]["project"]
-    if project["projectTypeKey"] != "software":
-        msg = "Sidebar task audience is unknown for this project type."
+    if project["projectTypeKey"] != "software" or not isinstance(rows, list) or len(rows) != total:
+        msg = "The Jira task list does not match the ordinary issue scope or source count."
         raise ValueError(msg)
-    if not isinstance(rows, list) or len(rows) != total:
-        msg = "The Jira task list and the source task count disagree."
-        raise ValueError(msg)
-    known = {t["id"]: t for t in descriptions}
+    known = {task["id"]: task for task in descriptions}
     seen: set[str] = set()
-    sidebar = []
+    result = []
     for row in rows:
         _validate_identity(row, raw, project)
-        identifier = str(row["id"])
-        if identifier in seen:
+        sid = str(row["id"])
+        if sid in seen:
             msg = "Duplicate Jira task ID in issue task list."
             raise ValueError(msg)
-        seen.add(identifier)
-        if identifier in known:
-            expected = known[identifier]
-            if row["manuallyCreated"] or expected["title"] != row["text"] or expected["checked"] != row["checked"]:
-                msg = "Jira task list differs from the rendered description."
-                raise ValueError(msg)
-        elif row["manuallyCreated"]:
-            sidebar.append({"id": identifier, "checked": row["checked"], "title": row["text"]})
+        seen.add(sid)
+        if record := _ordinary_record(row, known.get(sid)):
+            result.append(record)
     if not known.keys() <= seen:
         msg = "Description task missing from the source issue task list."
         raise ValueError(msg)
-    return sidebar
+    # Older add-on versions omit ordinals. Keep the response order in that case.
+    if result and all("ordinal" in item for item in result):
+        result.sort(key=lambda item: item["ordinal"])
+    return result
+
+
+def _ordinary_record(row: dict, description: dict | None) -> dict | None:
+    if row.get("commentId") is not None or row.get("visibility") is not None or row.get("private"):
+        if description is not None:
+            msg = "Jira task has conflicting issue and restricted origins."
+            raise ValueError(msg)
+        return None
+    if description is not None:
+        if row["manuallyCreated"] or description["title"] != row["text"] or description["checked"] != row["checked"]:
+            msg = "Jira task list differs from the rendered description."
+            raise ValueError(msg)
+    elif not row["manuallyCreated"]:
+        return None
+    if ("ordinal" in row and type(row["ordinal"]) is not int) or (
+        "mandatory" in row and not isinstance(row["mandatory"], bool)
+    ):
+        msg = "Invalid Jira task ordinal or mandatory flag."
+        raise ValueError(msg)
+    return {
+        "id": str(row["id"]),
+        "title": row["text"],
+        "checked": row["checked"],
+        "origin": "description" if description is not None else "sidebar",
+        **{k: row[k] for k in _METADATA if k in row},
+    }
 
 
 def _validate_identity(row: dict[str, Any], raw: dict, project: dict) -> None:
