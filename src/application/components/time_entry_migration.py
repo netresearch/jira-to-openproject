@@ -145,28 +145,31 @@ class TimeEntryMigration(BaseMigration):
     def run(self) -> ComponentResult:
         """Import time entries and an explicitly selected operator-only instance catalogue."""
         result = self._run_time_entries()
-        if project := os.environ.get(SETTING):
-            try:
-                receipt = archive_catalogue(self.jira_client, self.op_client, project)
-            except Exception as exc:
-                status = http_status_from_error(exc)
-                reason = f"HTTP {status}" if status else type(exc).__name__
-                result.add_error(f"The configured Tempo instance catalogue could not be verified ({reason}).")
-                result.success = False
-                result.failed_count += 1
-                result.details["tempo_instance_catalogue"] = {"verified": False}
-                result.details["status"] = "partial_success" if result.success_count else "failed"
-                result.message = "Tempo instance catalogue could not be verified"
-            else:
-                result.details["tempo_instance_catalogue"] = receipt
-                if result.details.get("reason") == "no_migrated_work_packages":
-                    result.details.pop("reason", None)
-                    result.details.update(status="success")
-                    result.message = "Tempo instance catalogue verified"
-                if receipt["external_options_not_enumerated"]:
-                    result.warnings.append(
-                        "External dynamic option providers are preserved as references. Their available choices were not enumerated."
-                    )
+        project = os.environ.get(SETTING)
+        if not project:
+            return result
+
+        try:
+            receipt = archive_catalogue(self.jira_client, self.op_client, project)
+        except Exception as exc:
+            status = http_status_from_error(exc)
+            reason = f"HTTP {status}" if status else type(exc).__name__
+            result.add_error(f"The configured Tempo instance catalogue could not be verified ({reason}).")
+            result.success = False
+            result.failed_count += 1
+            result.details["tempo_instance_catalogue"] = {"verified": False}
+            result.details["status"] = "partial_success" if result.success_count else "failed"
+            result.message = "Tempo instance catalogue could not be verified"
+        else:
+            result.details["tempo_instance_catalogue"] = receipt
+            if result.details.get("reason") == "no_migrated_work_packages":
+                result.details.pop("reason", None)
+                result.details.update(status="success")
+                result.message = "Tempo instance catalogue verified"
+            if receipt["external_options_not_enumerated"]:
+                result.warnings.append(
+                    "External dynamic option providers are preserved as references. Their available choices were not enumerated."
+                )
 
         return result
 
