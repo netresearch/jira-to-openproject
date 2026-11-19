@@ -23,14 +23,16 @@ normalised through :class:`WorkPackageMappingEntry.from_legacy`.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.tempo_attribute_catalogue import SETTING, archive_catalogue
 from src.config import logger
-from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.jira.jira_client import JiraClient, http_status_from_error
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 from src.utils.time_entry_migrator import TimeEntryMigrator
@@ -141,6 +143,37 @@ class TimeEntryMigration(BaseMigration):
         return migrated
 
     def run(self) -> ComponentResult:
+        """Import time entries and an explicitly selected operator-only instance catalogue."""
+        result = self._run_time_entries()
+        project = os.environ.get(SETTING)
+        if not project:
+            return result
+
+        try:
+            receipt = archive_catalogue(self.jira_client, self.op_client, project)
+        except Exception as exc:
+            status = http_status_from_error(exc)
+            reason = f"HTTP {status}" if status else type(exc).__name__
+            result.add_error(f"The configured Tempo instance catalogue could not be verified ({reason}).")
+            result.success = False
+            result.failed_count += 1
+            result.details["tempo_instance_catalogue"] = {"verified": False}
+            result.details["status"] = "partial_success" if result.success_count else "failed"
+            result.message = "Tempo instance catalogue could not be verified"
+        else:
+            result.details["tempo_instance_catalogue"] = receipt
+            if result.details.get("reason") == "no_migrated_work_packages":
+                result.details.pop("reason", None)
+                result.details.update(status="success")
+                result.message = "Tempo instance catalogue verified"
+            if receipt["external_options_not_enumerated"]:
+                result.warnings.append(
+                    "External dynamic option providers are preserved as references. Their available choices were not enumerated."
+                )
+
+        return result
+
+    def _run_time_entries(self) -> ComponentResult:
         """Run standalone time entry migration based on existing WP mapping."""
         logger.info("Starting time entry migration component")
         start_time = datetime.now(tz=UTC)

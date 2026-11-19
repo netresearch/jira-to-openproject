@@ -89,7 +89,7 @@ def seal_values(row: dict[str, Any], jira_url: str) -> dict[str, Any]:
         "worklogAttributes": flat,
         "workAttributeValues": nested,
     }
-    sealed = base64.b64encode(pyrage.encrypt(encoded(payload), [_identity().to_public()])).decode("ascii")
+    sealed = seal_document(payload)
     result = {k: v for k, v in row.items() if k not in (*_FLAT, *_NESTED)}
     result.update(issue_key=issue, jira_worklog_id=worklog)
     result["tempo_archive"] = {
@@ -102,6 +102,23 @@ def seal_values(row: dict[str, Any], jira_url: str) -> dict[str, Any]:
 
 def _open_packet(packet: str, key: x25519.Identity) -> dict:
     return json.loads(pyrage.decrypt(base64.b64decode(packet, validate=True), [key]))
+
+
+def seal_document(value: dict) -> str:
+    """Encrypt a JSON archive for the configured recovery operator."""
+    return base64.b64encode(pyrage.encrypt(encoded(value), [_identity().to_public()])).decode("ascii")
+
+
+def open_document(packet: str) -> dict:
+    """Authenticate and recover an operator archive without transmitting the private key."""
+    try:
+        value = _open_packet(packet, _identity())
+        if not isinstance(value, dict):
+            raise ValueError
+    except ValueError, TypeError, pyrage.DecryptError:
+        msg = "Cannot decrypt the stored operator archive."
+        raise ValueError(msg) from None
+    return value
 
 
 def verify_packets(expected: str, stored: str, origin: str) -> None:

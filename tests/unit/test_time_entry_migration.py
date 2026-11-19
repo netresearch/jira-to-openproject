@@ -278,3 +278,37 @@ def test_repeated_enriched_worklogs_count_once(tmp_path, monkeypatch, _mock_mapp
         "skipped": 7,
     }
     assert mig.run().success
+
+
+def test_instance_catalogue_runs_without_mapped_work_packages(tmp_path, monkeypatch, _mock_mappings):
+    from src.application.components import time_entry_migration as component
+
+    migration = _make_mig(tmp_path, monkeypatch)
+    receipt = {"verified": True, "written": True, "external_options_not_enumerated": 1}
+    archive = MagicMock(return_value=receipt)
+    monkeypatch.setattr(component, "archive_catalogue", archive)
+    monkeypatch.setenv(component.SETTING, "private-archive")
+    result = migration.run()
+
+    archive.assert_called_once_with(migration.jira_client, migration.op_client, "private-archive")
+    assert result.success
+    assert result.details["tempo_instance_catalogue"] == receipt
+    assert result.details["status"] == "success"
+    assert any("External dynamic option providers" in warning for warning in result.warnings)
+
+
+def test_configured_catalogue_cannot_silently_skip_denied_source(tmp_path, monkeypatch, _mock_mappings):
+    from src.application.components import time_entry_migration as component
+    from src.infrastructure.jira.jira_client import JiraAuthenticationError
+
+    migration = _make_mig(tmp_path, monkeypatch)
+    error = JiraAuthenticationError("sensitive upstream detail")
+    monkeypatch.setattr(component, "archive_catalogue", MagicMock(side_effect=error))
+    monkeypatch.setenv(component.SETTING, "private-archive")
+    result = migration.run()
+
+    assert result.success is False
+    assert result.details["tempo_instance_catalogue"] == {"verified": False}
+    assert result.details["status"] == "failed"
+    assert result.failed_count == 1
+    assert result.errors == ["The configured Tempo instance catalogue could not be verified (JiraAuthenticationError)."]
