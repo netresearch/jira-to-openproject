@@ -292,6 +292,9 @@ class OpenProjectCustomFieldService:
         """
         from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
 
+        if cf_type == "UserCustomField":
+            return self._ensure_user_field(name, field_format, searchable)
+
         searchable_str = "true" if searchable else "false"
 
         ruby = f"""
@@ -324,12 +327,6 @@ class OpenProjectCustomFieldService:
               cf.type_ids = Type.ids
             end
           end
-          if cf && cf.type == 'UserCustomField'
-            begin
-              cf.activate! if cf.respond_to?(:active?) && !cf.active?
-            rescue
-            end
-          end
           cf && cf.as_json(only: [:id, :name, :field_format, :type])
         """
         try:
@@ -341,6 +338,53 @@ class OpenProjectCustomFieldService:
         except Exception as e:
             msg = f"Failed to ensure custom field '{name}' ({cf_type}): {e}"
             raise QueryExecutionError(msg) from e
+
+    def _ensure_user_field(self, name: str, field_format: str, searchable: bool) -> dict[str, Any]:
+        """Keep existing field IDs and place new user fields in the OpenProject user profile section."""
+        origin = name in {
+            provenance_fields.ORIGIN_SYSTEM,
+            provenance_fields.USER_ID,
+            provenance_fields.USER_KEY,
+            provenance_fields.EXTERNAL_URL,
+        }
+        from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
+
+        query = f"""
+          UserCustomField.transaction do
+            UserCustomField.connection.execute("SELECT pg_advisory_xact_lock(17970453)")
+            name = '{escape_ruby_single_quoted(name)}'
+            matches = UserCustomField.where(name: name)
+            field = matches.sole if matches.exists?
+            if field
+              raise "Unexpected user field format" unless field.field_format == '{escape_ruby_single_quoted(field_format)}'
+            else
+              field = UserCustomField.new(name: name, field_format: '{escape_ruby_single_quoted(field_format)}',
+                is_required: false, searchable: {str(searchable).lower()}, is_for_all: true)
+              field.admin_only = true if {str(origin).lower()} && field.respond_to?(:admin_only=)
+            end
+            if defined?(UserCustomFieldSection) && field.respond_to?(:custom_field_section=) && !field.custom_field_section_id
+              section = if {str(origin).lower()}
+                          UserCustomFieldSection.find_or_create_by!(name: "J2O Origin")
+                        else
+                          UserCustomFieldSection.order(:position).first!
+                        end
+              field.custom_field_section = section
+            end
+            field.searchable = {str(searchable).lower()} if field.respond_to?(:searchable=)
+            field.save! if field.new_record? || field.changed?
+            field.activate! if field.respond_to?(:activate!) && field.respond_to?(:active?) && !field.active?
+            field.as_json(only: [:id, :name, :field_format, :type])
+          end
+          """
+        try:
+            result = self._client.execute_json_query(query)
+            if isinstance(result, dict) and result.get("id"):
+                return result
+            msg = f"Missing persisted user custom field {name!r}"
+            raise QueryExecutionError(msg)
+        except Exception as exc:
+            msg = f"Failed to ensure user custom field {name!r}: {exc}"
+            raise QueryExecutionError(msg) from exc
 
     def remove_custom_field(self, name: str, *, cf_type: str | None = None) -> dict[str, int]:
         """Remove CustomField records matching the provided name/type."""
