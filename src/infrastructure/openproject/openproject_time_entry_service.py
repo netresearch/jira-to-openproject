@@ -16,6 +16,7 @@ from typing import Any
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.utils.tempo_attribute_archive import verify_packets
 
 _BULK_TIME_ENTRY_BODY = """\
 entries = JSON.parse(File.read(data_path), symbolize_names: true)
@@ -40,6 +41,29 @@ fields_for = lambda do |row|
     raise source_mismatch, 'Source metadata field must be private' unless key == :jira_worklog_key || field.admin_only?
     values[field.id] = row[key].to_s
   end
+end
+tempo_archive_for = lambda do |row, wp, record|
+  archive = row.fetch(:tempo_archive)
+  raise source_mismatch, 'Missing expected project' unless row[:target_project_id] == wp.project_id
+  { 'J2O Origin ID' => archive.fetch(:issue_id), 'J2O Origin URL' => archive.fetch(:issue_url) }.each do |name, expected|
+    origin = WorkPackageCustomField.where(name: name).sole
+    raise source_mismatch, 'Wrong Jira work package origin' unless wp.custom_values.where(custom_field_id: origin.id).sole.value == expected
+  end
+  title = 'Jira Tempo Work Attribute Values (age)'
+  field = TimeEntryCustomField.find_by(name: title)
+  unless field
+    TimeEntry.connection.select_value('SELECT pg_advisory_xact_lock(124481108, 0)')
+    field = TimeEntryCustomField.find_or_create_by!(name: title) do |f|
+      f.assign_attributes(field_format: 'text', admin_only: true, is_for_all: false, is_required: false)
+    end
+  end
+  field = TimeEntryCustomField.where(name: title).sole
+  raise source_mismatch, 'Incompatible Tempo archive field' unless field.admin_only? && !field.is_for_all? && field.field_format == 'text'
+  values = record.custom_values.where(custom_field_id: field.id)
+  value = values.exists? ? values.sole : values.build
+  written = value.value.nil? || value.value == ''
+  value.update!(value: archive.fetch(:packet)) if written
+  { tempo_packet: values.sole.value, tempo_attributes_written: written }
 end
 entries.each do |row|
   begin
@@ -82,6 +106,7 @@ entries.each do |row|
       raise source_mismatch, 'Work log differs from target provenance' unless values.all? { |id,v| record.custom_values.where(custom_field_id: id).sole.value == v }
       result = { index: row[:index], success: true, reused: existing, id: record.id }
       result[:verified_worklog_key] = row[:jira_worklog_key] if row[:jira_started]
+      result.merge!(tempo_archive_for.call(row, wp, record)) if row[:tempo_archive]
       if row[:return_record]
         result.merge!(work_package_id: record.entity_id, user_id: record.user_id, activity_id: record.activity_id,
                       hours: record.hours, spent_on: record.spent_on.to_s, comments: record.comments,
@@ -254,6 +279,20 @@ class OpenProjectTimeEntryService:
         if ("jira_work_log_id" in meta or "tempo_worklog_id" in meta) and not meta.get("jira_worklog_key"):
             msg = "The source work log has no origin key."
             raise ValueError(msg)
+        if meta.get("tempo_attributes") and not meta.get("tempo_archive"):
+            msg = "Tempo values require a verified and encrypted Jira worklog."
+            raise ValueError(msg)
+        if archive := meta.get("tempo_archive"):
+            if not all(meta.get(k) for k in ("jira_started", "jira_worklog_key", "target_project_id")):
+                msg = "The protected Tempo archive requires a verified Jira origin and target project."
+                raise ValueError(msg)
+            issue = meta["jira_worklog_key"].partition(":")[0]
+            if not archive["issue_url"].endswith("/browse/" + issue) or not re.fullmatch(
+                r"[1-9][0-9]*", archive["issue_id"]
+            ):
+                msg = "The protected Tempo archive points to a different Jira issue."
+                raise ValueError(msg)
+            verify_packets(archive["packet"], archive["packet"], meta["jira_worklog_key"])
         keys = (
             "target_project_id",
             "jira_worklog_key",
@@ -272,6 +311,7 @@ class OpenProjectTimeEntryService:
             "hours": entry.get("hours"),
             "spent_on": entry.get("spentOn"),
             "comments": _comment_text(entry),
+            **({"tempo_archive": {k: archive[k] for k in ("packet", "issue_id", "issue_url")}} if archive else {}),
             **{key: meta[key] for key in keys if meta.get(key) is not None},
         }
 
@@ -412,6 +452,7 @@ class OpenProjectTimeEntryService:
         with local_result.open("r", encoding="utf-8") as f:
             ruby_result: dict[str, Any] = json.load(f)
 
+        self._verify_tempo_receipts(entries_data, ruby_result)
         # Merge the malformed-input failures captured during the
         # Python pre-pass with the Ruby-side per-entry results so
         # the returned dict reflects every input index 1:1.
@@ -419,3 +460,31 @@ class OpenProjectTimeEntryService:
             ruby_result.setdefault("results", []).extend(skipped_results)
             ruby_result["failed"] = int(ruby_result.get("failed", 0)) + len(skipped_results)
         return ruby_result
+
+    @staticmethod
+    def _verify_tempo_receipts(rows: list[dict], result: dict) -> None:
+        receipts = result.get("results", [])
+        for row in rows:
+            archive = row.get("tempo_archive")
+            if not archive:
+                continue
+            matches = [item for item in receipts if item.get("index") == row["index"]]
+            if len(matches) != 1:
+                msg = "Missing or ambiguous Tempo archive receipt."
+                raise QueryExecutionError(msg)
+            receipt = matches[0]
+            if not receipt.get("success"):
+                continue
+            try:
+                if receipt.get("verified_worklog_key") != row["jira_worklog_key"] or not receipt.get("id"):
+                    msg = "Tempo archive receipt has the wrong origin."
+                    raise ValueError(msg)
+                verify_packets(archive["packet"], receipt.pop("tempo_packet", ""), row["jira_worklog_key"])
+            except ValueError as exc:
+                key = "reused" if receipt.get("reused") else "created"
+                result[key] -= 1
+                result["failed"] += 1
+                receipt.clear()
+                receipt.update(index=row["index"], success=False, error=str(exc))
+            else:
+                receipt["tempo_attributes_verified"] = True

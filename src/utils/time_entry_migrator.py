@@ -27,6 +27,7 @@ from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models.migration_error import MigrationError
 from src.utils.scoped_receipts import ScopedReceipts
+from src.utils.tempo_attribute_archive import has_values, seal_values
 from src.utils.time_entry_transformer import TimeEntryTransformer
 
 # Get logger from config
@@ -102,7 +103,7 @@ def _filter_already_migrated_entries(
     for e in entries:
         meta = e.get("_meta") if isinstance(e, dict) else None
         key = meta.get("jira_worklog_key") if isinstance(meta, dict) else None
-        if isinstance(key, str) and key and key in existing_keys:
+        if isinstance(key, str) and key and key in existing_keys and not meta.get("tempo_archive"):
             skipped += 1
             continue
         kept.append(e)
@@ -157,6 +158,10 @@ class TimeEntryMigrator:
         self._worklog_receipts = ScopedReceipts([])
         self._failed_worklog_issues: set[str] = set()
         self._tempo_read_failed = False
+        self._combined_tempo = 0
+        self._expected_attribute_origins: set[str] = set()
+        self._verified_attribute_origins: set[str] = set()
+        self._written_attribute_origins: set[str] = set()
         self._requested_issues: set[str] | None = None
         self._target_projects: dict[str, int] = {}
         self.user_mapping: dict[str, int] = {}
@@ -481,6 +486,11 @@ class TimeEntryMigrator:
         if isinstance(origin, str) and receipt.get("success") is True:
             issue, _, identifier = origin.partition(":")
             self._worklog_receipts.confirm(issue, identifier, receipt.get("id"))
+            if receipt.get("tempo_attributes_verified") is True:
+                with self._worklog_receipts.lock:
+                    self._verified_attribute_origins.add(origin)
+                    if receipt.get("tempo_attributes_written") is True:
+                        self._written_attribute_origins.add(origin)
 
     def _create_time_entry(self, entry: dict[str, Any], *, parallel: bool) -> EntryOutcome:
         valid, reason = self._validate_time_entry_with_reason(entry)
@@ -643,6 +653,10 @@ class TimeEntryMigrator:
         start_time = datetime.now(tz=UTC)
 
         self._worklog_receipts = ScopedReceipts(issue_keys)
+        self._combined_tempo = 0
+        self._expected_attribute_origins.clear()
+        self._verified_attribute_origins.clear()
+        self._written_attribute_origins.clear()
         self._requested_issues = set(issue_keys)
         self._failed_worklog_issues.clear()
         extracted_logs = {}
@@ -735,6 +749,11 @@ class TimeEntryMigrator:
                 row = self._verified_tempo_entry(row, canonical)
             clock = canonical or row
             if self._ff_accept(clock.get("created"), clock.get("updated")):
+                if has_values(row):
+                    if not canonical:
+                        msg = "Cannot archive Tempo values without the verified Jira worklog."
+                        raise ValueError(msg)
+                    row = seal_values(row, self.jira_client.base_url)
                 result.append(row)
         return result
 
@@ -791,6 +810,9 @@ class TimeEntryMigrator:
             result_entries: list[dict[str, Any]] = []
             if tempo_entries:
                 filtered = self._selected_tempo_entries(tempo_entries)
+                self._expected_attribute_origins = {
+                    f"{row['issue_key']}:{row['jira_worklog_id']}" for row in filtered if row.get("tempo_archive")
+                }
                 self.extracted_tempo_entries = filtered
                 self.migration_results["tempo_entries_extracted"] = len(filtered)
                 self.migration_results["total_work_logs_found"] += len(filtered)
@@ -817,6 +839,31 @@ class TimeEntryMigrator:
             self.logger.exception(error_msg)
             self.migration_results["errors"].append(error_msg)
             return []
+
+    def _attach_tempo_archives(self, transformed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach protected values to the same canonical Jira entry, including on backfill."""
+        self._combined_tempo = 0
+        remaining = []
+        entries = {}
+        for entry in transformed:
+            key = (entry.get("_meta") or {}).get("jira_worklog_key")
+            if key:
+                entries[key] = None if key in entries else entry
+        for row in self.extracted_tempo_entries:
+            origin = f"{row.get('issue_key')}:{row.get('jira_worklog_id', row.get('jiraWorklogId'))}"
+            entry = entries.get(origin)
+            archive = row.get("tempo_archive")
+            if archive:
+                if entry is None or "tempo_archive" in entry["_meta"]:
+                    msg = "Tempo attributes have no unique, mapped Jira time entry."
+                    raise ValueError(msg)
+                entry["_meta"]["tempo_archive"] = archive
+            elif not (entry and row.get("jira_started")):
+                remaining.append(row)
+                continue
+            self._combined_tempo += 1
+            self.migration_results["successful_transformations"] += 1
+        return remaining
 
     def transform_all_time_entries(self) -> list[dict[str, Any]]:
         """Transform all extracted work logs and Tempo entries to OpenProject format.
@@ -873,7 +920,7 @@ class TimeEntryMigrator:
             )
             try:
                 tempo_transformed = self.transformer.batch_transform_work_logs(
-                    self.extracted_tempo_entries,
+                    self._attach_tempo_archives(transformed_entries),
                     source_type="tempo",
                 )
                 transformed_entries.extend(tempo_transformed)
@@ -883,13 +930,15 @@ class TimeEntryMigrator:
                 self.migration_results["unmappable_entries"] += self.transformer.last_unmappable_count
 
             except Exception as e:
+                self._tempo_read_failed = True
                 error_msg = f"Failed to transform Tempo entries: {e}"
                 self.logger.exception(error_msg)
                 self.migration_results["errors"].append(error_msg)
 
         for entry in transformed_entries:
             meta = entry.setdefault("_meta", {})
-            if project := self._target_projects.get(meta.get("jira_issue_key", "")):
+            issue = meta.get("jira_issue_key") or ""
+            if project := self._target_projects.get(issue) or self.project_mapping.get(issue.rpartition("-")[0]):
                 meta["target_project_id"] = project
         self.transformed_time_entries = transformed_entries
 
@@ -1084,7 +1133,8 @@ class TimeEntryMigrator:
 
             unmappable_count = self.migration_results.get("unmappable_entries", 0)
             status = "success"
-            if failed_count or self._failed_worklog_issues or self._tempo_read_failed:
+            missing_attributes = self._expected_attribute_origins - self._verified_attribute_origins
+            if failed_count or self._failed_worklog_issues or self._tempo_read_failed or missing_attributes:
                 status = "partial_success" if migrated_count else "failed"
             return {
                 "status": status,
@@ -1096,6 +1146,10 @@ class TimeEntryMigrator:
                 "tempo_time_entries": {
                     "discovered": tempo_discovered,
                     "read_failed": self._tempo_read_failed,
+                    "shared_jira_worklogs": self._combined_tempo,
+                    "attributes_expected": len(self._expected_attribute_origins),
+                    "attributes_verified": len(self._verified_attribute_origins),
+                    "attributes_written": len(self._written_attribute_origins),
                 },
                 "total_time_entries": {
                     "migrated": migrated_count,
