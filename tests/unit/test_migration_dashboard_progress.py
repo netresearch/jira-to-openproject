@@ -385,7 +385,8 @@ def test_cli_reports_worklog_reads_before_target_comparison(local_run, monkeypat
 
     def worklogs(key):
         snapshot = read_progress(local_run.target)
-        assert snapshot.status == "running" and snapshot.comparison_counts == {}
+        assert snapshot.status == "running"
+        assert snapshot.comparison_counts == {}
         observed.append(snapshot.verified_counts["time_entries · Jira issues with worklog IDs checked"])
         if key == "TEST-2":
             raise ConnectionError("unavailable")
