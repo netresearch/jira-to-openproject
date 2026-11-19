@@ -42,6 +42,11 @@ from src.infrastructure.jira.jira_client import (
 )
 from src.utils.timezone import UTC
 
+# Allowed WorkAttributeType values in the Tempo Data Center Core API.
+_WORK_ATTRIBUTE_TYPES = frozenset(
+    {"ACCOUNT", "BILLABLE_SECONDS", "CHECKBOX", "DYNAMIC_DROPDOWN", "INPUT_FIELD", "INPUT_NUMERIC", "STATIC_LIST"}
+)
+
 
 def _work_attributes(work_log: dict[str, Any]) -> list[dict[str, Any]]:
     """Reconcile Tempo Server's nested and flat attributes against the same Jira worklog."""
@@ -377,6 +382,37 @@ class JiraTempoService:
             msg = f"Unexpected work attribute catalogue from {path}"
             raise JiraApiError(msg)
         return attributes
+
+    def work_attribute_snapshot(self) -> list[dict[str, Any]]:
+        """Read the instance catalogue independently of selected projects and logged values."""
+        path = "/rest/tempo-core/1/work-attribute"
+        definitions = self._work_attribute_catalogue(path)
+        self._unique_catalogue_ids(definitions)
+        snapshot = []
+        for item in sorted(definitions, key=lambda definition: definition["id"]):
+            options = []
+            attribute_type = item.get("type")
+            if not isinstance(attribute_type, dict) or attribute_type.get("value") not in _WORK_ATTRIBUTE_TYPES:
+                msg = "Tempo returned an unsupported work attribute type; its options cannot be verified."
+                raise JiraApiError(msg)
+            if attribute_type["value"] == "STATIC_LIST":
+                options = self._work_attribute_catalogue(f"{path}/{item['id']}/static-list-value")
+                self._unique_catalogue_ids(options)
+                if any(
+                    type(option.get("workAttributeId")) is not int or option["workAttributeId"] != item["id"]
+                    for option in options
+                ):
+                    msg = "Tempo returned a static option for a different work attribute."
+                    raise JiraApiError(msg)
+            snapshot.append({"definition": item, "static_options": options})
+        return snapshot
+
+    @staticmethod
+    def _unique_catalogue_ids(records: list[dict[str, Any]]) -> None:
+        identifiers = [record.get("id") for record in records]
+        if any(type(i) is not int or i <= 0 for i in identifiers) or len(set(identifiers)) != len(identifiers):
+            msg = "Tempo returned invalid or duplicate catalogue IDs."
+            raise JiraApiError(msg)
 
     def _project_worklog_page(
         self, project_key: str, offset: int, limit: int, date_from: str | None, date_to: str | None

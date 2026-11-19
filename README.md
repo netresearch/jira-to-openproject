@@ -26,6 +26,8 @@ A robust, modular migration toolset for transferring project management data fro
 
 For confidential Tempo work attributes, set `J2O_TEMPO_ATTRIBUTE_IDENTITY` to a private age X25519 identity file owned by the recovery operator (mode 0600 on Unix). The normal time-entry migration encrypts those values before saving its extraction and verifies the encrypted OpenProject field after writing each matched Jira worklog. Keep the identity for recovery. Decode the field’s Base64 content and decrypt the resulting age file with that identity to recover its JSON.
 
+To include unused definitions, set `J2O_TEMPO_CATALOGUE_PROJECT` to the identifier of a private OpenProject project. The time-entry component archives the entire Jira instance’s Tempo Core catalogue there, including the choices returned by each static list. The field `Jira instance Tempo work attributes (age)` contains a Base64-encoded age file with the source URL and a history of complete catalogue snapshots. Recover it with the same operator identity. Dynamic providers are recorded by their source definition and URL. Their externally supplied choices are outside the archive.
+
 **Key Capabilities:**
 - **Batch Processing:** Configurable batch sizes for large datasets
 - **Progress Tracking:** Real-time progress monitoring with detailed logging
