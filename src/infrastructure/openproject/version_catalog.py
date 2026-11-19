@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 if TYPE_CHECKING:
     from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
-_SYNC = """
+_PROJECT = """
 Project.transaction do
   project = Project.lock.find(data.fetch('project'))
   source = data.fetch('source')
@@ -23,6 +23,9 @@ Project.transaction do
     field = ProjectCustomField.where(name: name).sole
     raise 'Wrong Jira project origin' unless project.custom_values.where(custom_field: field).sole.value == value
   end
+"""
+
+_SYNC = """
   field = VersionCustomField.find_or_create_by!(name: 'Jira Version Origin') { |f| f.field_format = 'text' }
   raise 'Unexpected version origin field' unless field.field_format == 'text' && !field.multi_value?
   origins = CustomValue.where(customized_type: 'Version', customized_id: project.versions.select(:id), custom_field: field)
@@ -64,7 +67,6 @@ Project.transaction do
     [version.name, version.id]
   end
   {versions: versions, changed: changes}
-end
 """
 
 
@@ -102,10 +104,6 @@ def sync_project_versions(
     """Reconcile one catalogue atomically and keep the flags that have no separate target field."""
     if not rows:
         return {}, 0
-    url = urlsplit(source)
-    if url.scheme not in {"https", "http"} or not url.hostname or url.username is not None or url.query or url.fragment:
-        msg = "Expected a credential-free Jira base URL for version provenance"
-        raise ValueError(msg)
     project_ids = {str(row["projectId"]) for row in rows}
     if len(project_ids) != 1 or not next(iter(project_ids)).isdecimal():
         msg = "Inconsistent Jira project IDs in the version catalogue"
@@ -115,20 +113,27 @@ def sync_project_versions(
     if len({v["id"] for v in versions}) != len(rows) or len({name.casefold() for name in names}) != len(rows):
         msg = "Ambiguous Jira project version catalogue"
         raise ValueError(msg)
-    payload = json.dumps(
-        {
-            "project": project,
-            "source": source.rstrip("/"),
-            "key": project_key,
-            "jira_project_id": project_ids.pop(),
-            "versions": versions,
-        }
-    ).encode()
-    data = base64.b64encode(payload).decode("ascii")
-    result = client.execute_json_query(
-        f"require 'base64'\ndata = JSON.parse(Base64.strict_decode64('{data}'))\n{_SYNC}"
-    )
+    payload = {
+        "project": project,
+        "source": source.rstrip("/"),
+        "key": project_key,
+        "jira_project_id": project_ids.pop(),
+        "versions": versions,
+    }
+    result = version_project_query(client, payload, _SYNC)
     if not isinstance(result, dict) or set(result["versions"]) != set(names):
         msg = "Incomplete OpenProject version catalogue response"
         raise ValueError(msg)
     return result["versions"], result["changed"]
+
+
+def version_project_query(client: OpenProjectClient, payload: dict, operation: str) -> object:
+    """Lock the mapped project and verify all three source identity fields before changing release data."""
+    url = urlsplit(payload["source"])
+    if url.scheme not in {"https", "http"} or not url.hostname or url.username is not None or url.query or url.fragment:
+        msg = "Expected a credential-free Jira base URL for version provenance"
+        raise ValueError(msg)
+    data = base64.b64encode(json.dumps(payload).encode()).decode("ascii")
+    return client.execute_json_query(
+        f"require 'base64'\ndata = JSON.parse(Base64.strict_decode64('{data}'))\n{_PROJECT}\n{operation}\nend"
+    )

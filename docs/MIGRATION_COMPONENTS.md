@@ -690,16 +690,11 @@ The target project must have matching Jira key, ID and base URL provenance. Work
 
 ### AffectsVersionsMigration
 
-**Location**: `src/migrations/affects_versions_migration.py`
+The `affects_versions` component imports Jira's `versions` issue field into OpenProject's native observed-in versions. It uses immutable IDs from the project release catalogue and confirms each unrestricted Jira issue's identity at the target. The existing `Affects Versions` text remains available on older OpenProject releases.
 
-Associates work packages with affected versions.
+A rerun reconciles only native links previously added by this component. Independently added links and target-version assignments remain intact. An issue omitted from Jira's unrestricted result or a missing source field never clears a target.
 
-**Features**:
-- Fix version mapping
-- Affects version association
-- Version timeline
-
-**Dependencies**: WorkPackageMigration, VersionsMigration
+Requires the project and work-package mappings. Run `versions` first on targets with native observed-in links.
 
 ---
 

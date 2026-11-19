@@ -1,20 +1,20 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
-"""Migrate Jira Affects Versions (versions field) to OpenProject via CF fallback.
-
-Creates/ensures a WorkPackage custom field "Affects Versions" (text) and writes
-comma-separated version names from Jira `versions` (distinct from `fixVersions`).
-"""
+"""Migrate unrestricted Jira affected versions as native observed-in links with source text."""
 
 from __future__ import annotations
 
+from itertools import batched
+
+from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.project_named_records import project_id
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.openproject.observed_versions import write_observed_versions
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
-from src.models.jira import JiraIssueFields
 
 AFFECTS_VERSIONS_CF_NAME = "Affects Versions"
 
@@ -25,90 +25,90 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict]:
-        """Get current entities for change detection.
-
-        AffectsVersionsMigration is a transformation-only component that operates on
-        already-migrated work packages. It doesn't fetch source data from Jira,
-        so change detection is not supported.
-
-        Args:
-            entity_type: Type of entities
-
-        Raises:
-            ValueError: Always, as this migration is transformation-only
-
-        """
-        msg = f"{type(self).__name__} is transformation-only and does not support change detection for entity type: {entity_type}"
+        """Run through the scoped project and issue pipeline."""
+        msg = f"Change detection is not available for {entity_type}"
         raise ValueError(msg)
 
     def _extract(self) -> ComponentResult:
-        """Extract Jira ``versions`` (Affects Versions) per issue mapped to a WP.
-
-        We parse at the boundary: each issue from the Jira client is normalised
-        through :meth:`JiraIssueFields.from_issue_any` so the rest of the
-        pipeline reads ``fields.affects_versions`` as a typed list of
-        :class:`JiraVersionRef`.
-        """
-        wp_map = self.mappings.get_mapping("work_package") or {}
-        keys = self._jira_keys_from_wp_map(wp_map)
-        if not keys:
-            return ComponentResult(success=True, data={"versions": {}})
-        issues = self._merge_batch_issues(keys)
-        versions_by_key: dict[str, list[str]] = {}
-        for k, issue in issues.items():
-            try:
-                fields = JiraIssueFields.from_issue_any(issue)
-                names = [v.name.strip() for v in fields.affects_versions if v.name and v.name.strip()]
-                if names:
-                    versions_by_key[k] = names
-            except Exception:
+        """Query only positively unrestricted issues from mapped projects selected for this run."""
+        projects = self.mappings.get_mapping("project") or {}
+        mapping = self.mappings.get_mapping("work_package") or {}
+        configured = config.migration_config.get("jira_project_filter") or []
+        selected = {k.upper() for k in ([configured] if isinstance(configured, str) else configured)}
+        targets = {}
+        for key, entry in mapping.items():
+            jira_key = self._inner_jira_key(key, entry)
+            mapped = self._work_package_entry(jira_key, entry) if jira_key else None
+            if mapped:
+                targets[mapped.jira_key] = mapped.openproject_id
+        by_project = {}
+        held = 0
+        for key, entry in projects.items():
+            pid = project_id(entry)
+            if not pid or (selected and key.upper() not in selected):
                 continue
-        return ComponentResult(success=True, data={"versions": versions_by_key})
+            keys = [k for k in targets if self._issue_project_key(k) == key]
+            issues = self.jira_client.projects.unrestricted_version_issues(key, keys)
+            held += len(set(keys) - issues.keys())
+            by_project[key] = {"project": pid, "issues": list(issues.values())}
+        return ComponentResult(success=True, data={"projects": by_project, "targets": targets, "held": held})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
+        """Retain immutable source identities and distinguish omitted fields from empty selections."""
         data = extracted.data or {}
-        raw: dict[str, list[str]] = data.get("versions", {}) if isinstance(data, dict) else {}
-        norm: dict[str, str] = {}
-        for key, names in raw.items():
-            unique_sorted = sorted({n.strip() for n in names if n and isinstance(n, str)})
-            if unique_sorted:
-                norm[key] = ", ".join(unique_sorted)
-        return ComponentResult(success=True, data={"affects_versions_text": norm})
+        batches = []
+        for key, group in data["projects"].items():
+            rows = []
+            project_ids = set()
+            for issue in group["issues"]:
+                fields = issue["fields"]
+                if "versions" not in fields:
+                    continue
+                project_ids.add(str(fields["project"]["id"]))
+                rows.append(self._affected_issue(issue, data["targets"][issue["key"]]))
+            if not rows:
+                continue
+            if len(project_ids) != 1 or not next(iter(project_ids)).isdecimal():
+                msg = "Inconsistent project identity on affected versions"
+                raise ValueError(msg)
+            project_origin = {
+                "project": group["project"],
+                "key": key,
+                "jira_project_id": project_ids.pop(),
+                "source": self.jira_client.base_url.rstrip("/"),
+            }
+            batches.extend({**project_origin, "issues": batch} for batch in batched(rows, 100, strict=False))
+        return ComponentResult(success=True, data={"batches": batches, "held": data["held"]})
+
+    @staticmethod
+    def _affected_issue(issue: dict, target: int) -> dict:
+        refs = [{"id": str(v["id"]), "name": v["name"]} for v in issue["fields"]["versions"]]
+        if not str(issue["id"]).isdecimal() or any(
+            not v["id"].isdecimal() or not isinstance(v["name"], str) or not v["name"].strip() for v in refs
+        ):
+            msg = "Invalid Jira affected version or issue identity"
+            raise ValueError(msg)
+        return {"wp": target, "id": str(issue["id"]), "key": issue["key"], "versions": refs}
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        cf_id = self._ensure_wp_custom_field(AFFECTS_VERSIONS_CF_NAME, "text")
-        if not cf_id:
-            return ComponentResult(success=False, failed=1)
-
-        wp_map = self.mappings.get_mapping("work_package") or {}
         data = mapped.data or {}
-        text_by_key: dict[str, str] = data.get("affects_versions_text", {}) if isinstance(data, dict) else {}
-
-        updated = 0
-        failed = 0
-        projects_with_values: set[int] = set()
-
-        for jira_key, text in text_by_key.items():
-            if not text:
-                continue
-            entry = self._work_package_entry(jira_key, wp_map.get(jira_key))
-            if entry is None:
-                continue
+        result = ComponentResult(success=True, details={"unconfirmed_issue_mappings": data["held"]})
+        if not data["batches"]:
+            return result
+        field = self._ensure_wp_custom_field(AFFECTS_VERSIONS_CF_NAME, "text")
+        if not field:
+            return ComponentResult(success=False, failed=1)
+        for batch in data["batches"]:
             try:
-                result = self._write_work_package_custom_value(entry, cf_id, text, projects_with_values)
-                if result:
-                    updated += 1
-                else:
-                    failed += 1
+                response = write_observed_versions(self.op_client, {**batch, "field": field})
             except Exception:
-                logger.exception("Failed to set Affects Versions for %s", jira_key)
-                failed += 1
-
-        # Enable CF only for projects that have values
-        if projects_with_values:
-            self._enable_cf_for_projects(cf_id, projects_with_values, cf_name=AFFECTS_VERSIONS_CF_NAME)
-
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+                logger.exception("Failed to reconcile affected versions for %s", batch["key"])
+                result.success = False
+                result.failed += len(batch["issues"])
+                continue
+            result.updated += response["updated"]
+            result.details["native_observed_versions"] = response["native"]
+        return result
 
     def run(self) -> ComponentResult:
         """Run Affects versions migration."""
