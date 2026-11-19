@@ -548,7 +548,7 @@ uv run python -m src.main migrate --components agile_boards --no-confirm
 
 Runs the `j2o-boards` import for every migrated project in the full profile. Each project-scoped Jira board becomes a native basic board in a private archive project, with the columns and the ranked cards of that project. The import code is shared with `j2o-boards`.
 
-The component runs only when `migration.native_board_archive_project` in `config/config.yaml` names an existing private, memberless root project. Without this setting the stage is reported as skipped, so a default run imports no native boards. It is also skipped when no project has been migrated. `--jira-project-filter` limits the projects.
+The component runs only when `migration.native_board_archive_project` in `config/config.yaml` names an existing private, memberless root project. Each migrated target project must be private too; the writer refuses boards for a public target. Without this setting the stage is reported as skipped, so a default run imports no native boards. It is also skipped when no project has been migrated. `--jira-project-filter` limits the projects.
 
 **Features**:
 - Each board is read twice. A board that changes between the reads is counted as failed.

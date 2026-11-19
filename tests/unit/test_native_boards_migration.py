@@ -52,6 +52,7 @@ def configured(monkeypatch):
     settings = {"native_board_archive_project": "board-archive"}
     monkeypatch.setattr("src.config.mappings", SimpleNamespace(get_mapping=mappings.get))
     monkeypatch.setattr("src.config.migration_config", settings)
+    monkeypatch.setattr("src.config.jira_config", {})
     return mappings, settings
 
 
@@ -163,6 +164,17 @@ def test_project_filter_limits_the_boards(configured):
     mappings, settings = configured
     mappings["project"]["OPS"] = {"jira_key": "OPS", "openproject_id": 5, "openproject_identifier": "ops"}
     settings["jira_project_filter"] = ["OPS"]
+    jira = fake_jira([{"id": 1, "name": "A", "project": "APP"}, {"id": 2, "name": "O", "project": "OPS"}])
+    target = FakeTarget()
+    result = component(jira, target).run()
+    assert result.success_count == 1
+    assert [(p["project"], p["target"]) for p in target.payloads] == [("OPS", "ops")]
+
+
+def test_cli_project_filter_limits_the_boards(configured, monkeypatch):
+    mappings, _ = configured
+    mappings["project"]["OPS"] = {"jira_key": "OPS", "openproject_id": 5, "openproject_identifier": "ops"}
+    monkeypatch.setattr("src.config.jira_config", {"projects": ["OPS"]})  # where --jira-project-filter lands
     jira = fake_jira([{"id": 1, "name": "A", "project": "APP"}, {"id": 2, "name": "O", "project": "OPS"}])
     target = FakeTarget()
     result = component(jira, target).run()
