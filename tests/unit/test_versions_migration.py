@@ -1,6 +1,9 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
+import base64
+import json
+
 import pytest
 
 from src.application.components.versions_migration import VersionsMigration
@@ -24,14 +27,31 @@ class DummyIssue:
 
 class DummyJira:
     def __init__(self) -> None:
+        self.base_url = "https://jira.example.invalid"
+        self.projects = self
         self.issues: dict[str, DummyIssue] = {
             "PRJ-1": DummyIssue("PRJ-1", ["v1", "v2"]),
             "PRJ-2": DummyIssue("PRJ-2", ["v1"]),
             "ABC-3": DummyIssue("ABC-3", ["alpha"]),
         }
 
-    def batch_get_issues(self, keys):
-        return {k: self.issues[k] for k in keys if k in self.issues}
+    def get_versions(self, project):
+        names = ["v1", "v2", "unused"] if project == "PRJ" else ["alpha"]
+        return [
+            {"id": str(i), "projectId": 78, "name": name, "released": False, "archived": False}
+            for i, name in enumerate(names, 1)
+        ]
+
+    def unrestricted_version_issues(self, project, keys):
+        return {
+            k: {
+                "id": k.split("-")[-1],
+                "key": k,
+                "fields": {"fixVersions": [{"name": v.name} for v in self.issues[k].fields.fixVersions]},
+            }
+            for k in keys
+            if k in self.issues and k.startswith(project + "-")
+        }
 
 
 class DummyOp:
@@ -41,18 +61,11 @@ class DummyOp:
 
     def execute_json_query(self, q: str):
         self.queries.append(q)
-        if "Version.where" in q:
-            # Return synthesized existing versions from what we've created so far
-            out = []
-            for i, rec in enumerate(self.created_payloads, start=1):
-                out.append({"id": 100 + i, "name": rec.get("name"), "project_id": rec.get("project_id")})
-            return out
-        return []
-
-    def bulk_create_records(self, model: str, records: list[dict], **_):
-        assert model == "Version"
-        self.created_payloads.extend(records)
-        return {"created_count": len(records)}
+        encoded = q.split("strict_decode64('", 1)[1].split("')", 1)[0]
+        data = json.loads(base64.b64decode(encoded))
+        self.created_payloads.append(data)
+        rows = {r["attributes"]["name"]: int(r["id"]) for r in data["versions"]}
+        return {"versions": rows, "changed": len(rows)}
 
     def batch_update_work_packages(self, updates):
         # Pretend all succeeded
@@ -169,12 +182,18 @@ def test_refresh_failure_retains_preexisting_project_version_ids():
 
 def test_fix_versions_require_every_reference_to_resolve():
     migration = VersionsMigration(jira_client=DummyJira(), op_client=DummyOp())
-    issues = {"PRJ-1": {"fields": {"fixVersions": [{"name": "v1"}, {"name": "v2"}]}}}
+    issues = {"PRJ-1": {"id": "189", "key": "PRJ-1", "fields": {"fixVersions": [{"name": "v1"}, {"name": "v2"}]}}}
     projects = {"PRJ": {"openproject_id": 11}}
     versions = {"11": {"v1": 101, "v2": 102}}
     assert migration._version_assignment("PRJ-1", 123, issues, projects, versions) == {
         "id": 123,
         "target_version_ids": [101, 102],
+        "jira_version_issue_origin": {
+            "project": 11,
+            "id": "189",
+            "key": "PRJ-1",
+            "url": "https://jira.example.invalid/browse/PRJ-1",
+        },
     }
     del versions["11"]["v2"]
     with pytest.raises(KeyError):
@@ -185,7 +204,7 @@ def test_version_catalogue_failure_is_reported_per_affected_issue(monkeypatch, c
     jira = DummyJira()
     jira.issues["ABC-3"] = DummyIssue("ABC-3", [])
     op = DummyOp()
-    monkeypatch.setattr(op, "bulk_create_records", lambda *_args: {"created_count": 0})
+    monkeypatch.setattr(jira, "get_versions", lambda _project: [])
     migration = VersionsMigration(jira_client=jira, op_client=op)
     result = migration.run()
     assert not result.success
@@ -193,3 +212,108 @@ def test_version_catalogue_failure_is_reported_per_affected_issue(monkeypatch, c
     assert result.failed == 2
     assert "PRJ-1" in caplog.text
     assert "v1" in caplog.text
+
+
+def test_complete_catalogue_includes_unassigned_versions_and_preserves_project_scope(monkeypatch):
+    from src import config
+
+    jira, op = DummyJira(), DummyOp()
+    config.mappings.set_mapping("work_package", {})
+    config.mappings.set_mapping("version", {"22": {"outside": 34}})
+    monkeypatch.setitem(config.migration_config, "jira_project_filter", ["PRJ"])
+    result = VersionsMigration(jira_client=jira, op_client=op).run()
+    assert result.success
+    assert config.mappings.get_mapping("version") == {"11": {"v1": 1, "v2": 2, "unused": 3}, "22": {"outside": 34}}
+    assert len(op.created_payloads) == 1
+
+
+def test_unavailable_catalogue_is_a_failure_without_target_writes(monkeypatch):
+    from unittest.mock import Mock
+
+    jira, op = DummyJira(), DummyOp()
+    monkeypatch.setattr(jira, "get_versions", Mock(side_effect=OSError("unavailable")))
+    result = VersionsMigration(jira_client=jira, op_client=op).run()
+    assert not result.success
+    assert not op.queries
+
+
+def test_native_catalogue_preserves_both_flags_and_dates_and_rejects_partial_responses(monkeypatch):
+    from src.infrastructure.openproject.version_catalog import sync_project_versions
+
+    op = DummyOp()
+    row = {
+        "id": "41",
+        "projectId": 78,
+        "name": "R1",
+        "archived": True,
+        "released": True,
+        "startDate": "2026-01-02",
+        "releaseDate": "2026-04-15",
+        "description": "Release notes",
+    }
+    assert sync_project_versions(op, 3, "https://jira.example.invalid/", "PRJ", [row]) == ({"R1": 41}, 1)
+    saved = op.created_payloads[0]["versions"][0]
+    assert saved == {
+        "id": "41",
+        "released": True,
+        "archived": True,
+        "attributes": {
+            "name": "R1",
+            "description": "Release notes",
+            "status": "closed",
+            "start_date": "2026-01-02",
+            "effective_date": "2026-04-15",
+        },
+    }
+    with pytest.raises(ValueError, match="Ambiguous"):
+        sync_project_versions(op, 3, "https://jira.example.invalid", "PRJ", [row, row])
+    monkeypatch.setattr(op, "execute_json_query", lambda query: {"versions": {}, "changed": 0})
+    with pytest.raises(ValueError, match="Incomplete"):
+        sync_project_versions(op, 3, "https://jira.example.invalid", "PRJ", [row])
+
+
+def test_version_catalogue_reader_rejects_incomplete_or_non_json_responses():
+    from unittest.mock import Mock
+
+    from src.infrastructure.jira.jira_client import JiraApiError
+    from src.infrastructure.jira.jira_project_service import JiraProjectService
+
+    client = Mock()
+    response = client._make_request.return_value
+    response.headers = {"Content-Type": "application/json"}
+    response.text = "{}"
+    response.json.return_value = {"values": []}
+    service = JiraProjectService(client)
+    with pytest.raises(JiraApiError):
+        service.get_versions("PRJ")
+    client._make_request.assert_called_once_with("/rest/api/2/project/PRJ/versions")
+    response.json.return_value = []
+    assert service.get_versions("PRJ") == []
+
+
+def test_version_origin_rejects_urls_containing_credentials():
+    from src.infrastructure.openproject.version_catalog import sync_project_versions
+
+    client = DummyOp()
+    with pytest.raises(ValueError, match="credential-free"):
+        sync_project_versions(client, 3, "https://user@jira.example.invalid/", "PRJ", [{}])
+
+
+def test_version_assignments_require_positive_unrestricted_search_and_pagination():
+    from unittest.mock import Mock
+
+    from src.infrastructure.jira.jira_client import JiraApiError
+    from src.infrastructure.jira.jira_project_service import JiraProjectService
+
+    client = Mock()
+    response = client._make_request.return_value
+    response.headers = {"Content-Type": "application/json"}
+    response.text = "{}"
+    issue = {"key": "PRJ-1", "fields": {"project": {"key": "PRJ"}}}
+    response.json.return_value = {"startAt": 0, "total": 1, "issues": [issue]}
+    service = JiraProjectService(client)
+    assert service.unrestricted_version_issues("PRJ", ["PRJ-1", "PRJ-2"]) == {"PRJ-1": issue}
+    assert "level IS EMPTY" in client._make_request.call_args.kwargs["params"]["jql"]
+    issue["fields"]["security"] = {"id": "99"}
+    with pytest.raises(JiraApiError, match="restricted"):
+        service.unrestricted_version_issues("PRJ", ["PRJ-1"])
