@@ -163,6 +163,8 @@ Open [the local dashboard](http://127.0.0.1:8001/). In the terminal where you ru
 
 The standard time-entry component compares worklogs carrying Tempo attributes for each selected project. The target count includes entries whose stored attributes the importer decrypted and verified. Missing or duplicate source worklog IDs leave the affected project comparison unmeasured. The dashboard publishes aggregate counts only.
 
+During a time-entry import, the dashboard counts selected Jira issues and shows how many returned a worklog list with valid IDs. Empty lists count as checked. Failed requests and malformed lists leave the checked count below the selected count. The source and target comparison appears after the import verifies its results.
+
 A reconciliation producer can publish per-data-type counts, for example `"comparison_counts": {"Attachments": {"source": 12, "target": 12}, "Comments": {"source": 30}}`. Count the same population and unit on each side. Omit a side until measured. The dashboard shows zero for a measured zero and “Not checked” for a missing observation. Existing `verified_counts` stay available for other measurements. For a multi-project run, publish the same per-data-type structure under `project_comparisons`, keyed by project. The project selector keeps each comparison within its source scope.
 
 

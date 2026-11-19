@@ -370,3 +370,42 @@ def test_cli_displays_tempo_attribute_receipts_and_replaces_incomplete_attempts(
     retry = read_progress(local_run.target)
     assert retry.project_comparisons["DEMO"][label].target == 1
     assert label not in retry.comparison_counts
+
+
+def test_cli_reports_worklog_reads_before_target_comparison(local_run, monkeypatch, tmp_path) -> None:
+    from itertools import count
+
+    from src import migration_progress
+
+    monkeypatch.setitem(migration.config.var_dirs, "data", tmp_path)
+    monkeypatch.setattr(migration_progress, "monotonic", count().__next__)
+    jira = Mock()
+    component = migration.TimeEntryMigration(jira, Mock())
+    observed = []
+
+    def worklogs(key):
+        snapshot = read_progress(local_run.target)
+        assert snapshot.status == "running" and snapshot.comparison_counts == {}
+        observed.append(snapshot.verified_counts["time_entries · Jira issues with worklog IDs checked"])
+        if key == "TEST-2":
+            raise ConnectionError("unavailable")
+        if key == "TEST-3":
+            return [{"id": "1"}, {"id": "1"}]
+        return []
+
+    jira.get_work_logs_for_issue.side_effect = worklogs
+
+    def run(**_kwargs):
+        component.time_entry_migrator.extract_jira_work_logs_for_issues(
+            ["TEST-1", "TEST-2", "TEST-3", "TEST-4"], save_to_file=False
+        )
+        return ComponentResult(success=False, details={"status": "failed"})
+
+    monkeypatch.setattr(component, "run_with_change_detection", run)
+    local_run.factories["time_entries"] = lambda: component
+    assert run_command("time_entries") == 1
+    snapshot = read_progress(local_run.target)
+    assert observed == [0, 1, 1, 1]
+    assert snapshot.verified_counts["time_entries · Jira issues selected for worklog reads"] == 4
+    assert snapshot.verified_counts["time_entries · Jira issues with worklog IDs checked"] == 2
+    assert "TEST-" not in local_run.target.read_text()

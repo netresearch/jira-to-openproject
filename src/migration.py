@@ -756,9 +756,13 @@ def _invoke_component(name: str, component: BaseMigration) -> ComponentResult:
     return run_with_changes(entity_type=entity_type)
 
 
-def _run_component(name: str, component: BaseMigration) -> ComponentResult:
+def _run_component(
+    name: str, component: BaseMigration, progress: MigrationRunProgress | None = None
+) -> ComponentResult:
     start = time.monotonic()
     try:
+        if isinstance(component, TimeEntryMigration) and progress is not None and progress.path is not None:
+            component.time_entry_migrator.on_worklog_read = progress.worklog_reads
         result = _invoke_component(name, component)
         if result is None:
             return ComponentResult(success=False, message=f"Component '{name}' did not return a result")
@@ -866,7 +870,7 @@ async def _run_components(
             progress.start_component(index)
             print_component_header(name)
             preflight = _work_package_preflight() if name == "work_packages" else None
-            result = preflight or _run_component(name, factories[name]())
+            result = preflight or _run_component(name, factories[name](), progress)
             results.components[name] = result
             status = _component_status(result)
             progress.end_component(name, result, status)
