@@ -121,7 +121,17 @@ def stage(monkeypatch):
     jira.get_custom_fields.return_value = [
         {"id": "customfield_42", "schema": {"custom": "com.topshelfsolution.simpletasklists:all-tasks-count-cftype"}}
     ]
+    jira.jira.server_info.return_value = {"deploymentType": "Data Center"}
     raw = _project_issue()
+    raw["fields"]["comment"] = {
+        "comments": [
+            {
+                "id": "555",
+                "visibility": {"type": "role", "value": "Reviewers"},
+                "body": "{task:id=44}restricted comment{task}",
+            }
+        ]
+    }
     issue = SimpleNamespace(key="J-1", id="90", raw=raw, fields=raw["fields"])
     jira.jira.search_issues.side_effect = lambda jql, **kwargs: [issue] if kwargs["startAt"] == 0 else []
     jira.jira.issue.return_value.raw = raw
@@ -154,6 +164,24 @@ def test_regular_stage_preserves_the_confirmed_task_order_and_withholds_comment_
     assert row["markdown"] == "- [ ] ` direct task `\n- [x] ` inline ` (mandatory)"
     assert "sensitive" not in str(row)
     assert "restricted" not in str(row)
+
+
+def test_personal_or_comment_task_is_never_published_as_a_direct_sidebar_task(stage):
+    migration, jira, target = stage
+    jira.get_issue_simpletasks.return_value[1]["commentId"] = 555
+    result = migration.run()
+    assert result.details["unverified_task_audience"] == 2
+    [row] = target.call_args.args[1]["rows"]
+    assert [t["id"] for t in row["tasks"]] == ["42"]
+
+
+def test_cloud_sidebar_tasks_are_held_for_a_separate_audience_check(stage):
+    migration, jira, target = stage
+    jira.jira.server_info.return_value = {"deploymentType": "Cloud"}
+    result = migration.run()
+    assert result.details["unverified_task_audience"] == 2
+    assert [t["id"] for t in target.call_args.args[1]["rows"][0]["tasks"]] == ["42"]
+    jira.get_issue_simpletasks.assert_not_called()
 
 
 def test_property_cannot_publish_task_content_or_modify_confirmed_labels(stage):

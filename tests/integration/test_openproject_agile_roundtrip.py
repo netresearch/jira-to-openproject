@@ -560,7 +560,22 @@ def test_task_origins_bind_to_the_native_work_package_without_comment_data(nativ
        wp.custom_values.find_or_initialize_by(custom_field:f).update!(value:"EX-1")
        wp.update_columns(description:"Before")
     """)
-    info = {"key": "EX-1", "id": "90", "fields": {"project": {"id": "80", "projectTypeKey": "software"}}}
+    info = {
+        "key": "EX-1",
+        "id": "90",
+        "fields": {
+            "project": {"id": "80", "projectTypeKey": "software"},
+            "comment": {
+                "comments": [
+                    {
+                        "id": "317",
+                        "visibility": {"type": "role", "value": "Reviewers"},
+                        "body": "{task:id=30}restricted comment{task}",
+                    }
+                ]
+            },
+        },
+    }
     source = {
         "issue": "EX-1",
         "issueId": 90,
@@ -574,7 +589,7 @@ def test_task_origins_bind_to_the_native_work_package_without_comment_data(nativ
         [{"id": "29", "title": "open task", "checked": False}],
         [
             {**source, "id": 29, "ordinal": 2, "text": "open task", "lastChangedBy": "source-actor"},
-            {**source, "id": 30, "ordinal": 1, "text": "restricted comment"},
+            {**source, "id": 30, "ordinal": 1, "text": "restricted comment", "commentId": 317},
         ],
         2,
     )

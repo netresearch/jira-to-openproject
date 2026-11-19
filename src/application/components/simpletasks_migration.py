@@ -52,6 +52,13 @@ class SimpleTasksMigration(BaseMigration):
                 return field["id"]
         return None
 
+    @cached_property
+    def _server_tasklist(self) -> bool:
+        """Cloud supports personal tasks. A sidebar is ordinary only for the Server/DC add-on."""
+        info = self.jira_client.jira.server_info()
+        deployment = str(info.get("deploymentType", "")).casefold().replace(" ", "")
+        return deployment in {"server", "datacenter"}
+
     def _confirmed_tasks(self, raw: dict) -> tuple[list[dict], int]:
         key = raw["key"]
         tasks = [{**t, "origin": "description"} for t in description_tasks(key, raw)]
@@ -63,7 +70,7 @@ class SimpleTasksMigration(BaseMigration):
                 msg = "Inconsistent source task count."
                 raise ValueError(msg)
             total = int(value)
-            if total and raw["fields"]["project"]["projectTypeKey"] == "software":
+            if total and raw["fields"]["project"]["projectTypeKey"] == "software" and self._server_tasklist:
                 tasks = issue_task_records(raw, tasks, self.jira_client.get_issue_simpletasks(key), total)
             held = total - len(tasks)
         prop = config.migration_config.get("simpletasks_property_key") or "com.topshelf.simple-tasklists"

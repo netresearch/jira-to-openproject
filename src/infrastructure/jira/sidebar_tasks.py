@@ -36,6 +36,11 @@ def issue_task_records(raw: dict, descriptions: list[dict], rows: list[dict], to
 
 
 def _ordinary_record(row: dict, description: dict | None) -> dict | None:
+    if row.get("commentId") is not None or row.get("visibility") is not None or row.get("private"):
+        if description is not None:
+            msg = "Jira task has conflicting issue and restricted origins."
+            raise ValueError(msg)
+        return None
     if description is not None:
         if row["manuallyCreated"] or description["title"] != row["text"] or description["checked"] != row["checked"]:
             msg = "Jira task list differs from the rendered description."
