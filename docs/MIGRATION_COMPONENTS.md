@@ -872,16 +872,9 @@ The standard work-package import asks Jira for issues with an empty security lev
 
 ### CategoryDefaultsMigration
 
-**Location**: `src/migrations/category_defaults_migration.py`
+The `category_defaults` stage reads each selected project's component catalogue through the Jira SDK. Run `components` first to establish the native category IDs. In a private target project the administrator can recover each component's configured policy, effective policy, validity, and original user identifiers from **Jira category default policies**.
 
-Applies category-based defaults to work packages.
-
-**Features**:
-- Default assignee per category
-- Default type per category
-- Bulk updates
-
-**Dependencies**: WorkPackageMigration, ProjectMigration
+A valid component-lead or project-lead rule becomes a fixed OpenProject category default only when Jira confirms the same effective assignee and OpenProject confirms the category's source, the user's migration identifiers, and existing project membership. OpenProject represents this as the current person's ID. Run the stage again after a Jira leadership change. Inherited policies remain in the administrative project attribute. An explicitly unassigned policy leaves the native default empty. The stage reports unresolved policies and preserves independently configured category defaults. It changes no work packages, memberships or accounts.
 
 ---
 

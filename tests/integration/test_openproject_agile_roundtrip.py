@@ -593,6 +593,95 @@ def test_migrated_project_allows_native_work_package_creation(rails):
     assert query(f"({types}).count") == 0
 
 
+def test_category_policy_preserves_inherited_and_only_assigns_existing_verified_member(rails):
+    from src.application.components.category_defaults_migration import _rule
+    from src.infrastructure.openproject.category_defaults import apply_category_defaults
+
+    client, query = rails
+    base = "https://category-default.example.invalid"
+    pid, uid, cat, members, users, notices = query("""
+      $p, $u = Member.where.not(project_id: nil).filter_map { |m|
+        [m.project, m.principal] if m.principal.is_a?(User) && m.principal.active? && m.project
+      }.min_by { |project, user| user.admin? ? 1 : 0 }
+      raise "Seed the disposable target with a project member" unless $p && $u
+      $p.update_column(:public, false)
+      policy = ProjectCustomField.find_by(name:"Jira category default policies")
+      $p.custom_values.where(custom_field:policy).delete_all if policy
+      section = ProjectCustomFieldSection.find_or_create_by!(name: "J2O Origin")
+      origin = {"Jira Project Key"=>"ABC","Jira Project ID"=>"7","Jira Base URL"=>"https://category-default.example.invalid"}
+      set_project = lambda do |name,val,fmt,admin|
+        f=ProjectCustomField.find_or_create_by!(name:name) { |x|
+          x.assign_attributes(field_format:fmt,admin_only:admin,is_for_all:false,custom_field_section:section)
+        }
+        $p.custom_values.find_or_initialize_by(custom_field:f).update!(value:val)
+      end
+      origin.each { |name,val| set_project.call(name,val,"string",false) }
+      $category=$p.categories.create!(name:"Category default integration fixture")
+      ref={"id"=>"17","name"=>$category.name,"url"=>origin["Jira Base URL"]+"/rest/api/2/component/17"}
+      set_project.call("Jira component membership origins",
+        {source:origin,components:{"17"=>{source:ref,category:$category.id}},issues:{}}.to_json,"text",true)
+      {"J2O User Key"=>"fixed-key","J2O User ID"=>"policy-login","J2O Origin System"=>"Jira Data Center 9.12.3",
+       "J2O External URL"=>origin["Jira Base URL"]+"/secure/ViewProfile.jspa?name=policy-login"}.each do |name,val|
+        f=UserCustomField.find_or_create_by!(name:name) { |x|
+          x.assign_attributes(field_format:"string", custom_field_section:UserCustomFieldSection.first!)
+        }
+        $u.custom_values.find_or_initialize_by(custom_field:f).update!(value:val)
+      end
+      [$p.id,$u.id,$category.id,Member.count,User.count,Notification.count]
+    """)
+    actor = {"key": "fixed-key", "name": "policy-login", "active": True}
+    details = {"projectTypeKey": "software", "id": "7", "key": "ABC", "lead": actor}
+    raw = {
+        "id": "17",
+        "name": "Category default integration fixture",
+        "project": "ABC",
+        "projectId": 7,
+        "self": base + "/rest/api/2/component/17",
+        "assigneeType": "COMPONENT_LEAD",
+        "realAssigneeType": "COMPONENT_LEAD",
+        "lead": actor,
+        "assignee": actor,
+        "realAssignee": actor,
+        "isAssigneeTypeValid": True,
+    }
+    project = {
+        "project_id": pid,
+        "source": {"Jira Project Key": "ABC", "Jira Project ID": "7", "Jira Base URL": base},
+        "project_policy": {"assigneeType": "UNASSIGNED", "lead": actor},
+    }
+
+    def apply(row, user=uid):
+        project["rules"] = [_rule(row, details, base, {"fixed-key": {"openproject_id": user}})]
+        return apply_category_defaults(client, project)
+
+    def read_assignee():
+        return query(f"""
+            require "rack/mock"
+            tok=Token::API.create!(user:User.admin.active.first!);auth=ActionController::HttpAuthentication::Basic.encode_credentials("apikey",tok.plain_value)
+            req=Rack::MockRequest.new(Rails.application).get("/api/v3/categories/{cat}",{{"HTTP_HOST"=>"localhost","HTTP_ACCEPT"=>"application/hal+json","HTTP_AUTHORIZATION"=>auth}})
+            raise "category API failure" unless req.status==200
+            JSON.parse(req.body).dig("_links","defaultAssignee","href")
+        """)
+
+    assert apply(raw, 987654321)["held"] == 1
+    assert read_assignee() is None
+    assert apply(raw)["native"] == 1
+    assert read_assignee() == f"/api/v3/users/{uid}"
+    assert apply(raw)["updated"] == 0
+    inherited = {**raw, "assigneeType": "PROJECT_DEFAULT", "realAssigneeType": "PROJECT_DEFAULT"}
+    assert apply(inherited)["held"] == 1
+    assert read_assignee() is None
+    assert apply(inherited)["updated"] == 0
+    # Independently maintained defaults remain owned by the migration operator.
+    query(f"Category.find({cat}).update!(assigned_to_id:{uid}); true")
+    assert (
+        apply({**raw, "assigneeType": "UNASSIGNED", "realAssigneeType": "UNASSIGNED", "realAssignee": None})["held"]
+        == 1
+    )
+    assert read_assignee() == f"/api/v3/users/{uid}"
+    assert query("[Member.count,User.count,Notification.count]") == [members, users, notices]
+
+
 def test_all_fix_versions_survive_native_readback_and_retry(rails):
     client, query = rails
     seed = query("""
