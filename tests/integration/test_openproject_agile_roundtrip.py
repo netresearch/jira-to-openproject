@@ -772,7 +772,7 @@ def test_component_assignments_are_atomic_project_scoped_and_admin_recoverable(n
 
     query, ((pid, wid, _), _) = native_sprint_projects
     client = Mock()
-    client.execute_large_query_to_json_file.side_effect = lambda expression: query(f"({expression}).as_json")
+    client.execute_large_query_to_json_file.side_effect = lambda expression, **kwargs: query(f"({expression}).as_json")
     query(f"""
         wp = WorkPackage.find({wid})
         {{"J2O Origin Key"=>"EX-1", "J2O Origin System"=>"Jira"}}.each do |name,val|
@@ -836,6 +836,14 @@ def test_component_assignments_are_atomic_project_scoped_and_admin_recoverable(n
     assert query(f"WorkPackage.find({wid}).category.name") == refs[1]["name"]
     assert apply_component_assignments(client, {**project, "issues": [{**issue, "components": []}]}, {})["updated"] == 1
     assert query(f"WorkPackage.find({wid}).category_id") is None
+    renamed = [{**refs[0], "name": "New component name"}, refs[1]]
+    renamed_project = {**project, "issues": [{**issue, "components": renamed}]}
+    assert (
+        apply_component_assignments(client, renamed_project, {})["categories"][renamed[0]["name"]]
+        == first["categories"][refs[0]["name"]]
+    )
+    assert apply_component_assignments(client, renamed_project, {})["updated"] == 0
+    assert apply_component_assignments(client, {**project, "issues": [{**issue, "components": []}]}, {})["updated"] == 1
     before = query(f"Category.where(project_id: {pid}).count")
     invalid = {**project, "issues": [issue, {**issue, "id": "999"}]}
     with pytest.raises(AssertionError, match="Unexpected work package origin"):

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from itertools import batched
 from typing import Any
 
 from src import config
@@ -159,20 +160,31 @@ class ComponentsMigration(BaseMigration):
         updated = failed = 0
         for project in (mapped.data or {}).values():
             pid = str(project["project_id"])
-            try:
-                outcome = apply_component_assignments(self.op_client, project, categories.get(pid, {}))
-                updated += outcome["updated"]
-                current = categories.get(pid, {})
-                merged = {**current, **outcome["categories"]}
-                if merged != current:
-                    categories[pid] = merged
-                    self.mappings.set_mapping("category", categories)
-            except Exception:
-                self.logger.exception("Could not reconcile component assignments for %s", project["key"])
-                failed += len(project["issues"])
+            completed = 0
+            for batch in batched(project["issues"], 100, strict=False):
+                try:
+                    outcome = apply_component_assignments(
+                        self.op_client, {**project, "issues": list(batch)}, categories.get(pid, {})
+                    )
+                    updated += outcome["updated"]
+                    completed += len(batch)
+                    self._save_categories(categories, pid, outcome["categories"])
+                except Exception:
+                    self.logger.exception("Could not reconcile component assignments for %s", project["key"])
+                    failed += max(1, len(project["issues"]) - completed)
+                    break
         return ComponentResult(
             success=not failed, updated=updated, failed=failed, details=mapped.details, warnings=mapped.warnings
         )
+
+    def _save_categories(self, categories: dict, pid: str, verified: dict) -> None:
+        current = categories.get(pid, {})
+        targets = set(verified.values())
+        merged = {name: identifier for name, identifier in current.items() if identifier not in targets}
+        merged.update(verified)
+        if merged != current:
+            categories[pid] = merged
+            self.mappings.set_mapping("category", categories)
 
     def run(self) -> ComponentResult:
         """Check the source and the target on every pass, including retries."""

@@ -41,6 +41,7 @@ project.with_lock(requires_new: true) do
   issues = registry.fetch("issues")
   updated = 0
   verified = {}
+  renamed = Set.new
   data.fetch("issues").each do |row|
     sid = row.fetch("id")
     old = issues[sid]
@@ -58,12 +59,20 @@ project.with_lock(requires_new: true) do
     ids = refs.map do |ref|
       id, name = ref.values_at("id", "name")
       saved = catalogue[id]
-      raise "Registered component origin changed" if saved && saved.fetch("source") != ref
+      old_source = saved && saved.fetch("source")
+      if old_source && old_source.except("name") != ref.except("name")
+        raise "Registered component origin changed"
+      end
       unless verified.key?(id)
         known = saved ? saved.fetch("category") : data.fetch("legacy")[name]
         if known
           category = project.categories.lock.find(known)
-          raise "Native category changed" unless category.name == name
+          raise "Native category changed" unless category.name == (old_source ? old_source.fetch("name") : name)
+          if old_source && category.name != name
+            raise "Rename categories before granting project access" unless private_staging
+            category.update!(name: name)
+            renamed.add(id)
+          end
         else
           raise "Unregistered native category collision" if project.categories.where("lower(name) = lower(?)", name).exists?
           raise "Create categories before granting project access" unless private_staging
@@ -88,6 +97,7 @@ project.with_lock(requires_new: true) do
   end
   targets = catalogue.values.pluck("category")
   raise "Ambiguous component origin" unless targets.uniq == targets
+  updated += renamed.size
   value.update!(value: JSON.generate(registry)) if updated.positive?
   {updated: updated, categories: catalogue.values.to_h { |r| [r.fetch("source").fetch("name"), r.fetch("category")] }}
 end
@@ -98,4 +108,6 @@ def apply_component_assignments(client: Any, project: dict, legacy: dict) -> dic
     """The Rails transaction checks source identities, target scope, category and register together."""
     data = {**project, "legacy": legacy, "register": _REGISTER, "systems": JIRA_SOURCE_LABELS}
     payload = base64.b64encode(json.dumps(data, ensure_ascii=False).encode()).decode("ascii")
-    return client.execute_large_query_to_json_file(f'data = JSON.parse(Base64.strict_decode64("{payload}"))\n{_APPLY}')
+    return client.execute_large_query_to_json_file(
+        f'data = JSON.parse(Base64.strict_decode64("{payload}"))\n{_APPLY}', timeout=180
+    )

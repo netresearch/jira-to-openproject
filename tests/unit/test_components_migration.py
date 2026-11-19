@@ -8,6 +8,7 @@ import pytest
 
 from src.application.components.components_migration import ComponentsMigration
 from src.migration import _invoke_component
+from src.models import ComponentResult
 
 
 def source(number, components, **fields):
@@ -89,3 +90,27 @@ def test_incomplete_or_inconsistent_component_data_fails_before_writes(migration
     migration.jira_client.jira.search_issues.side_effect = [[source(1, bad)], []]
     assert not _invoke_component("components", migration).success
     migration.op_client.execute_large_query_to_json_file.assert_not_called()
+
+
+def test_checkpoints_work_packages_in_bounded_transactions(monkeypatch):
+    migration = ComponentsMigration(jira_client=Mock(), op_client=Mock())
+    mapping = {"8": {"Old": 13, "Local": 500}}
+    migration.mappings = Mock()
+    migration.mappings.get_mapping.return_value = mapping
+    calls = []
+
+    def write(client, batch, legacy):
+        calls.append(len(batch["issues"]))
+        if len(calls) == 2:
+            raise RuntimeError("failure on a later batch")
+        return {"updated": len(batch["issues"]), "categories": {"New": 13}}
+
+    monkeypatch.setattr("src.application.components.components_migration.apply_component_assignments", write)
+    result = migration._load(
+        ComponentResult(success=True, data={"ABC": {"project_id": 8, "key": "ABC", "issues": list(range(102))}})
+    )
+    assert not result.success
+    assert result.updated == 100
+    assert result.failed == 2
+    assert calls == [100, 2]
+    migration.mappings.set_mapping.assert_called_once_with("category", {"8": {"New": 13, "Local": 500}})

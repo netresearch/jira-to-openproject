@@ -665,6 +665,9 @@ Run `uv run j2o migrate --components components --no-confirm` after migrating th
 
 OpenProject supports one native category per work package. The first Jira component in source order supplies that category. The admin-only project attribute **Jira component membership origins** retains the complete ordered assignment. To recover it via `GET /api/v3/projects/{id}` as an administrator, read the attribute's raw JSON. Look up the immutable Jira issue ID in `issues`, then resolve each ID in its `components` array through the project's `components` object. Each entry contains the original Jira component ID, name and URL, and its verified OpenProject category ID.
 
+Each batch of up to 100 work packages commits its category links and provenance together. A failed batch rolls back and earlier batches can be replayed. A Jira component rename updates the registered category with the same immutable source ID and URL while the target remains private and memberless. An independently renamed target category requires administrator review.
+
+
 The component reuses earlier category IDs from the migration mapping and checks them against the project and name. A category name collision without a known origin, a locally edited native assignment, or a foreign target rolls back that project. Replaying an unchanged project writes zero assignments. A confirmed empty Jira component list clears the native category only when the previous assignment was recorded by this importer. This assignment import leaves category default assignees unchanged.
 
 ---
