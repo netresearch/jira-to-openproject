@@ -283,18 +283,20 @@ def test_version_catalogue_reader_rejects_incomplete_or_non_json_responses():
     response.headers = {"Content-Type": "application/json"}
     response.text = "{}"
     response.json.return_value = {"values": []}
+    service = JiraProjectService(client)
     with pytest.raises(JiraApiError):
-        JiraProjectService(client).get_versions("PRJ")
+        service.get_versions("PRJ")
     client._make_request.assert_called_once_with("/rest/api/2/project/PRJ/versions")
     response.json.return_value = []
-    assert JiraProjectService(client).get_versions("PRJ") == []
+    assert service.get_versions("PRJ") == []
 
 
 def test_version_origin_rejects_urls_containing_credentials():
     from src.infrastructure.openproject.version_catalog import sync_project_versions
 
+    client = DummyOp()
     with pytest.raises(ValueError, match="credential-free"):
-        sync_project_versions(DummyOp(), 3, "https://user@jira.example.invalid/", "PRJ", [{}])
+        sync_project_versions(client, 3, "https://user@jira.example.invalid/", "PRJ", [{}])
 
 
 def test_version_assignments_require_positive_unrestricted_search_and_pagination():
