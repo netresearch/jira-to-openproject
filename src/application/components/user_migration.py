@@ -660,26 +660,6 @@ class UserMigration(BaseMigration):
         if self._origin_cf_id_map is not None:
             return self._origin_cf_id_map
 
-        for legacy_cf in ("Jira user key", "Tempo Account"):
-            try:
-                removal_result = self.op_client.remove_custom_field(
-                    legacy_cf,
-                    cf_type="UserCustomField",
-                )
-                removed_count = removal_result.get("removed", 0)
-                if removed_count:
-                    self.logger.info(
-                        "Removed legacy user custom field '%s' (%s entry/entries)",
-                        legacy_cf,
-                        removed_count,
-                    )
-            except Exception as exc:
-                self.logger.debug(
-                    "Failed to remove legacy user custom field '%s': %s",
-                    legacy_cf,
-                    exc,
-                )
-
         cf_names = (
             (provenance_fields.ORIGIN_SYSTEM, "string"),
             (provenance_fields.USER_ID, "string"),
@@ -699,7 +679,8 @@ class UserMigration(BaseMigration):
             except Exception as exc:
                 self.logger.warning("Unable to ensure user custom field %s: %s", name, exc)
 
-        self._origin_cf_id_map = ids
+        if len(ids) == len(cf_names):
+            self._origin_cf_id_map = ids
         return ids
 
     def _get_origin_system_label(self) -> str:

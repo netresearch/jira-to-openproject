@@ -14,6 +14,7 @@ import pytest
 
 from src.application.components.agile_board_migration import AgileBoardMigration
 from src.application.components.sprint_epic_migration import SprintEpicMigration
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.openproject_content_service import OpenProjectContentService
 from src.infrastructure.openproject.openproject_custom_field_service import OpenProjectCustomFieldService
 from src.infrastructure.openproject.openproject_project_setup_service import OpenProjectProjectSetupService
@@ -505,6 +506,52 @@ def test_unsupported_cleanup_preserves_every_work_package_type(rails):
     with pytest.raises(QueryExecutionError, match="all types were preserved"):
         service.delete_non_default_issue_types()
     assert query("Type.order(:id).pluck(:id, :name)") == original
+
+
+def test_user_provenance_fields_create_in_sections_and_preserve_legacy_values(rails):
+    from src.application.components.user_migration import UserMigration
+
+    client, query = rails
+    service = OpenProjectCustomFieldService(client)
+    client.custom_fields = service
+    client.ensure_custom_field.side_effect = lambda *args, **kwargs: OpenProjectClient.ensure_custom_field(
+        client, *args, **kwargs
+    )
+    migration = UserMigration.__new__(UserMigration)
+    migration.op_client = client
+    migration.logger = client.logger
+    names = ["J2O Origin System", "J2O User ID", "J2O User Key", "J2O External URL"]
+    existing = query(f"""
+      # The fixture transaction rolls back the field setup and all values.
+      names = {json.dumps(names)}
+      UserCustomField.where(name:names).each {{ |f| f.update_column(:name, "Seed field " + f.id.to_s) }}
+      owned=UserCustomFieldSection.create!(name:"Retained user profile section")
+      first=UserCustomField.create!(name:names.first,field_format:"string",custom_field_section:owned,admin_only:true)
+      $legacy=["Jira user key","Tempo Account"].map do |name|
+        f=UserCustomField.find_or_create_by!(name:name) {{ |v| v.field_format="string";v.custom_field_section=owned }}
+        User.current.custom_values.find_or_initialize_by(custom_field:f).update!(value:"keep-"+name);f.id
+      end
+      [first.id, owned.id]
+    """)
+    migration._origin_cf_id_map = None
+    first = migration.ensure_j2o_custom_fields()
+    assert set(first) == set(names), client.logger.warning.call_args_list
+    assert first[names[0]] == existing[0]
+    migration._origin_cf_id_map = None
+    assert migration.ensure_j2o_custom_fields() == first
+    state = query(f"""
+        fields = UserCustomField.where(id:{list(first.values())})
+        {{"legacy"=>User.current.custom_values.where(custom_field_id:$legacy).order(:value).pluck(:value),
+          "section"=>UserCustomField.find({existing[0]}).custom_field_section_id,
+          "new"=>fields.where.not(id:{existing[0]}).map{{ |f| [f.custom_field_section.type,f.admin_only?] }}.uniq,
+          "anonymous_visible"=>UserCustomField.visible(User.anonymous).where(id:fields.ids).exists?}}
+    """)
+    assert state == {
+        "legacy": ["keep-Jira user key", "keep-Tempo Account"],
+        "section": existing[1],
+        "new": [["UserCustomFieldSection", True]],
+        "anonymous_visible": False,
+    }
 
 
 def test_migrated_project_allows_native_work_package_creation(rails):

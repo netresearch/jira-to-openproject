@@ -31,17 +31,11 @@ def logger_stub():
 
 
 def test_get_user_origin_cf_ids_ensures_fields(logger_stub):
-    """Verify legacy fields are removed and new origin CFs are created once."""
+    """Retain populated legacy fields and ensure each new origin field once."""
     instance = UserMigration.__new__(UserMigration)
     instance.logger = logger_stub
     instance.op_client = MagicMock()
     instance._origin_cf_id_map = None
-
-    removal_results = [
-        {"removed": 1},
-        {"removed": 0},
-    ]
-    instance.op_client.remove_custom_field.side_effect = removal_results
 
     ensured = [
         {"id": 11},
@@ -59,7 +53,7 @@ def test_get_user_origin_cf_ids_ensures_fields(logger_stub):
         "J2O User Key": 13,
         "J2O External URL": 14,
     }
-    assert instance.op_client.remove_custom_field.call_count == 2
+    instance.op_client.remove_custom_field.assert_not_called()
     assert instance.op_client.ensure_custom_field.call_count == 4
 
     # Second call should use the cached value without calling the client again
@@ -67,6 +61,25 @@ def test_get_user_origin_cf_ids_ensures_fields(logger_stub):
     cached = instance._get_user_origin_cf_ids()
     assert cached is ids
     instance.op_client.ensure_custom_field.assert_not_called()
+
+
+def test_missing_origin_field_can_be_retried(logger_stub):
+    migration = UserMigration.__new__(UserMigration)
+    migration.logger = logger_stub
+    migration.op_client = MagicMock()
+    migration._origin_cf_id_map = None
+    migration.op_client.ensure_custom_field.side_effect = [
+        {"id": 1},
+        {"id": 2},
+        ConnectionError("unavailable"),
+        {"id": 4},
+        {"id": 1},
+        {"id": 2},
+        {"id": 3},
+        {"id": 4},
+    ]
+    assert len(migration.ensure_j2o_custom_fields()) == 3
+    assert len(migration.ensure_j2o_custom_fields()) == 4
 
 
 @pytest.mark.parametrize(
