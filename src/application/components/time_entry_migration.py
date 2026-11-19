@@ -194,10 +194,12 @@ class TimeEntryMigration(BaseMigration):
 
             total_migrated = result.get("total_time_entries", {}).get("migrated", 0)
             total_failed = result.get("total_time_entries", {}).get("failed", 0)
-            total_discovered = result.get("jira_work_logs", {}).get("discovered", 0) + result.get(
-                "tempo_time_entries",
-                {},
-            ).get("discovered", 0)
+            tempo = result.get("tempo_time_entries", {})
+            total_discovered = (
+                result.get("jira_work_logs", {}).get("discovered", 0)
+                + tempo.get("discovered", 0)
+                - tempo.get("shared_jira_worklogs", 0)
+            )
             # Entries accounted for by known-benign skip classes:
             #   • unmappable: dropped at the transformer (no user + no WP in mapping tables)
             #   • skipped: already present in OP (provenance dedup)

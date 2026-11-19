@@ -37,12 +37,29 @@ TimeEntry.transaction do
             jira_worklog_key: key, jira_started: '2024-01-15T23:15:00.123+0000',
             jira_time_zone: 'Europe/Berlin', jira_update_author_id: user.id,
             jira_created_at: '2024-01-16T09:00:00Z', jira_updated_at: '2024-01-17T09:00:00Z' }
-    File.write(data_path, [row, row, row.merge(comments: 'Changed'), row.merge(target_project_id: -1)].to_json)
+    # Supply a synthetic Jira origin within this rollback-only transaction.
+    issue_url = "https://jira.example.test/browse/TEST-15"
+    { 'J2O Origin ID' => '15', 'J2O Origin URL' => issue_url }.each do |name, value|
+      field = WorkPackageCustomField.find_or_create_by!(name: name) { |f| f.field_format = 'string' }
+      wp.custom_values.find_or_initialize_by(custom_field_id: field.id).update!(value: value)
+    end
+    TimeEntryCustomField.find_or_create_by!(name: 'Jira Tempo Work Attribute Values (age)') do |field|
+      field.assign_attributes(field_format: 'text', admin_only: true, is_for_all: false, is_required: false)
+    end
+    archive = { issue_id: '15', issue_url: issue_url, packet: 'first-opaque-test-packet' }
+    with_archive = row.merge(tempo_archive: archive)
+    rows = [row, row, row.merge(comments: 'Changed'), row.merge(target_project_id: -1), with_archive,
+            row.merge(tempo_archive: archive.merge(packet: 'second-test-packet')),
+            row.merge(tempo_archive: archive.merge(issue_id: '16'))]
+    File.write(data_path, rows.to_json)
 """
     assertions = """
     result = JSON.parse(File.read(result_path))
-    raise unless result.values_at('created', 'reused', 'failed') == [1, 1, 2]
-    first, second, conflict, wrong_project = result.fetch('results')
+    raise unless result.values_at('created', 'reused', 'failed') == [1, 3, 3]
+    first, second, conflict, wrong_project, attached, repeated, wrong_source = result.fetch('results')
+    raise unless attached.fetch('tempo_attributes_written') && !repeated.fetch('tempo_attributes_written')
+    raise unless attached.fetch('tempo_packet') == repeated.fetch('tempo_packet') && repeated.fetch('id') == first.fetch('id')
+    raise if wrong_source.fetch('success')
     raise unless first.fetch('id') == second.fetch('id') && second.fetch('reused')
     raise unless [first, second].all? { |receipt| receipt.fetch('verified_worklog_key') == key }
     raise if [conflict, wrong_project].any? { |receipt| receipt.key?('verified_worklog_key') }

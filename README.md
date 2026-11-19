@@ -24,6 +24,8 @@ A robust, modular migration toolset for transferring project management data fro
 - **Admin Schemes:** Jira role memberships → OpenProject project memberships
 - **Reporting Artefacts:** Jira saved filters & dashboards → OpenProject queries and wiki summaries
 
+For confidential Tempo work attributes, set `J2O_TEMPO_ATTRIBUTE_IDENTITY` to a private age X25519 identity file owned by the recovery operator (mode 0600 on Unix). The normal time-entry migration encrypts those values before saving its extraction and verifies the encrypted OpenProject field after writing each matched Jira worklog. Keep the identity for recovery. Decode the field’s Base64 content and decrypt the resulting age file with that identity to recover its JSON.
+
 **Key Capabilities:**
 - **Batch Processing:** Configurable batch sizes for large datasets
 - **Progress Tracking:** Real-time progress monitoring with detailed logging

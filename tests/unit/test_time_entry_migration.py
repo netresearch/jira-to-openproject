@@ -264,3 +264,17 @@ def test_run_zero_created_failure_message_includes_counts(
     msg = result.message
     assert "discovered=" in msg, f"Message should include discovered count: {msg!r}"
     assert "failed" in msg, f"Message should mention failures: {msg!r}"
+
+
+def test_repeated_enriched_worklogs_count_once(tmp_path, monkeypatch, _mock_mappings):
+    mapping = {"1001": {"jira_key": "PROJ-1", "openproject_id": 5001}}
+    (tmp_path / "work_package_mapping.json").write_text(json.dumps(mapping), encoding="utf-8")
+    mig = _make_mig(tmp_path, monkeypatch, rails_present=True)
+    mig.time_entry_migrator.migrate_time_entries_for_issues.return_value = {
+        "status": "success",
+        "jira_work_logs": {"discovered": 7},
+        "tempo_time_entries": {"discovered": 7, "shared_jira_worklogs": 7, "attributes_verified": 7},
+        "total_time_entries": {"migrated": 0, "failed": 0},
+        "skipped": 7,
+    }
+    assert mig.run().success
