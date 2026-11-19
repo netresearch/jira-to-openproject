@@ -296,7 +296,13 @@ def test_version_origin_rejects_urls_containing_credentials():
 
     client = DummyOp()
     with pytest.raises(ValueError, match="credential-free"):
-        sync_project_versions(client, 3, "https://user@jira.example.invalid/", "PRJ", [{}])
+        sync_project_versions(
+            client,
+            3,
+            "https://user@jira.example.invalid/",
+            "PRJ",
+            [{"projectId": 78, "id": "1", "name": "v", "released": False, "archived": False}],
+        )
 
 
 def test_version_assignments_require_positive_unrestricted_search_and_pagination():
