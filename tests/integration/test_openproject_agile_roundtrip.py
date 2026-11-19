@@ -546,6 +546,79 @@ def test_migrated_project_allows_native_work_package_creation(rails):
     assert query(f"({types}).count") == 0
 
 
+def test_task_origins_bind_to_the_native_work_package_without_comment_data(native_sprint_projects):
+    from src.application.components.simpletasks_migration import _checklist_row
+    from src.infrastructure.jira.sidebar_tasks import issue_task_records
+    from src.infrastructure.openproject.tasklist_origins import apply_tasklists
+
+    query, ((pid, wid, _), _) = native_sprint_projects
+    client = Mock()
+    client.execute_large_query_to_json_file.side_effect = lambda expression, **kwargs: query(f"({expression}).as_json")
+    query(f"""
+       wp = WorkPackage.find({wid})
+       f = WorkPackageCustomField.find_or_create_by!(name:"J2O Origin Key") {{ |x| x.field_format="string" }}
+       wp.custom_values.find_or_initialize_by(custom_field:f).update!(value:"EX-1")
+       wp.update_columns(description:"Before")
+    """)
+    info = {"key": "EX-1", "id": "90", "fields": {"project": {"id": "80", "projectTypeKey": "software"}}}
+    source = {
+        "issue": "EX-1",
+        "issueId": 90,
+        "projectId": 80,
+        "checked": False,
+        "manuallyCreated": False,
+        "mandatory": True,
+    }
+    tasks = issue_task_records(
+        info,
+        [{"id": "29", "title": "open task", "checked": False}],
+        [
+            {**source, "id": 29, "ordinal": 2, "text": "open task", "lastChangedBy": "source-actor"},
+            {**source, "id": 30, "ordinal": 1, "text": "restricted comment"},
+        ],
+        2,
+    )
+    project = {"project": pid, "base": "https://jira.example.org", "source_id": "80", "key": "EX"}
+    row = {
+        "wp": wid,
+        "id": "90",
+        "key": "EX-1",
+        "tasks": tasks,
+        "markdown": "\n".join(_checklist_row(t) for t in tasks),
+    }
+
+    def run(*rows):
+        return apply_tasklists(client, {**project, "rows": list(rows)})
+
+    assert run(row) == {"updated": 1, "tasks": 1}
+    assert run(row) == {"updated": 0, "tasks": 1}
+    observed = query(f"""
+        require "rack/mock"
+        token=Token::API.create!(user:User.admin.active.first!);auth=ActionController::HttpAuthentication::Basic.encode_credentials("apikey",token.plain_value)
+        get=lambda do |path|
+          r=Rack::MockRequest.new(Rails.application).get("/api/v3/"+path,{{"HTTP_HOST"=>"localhost","HTTP_ACCEPT"=>"application/hal+json","HTTP_AUTHORIZATION"=>auth}})
+          raise "API error" unless r.status==200;JSON.parse(r.body)
+        end
+        field=ProjectCustomField.where(name:"Jira tasklist origins").sole
+        value=get.call("projects/{pid}").fetch("customField"+field.id.to_s)
+        [get.call("work_packages/{wid}").fetch("description").fetch("raw"),
+         JSON.parse(value.is_a?(Hash) ? value.fetch("raw") : value).fetch("issues").fetch("90"),field.admin_only?]
+    """)
+    description, entry, admin_only = observed
+    assert "restricted comment" not in str(observed)
+    assert "Before" in description
+    assert "- [ ] ` open task ` (mandatory)" in description
+    assert entry["tasks"] == tasks
+    assert entry["wp"] == wid
+    assert admin_only
+    with pytest.raises(AssertionError, match="Unexpected tasklist work package"):
+        run({**row, "key": "EX-99"})
+    query(f'WorkPackage.find({wid}).update_columns(description:"Changed by its owner")')
+    with pytest.raises(AssertionError, match="Previously imported checklist is missing"):
+        run(row)
+    assert query(f"WorkPackage.find({wid}).description") == "Changed by its owner"
+
+
 def test_all_fix_versions_survive_native_readback_and_retry(rails):
     client, query = rails
     seed = query("""

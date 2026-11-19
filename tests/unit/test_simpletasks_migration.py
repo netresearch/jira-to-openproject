@@ -1,70 +1,15 @@
 # Copyright (c) 2024-2026 Netresearch DTT GmbH
 # SPDX-License-Identifier: MIT
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
+from src import config
 from src.application.components.simpletasks_migration import SimpleTasksMigration
-
-
-class DummyJira:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self._payload = payload
-
-    def get_issue_property(self, key: str, prop: str):
-        return self._payload.get(key)
-
-
-class DummyOp:
-    def __init__(self) -> None:
-        self.calls: list[tuple[int, str]] = []
-
-    def set_checklist_section(self, wp_id: int, md: str):
-        self.calls.append((wp_id, md))
-        return True
-
-
-@pytest.fixture(autouse=True)
-def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
-    from src import config
-    from src import mappings as pkg
-
-    class DummyMappings:
-        def __init__(self) -> None:
-            self._m = {
-                "work_package": {
-                    "90901": {"openproject_id": 101, "jira_key": "J-1"},
-                    "J-2": {"openproject_id": 102},
-                },
-            }
-
-        def get_mapping(self, name: str):
-            return self._m.get(name, {})
-
-    # Patch both the Mappings class and the config.mappings instance
-    monkeypatch.setattr(pkg, "Mappings", DummyMappings)
-    monkeypatch.setattr(config, "mappings", DummyMappings())
-
-
-def test_simpletasks_migration_renders_markdown_and_updates():
-    jira = DummyJira(
-        {
-            "J-1": {"tasks": [{"title": "A", "checked": True}, {"title": "B", "labels": ["x", "y"]}]},
-            "J-2": {"value": [{"text": "C", "dueDate": "2025-09-01"}]},
-        },
-    )
-    op = DummyOp()
-
-    mig = SimpleTasksMigration(jira_client=jira, op_client=op)  # type: ignore[arg-type]
-    ex = mig._extract()
-    mp = mig._map(ex)
-    ld = mig._load(mp)
-
-    assert ld.success is True
-    assert ld.updated == 2
-    # Verify markdown shape
-    assert any("- [x] A" in md for _, md in op.calls)
-    assert any("labels: x, y" in md for _, md in op.calls)
-    assert any("due:" in md for _, md in op.calls)
+from src.infrastructure.jira.sidebar_tasks import issue_task_records
+from src.migration import _invoke_component
 
 
 def _render(identifier="42", key="J-1", checked=True):
@@ -77,25 +22,6 @@ def _render(identifier="42", key="J-1", checked=True):
 
 def _raw(source, rendered):
     return {"key": "J-1", "fields": {"description": source}, "renderedFields": {"description": rendered}}
-
-
-def test_migrates_only_description_macros_when_property_is_missing():
-    from unittest.mock import Mock
-
-    jira = Mock()
-    jira.get_custom_fields.return_value = []
-    op = DummyOp()
-    jira.get_issue_property.side_effect = [None, []]
-    source = "{task:id=42}![image](somewhere) `sample`\nnext{task}{task:id=57}Last{task}"
-    raw = _raw(source, _render("57", checked=False) + _render())
-    raw["renderedFields"]["comment"] = _render("63")
-    raw["fields"]["comment"] = "{task:id=63}unknown audience{task}"
-    jira.jira.issue.return_value.raw = raw
-    result = SimpleTasksMigration(jira_client=jira, op_client=op).run()
-    assert result.success
-    assert result.updated == 1
-    jira.jira.issue.assert_called_once_with("J-1", fields="description", expand="renderedFields")
-    assert op.calls == [(101, "- [x] `` ![image](somewhere) `sample` next ``\n- [ ] ` Last `")]
 
 
 @pytest.mark.parametrize(
@@ -111,15 +37,10 @@ def test_migrates_only_description_macros_when_property_is_missing():
     ],
 )
 def test_inconsistent_description_tasks_abort_before_writing(source, rendered):
-    from unittest.mock import Mock
+    from src.infrastructure.jira.description_tasks import description_tasks
 
-    jira = Mock()
-    jira.get_custom_fields.return_value = []
-    op = DummyOp()
-    jira.get_issue_property.return_value = None
-    jira.jira.issue.return_value.raw = _raw(source, rendered)
-    assert not SimpleTasksMigration(jira_client=jira, op_client=op).run().success
-    assert op.calls == []
+    with pytest.raises(ValueError):
+        description_tasks("J-1", _raw(source, rendered))
 
 
 def test_missing_description_tasks_and_issue_identity():
@@ -177,45 +98,95 @@ def test_checklist_writer_requires_a_verified_result():
     assert not service.set_checklist_section(12, "example")
 
 
-def _plugin_jira(project_type="software"):
-    from unittest.mock import Mock
-
-    jira = Mock()
-    jira.get_custom_fields.return_value = [
-        {"id": "customfield_42", "schema": {"custom": "com.topshelfsolution.simpletasklists:all-tasks-count-cftype"}},
-    ]
-    jira.get_issue_property.side_effect = [None, []]
+def _project_issue():
     raw = _raw("{task:id=42}inline{task}", _render())
-    raw["id"] = "90"
-    raw["fields"].update({"project": {"id": "7", "projectTypeKey": project_type}, "customfield_42": "3.0"})
-    jira.jira.issue.return_value.raw = raw
-    base = {"issue": "J-1", "issueId": 90, "projectId": 7, "checked": True, "manuallyCreated": False}
-    jira.get_issue_simpletasks.return_value = [
-        {**base, "id": 42, "text": "inline"},
-        {**base, "id": 43, "text": "direct task", "checked": False, "manuallyCreated": True},
-        {**base, "id": 44, "text": "other audience"},
+    raw.update(id="90")
+    raw["fields"].update({"project": {"id": "7", "key": "J", "projectTypeKey": "software"}, "customfield_42": "3.0"})
+    return raw
+
+
+def _rows():
+    common = {"issue": "J-1", "issueId": 90, "projectId": 7, "checked": True, "manuallyCreated": False}
+    return [
+        {**common, "id": 42, "text": "inline", "ordinal": 4, "mandatory": True, "lastChangedBy": "example"},
+        {**common, "id": 43, "text": "direct task", "ordinal": 2, "manuallyCreated": True, "checked": False},
+        {**common, "id": 44, "text": "restricted comment", "ordinal": 3},
     ]
-    return jira
 
 
-def test_sidebar_include_only_direct_tasks_and_report_unknown_audiences():
-    jira = _plugin_jira()
-    op = DummyOp()
-    result = SimpleTasksMigration(jira_client=jira, op_client=op).run()
-    jira.get_issue_simpletasks.assert_called_once_with("J-1")
+@pytest.fixture
+def stage(monkeypatch):
+    jira = Mock(base_url="https://jira.example.invalid")
+    jira.get_custom_fields.return_value = [
+        {"id": "customfield_42", "schema": {"custom": "com.topshelfsolution.simpletasklists:all-tasks-count-cftype"}}
+    ]
+    raw = _project_issue()
+    issue = SimpleNamespace(key="J-1", id="90", raw=raw, fields=raw["fields"])
+    jira.jira.search_issues.side_effect = lambda jql, **kwargs: [issue] if kwargs["startAt"] == 0 else []
+    jira.jira.issue.return_value.raw = raw
+    jira.get_issue_property.return_value = {"tasks": [{"id": 44, "text": "sensitive property"}]}
+    jira.get_issue_simpletasks.return_value = _rows()
+    target = Mock(return_value={"updated": 1, "tasks": 2})
+    monkeypatch.setattr("src.application.components.simpletasks_migration.apply_tasklists", target)
+    monkeypatch.setitem(config.jira_config, "projects", ["J"])
+    migration = SimpleTasksMigration(jira_client=jira, op_client=Mock())
+    migration.mappings = Mock()
+    migration.mappings.get_mapping.side_effect = {
+        "work_package": {"90": {"jira_key": "J-1", "openproject_id": 101}, "OTHER-2": 44},
+        "project": {"J": 77},
+    }.get
+    return migration, jira, target
+
+
+def test_regular_stage_preserves_the_confirmed_task_order_and_withholds_comment_and_property(stage):
+    migration, jira, target = stage
+    result = _invoke_component("simpletasks", migration)
     assert result.success
+    assert result.updated == 1
+    assert result.details["tasks"] == 2
     assert result.details["unverified_task_audience"] == 1
-    assert op.calls == [(101, "- [x] ` inline `\n- [ ] ` direct task `")]
+    assert jira.jira.search_issues.call_args.args[0] == 'project = "J" AND level IS EMPTY ORDER BY id'
+    [row] = target.call_args.args[1]["rows"]
+    assert row["wp"] == 101
+    assert [t["id"] for t in row["tasks"]] == ["43", "42"]
+    assert row["tasks"][1]["lastChangedBy"] == "example"
+    assert row["markdown"] == "- [ ] ` direct task `\n- [x] ` inline ` (mandatory)"
+    assert "sensitive" not in str(row)
+    assert "restricted" not in str(row)
 
 
-def test_service_desk_sidebar_audience_remains_unverified():
-    jira = _plugin_jira("service_desk")
-    op = DummyOp()
-    result = SimpleTasksMigration(jira_client=jira, op_client=op).run()
-    jira.get_issue_simpletasks.assert_not_called()
+def test_property_cannot_publish_task_content_or_modify_confirmed_labels(stage):
+    migration, jira, target = stage
+    raw = jira.jira.issue.return_value.raw
+    raw["fields"].pop("customfield_42")
+    jira.get_issue_property.return_value = [{"id": 42, "text": "private source body"}]
+    result = migration.run()
     assert result.success
-    assert result.details["unverified_task_audience"] == 2
-    assert op.calls == [(101, "- [x] ` inline `")]
+    [row] = target.call_args.args[1]["rows"]
+    assert row["markdown"] == "- [x] ` inline `"
+    assert "private source body" not in str(row)
+
+
+def test_ordinary_scope_requires_empty_level_and_excludes_customer_projects(stage):
+    migration, jira, target = stage
+    jira.jira.issue.return_value.raw["fields"]["security"] = {"id": "10"}
+    result = migration.run()
+    assert result.success
+    assert result.details["unconfirmed_issues"] == 1
+    target.assert_not_called()
+    del jira.jira.issue.return_value.raw["fields"]["security"]
+    jira.jira.issue.return_value.raw["fields"]["project"]["projectTypeKey"] = "service_desk"
+    assert migration.run().details["unconfirmed_issues"] == 1
+    target.assert_not_called()
+    jira.get_issue_property.assert_not_called()
+
+
+@pytest.mark.parametrize("count", ["NaN", "1.2", "-1", "4"])
+def test_source_mismatch_aborts_before_first_write(stage, count):
+    migration, jira, target = stage
+    jira.jira.issue.return_value.raw["fields"]["customfield_42"] = count
+    assert not migration.run().success
+    target.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -234,27 +205,7 @@ def test_service_desk_sidebar_audience_remains_unverified():
     ],
 )
 def test_inconsistent_sidebar_identity_aborts_the_write(index, change):
-    jira = _plugin_jira()
-    jira.get_issue_simpletasks.return_value[index].update(change)
-    op = DummyOp()
-    assert not SimpleTasksMigration(jira_client=jira, op_client=op).run().success
-    assert op.calls == []
-
-
-@pytest.mark.parametrize("count", ["NaN", "1.2", "-1", "4"])
-def test_invalid_or_inconsistent_source_task_count_aborts(count):
-    jira = _plugin_jira()
-    jira.jira.issue.return_value.raw["fields"]["customfield_42"] = count
-    op = DummyOp()
-    assert not SimpleTasksMigration(jira_client=jira, op_client=op).run().success
-    assert op.calls == []
-
-
-def test_count_field_out_of_context_keeps_verified_description_tasks():
-    jira = _plugin_jira()
-    del jira.jira.issue.return_value.raw["fields"]["customfield_42"]
-    op = DummyOp()
-    result = SimpleTasksMigration(jira_client=jira, op_client=op).run()
-    assert result.success
-    jira.get_issue_simpletasks.assert_not_called()
-    assert op.calls == [(101, "- [x] ` inline `")]
+    with pytest.raises((ValueError, KeyError)):
+        rows = _rows()
+        rows[index].update(change)
+        issue_task_records(_project_issue(), [{"id": "42", "title": "inline", "checked": True}], rows, 3)
