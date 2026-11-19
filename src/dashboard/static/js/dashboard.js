@@ -124,6 +124,15 @@ function renderProgressBar(data, phases) {
         done = data.processed_entities;
         description = number.format(done) + ' of ' + number.format(total) + ' entities processed';
     }
+    const counts = data.verified_counts ?? {};
+    const selected = counts[data.current_component + ' · Jira issues selected for worklog reads'];
+    const checked = counts[data.current_component + ' · Jira issues with worklog IDs checked'];
+    if (data.status === 'running' && Number.isInteger(selected) && selected > 0 &&
+        Number.isInteger(checked) && checked >= 0 && checked <= selected) {
+        total = selected;
+        done = checked;
+        description = number.format(done) + ' of ' + number.format(total) + ' Jira issues checked for worklogs';
+    }
     element('progress-row').hidden = total === 0;
     if (!total) return;
     const bar = element('progress-bar');

@@ -16,7 +16,7 @@ import json
 import os
 import time
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
@@ -158,6 +158,7 @@ class TimeEntryMigrator:
 
         # Migration mappings
         self._worklog_receipts = ScopedReceipts([])
+        self.on_worklog_read: Callable[[int, int, bool], None] | None = None
         self._failed_worklog_issues: set[str] = set()
         self._tempo_read_failed = False
         self._combined_tempo = 0
@@ -632,6 +633,10 @@ class TimeEntryMigrator:
                 self.activity_mapping = {}
                 self.default_activity_id = None
 
+    def _report_worklog_reads(self, *, finished: bool = False) -> None:
+        if self.on_worklog_read is not None:
+            self.on_worklog_read(len(self._worklog_receipts.inventory), len(self._worklog_receipts.scope), finished)
+
     def extract_jira_work_logs_for_issues(
         self,
         issue_keys: list[str],
@@ -655,6 +660,7 @@ class TimeEntryMigrator:
         start_time = datetime.now(tz=UTC)
 
         self._worklog_receipts = ScopedReceipts(issue_keys)
+        self._report_worklog_reads()
         self._combined_tempo = 0
         self._expected_attribute_origins.clear()
         self._verified_attribute_origins.clear()
@@ -682,6 +688,7 @@ class TimeEntryMigrator:
 
                 if isinstance(work_logs, list):
                     self._worklog_receipts.observe(issue_key, [row.get("id") for row in work_logs])
+                    self._report_worklog_reads()
 
             except Exception as e:
                 self._failed_worklog_issues.add(issue_key)
@@ -690,6 +697,7 @@ class TimeEntryMigrator:
                 self.migration_results["errors"].append(error_msg)
                 continue
 
+        self._report_worklog_reads(finished=True)
         self.extracted_work_logs = extracted_logs
         self.migration_results["jira_work_logs_extracted"] = total_logs
         self.migration_results["total_work_logs_found"] += total_logs

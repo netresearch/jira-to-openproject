@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from datetime import UTC, datetime
 from logging import getLogger
-from time import sleep
+from time import monotonic, sleep
 from typing import Any
 from uuid import uuid4
 
@@ -89,6 +89,7 @@ class MigrationRunProgress:
         self.snapshot: dict[str, Any] = {}
         self.phases: list[dict[str, str]] = []
         self.active: dict[str, str] | None = None
+        self._last_worklog_publish = float("-inf")
         self._observations: dict[str, dict[str, dict[str, int]]] = {}
 
     def start(self, *, dry_run: bool) -> None:
@@ -124,12 +125,26 @@ class MigrationRunProgress:
         """Mark the requested attempt active before calling its factory."""
         if self.path is not None:
             self.active = self.phases[index]
+            self._last_worklog_publish = float("-inf")
             self.active.update(status="running", started_at=datetime.now(UTC).isoformat())
             self.snapshot["current_component"] = self.active["name"]
             component = self.active["name"].partition(" (attempt ")[0]
             for label in _COMPARISON_LABELS.get(component, {}).values():
                 self._observations.pop(label, None)
             self._publish_comparisons()
+            self._publish()
+
+    def worklog_reads(self, read: int, total: int, finished: bool) -> None:
+        """Show source inventory progress while the native target comparison is still pending."""
+        if self.active is None or self.dry_run:
+            return
+        phase = self.active["name"]
+        counts = self.snapshot["verified_counts"]
+        counts[f"{phase} · Jira issues selected for worklog reads"] = total
+        counts[f"{phase} · Jira issues with worklog IDs checked"] = read
+        now = monotonic()
+        if finished or now - self._last_worklog_publish >= 1:
+            self._last_worklog_publish = now
             self._publish()
 
     def end_component(self, name: str, result: ComponentResult, status: str) -> None:

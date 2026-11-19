@@ -99,15 +99,27 @@ def dump_page(profile: Path, url: str, ready: str) -> str:
                 proc.kill()
 
 
-def test_published_values_and_system_memory_are_displayed(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("active_component", "expected_progress"),
+    [(None, "1 of 1 phases completed"), ("time_entries", "3 of 8 Jira issues checked for worklogs")],
+)
+def test_published_values_and_system_memory_are_displayed(
+    tmp_path: Path, active_component: str | None, expected_progress: str
+) -> None:
     assets = DASHBOARD
     progress = {
         "migration_id": "test-run",
-        "status": "pending",
+        "status": "running" if active_component else "pending",
+        "current_component": active_component,
         "elapsed_seconds": 380,
         "phases": [{"name": "Work packages", "status": "completed"}],
         "project_comparisons": {"Project A": {"Attachments": {"source": 3, "target": 2}}},
-        "verified_counts": {"Source issues": 12, "Rejected files": 0},
+        "verified_counts": {
+            "Source issues": 12,
+            "Rejected files": 0,
+            "time_entries · Jira issues selected for worklog reads": 8,
+            "time_entries · Jira issues with worklog IDs checked": 3,
+        },
         "comparison_counts": {"Attachments": {"source": 10, "target": 0}, "Comments": {"source": 13}},
         "pending_checks": ["Verify comment permissions"],
         "memory_usage_mb": 48,
@@ -134,7 +146,7 @@ def test_published_values_and_system_memory_are_displayed(tmp_path: Path) -> Non
     assert '<th scope="row">Comments</th><td>13</td><td class="unmeasured">Not checked</td>' in dom
     assert '<option value="Project A">Project A</option>' in dom
     assert "<li>Verify comment permissions</li>" in dom
-    assert 'aria-valuetext="1 of 1 phases completed"' in dom
+    assert f'aria-valuetext="{expected_progress}"' in dom
 
 
 def test_template_asset_fingerprints_match_packaged_files() -> None:
