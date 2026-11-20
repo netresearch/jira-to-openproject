@@ -31,8 +31,9 @@ def test_live_invocation_selects_only_its_project(monkeypatch):
 
 @pytest.mark.usefixtures("no_filter")
 def test_cli_value_wins_over_both_config_keys(monkeypatch):
-    monkeypatch.setitem(config.migration_config, "jira_project_filter", ["MIG"])
     apply_cli_project_filter(monkeypatch, "cli, OTHER ,cli")
+    # Set both configuration keys after the CLI helper, which may clear them.
+    monkeypatch.setitem(config.migration_config, "jira_project_filter", ["MIG"])
     monkeypatch.setitem(config.jira_config, "projects", ["YAML"])
     assert config.selected_jira_projects() == ["CLI", "OTHER"]
 

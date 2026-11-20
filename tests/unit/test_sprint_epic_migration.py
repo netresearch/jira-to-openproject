@@ -190,3 +190,13 @@ def test_same_named_sprints_without_versions_keep_both_ids(migration):
     assert result.details["sprint_history_updates"] == 1
     history = mig.op_client.bulk_set_wp_custom_field_values.call_args.args[0][0]["value"]
     assert json.loads(history) == [{"id": "21", "name": "Sprint, one"}, {"id": "22", "name": "Sprint, one"}]
+
+
+def test_cached_keys_of_unselected_projects_are_not_read(migration, monkeypatch):
+    mig, mappings = migration
+    mappings["work_package"]["OTHER-1"] = 30
+    monkeypatch.setattr("src.config.selected_jira_projects", lambda: ["DEMO"])
+    mig.run_with_change_detection("sprint_epic")
+    read = [key for call in mig.jira_client.batch_get_issues.call_args_list for key in call.args[0]]
+    assert "OTHER-1" not in read
+    assert {"DEMO-1", "DEMO-2"} <= set(read)

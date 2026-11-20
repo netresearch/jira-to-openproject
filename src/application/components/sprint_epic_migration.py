@@ -74,7 +74,10 @@ class SprintEpicMigration(BaseMigration):
                     success=False, failed=1, message=f"Could not read work-package provenance: {exc}"
                 )
             keys = list(mappings)
-        self._work_package_mapping = mappings
+        self._work_package_mapping = mappings  # full mapping: parents may sit in other projects
+        selected = set(config.selected_jira_projects())
+        if selected:
+            keys = [key for key in keys if str(key).rsplit("-", 1)[0].upper() in selected]
         if not keys:
             return ComponentResult(
                 success=False, failed=1, message="No mapped work packages. Run work_packages_skeleton first."
