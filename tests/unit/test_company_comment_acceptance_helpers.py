@@ -5,12 +5,16 @@
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from src.application.components.admin_scheme_migration import ROLE_NAME_MAPPING
 from tests.integration import company_comment_load as load
+from tests.integration import company_comment_sample as sample
 
 pytestmark = pytest.mark.unit
 
@@ -77,3 +81,45 @@ def test_only_administrators_and_baseline_roles_grant_browsing():
         row["holder"]["parameter"] for row in admin.payload["permissions"] if row["permission"] == "BROWSE_PROJECTS"
     }
     assert browse == {"1", "2"}
+
+
+def test_fixture_replaces_a_readable_file_with_an_owner_only_one(tmp_path: Path):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    output = private / "fixture.json"
+    output.write_text("old")
+    output.chmod(0o644)
+    sample.write_private(sample.private_output(output), {"cases": {}})
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert json.loads(output.read_text()) == {"cases": {}}
+    assert sorted(path.name for path in private.iterdir()) == ["fixture.json"]
+
+
+def test_fixture_replaces_a_symlink_without_writing_its_target(tmp_path: Path):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    target = tmp_path / "elsewhere.json"
+    target.write_text("keep")
+    (private / "fixture.json").symlink_to(target)
+    sample.write_private(private / "fixture.json", {})
+    assert target.read_text() == "keep"
+    assert not (private / "fixture.json").is_symlink()
+
+
+def test_fixture_refuses_a_directory_others_can_read(tmp_path: Path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o755)
+    with pytest.raises(SystemExit, match="only you can access"):
+        sample.private_output(shared / "fixture.json")
+
+
+def test_fixture_creates_a_missing_directory_owner_only(tmp_path: Path):
+    output = tmp_path / "new" / "fixture.json"
+    assert sample.private_output(output) == output
+    assert os.stat(output.parent).st_mode & 0o777 == 0o700
+
+
+def test_fixture_refuses_the_checkout():
+    with pytest.raises(SystemExit, match="outside the checkout"):
+        sample.private_output(sample.CHECKOUT / "var" / "fixture.json")

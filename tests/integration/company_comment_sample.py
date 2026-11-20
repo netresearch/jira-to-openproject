@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -128,13 +129,28 @@ def describe(jira: ReadOnlyJira, key: str) -> dict:
 
 
 def private_output(path: Path) -> Path:
-    """Refuse destinations inside the checkout and create the file owner-only."""
+    """Refuse destinations inside the checkout or in a directory that others can access."""
     path = path.absolute()
     if path.resolve().is_relative_to(CHECKOUT):
         msg = "Write the company fixture outside the checkout"
         raise SystemExit(msg)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.parent.stat().st_mode & 0o077:
+        msg = f"Write the company fixture to a directory only you can access (chmod 700 {path.parent})"
+        raise SystemExit(msg)
     return path
+
+
+def write_private(path: Path, value: object) -> None:
+    """Replace the file atomically with a new owner-only file, whatever mode an earlier file had."""
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -174,9 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         if classify({"fields": {"security": data["security"]}}, data["comments"]) != case:
             sys.stderr.write(f"Pinned issue does not represent the {case} case\n")
             return 1
-    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(fixture, stream, ensure_ascii=False, indent=2)
+    write_private(output, fixture)
     summary = {case: [data["project"], len(data["comments"])] for case, data in fixture["cases"].items()}
     sys.stdout.write(json.dumps({"scanned_issues": scanned, "cases": summary}) + "\n")
     return 0
