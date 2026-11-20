@@ -64,7 +64,9 @@ input_data.fetch('rows').each do |row|
     CustomFieldsProject.find_or_create_by!(custom_field: cf, project_id: wp.project_id)
     if row.fetch('value').nil?
       wp.custom_values.where(custom_field: cf).destroy_all
-      raise 'Field history removal failed' if wp.custom_values.where(custom_field: cf).exists?
+      copies = Journal::CustomizableJournal.where(journal_id: wp.journals.select(:id), custom_field_id: cf.id)
+      copies.delete_all
+      raise 'Field history removal failed' if wp.custom_values.where(custom_field: cf).exists? || copies.exists?
       cleared += 1
       next
     end
@@ -203,15 +205,16 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
                 continue
             rows.append({"wp": wp_id, "id": str(issue.id), "value": canonical_history(str(issue.id), events)})
         # A mapped issue the unrestricted search no longer returns may have gained a security level: clear its value.
-        rows.extend(
-            self._clear_row(wp_id, sid) for key, (wp_id, sid) in targets.items() if key not in seen and sid is not None
-        )
+        rows.extend(self._clear_row(wp_id, sid) for key, (wp_id, sid) in targets.items() if key not in seen)
         return rows, len(seen)
 
     @staticmethod
     def _clear_row(wp_id: int, issue_id: object) -> dict:
-        """Request removal of a stored value whose issue is no longer audience-safe."""
-        return {"wp": wp_id, "id": str(issue_id), "value": None}
+        """Request removal of a stored value whose issue is no longer audience-safe.
+
+        Without a known Jira issue ID the target's own stored J2O Origin ID confirms it at write time.
+        """
+        return {"wp": wp_id, "id": None if issue_id is None else str(issue_id), "value": None}
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         counts: Counter[str] = Counter(dict.fromkeys(_COUNTS, 0))
@@ -267,6 +270,8 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         for row in rows:
             if row["value"] is None and row["wp"] not in stored:
                 continue  # nothing stored, nothing to clear
+            if row["id"] is None and len(origins.get(row["wp"], ())) == 1:
+                row = {**row, "id": next(iter(origins[row["wp"]]))}
             if origins.get(row["wp"]) != {row["id"]} or row["wp"] not in in_project:
                 local["target_unconfirmed"] += 1
             elif stored.get(row["wp"]) == row["value"]:

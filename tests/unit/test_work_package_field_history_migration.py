@@ -148,7 +148,7 @@ def test_audience_tagged_event_is_withheld(migration):
 
 
 def test_audience_tagged_item_is_withheld(migration):
-    tagged = {**_SAFE, "field": "WorklogTimeSpent", "toString": "3h", "visibility": {"type": "role", "value": "Admins"}}
+    tagged = {**_SAFE, "field": "status", "toString": "Done", "visibility": {"type": "role", "value": "Admins"}}
     run(migration, source(1, [history(5, _SAFE, tagged)]))
     assert [c["field"] for c in stored(migration, 1)["events"][0]["changes"]] == ["summary"]
 
@@ -174,12 +174,13 @@ def test_repeat_run_writes_nothing(migration):
     assert result.details["issues_written"] == 0
 
 
-def test_worklog_items_stay_out_of_the_project_value(migration):
+def test_events_touching_a_worklog_stay_out_of_the_project_value(migration):
     worklog = {**_SAFE, "field": "WorklogId", "toString": "9001"}
-    spent = {**_SAFE, "field": "WorklogTimeSpent", "toString": "3h"}
-    result = run(migration, source(1, [history(5, _SAFE, worklog, spent)]))
-    assert [c["field"] for c in stored(migration, 1)["events"][0]["changes"]] == ["summary"]
-    assert result.details["withheld_changes"] == 2
+    total = {**_SAFE, "field": "timespent", "toString": "10800"}
+    by_id = {**_SAFE, "field": "Worklog Time Spent", "fieldId": "WorklogTimeSpent", "toString": "3h"}
+    result = run(migration, source(1, [history(5, _SAFE), history(6, total, worklog), history(7, total, by_id)]))
+    assert [e["id"] for e in stored(migration, 1)["events"]] == ["5"]
+    assert result.details["withheld_changes"] == 4
 
 
 def test_worklog_items_stay_in_the_operator_archive():
@@ -196,6 +197,17 @@ def test_value_is_cleared_when_the_issue_gains_a_security_level(migration):
     run(migration, source(1, [history(5, _SAFE)]))
     assert 11 in migration.op_client.values
     result = run(migration)  # the unrestricted search no longer returns APP-1
+    assert 11 not in migration.op_client.values
+    assert result.details["cleared"] == 1
+
+
+def test_value_is_cleared_for_a_mapping_without_issue_id(migration):
+    migration.mappings.get_mapping.side_effect = {
+        "project": {"APP": 7},
+        "work_package": {"APP-1": {"jira_key": "APP-1", "openproject_id": 11}},
+    }.get
+    migration.op_client.values[11] = "stale"
+    result = run(migration)
     assert 11 not in migration.op_client.values
     assert result.details["cleared"] == 1
 
