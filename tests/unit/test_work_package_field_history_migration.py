@@ -72,9 +72,13 @@ class FakeOpenProject:
         if self.fail_write:
             return {"status": "error", "data": None}
         self.writes.append(data["rows"])
+        cleared = 0
         for row in data["rows"]:
-            self.values[row["wp"]] = row["value"]
-        return {"status": "success", "data": {"updated": len(data["rows"])}}
+            if row["value"] is None:
+                cleared += self.values.pop(row["wp"], None) is not None
+            else:
+                self.values[row["wp"]] = row["value"]
+        return {"status": "success", "data": {"updated": len(data["rows"]) - cleared, "cleared": cleared}}
 
 
 @pytest.fixture
@@ -168,6 +172,40 @@ def test_repeat_run_writes_nothing(migration):
     assert len(migration.op_client.writes) == 1
     assert result.details["unchanged"] == 1
     assert result.details["issues_written"] == 0
+
+
+def test_worklog_items_stay_out_of_the_project_value(migration):
+    worklog = {**_SAFE, "field": "WorklogId", "toString": "9001"}
+    spent = {**_SAFE, "field": "WorklogTimeSpent", "toString": "3h"}
+    result = run(migration, source(1, [history(5, _SAFE, worklog, spent)]))
+    assert [c["field"] for c in stored(migration, 1)["events"][0]["changes"]] == ["summary"]
+    assert result.details["withheld_changes"] == 2
+
+
+def test_worklog_items_stay_in_the_operator_archive():
+    from src.infrastructure.jira.field_history import kept_events
+
+    worklog = {**_SAFE, "field": "WorklogId", "toString": "9001"}
+    assert [c["field"] for c in kept_events([history(5, _SAFE, worklog)], set())[0]["changes"]] == [
+        "summary",
+        "WorklogId",
+    ]
+
+
+def test_value_is_cleared_when_the_issue_gains_a_security_level(migration):
+    run(migration, source(1, [history(5, _SAFE)]))
+    assert 11 in migration.op_client.values
+    result = run(migration)  # the unrestricted search no longer returns APP-1
+    assert 11 not in migration.op_client.values
+    assert result.details["cleared"] == 1
+
+
+def test_value_is_cleared_when_no_change_is_kept_any_more(migration):
+    run(migration, source(1, [history(5, _SAFE)]))
+    comment = {**_SAFE, "field": "Comment", "toString": "x"}
+    result = run(migration, source(1, [history(5, comment)]))
+    assert 11 not in migration.op_client.values
+    assert result.details["cleared"] == 1
 
 
 def test_customer_facing_project_issue_is_skipped(migration):

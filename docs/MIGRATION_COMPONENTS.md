@@ -933,7 +933,7 @@ The stage verifies the target project and each affected work package's origin in
 
 ### WorkPackageFieldHistoryMigration
 
-The default and `full` profiles run `work_package_field_history` directly after `customfields_generic`. It keeps each migrated issue's Jira field changes as structured history in the work-package text custom field **Jira Field Changes (structured history)**. It does not create native OpenProject journals: those cannot keep each change's reader audience (see [ADR-001](adr/ADR-001-two-phase-work-package-migration.md)).
+The default and `full` profiles run `work_package_field_history` directly after `customfields_generic`. It keeps each migrated issue's Jira field changes as structured history in the work-package text custom field **Jira Field Changes (structured history)**. It does not create native OpenProject journals: those cannot keep each change's reader audience (see [ADR-001](adr/ADR-001-two-phase-work-package-migration.md)). Worklog history items (`WorklogId`, `WorklogTimeSpent`) stay out of this value, because a worklog can have its own visibility; the operator archive keeps them. When an issue later gains a security level or keeps no change, a re-run removes its stored value.
 
 The selection is the one `j2o-history` uses (`src/infrastructure/jira/field_history.py`). Recognized built-in fields, supported Agile and Tempo fields and reviewed standard custom fields are kept. Comment changes and every event or item that carries audience or visibility metadata are withheld.
 

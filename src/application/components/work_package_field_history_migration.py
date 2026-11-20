@@ -53,6 +53,7 @@ cf = WorkPackageCustomField.find(input_data.fetch('field'))
 raise 'Wrong field history field' unless cf.name == input_data.fetch('name') && cf.field_format == 'text'
 origin = WorkPackageCustomField.where(name: 'J2O Origin ID').sole
 updated = 0
+cleared = 0
 input_data.fetch('rows').each do |row|
   wp = WorkPackage.find(row.fetch('wp'))
   wp.with_lock do
@@ -61,6 +62,12 @@ input_data.fetch('rows').each do |row|
     owner = wp.respond_to?(:type_variant) ? wp.type_variant.effective_source_for(TypeVariant::FORM_CONFIGURATION) : wp.type
     owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
     CustomFieldsProject.find_or_create_by!(custom_field: cf, project_id: wp.project_id)
+    if row.fetch('value').nil?
+      wp.custom_values.where(custom_field: cf).destroy_all
+      raise 'Field history removal failed' if wp.custom_values.where(custom_field: cf).exists?
+      cleared += 1
+      next
+    end
     cv = wp.custom_values.find_or_initialize_by(custom_field: cf)
     next if cv.persisted? && cv.value == row.fetch('value')
     cv.update!(value: row.fetch('value'))
@@ -69,13 +76,14 @@ input_data.fetch('rows').each do |row|
   end
 end
 puts $j2o_start_marker
-puts JSON.generate({'updated' => updated})
+puts JSON.generate({'updated' => updated, 'cleared' => cleared})
 puts $j2o_end_marker
 """
 
 _COUNTS = (
     "issues_seen",
     "issues_written",
+    "cleared",
     "unchanged",
     "no_kept_changes",
     "incomplete",
@@ -84,6 +92,7 @@ _COUNTS = (
     "unsupported_project_type",
     "target_unconfirmed",
     "failed",
+    "clear_unconfirmed",
     "source_changes",
     "kept_changes",
     "withheld_changes",
@@ -168,6 +177,7 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
             wp_id, expected = targets[issue.key]
             if not permits_unrestricted_result(issue):
                 counts["restricted_skipped"] += 1
+                rows.append(self._clear_row(wp_id, issue.id))
                 continue
             if raw["fields"]["project"].get("projectTypeKey") not in _PROJECT_TYPES:
                 counts["unsupported_project_type"] += 1  # Customer-facing audiences need a separate access check.
@@ -183,15 +193,25 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
             if not complete:
                 counts["incomplete"] += 1
                 continue
-            events = kept_events(page["histories"], fields)
+            events = kept_events(page["histories"], fields, project_visible=True)
             source = sum(len(h["items"]) for h in page["histories"])
             kept = sum(len(event["changes"]) for event in events)
             counts.update(source_changes=source, kept_changes=kept, withheld_changes=source - kept)
             if not events:
                 counts["no_kept_changes"] += 1
+                rows.append(self._clear_row(wp_id, issue.id))
                 continue
             rows.append({"wp": wp_id, "id": str(issue.id), "value": canonical_history(str(issue.id), events)})
+        # A mapped issue the unrestricted search no longer returns may have gained a security level: clear its value.
+        rows.extend(
+            self._clear_row(wp_id, sid) for key, (wp_id, sid) in targets.items() if key not in seen and sid is not None
+        )
         return rows, len(seen)
+
+    @staticmethod
+    def _clear_row(wp_id: int, issue_id: object) -> dict:
+        """Request removal of a stored value whose issue is no longer audience-safe."""
+        return {"wp": wp_id, "id": str(issue_id), "value": None}
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         counts: Counter[str] = Counter(dict.fromkeys(_COUNTS, 0))
@@ -208,7 +228,9 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
                         self._write_batch(field, project["project_id"], list(batch), counts)
                     except Exception:
                         self.logger.exception("Could not write field history for %s", key)
-                        counts["failed"] += len(batch)
+                        clears = sum(row["value"] is None for row in batch)
+                        counts["failed"] += len(batch) - clears
+                        counts["clear_unconfirmed"] += clears
         warnings = [
             f"{counts[name]} mapped work packages skipped: {name}"
             for name in (
@@ -223,7 +245,7 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         for warning in warnings:
             self.logger.warning(warning)
         return ComponentResult(
-            success=not counts["failed"],
+            success=not (counts["failed"] or counts["clear_unconfirmed"]),
             updated=counts["issues_written"],
             failed=counts["failed"],
             details=dict(counts),
@@ -243,6 +265,8 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         local: Counter[str] = Counter()  # Merged only after the batch succeeded; a failure counts each row once.
         changed = []
         for row in rows:
+            if row["value"] is None and row["wp"] not in stored:
+                continue  # nothing stored, nothing to clear
             if origins.get(row["wp"]) != {row["id"]} or row["wp"] not in in_project:
                 local["target_unconfirmed"] += 1
             elif stored.get(row["wp"]) == row["value"]:
@@ -250,11 +274,18 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
             else:
                 changed.append({**row, "project": pid})
         if changed:
-            updated = self._script(_WRITE, {"field": field, "name": FIELD_NAME, "rows": changed}).get("updated")
-            if type(updated) is not int or not 0 <= updated <= len(changed):
+            result = self._script(_WRITE, {"field": field, "name": FIELD_NAME, "rows": changed})
+            updated, cleared = result.get("updated"), result.get("cleared")
+            clears = sum(row["value"] is None for row in changed)
+            if (
+                type(updated) is not int
+                or type(cleared) is not int
+                or not 0 <= updated <= len(changed) - clears
+                or cleared != clears
+            ):
                 msg = "OpenProject returned an invalid field history write count"
                 raise ValueError(msg)
-            local.update(issues_written=updated, unchanged=len(changed) - updated)
+            local.update(issues_written=updated, cleared=cleared, unchanged=len(changed) - clears - updated)
         counts.update(local)
 
     def _script(self, script: str, payload: dict) -> dict:

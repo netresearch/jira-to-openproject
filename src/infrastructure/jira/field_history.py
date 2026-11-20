@@ -17,6 +17,8 @@ from collections import Counter
 from src.infrastructure.jira.comment_audience import has_comment_audience, may_copy_history_item
 
 _CORE_ADDITIONAL_FIELDS = {"WorklogId", "WorklogTimeSpent", "RemoteIssueLink"}
+# A worklog can carry its own visibility; its history items stay in the operator archive only.
+_WORKLOG_FIELDS = {"WorklogId", "WorklogTimeSpent"}
 _SYSTEM_CUSTOM = "com.atlassian.jira.plugin.system.customfieldtypes:"
 _AGILE_CUSTOM = "com.pyxis.greenhopper.jira:"
 _SCHEMA_TYPES = {
@@ -61,7 +63,9 @@ def _synthetic_reference(item: dict) -> bool:
     return item.get("from") is not None or item.get("to") is not None
 
 
-def _keep(item: dict, history: dict, fields: set[tuple[str, str | None]]) -> bool:
+def _keep(item: dict, history: dict, fields: set[tuple[str, str | None]], *, project_visible: bool = False) -> bool:
+    if project_visible and item.get("field") in _WORKLOG_FIELDS:
+        return False
     if "raw" in item or has_comment_audience(history) or has_comment_audience(item):
         return False
     if any(value is not None and type(value) not in (str, int) for value in (item.get(k) for k in _FIELDS)):
@@ -78,12 +82,15 @@ def _keep(item: dict, history: dict, fields: set[tuple[str, str | None]]) -> boo
     return (name, fid) in fields or _synthetic_reference(item)
 
 
-def history_event(history: dict, fields: set[tuple[str, str | None]]) -> dict:
-    """Return one changelog event with only its kept items, each with its original position."""
+def history_event(history: dict, fields: set[tuple[str, str | None]], *, project_visible: bool = False) -> dict:
+    """Return one changelog event with only its kept items, each with its original position.
+
+    ``project_visible`` selects for a value every project member reads: worklog items are dropped.
+    """
     values = [
         {"position": index, **{k: item[k] for k in _FIELDS if k in item}}
         for index, item in enumerate(history["items"])
-        if _keep(item, history, fields)
+        if _keep(item, history, fields, project_visible=project_visible)
     ]
     return {
         "id": str(history["id"]),
@@ -93,9 +100,11 @@ def history_event(history: dict, fields: set[tuple[str, str | None]]) -> dict:
     }
 
 
-def kept_events(histories: list[dict], fields: set[tuple[str, str | None]]) -> list[dict]:
+def kept_events(
+    histories: list[dict], fields: set[tuple[str, str | None]], *, project_visible: bool = False
+) -> list[dict]:
     """Return the events of a changelog that keep at least one change."""
-    events = [history_event(h, fields) for h in histories]
+    events = [history_event(h, fields, project_visible=project_visible) for h in histories]
     return [event for event in events if event["changes"]]
 
 
