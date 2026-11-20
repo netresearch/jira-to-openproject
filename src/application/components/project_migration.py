@@ -1244,7 +1244,15 @@ class ProjectMigration(BaseMigration):
         return created, failed
 
     def _plan_projects(self):
-        by_name = {p["name"].lower(): p for p in self.op_projects if p.get("name")}
+        # Tempo company containers are not Jira projects, even when a Jira project shares the customer's name.
+        containers = {
+            str(company["openproject_id"])
+            for company in (self.company_mapping or {}).values()
+            if isinstance(company, dict) and company.get("openproject_id")
+        }
+        by_name = {
+            p["name"].lower(): p for p in self.op_projects if p.get("name") and str(p.get("id")) not in containers
+        }
         by_identifier = {p["identifier"]: p for p in self.op_projects if p.get("identifier")}
         plans = []
         setup = []
