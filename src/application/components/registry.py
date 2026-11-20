@@ -95,7 +95,6 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     # author/assignee/reporter/watcher fields. Idempotent — re-runs
     # only add what's not already mapped.
     "user_mapping_backfill",
-    "groups",
     # === Metadata: Field Definitions ===
     "custom_fields",
     "priorities",
@@ -108,6 +107,8 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "accounts",
     # === Structure: Projects ===
     "projects",
+    # Groups read the project mapping to build project-role groups.
+    "groups",
     "workflows",
     # === Phase 1: Work Package Skeletons (no content) ===
     "work_packages_skeleton",
