@@ -53,6 +53,11 @@ from src.models import ComponentResult, MigrationError
 
 # Rich console instance imported from base_migration
 
+# Jira's Tempo account field holds an account object. Its values belong in the
+# work package field that the accounts component provisions under this name.
+TEMPO_ACCOUNT_CUSTOM_TYPE = "com.tempoplugin.tempo-accounts:accounts.customfield"
+TEMPO_ACCOUNT_FIELD_NAME = "Tempo Account"
+
 
 _CREATE_FIELD = """
 field = nil
@@ -593,7 +598,29 @@ class CustomFieldMigration(BaseMigration):
     def _field_schema(self, field):
         return field.get("schema") or {"type": field.get("type", ""), "custom": field.get("custom_type", "")}
 
+    def _map_tempo_account_field(self, jira_field, mapping, op_fields_by_name, used_op_names):
+        """Map Jira's Tempo account field onto the shared "Tempo Account" field, never a same-named one."""
+        target = TEMPO_ACCOUNT_FIELD_NAME.lower()
+        op_field = next(
+            (field for field in op_fields_by_name.values() if str(field.get("name", "")).strip().lower() == target),
+            None,
+        )
+        used_op_names.add(target)
+        mapping[jira_field.get("id")] = {
+            "jira_id": jira_field.get("id"),
+            "jira_name": jira_field.get("name", ""),
+            "jira_type": self._field_schema(jira_field).get("type", ""),
+            "jira_custom_type": TEMPO_ACCOUNT_CUSTOM_TYPE,
+            "openproject_id": op_field.get("id") if op_field else None,
+            "openproject_name": op_field.get("name") if op_field else TEMPO_ACCOUNT_FIELD_NAME,
+            "openproject_type": op_field.get("field_format", "string") if op_field else "string",
+            "matched_by": "name" if op_field else "create",
+        }
+        return None if op_field else f"{TEMPO_ACCOUNT_FIELD_NAME} (Format: string)"
+
     def _map_single_field(self, jira_field, mapping, op_fields_by_name, used_op_names):
+        if self._field_schema(jira_field).get("custom") == TEMPO_ACCOUNT_CUSTOM_TYPE:
+            return self._map_tempo_account_field(jira_field, mapping, op_fields_by_name, used_op_names)
         jira_id = jira_field.get("id")
         jira_name = jira_field.get("name", "")
         jira_name_lower = jira_name.lower()

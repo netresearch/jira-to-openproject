@@ -622,6 +622,7 @@ Migrates Tempo accounts to custom field values on projects.
 - Account → Custom field mapping
 - Account categories
 - Project association
+- Work package "Tempo Account" field (string): `custom_fields` maps Jira's Tempo account issue field onto it, and `work_packages_content` writes the account key
 
 **Dependencies**: CompanyMigration, ProjectMigration
 
