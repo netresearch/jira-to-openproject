@@ -273,7 +273,7 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
             if row["id"] is None and len(origins.get(row["wp"], ())) == 1:
                 row = {**row, "id": next(iter(origins[row["wp"]]))}
             if origins.get(row["wp"]) != {row["id"]} or row["wp"] not in in_project:
-                local["target_unconfirmed"] += 1
+                local["clear_unconfirmed" if row["value"] is None else "target_unconfirmed"] += 1
             elif stored.get(row["wp"]) == row["value"]:
                 local["unchanged"] += 1
             else:

@@ -235,6 +235,21 @@ def test_target_with_other_origin_or_project_is_skipped(migration):
     assert result.details["target_unconfirmed"] == 2
 
 
+@pytest.mark.parametrize("moved", ["origin", "project"])
+def test_clear_for_target_with_other_origin_or_project_fails_the_run(migration, moved):
+    migration.op_client.values[11] = "stale"
+    if moved == "origin":
+        migration.op_client.origins[11] = "999"
+    else:
+        migration.op_client.projects[11] = 8
+    result = run(migration)  # the unrestricted search no longer returns APP-1
+    assert not result.success
+    assert result.details["clear_unconfirmed"] == 1
+    assert result.details["target_unconfirmed"] == 0
+    assert migration.op_client.values[11] == "stale"
+    assert migration.op_client.writes == []
+
+
 def test_standard_custom_field_needs_review(migration, monkeypatch):
     from src import config
 
