@@ -59,7 +59,8 @@ begin
       query.add_filter(*desired)
     end
     changed = query.changed?
-    query.save! if created || changed
+    # The Id filter validates its values against what the current user can see.
+    User.execute_as(user) { query.save! } if created || changed
     matches = User.execute_as(user) { query.reload.results.work_packages.pluck(:id).sort }
     raise 'target board membership mismatch' unless matches == ids.sort
     {success: true, id: query.id, created: created, updated: changed || created}

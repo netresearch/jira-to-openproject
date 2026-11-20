@@ -76,6 +76,16 @@ puts $j2o_end_marker
 """
 
 
+# The bulk create helper saves fields without a type; attach them as _CREATE_FIELD does.
+_ATTACH_TO_DEFAULT_TYPES = """
+WorkPackageCustomField.where(id: FIELD_IDS).select(&:is_for_all?).map do |field|
+  owners = field.respond_to?(:type_variants) ? TypeVariant.default_variant : Type.all
+  owners.each { |owner| owner.custom_fields << field unless owner.custom_fields.exists?(field.id) }
+  field.id
+end
+"""
+
+
 @register_entity_types("custom_fields")
 class CustomFieldMigration(BaseMigration):
     """Handles the migration of custom fields from Jira to OpenProject.
@@ -488,6 +498,9 @@ class CustomFieldMigration(BaseMigration):
 
             # Update mapping with created/existing openproject_ids
             self._update_mapping_with_op_ids(created, existing, meta)
+            field_ids = sorted({int(rec["id"]) for rec in [*created, *existing] if rec.get("id")})
+            if field_ids:
+                self.op_client.execute_json_query(_ATTACH_TO_DEFAULT_TYPES.replace("FIELD_IDS", str(field_ids)))
 
             # Record provenance for created/matched custom fields
             self._record_custom_field_provenance()

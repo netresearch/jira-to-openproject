@@ -5,11 +5,15 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.issue_security import permits_unrestricted_result
+from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
+from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 from src.utils.change_aware_runner import ChangeAwareRunner
@@ -299,11 +303,36 @@ class AgileBoardMigration(BaseMigration):
 
     def _board_work_package_ids(self, board_id: int, key: str, targets: dict[str, int]) -> list[int]:
         issue_keys = self.jira_client.get_board_issue_keys(board_id, key)
-        ids = [targets[issue] for issue in issue_keys]
+        unmapped = [issue for issue in issue_keys if issue not in targets]
+        # The skeleton imports only issues Jira confirms have no security level.
+        withheld = self._security_withheld(key, unmapped) if unmapped else set()
+        ids = [targets[issue] for issue in issue_keys if issue not in withheld]
         if len(set(ids)) != len(ids):
             msg = "Distinct board issues map to the same work package"
             raise ValueError(msg)
         return sorted(ids)
+
+    def _security_withheld(self, project_key: str, keys: list[str]) -> set[str]:
+        """Return the given issues that Jira reports with an issue security level."""
+        listed = ", ".join(json.dumps(issue) for issue in sorted(keys))
+        query = f"project = {json.dumps(project_key)} AND key in ({listed}) AND level IS NOT EMPTY ORDER BY id"
+
+        def fetch_page(offset: int, size: int) -> list:
+            return fetch_issue_page_with_retry(
+                self.jira_client,
+                jql=query,
+                start_at=offset,
+                max_results=size,
+                fields="security",
+                expand=None,
+                project_key=project_key,
+            )
+
+        return {
+            str(issue.key)
+            for issue in iter_issue_pages(project_key, fetch_page, 100)
+            if not permits_unrestricted_result(issue)
+        }
 
     def _list_boards(self, selected: set[str] | None) -> list[dict[str, Any]]:
         if selected is None:
