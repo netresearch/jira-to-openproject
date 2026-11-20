@@ -36,9 +36,9 @@ def _private_json(path: Path, value: object) -> None:
         json.dump(value, stream)
 
 
-def _container(project: str) -> str:
+def _container(project: str, compose_file: str) -> str:
     container_id = subprocess.check_output(
-        ["docker", "compose", "-p", project, "ps", "-q", "op"],
+        ["docker", "compose", "-p", project, "-f", compose_file, "ps", "-q", "op"],
         text=True,
         timeout=60,
     ).strip()
@@ -159,7 +159,7 @@ def acceptance():
     stack = json.loads(Path(STACK).read_text())
     state = Path(STACK).parent
     fixture = json.loads(Path(FIXTURE).read_text())
-    container = _container(stack["compose_project"])
+    container = _container(stack["compose_project"], stack["compose_file"])
     admin = JiraAdmin(stack["jira"], stack["ca"], "acceptadmin", (state / "jira-admin-password").read_text().strip())
     loaded_file = state / "loaded.json"
     if not loaded_file.exists():

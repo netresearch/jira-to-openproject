@@ -16,6 +16,7 @@ import pytest
 from src.application.components.admin_scheme_migration import ROLE_NAME_MAPPING
 from tests.integration import company_comment_load as load
 from tests.integration import company_comment_sample as sample
+from tests.integration import test_company_comment_acceptance as acceptance
 
 pytestmark = pytest.mark.unit
 
@@ -151,3 +152,15 @@ def test_down_removes_the_state_of_the_destroyed_stack(tmp_path: Path):
         calls.read_text() == f"compose -p j2o-accept-test -f {state.resolve()}/compose.yml down -v --remove-orphans\n"
     )
     assert sorted(path.name for path in state.iterdir()) == ["fixture.json"]
+
+
+def test_container_lookup_uses_the_generated_compose_file(monkeypatch: pytest.MonkeyPatch):
+    calls: list[list[str]] = []
+
+    def check_output(args: list[str], **kwargs: Any) -> str:
+        calls.append(args)
+        return "abc\n" if args[1] == "compose" else "/j2o-accept-test-op-1\n"
+
+    monkeypatch.setattr(acceptance.subprocess, "check_output", check_output)
+    assert acceptance._container("j2o-accept-test", "/private/compose.yml") == "j2o-accept-test-op-1"
+    assert calls[0] == ["docker", "compose", "-p", "j2o-accept-test", "-f", "/private/compose.yml", "ps", "-q", "op"]

@@ -136,8 +136,8 @@ down() {
 
 run_test() {
     export J2O_ACCEPT_STACK="$state/stack.json"
-    printf '{"compose_project": "%s", "jira": "https://localhost:%s", "openproject": "https://localhost:%s", "ca": "%s"}\n' \
-        "$project" "$jira_port" "$op_port" "$state/tls/ca.pem" > "$state/stack.json"
+    printf '{"compose_project": "%s", "compose_file": "%s", "jira": "https://localhost:%s", "openproject": "https://localhost:%s", "ca": "%s"}\n' \
+        "$project" "$state/compose.yml" "$jira_port" "$op_port" "$state/tls/ca.pem" > "$state/stack.json"
     export J2O_RUN_INTEGRATION=true J2O_ENABLE_DOCKER=true
     cd "$checkout"
     local status=0
