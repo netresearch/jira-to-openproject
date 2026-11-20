@@ -38,7 +38,7 @@ On 2026-11-19 the project owner decided that native OpenProject activity entries
 
 - Field history reaches OpenProject without widening its audience: the kept changes have the same readers as the work package.
 - The operator archive and the standard run use one selection, so they cannot drift apart.
-- Repeat runs write nothing when nothing changed, and they remove values that have become unsafe.
+- Repeat runs write nothing when nothing changed, and they remove values that have become unsafe. An issue the run skips (for example an incomplete changelog page or an unsupported project type) keeps its earlier value; the run reports it in its skip counters, and an operator reviews or removes such values before granting access.
 - In the live run reported in PR #461 (one project, 94 issues), 2827 of 2866 changes were kept, and the stored values were byte-equal to the computed rows.
 
 ### Negative

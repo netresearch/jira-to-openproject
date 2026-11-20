@@ -28,8 +28,8 @@ The `users` component locks OpenProject users whose Jira accounts are inactive, 
 ### Positive
 
 - A Jira account that can no longer log in does not become a usable OpenProject login.
-- Group membership no longer gives inactive users read access to migrated work packages.
-- A shared OpenProject account stays usable as long as one of its Jira identities is active.
+- Group membership no longer gives inactive users read access to migrated work packages. Two exceptions keep access: an inactive identity that shares an OpenProject account with an active one, and OpenProject administrators, which are never locked.
+- A shared OpenProject account is created and kept usable as long as one of its Jira identities is active. An account that is already locked stays locked even if an identity becomes active again; an administrator has to unlock it.
 - Locks set by administrators survive re-runs.
 
 ### Negative
