@@ -149,6 +149,7 @@ Migrates Jira users to OpenProject with comprehensive metadata.
 - Avatar backfill via Avatars module
 - Timezone metadata for accurate timestamp conversions
 - Role mapping based on Jira groups
+- Inactive Jira accounts: created locked; on re-runs, mapped OpenProject users whose every Jira identity is inactive are locked (admins excepted). The tool never unlocks, because nothing records who locked an account
 
 **Cleanup**: Automatically removes legacy "Jira user key" and "Tempo Account" custom fields
 
