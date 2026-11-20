@@ -14,6 +14,7 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [ADR-006](ADR-006-lock-inactive-jira-users.md) | Inactive Jira users become locked OpenProject users | Accepted | 2026-11-20 |
 | [ADR-007](ADR-007-protected-comments-and-local-acceptance.md) | Protected comments stay out of native journals; acceptance runs locally | Accepted | 2026-11-20 |
 | [ADR-008](ADR-008-project-selection-and-fail-closed-anonymous-proofs.md) | One source for the project selection; fail-closed anonymous proofs | Accepted | 2026-11-20 |
+| [ADR-009](ADR-009-security-levels-as-private-sub-projects.md) | Issues with a Jira security level become private OpenProject sub-projects | Accepted | 2026-11-20 |
 
 ## What is an ADR?
 
