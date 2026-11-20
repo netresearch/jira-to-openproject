@@ -333,3 +333,17 @@ def test_project_filter_can_select_a_shared_board_with_a_different_home(_mock_ma
     assert AgileBoardMigration(jira, op).run().success
     assert [q["project_id"] for q in op.created_queries] == [11]
     assert not op.created_versions
+
+
+def test_cli_project_filter_limits_the_boards(_mock_mappings, monkeypatch):
+    from tests.helpers.cli_project_filter import apply_cli_project_filter
+
+    board = {"id": 31, "name": "Shared", "type": "scrum", "location": {"projectKey": "OTHER"}}
+    jira = DummyJira(boards=[board], sprints_by_board={31: [{"id": 12, "name": "Other project sprint"}]})
+    apply_cli_project_filter(monkeypatch, "PROJ")
+    monkeypatch.setattr(jira, "get_boards", lambda: pytest.fail("Unscoped board listing"))
+    monkeypatch.setattr(jira, "get_boards_for_project", lambda key: [board] if key == "PROJ" else [], raising=False)
+    monkeypatch.setattr(jira, "get_board_projects", lambda _: [{"key": "PROJ"}, {"key": "OTHER"}])
+    op = DummyOp()
+    assert AgileBoardMigration(jira, op).run().success
+    assert [q["project_id"] for q in op.created_queries] == [11]

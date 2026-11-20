@@ -66,11 +66,7 @@ class NativeBoardsMigration(BaseMigration):
 
     def _selected_projects(self) -> dict[str, Any]:
         mapping = self.mappings.get_mapping("project") or {}
-        # The CLI's --jira-project-filter lands in jira.projects; migration.jira_project_filter is the config key.
-        configured = config.jira_config.get("projects") or config.migration_config.get("jira_project_filter")
-        if isinstance(configured, str):
-            configured = configured.split(",")
-        selected = {str(k).strip() for k in configured if str(k).strip()} if configured else None
+        selected = set(config.selected_jira_projects()) or None
         return {key: entry for key, entry in sorted(mapping.items()) if selected is None or key in selected}
 
     def _skipped(self, reason: str) -> ComponentResult:

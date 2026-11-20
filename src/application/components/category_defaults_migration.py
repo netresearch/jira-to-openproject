@@ -71,8 +71,7 @@ class CategoryDefaultsMigration(BaseMigration):
     """Translate fixed assignees after confirming the category and user in the target."""
 
     def _extract(self) -> ComponentResult:
-        selected = config.jira_config.get("projects") or []
-        wanted = {k.strip() for k in (selected.split(",") if isinstance(selected, str) else selected)}
+        wanted = set(config.selected_jira_projects())
         users = self.mappings.get_mapping("user") or {}
         base = self.jira_client.base_url
         projects = []

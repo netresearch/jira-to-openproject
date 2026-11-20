@@ -155,12 +155,7 @@ class ProjectMigration(BaseMigration):
 
         self._jira_project_detail_cache: dict[str, Any] = {}
         self._role_lookup = self._build_role_lookup()
-        filters = config.migration_config.get("jira_project_filter")
-        if isinstance(filters, str):
-            filters = [filters]
-        self.project_filters = {
-            str(f).upper() for f in (filters or []) if isinstance(f, (str, bytes)) and str(f).strip()
-        }
+        self.project_filters = set(config.selected_jira_projects())
 
     def extract_jira_projects(self) -> list[dict[str, Any]]:
         """Extract projects from Jira.

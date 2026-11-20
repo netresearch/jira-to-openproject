@@ -33,8 +33,7 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         """Query only positively unrestricted issues from mapped projects selected for this run."""
         projects = self.mappings.get_mapping("project") or {}
         mapping = self.mappings.get_mapping("work_package") or {}
-        configured = config.migration_config.get("jira_project_filter") or []
-        selected = {k.upper() for k in ([configured] if isinstance(configured, str) else configured)}
+        selected = set(config.selected_jira_projects())
         targets = {}
         for key, entry in mapping.items():
             jira_key = self._inner_jira_key(key, entry)

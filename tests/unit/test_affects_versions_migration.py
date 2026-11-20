@@ -97,3 +97,20 @@ def test_native_readback_failure_surfaces_as_incomplete(monkeypatch):
     result = AffectsVersionsMigration(jira, op).run()
     assert not result.success
     assert result.failed == 3
+
+
+def test_cli_project_filter_limits_the_projects(monkeypatch):
+    from src import config
+    from tests.helpers.cli_project_filter import apply_cli_project_filter
+
+    jira, op = DummyJira(), DummyOp()
+    jira.issues["ABC-1"] = {
+        "id": "9",
+        "key": "ABC-1",
+        "fields": {"project": {"id": "41", "key": "ABC"}, "versions": []},
+    }
+    config.mappings._m["project"]["ABC"] = {"openproject_id": 33}
+    config.mappings._m["work_package"]["ABC-1"] = {"openproject_id": 2009}
+    apply_cli_project_filter(monkeypatch, "PRJ")
+    assert AffectsVersionsMigration(jira, op).run().success
+    assert [batch["key"] for batch in op.batches] == ["PRJ"]

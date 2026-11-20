@@ -53,10 +53,7 @@ class SprintEpicMigration(BaseMigration):
     def _recover_work_packages(self) -> dict[str, Any]:
         """Recover locally needed issue keys from their target projects' origin fields."""
         restored = {}
-        project_filter = config.jira_config.get("projects") or []
-        if isinstance(project_filter, str):
-            project_filter = project_filter.split(",")
-        selected = {str(key).strip().upper() for key in project_filter}
+        selected = set(config.selected_jira_projects())
         for project, mapping in (self.mappings.get_mapping("project") or {}).items():
             if selected and project.upper() not in selected:
                 continue

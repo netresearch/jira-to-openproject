@@ -95,10 +95,7 @@ class TimeEntryMigration(BaseMigration):
             logger.error("Failed to read work_package_mapping.json: %s", e)
             return []
 
-        # Optional project filter from CLI (applied earlier into config.jira_config['projects'])
-        allowed_projects = [
-            str(p).upper().strip() for p in (config.jira_config.get("projects") or []) if str(p).strip()
-        ]
+        allowed_projects = config.selected_jira_projects()
 
         # Note: ``work_package_mapping.json`` is keyed by ``str(jira_id)``
         # (numeric Jira id) at the outer level, while the inner record
