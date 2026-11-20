@@ -1287,24 +1287,37 @@ class UserMigration(BaseMigration):
             f"ids = JSON.parse({json.dumps(json.dumps(ids))})\n"
             "locked = []\n"
             "missing = []\n"
+            "admins = []\n"
             "errors = []\n"
             "ids.each do |id|\n"
             "  begin\n"
-            "    user = User.find_by(id: id)\n"
-            "    if user.nil?\n"
+            "    outcome = User.transaction do\n"
+            "      user = User.lock.find_by(id: id)\n"
+            "      if user.nil?\n"
+            "        :missing\n"
+            "      elsif user.admin?\n"
+            "        :admin\n"
+            "      else\n"
+            "        unless user.locked?\n"
+            "          user.status = 'locked'\n"
+            "          user.save(validate: false)\n"
+            "        end\n"
+            "        :saved\n"
+            "      end\n"
+            "    end\n"
+            "    # Confirm from the committed row, after the transaction has ended.\n"
+            "    if outcome == :missing\n"
             "      missing << id\n"
-            "      next\n"
+            "    elsif outcome == :admin\n"
+            "      admins << id\n"
+            "    elsif User.find_by(id: id)&.locked?\n"
+            "      locked << id\n"
             "    end\n"
-            "    unless user.locked?\n"
-            "      user.status = 'locked'\n"
-            "      user.save(validate: false)\n"
-            "    end\n"
-            "    locked << id if user.reload.locked?\n"
             "  rescue => e\n"
             "    errors << { id: id, error: e.message }\n"
             "  end\n"
             "end\n"
-            "{ locked: locked, missing: missing, errors: errors }\n"
+            "{ locked: locked, missing: missing, admins: admins, errors: errors }\n"
         )
         summary = self.op_client.execute_query_to_json_file(ruby, timeout=180)
         if not isinstance(summary, dict):
@@ -1313,15 +1326,21 @@ class UserMigration(BaseMigration):
 
         confirmed = {int(i) for i in summary.get("locked") or []}
         missing = {int(i) for i in summary.get("missing") or []}
-        unconfirmed = sorted(set(ids) - confirmed - missing)
+        admins = {int(i) for i in summary.get("admins") or []}
+        unconfirmed = sorted(set(ids) - confirmed - missing - admins)
         if unconfirmed:
             msg = f"OpenProject did not confirm the lock of users {unconfirmed}: {summary.get('errors')}"
             raise MigrationError(msg)
         if missing:
             self.logger.warning("Users to lock no longer exist in OpenProject: %s", sorted(missing))
+        if admins:
+            self.logger.warning(
+                "Not locking OpenProject admins %s although their Jira account is inactive", sorted(admins)
+            )
 
         stats["locked"] = len(confirmed)
         stats["missing"] = len(missing)
+        stats["skipped_admin"] += len(admins)
         self.logger.info("Locked %d OpenProject users whose Jira account is inactive", len(confirmed))
         return stats
 

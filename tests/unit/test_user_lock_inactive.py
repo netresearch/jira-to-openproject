@@ -254,3 +254,30 @@ def test_new_target_is_locked_only_when_every_identity_is_inactive(
     tmp_path: Path, identities: list, expected: dict, batch_size: int
 ) -> None:
     assert _created_statuses(tmp_path, identities, batch_size) == expected
+
+
+def test_admin_found_by_lock_script_is_skipped_not_unconfirmed(tmp_path: Path) -> None:
+    migration = _migration(tmp_path)
+    migration.jira_users = [_jira("gone", active=False), _jira("promoted", active=False)]
+    migration._jira_user_index = None
+    migration.user_mapping = {"gone": _row("gone", 5), "promoted": _row("promoted", 6)}
+    migration.op_users = [
+        {"id": 5, "login": "gone", "status": "active", "admin": False},
+        {"id": 6, "login": "promoted", "status": "active", "admin": False},
+    ]
+    op = migration.op_client
+    op.execute_query_to_json_file.return_value = {"locked": [5], "missing": [], "admins": [6], "errors": []}
+
+    result = migration.lock_inactive_users()
+
+    script = op.execute_query_to_json_file.call_args.args[0]
+    assert _locked_ids(script) == [5, 6]
+    assert "User.lock.find_by(id: id)" in script
+    assert "User.transaction do" in script
+    assert re.search(r"elsif user\.admin\?\n\s*:admin\n", script), script
+    assert re.search(r"elsif outcome == :admin\n\s*admins << id\n", script), script
+    # The lock is confirmed from the committed row, not inside the transaction.
+    transaction = script[script.index("User.transaction do") : script.index("\n    end\n")]
+    assert "locked <<" not in transaction
+    assert script.index("locked << id") > script.index("User.find_by(id: id)&.locked?")
+    assert result == {"requested": 2, "locked": 1, "missing": 0, "skipped_admin": 1}
