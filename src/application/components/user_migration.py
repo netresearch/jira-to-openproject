@@ -168,6 +168,11 @@ def _apply_created_user_ids_to_mapping(
     return n
 
 
+def _is_inactive(jira_user: dict | None) -> bool:
+    """Only an explicit ``active: false`` proves a Jira account inactive."""
+    return jira_user is not None and jira_user.get("active") is False
+
+
 @register_entity_types("users", "user_accounts")
 class UserMigration(BaseMigration):
     """Handles the migration of users from Jira to OpenProject.
@@ -1118,6 +1123,7 @@ class UserMigration(BaseMigration):
 
         cf_ids = self._get_user_origin_cf_ids()
         jira_index = self._get_jira_user_index()
+        created_locked = self._keys_created_locked(missing_users, jira_index)
 
         if missing_users:
             with ProgressTracker(
@@ -1130,7 +1136,8 @@ class UserMigration(BaseMigration):
 
                     # Prepare data for user creation
                     users_to_create = [
-                        self._new_user_record(user, existing_emails, jira_index, cf_ids) for user in batch
+                        self._new_user_record(user, existing_emails, jira_index, cf_ids, created_locked)
+                        for user in batch
                     ]
 
                     batch_users = [user["jira_name"] for user in batch]
@@ -1194,6 +1201,34 @@ class UserMigration(BaseMigration):
             "locked": lock_stats,
         }
 
+    @staticmethod
+    def _keys_created_locked(missing_users: list, jira_index: dict) -> set[str]:
+        """Return the Jira keys whose new target may be created locked.
+
+        A taken login or email links a later identity to the account an earlier
+        one created, so identities sharing a login or a non-empty email, also
+        through others, can end up on one target. Such a group's target is
+        created locked only when every identity in the group is inactive.
+        """
+        parent = list(range(len(missing_users)))
+
+        def root(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        first_with: dict[tuple[str, str], int] = {}
+        for i, user in enumerate(missing_users):
+            for field in ("jira_name", "jira_email"):
+                value = str(user.get(field) or "").strip().lower()
+                if value:
+                    parent[root(i)] = root(first_with.setdefault((field, value), i))
+
+        keys = [str(user.get("jira_key")) for user in missing_users]
+        active_groups = {root(i) for i, key in enumerate(keys) if not _is_inactive(jira_index.get(key))}
+        return {key for i, key in enumerate(keys) if root(i) not in active_groups}
+
     def _user_ids_to_lock(self) -> tuple[list[int], int]:
         """Return target users whose every mapped Jira identity is inactive, plus skipped admins.
 
@@ -1208,8 +1243,7 @@ class UserMigration(BaseMigration):
                 op_id = int(mapping.get("openproject_id"))
             except TypeError, ValueError:
                 continue
-            jira_user = jira_index.get(str(mapping.get("jira_key")))
-            if jira_user is not None and jira_user.get("active") is False:
+            if _is_inactive(jira_index.get(str(mapping.get("jira_key")))):
                 inactive.add(op_id)
             else:
                 keep_unlocked.add(op_id)
@@ -1590,7 +1624,9 @@ class UserMigration(BaseMigration):
                     last = last[:start].strip()
         return _printable_name(first, "User"), _printable_name(last, "Unknown")
 
-    def _new_user_record(self, user: dict, existing_emails: set, jira_index: dict, cf_ids: dict) -> dict:
+    def _new_user_record(
+        self, user: dict, existing_emails: set, jira_index: dict, cf_ids: dict, created_locked: set[str]
+    ) -> dict:
         first_name, last_name = self._user_names(user)
         email = user["jira_email"]
         if not email or email.strip() == "":
@@ -1621,8 +1657,9 @@ class UserMigration(BaseMigration):
             "lastname": last_name,
             "mail": email,
             "admin": False,
-            # An inactive Jira account must not become a usable OpenProject login.
-            "status": "locked" if jira_payload.get("active") is False else "active",
+            # An inactive Jira account must not become a usable OpenProject login,
+            # unless an active identity will be linked to the same account.
+            "status": "locked" if str(user.get("jira_key")) in created_locked else "active",
         }
         if cf_payload:
             user_record["custom_fields"] = cf_payload

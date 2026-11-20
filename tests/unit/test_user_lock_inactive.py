@@ -168,3 +168,89 @@ def test_nothing_to_lock_sends_no_script(tmp_path: Path) -> None:
 
     assert migration.lock_inactive_users() == {"requested": 0, "locked": 0, "missing": 0, "skipped_admin": 0}
     migration.op_client.execute_query_to_json_file.assert_not_called()
+
+
+def _identity(key: str, name: str, email: str, *, active: bool | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    jira = {"key": key, "name": name, "emailAddress": email, "displayName": f"{key} User"}
+    if active is not None:
+        jira["active"] = active
+    row = {
+        "jira_key": key,
+        "jira_name": name,
+        "jira_email": email,
+        "jira_display_name": f"{key} User",
+        "openproject_id": None,
+        "matched_by": "none",
+    }
+    return jira, row
+
+
+def _created_statuses(tmp_path: Path, identities: list[tuple[str, str, str, bool | None]], batch_size: int) -> dict:
+    migration = _migration(tmp_path)
+    pairs = [_identity(key, name, email, active=active) for key, name, email, active in identities]
+    migration.jira_users = [jira for jira, _ in pairs]
+    migration._jira_user_index = None
+    migration.user_mapping = {row["jira_key"]: row for _, row in pairs}
+    migration.op_users = []
+    op = migration.op_client
+    op.bulk_create_records.return_value = {"status": "success", "created": [], "errors": []}
+
+    with (
+        patch("src.application.components.user_migration._backfill_unmapped_users_from_op"),
+        patch.object(UserMigration, "_get_user_origin_cf_ids", return_value={}),
+        patch.object(UserMigration, "backfill_user_origin_metadata", return_value={}),
+        patch.object(UserMigration, "extract_openproject_users", return_value=[]),
+        patch.object(UserMigration, "create_user_mapping", return_value={}),
+        patch.object(UserMigration, "lock_inactive_users", return_value={}),
+        patch.object(UserMigration, "_ensure_jira_user_details"),
+    ):
+        migration.create_missing_users(batch_size=batch_size)
+
+    records = [record for call in op.bulk_create_records.call_args_list for record in call.kwargs["records"]]
+    return {record["login"]: record["status"] for record in records}
+
+
+@pytest.mark.parametrize("batch_size", [100, 1])
+@pytest.mark.parametrize(
+    ("identities", "expected"),
+    [
+        pytest.param(
+            [("gone", "gone", "Shared@Example.com", False), ("here", "here", "shared@example.com", True)],
+            {"gone": "active", "here": "active"},
+            id="active-identity-shares-email",
+        ),
+        pytest.param(
+            [("gone", "Pat", "gone@example.com", False), ("here", "pat", "here@example.com", True)],
+            {"Pat": "active", "pat": "active"},
+            id="active-identity-shares-login",
+        ),
+        pytest.param(
+            [("gone", "gone", "shared@example.com", False), ("unknown", "unknown", "shared@example.com", None)],
+            {"gone": "active", "unknown": "active"},
+            id="identity-without-flag-shares-email",
+        ),
+        pytest.param(
+            [("gone", "gone", "shared@example.com", False), ("left", "left", "SHARED@example.com", False)],
+            {"gone": "locked", "left": "locked"},
+            id="all-identities-inactive",
+        ),
+        pytest.param(
+            [
+                ("gone", "Pat", "one@example.com", False),
+                ("mid", "pat", "two@example.com", False),
+                ("here", "here", "TWO@example.com", True),
+            ],
+            {"Pat": "active", "pat": "active", "here": "active"},
+            id="active-identity-shares-key-through-another",
+        ),
+        pytest.param(
+            [("gone", "gone", "", False), ("here", "here", "", True)],
+            {"gone": "locked", "here": "active"},
+            id="empty-emails-are-not-shared",
+        ),
+    ],
+)
+def test_new_target_is_locked_only_when_every_identity_is_inactive(
+    tmp_path: Path, identities: list, expected: dict, batch_size: int
+) -> None:
+    assert _created_statuses(tmp_path, identities, batch_size) == expected
