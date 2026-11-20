@@ -66,6 +66,7 @@ from src.application.components.issue_security import (
     unrestricted_project_jql,
     warn_if_restricted_mappings,
 )
+from src.application.components.jira_field_values import without_empty_values
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
@@ -901,9 +902,10 @@ class WorkPackageContentMigration(BaseMigration):
         raw_fields = getattr(jira_issue, "raw", {}).get("fields", {})
         updates = {}
 
-        for jira_field_id, value in raw_fields.items():
+        for jira_field_id, raw_value in raw_fields.items():
             if not jira_field_id.startswith("customfield_"):
                 continue
+            value = without_empty_values(raw_value)
             if value is None:
                 continue
 

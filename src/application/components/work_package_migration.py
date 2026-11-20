@@ -27,6 +27,7 @@ from src.application.components.issue_security import (
     unrestricted_project_jql,
     warn_if_restricted_mappings,
 )
+from src.application.components.jira_field_values import without_empty_values
 from src.application.components.work_package_files import sync_directory, write_issue_snapshot
 from src.application.components.work_package_history import has_no_source_journals
 from src.application.components.wp_defaults import fill_missing_fields, work_package_defaults
@@ -1148,7 +1149,11 @@ class WorkPackageMigration(BaseMigration):
             work_package["_rails_operations"] = operations
 
     def _source_custom_values(self, fields: dict[str, Any]) -> list[dict[str, Any]]:
-        source = {k: v for k, v in fields.items() if k.startswith("customfield_") and v is not None}
+        source = {
+            k: value
+            for k, v in fields.items()
+            if k.startswith("customfield_") and (value := without_empty_values(v)) is not None
+        }
         if not source:
             return []
         try:
