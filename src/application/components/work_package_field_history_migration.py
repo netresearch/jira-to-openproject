@@ -99,6 +99,7 @@ _COUNTS = (
     "kept_changes",
     "withheld_changes",
 )
+_SKIPS = ("incomplete", "restricted_skipped", "not_returned", "unsupported_project_type", "target_unconfirmed")
 
 
 def approved_field_ids(value: Any) -> set[str]:
@@ -109,6 +110,26 @@ def approved_field_ids(value: Any) -> set[str]:
         msg = "history_approved_field_ids accepts only Jira customfield_<number> IDs"
         raise ValueError(msg)
     return approved
+
+
+def _complete_page(page: object) -> bool:
+    try:
+        return isinstance(page, dict) and is_complete_page(page)
+    except KeyError, TypeError:
+        return False
+
+
+def _row_outcome(
+    row: dict, stored: dict[int, Any], origins: dict[int, set[str]], in_project: set
+) -> tuple[str | None, dict]:
+    """Name the counter for a row that needs no write, or return ``None`` with the row to write."""
+    if row["id"] is None and len(origins.get(row["wp"], ())) == 1:
+        row = {**row, "id": next(iter(origins[row["wp"]]))}
+    if origins.get(row["wp"]) != {row["id"]} or row["wp"] not in in_project:
+        return ("clear_unconfirmed" if row["value"] is None else "target_unconfirmed"), row
+    if stored.get(row["wp"]) == row["value"]:
+        return "unchanged", row
+    return None, row
 
 
 def canonical_history(issue_id: str, events: list[dict]) -> str:
@@ -175,38 +196,40 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
                 continue
             seen.add(issue.key)
             counts["issues_seen"] += 1
-            raw = issue.raw
             wp_id, expected = targets[issue.key]
-            if not permits_unrestricted_result(issue):
-                counts["restricted_skipped"] += 1
-                rows.append(self._clear_row(wp_id, issue.id))
-                continue
-            if raw["fields"]["project"].get("projectTypeKey") not in _PROJECT_TYPES:
-                counts["unsupported_project_type"] += 1  # Customer-facing audiences need a separate access check.
-                continue
-            if not str(issue.id).isdecimal() or (expected is not None and str(issue.id) != expected):
-                counts["target_unconfirmed"] += 1
-                continue
-            page = raw.get("changelog")
-            try:
-                complete = isinstance(page, dict) and is_complete_page(page)
-            except KeyError, TypeError:
-                complete = False
-            if not complete:
-                counts["incomplete"] += 1
-                continue
-            events = kept_events(page["histories"], fields, project_visible=True)
-            source = sum(len(h["items"]) for h in page["histories"])
-            kept = sum(len(event["changes"]) for event in events)
-            counts.update(source_changes=source, kept_changes=kept, withheld_changes=source - kept)
-            if not events:
-                counts["no_kept_changes"] += 1
-                rows.append(self._clear_row(wp_id, issue.id))
-                continue
-            rows.append({"wp": wp_id, "id": str(issue.id), "value": canonical_history(str(issue.id), events)})
+            row = self._issue_row(issue, wp_id, expected, fields, counts)
+            if row is not None:
+                rows.append(row)
         # A mapped issue the unrestricted search no longer returns may have gained a security level: clear its value.
         rows.extend(self._clear_row(wp_id, sid) for key, (wp_id, sid) in targets.items() if key not in seen)
         return rows, len(seen)
+
+    def _issue_row(
+        self, issue: Any, wp_id: int, expected: str | None, fields: set, counts: Counter[str]
+    ) -> dict | None:
+        """Return the issue's write or clear row, or ``None`` when the issue is skipped and its value kept."""
+        raw = issue.raw
+        if not permits_unrestricted_result(issue):
+            counts["restricted_skipped"] += 1
+            return self._clear_row(wp_id, issue.id)
+        if raw["fields"]["project"].get("projectTypeKey") not in _PROJECT_TYPES:
+            counts["unsupported_project_type"] += 1  # Customer-facing audiences need a separate access check.
+            return None
+        if not str(issue.id).isdecimal() or (expected is not None and str(issue.id) != expected):
+            counts["target_unconfirmed"] += 1
+            return None
+        page = raw.get("changelog")
+        if not _complete_page(page):
+            counts["incomplete"] += 1
+            return None
+        events = kept_events(page["histories"], fields, project_visible=True)
+        source = sum(len(h["items"]) for h in page["histories"])
+        kept = sum(len(event["changes"]) for event in events)
+        counts.update(source_changes=source, kept_changes=kept, withheld_changes=source - kept)
+        if not events:
+            counts["no_kept_changes"] += 1
+            return self._clear_row(wp_id, issue.id)
+        return {"wp": wp_id, "id": str(issue.id), "value": canonical_history(str(issue.id), events)}
 
     @staticmethod
     def _clear_row(wp_id: int, issue_id: object) -> dict:
@@ -221,30 +244,8 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         counts.update(mapped.details or {})
         projects = (mapped.data or {}).get("projects", {})
         if projects:
-            field = self.op_client.ensure_wp_custom_field_id(FIELD_NAME, "text")
-            if not field:
-                msg = f"OpenProject did not return the '{FIELD_NAME}' custom field"
-                raise ValueError(msg)
-            for key, project in projects.items():
-                for batch in batched(project["rows"], _BATCH, strict=False):
-                    try:
-                        self._write_batch(field, project["project_id"], list(batch), counts)
-                    except Exception:
-                        self.logger.exception("Could not write field history for %s", key)
-                        clears = sum(row["value"] is None for row in batch)
-                        counts["failed"] += len(batch) - clears
-                        counts["clear_unconfirmed"] += clears
-        warnings = [
-            f"{counts[name]} mapped work packages skipped: {name}"
-            for name in (
-                "incomplete",
-                "restricted_skipped",
-                "not_returned",
-                "unsupported_project_type",
-                "target_unconfirmed",
-            )
-            if counts[name]
-        ]
+            self._write_projects(projects, counts)
+        warnings = [f"{counts[name]} mapped work packages skipped: {name}" for name in _SKIPS if counts[name]]
         for warning in warnings:
             self.logger.warning(warning)
         return ComponentResult(
@@ -255,9 +256,40 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
             warnings=warnings,
         )
 
+    def _write_projects(self, projects: dict, counts: Counter[str]) -> None:
+        field = self.op_client.ensure_wp_custom_field_id(FIELD_NAME, "text")
+        if not field:
+            msg = f"OpenProject did not return the '{FIELD_NAME}' custom field"
+            raise ValueError(msg)
+        for key, project in projects.items():
+            for batch in batched(project["rows"], _BATCH, strict=False):
+                try:
+                    self._write_batch(field, project["project_id"], list(batch), counts)
+                except Exception:
+                    self.logger.exception("Could not write field history for %s", key)
+                    clears = sum(row["value"] is None for row in batch)
+                    counts["failed"] += len(batch) - clears
+                    counts["clear_unconfirmed"] += clears
+
     def _write_batch(self, field: int, pid: int, rows: list[dict], counts: Counter[str]) -> None:
+        stored, origins, in_project = self._read_targets(field, pid, rows)
+        local: Counter[str] = Counter()  # Merged only after the batch succeeded; a failure counts each row once.
+        changed = []
+        for row in rows:
+            if row["value"] is None and row["wp"] not in stored:
+                continue  # nothing stored, nothing to clear
+            outcome, target = _row_outcome(row, stored, origins, in_project)
+            if outcome:
+                local[outcome] += 1
+            else:
+                changed.append({**target, "project": pid})
+        if changed:
+            local.update(self._write_rows(field, changed))
+        counts.update(local)
+
+    def _read_targets(self, field: int, pid: int, rows: list[dict]) -> tuple[dict[int, Any], dict[int, set[str]], set]:
         data = self._script(_READ, {"field": field, "ids": [row["wp"] for row in rows]})
-        stored = {}
+        stored: dict[int, Any] = {}
         origins: dict[int, set[str]] = {}
         for wp, cf_id, value in data["rows"]:
             if cf_id == field:
@@ -265,33 +297,21 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
             elif cf_id == data["origin"]:
                 origins.setdefault(wp, set()).add(value)
         in_project = {wp for wp, project in data["projects"] if project == pid}
-        local: Counter[str] = Counter()  # Merged only after the batch succeeded; a failure counts each row once.
-        changed = []
-        for row in rows:
-            if row["value"] is None and row["wp"] not in stored:
-                continue  # nothing stored, nothing to clear
-            if row["id"] is None and len(origins.get(row["wp"], ())) == 1:
-                row = {**row, "id": next(iter(origins[row["wp"]]))}
-            if origins.get(row["wp"]) != {row["id"]} or row["wp"] not in in_project:
-                local["clear_unconfirmed" if row["value"] is None else "target_unconfirmed"] += 1
-            elif stored.get(row["wp"]) == row["value"]:
-                local["unchanged"] += 1
-            else:
-                changed.append({**row, "project": pid})
-        if changed:
-            result = self._script(_WRITE, {"field": field, "name": FIELD_NAME, "rows": changed})
-            updated, cleared = result.get("updated"), result.get("cleared")
-            clears = sum(row["value"] is None for row in changed)
-            if (
-                type(updated) is not int
-                or type(cleared) is not int
-                or not 0 <= updated <= len(changed) - clears
-                or cleared != clears
-            ):
-                msg = "OpenProject returned an invalid field history write count"
-                raise ValueError(msg)
-            local.update(issues_written=updated, cleared=cleared, unchanged=len(changed) - clears - updated)
-        counts.update(local)
+        return stored, origins, in_project
+
+    def _write_rows(self, field: int, changed: list[dict]) -> dict[str, int]:
+        result = self._script(_WRITE, {"field": field, "name": FIELD_NAME, "rows": changed})
+        updated, cleared = result.get("updated"), result.get("cleared")
+        clears = sum(row["value"] is None for row in changed)
+        if (
+            type(updated) is not int
+            or type(cleared) is not int
+            or not 0 <= updated <= len(changed) - clears
+            or cleared != clears
+        ):
+            msg = "OpenProject returned an invalid field history write count"
+            raise ValueError(msg)
+        return {"issues_written": updated, "cleared": cleared, "unchanged": len(changed) - clears - updated}
 
     def _script(self, script: str, payload: dict) -> dict:
         envelope = self.op_client.execute_script_with_data(script, payload)
