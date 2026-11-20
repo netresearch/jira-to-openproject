@@ -258,8 +258,42 @@ def test_shared_board_is_split_into_exact_mapped_project_snapshots(_mock_mapping
         (12, []),
     ]
     monkeypatch.setattr(jira, "get_board_issue_keys", lambda _, project: ["A-999"])
+    monkeypatch.setattr("src.application.components.agile_board_migration.fetch_issue_page_with_retry", _no_issues)
     assert not AgileBoardMigration(jira, op).run().success
     assert len(op.created_queries) == 2
+
+
+def _no_issues(*_args, **_kwargs):
+    return []
+
+
+def test_board_omits_issues_withheld_for_their_security_level(_mock_mappings, monkeypatch):
+    from types import SimpleNamespace
+
+    from src import config
+
+    config.mappings.set_mapping("project", {"A": {"openproject_id": 11}})
+    config.mappings.set_mapping("work_package", {"91": {"jira_key": "A-1", "openproject_id": 25}})
+    jira = DummyJira(boards=[{"id": 23, "name": "Secure", "type": "kanban"}])
+    monkeypatch.setattr(jira, "get_board_projects", lambda _: [{"key": "A"}], raising=False)
+    monkeypatch.setattr(jira, "get_board_issue_keys", lambda _, project: ["A-1", "A-2", "A-3"])
+    queries = []
+
+    def search(_client, *, jql, start_at, **_kwargs):
+        queries.append(jql)
+        secured = SimpleNamespace(id="2", key="A-2", raw={"fields": {"security": {"id": "1", "name": "Staff"}}})
+        return [secured] if start_at == 0 else []
+
+    monkeypatch.setattr("src.application.components.agile_board_migration.fetch_issue_page_with_retry", search)
+    op = DummyOp()
+    # A-3 is neither mapped nor reported with a security level, so the board stays unverified.
+    assert not AgileBoardMigration(jira, op).run().success
+    assert queries[0] == 'project = "A" AND key in ("A-2", "A-3") AND level IS NOT EMPTY ORDER BY id'
+
+    monkeypatch.setattr(jira, "get_board_issue_keys", lambda _, project: ["A-1", "A-2"])
+    op = DummyOp()
+    assert AgileBoardMigration(jira, op).run().success
+    assert [p["options"]["board_work_package_ids"] for p in op.created_queries] == [[25]]
 
 
 def test_board_pagination_requires_all_issue_keys_in_the_requested_project():
