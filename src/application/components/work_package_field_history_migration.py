@@ -89,7 +89,7 @@ ids = []
 if cf
   in_project = WorkPackage.where(project_id: input_data.fetch('project')).select(:id)
   ids = CustomValue.where(customized_type: 'WorkPackage', custom_field_id: cf.id, customized_id: in_project)
-    .distinct.pluck(:customized_id)
+    .where.not(value: [nil, '']).distinct.pluck(:customized_id)
 end
 origin = WorkPackageCustomField.find_by(name: 'J2O Origin ID')&.id
 key = WorkPackageCustomField.find_by(name: 'J2O Origin Key')&.id
@@ -176,11 +176,11 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
 
         return iter_issue_pages(key, fetch, _BATCH)
 
-    def _mapped_targets(self, wanted: set[str]) -> dict[str, dict[str, tuple[int, str | None]]]:
+    def _mapped_targets(self) -> dict[str, dict[str, tuple[int, str | None]]]:
         projects: dict[str, dict[str, tuple[int, str | None]]] = {}
         for origin, value in (self.mappings.get_mapping("work_package") or {}).items():
             key = self._inner_jira_key(str(origin), value)
-            if not key or (wanted and self._issue_project_key(key) not in wanted):
+            if not key:
                 continue
             row = WorkPackageMappingEntry.from_legacy(key, value)
             sid = str(origin) if str(origin).isdecimal() else None
@@ -192,24 +192,31 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         fields = custom_fields(self.jira_client.get_custom_fields(), approved)
         selected = config.jira_config.get("projects") or []
         wanted = {k.strip() for k in (selected.split(",") if isinstance(selected, str) else selected)}
-        mapped = self._mapped_targets(wanted)
+        mapped = self._mapped_targets()
+        # Every mapped work package, selected or not, so recovery never claims one another project maps.
+        mapped_wps = {wp for targets in mapped.values() for wp, _ in targets.values()}
         counts: Counter[str] = Counter()
         projects = {}
-        mapped_wps = {wp for targets in mapped.values() for wp, _ in targets.values()}
         for key, mapping in (self.mappings.get_mapping("project") or {}).items():
             pid = project_id(mapping)
             if (wanted and key not in wanted) or not pid:
                 continue
-            targets = dict(mapped.get(key, {}))
-            unkeyed = self._recover_targets(pid, targets, mapped_wps)
-            if not targets and not unkeyed:
-                continue
-            rows, seen = self._project_rows(key, targets, fields, counts)
-            counts["not_returned"] += len(targets) - seen
-            rows += unkeyed
+            rows = self._project_plan(
+                key, pid, dict(mapped.get(key, {})), mapped_wps=mapped_wps, fields=fields, counts=counts
+            )
             if rows:
                 projects[key] = {"project_id": pid, "rows": rows}
         return ComponentResult(success=True, data={"projects": projects}, details=dict(counts))
+
+    def _project_plan(
+        self, key: str, pid: int, targets: dict, *, mapped_wps: set[int], fields: set, counts: Counter[str]
+    ) -> list[dict]:
+        unkeyed = self._recover_targets(pid, targets, mapped_wps)
+        if not targets:
+            return unkeyed
+        rows, seen = self._project_rows(key, targets, fields, counts)
+        counts["not_returned"] += len(targets) - seen
+        return rows + unkeyed
 
     def _recover_targets(self, pid: int, targets: dict, mapped_wps: set[int]) -> list[dict]:
         """Add stored values the work-package mapping misses to the targets, by their provenance.

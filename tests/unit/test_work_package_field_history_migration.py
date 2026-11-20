@@ -68,7 +68,7 @@ class FakeOpenProject:
         assert data["field"] == _FIELD_ID
         if script == module._READ:
             ids = data["ids"]
-            rows = [[wp, 1, self.origins[wp]] for wp in ids] + [
+            rows = [[wp, 1, self.origins[wp]] for wp in ids if wp in self.origins] + [
                 [wp, _FIELD_ID, self.values[wp]] for wp in ids if wp in self.values
             ]
             return {
@@ -286,6 +286,32 @@ def test_stored_value_without_origin_key_is_cleared(migration):
     assert result.success
     assert 11 not in migration.op_client.values
     assert result.details["cleared"] == 1
+
+
+def test_value_another_jira_project_maps_is_not_recovered(migration):
+    migration.mappings.get_mapping.side_effect = {
+        "project": {"APP": 7, "OTH": 7},
+        "work_package": {
+            "101": {"jira_key": "APP-1", "openproject_id": 11},
+            "102": {"jira_key": "OTH-1", "openproject_id": 12},
+        },
+    }.get
+    migration.op_client.keys[12] = "OTH-1"
+    migration.op_client.values[12] = "kept"
+    result = run(migration, source(1, [history(5, _SAFE)]))  # OTH is not a selected project
+    assert result.success
+    assert migration.op_client.values[12] == "kept"
+    assert result.details["cleared"] == 0
+
+
+def test_stored_value_without_origin_fails_the_run(migration):
+    migration.mappings.get_mapping.side_effect = {"project": {"APP": 7}, "work_package": {}}.get
+    migration.op_client.values[11] = "stale"
+    del migration.op_client.origins[11]
+    result = run(migration)
+    assert not result.success
+    assert result.details["clear_unconfirmed"] == 1
+    assert migration.op_client.values[11] == "stale"
 
 
 def test_standard_custom_field_needs_review(migration, monkeypatch):
