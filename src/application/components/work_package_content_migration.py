@@ -60,6 +60,7 @@ from pydantic import ValidationError
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.custom_field_migration import TEMPO_ACCOUNT_CUSTOM_TYPE
 from src.application.components.issue_security import (
     mapped_project_issues,
     permits_unrestricted_result,
@@ -406,6 +407,12 @@ class WorkPackageContentMigration(BaseMigration):
     def _mapped_field_value(self, mapping: Any, value: Any, issue_key: str) -> Any:
         """Prepare values according to their target format without changing selection labels."""
         field_format = mapping.get("openproject_type") if isinstance(mapping, dict) else None
+        if isinstance(mapping, dict) and mapping.get("jira_custom_type") == TEMPO_ACCOUNT_CUSTOM_TYPE:
+            if not isinstance(value, dict):
+                return value
+            # The account key is unique; account names are not.
+            key = value.get("key")
+            return key if isinstance(key, str) and key else {"unmapped_tempo_account": True}
         if field_format == "user":
             return self._mapped_user_field(value)
         if isinstance(value, str) and field_format in (None, "text", "string"):
