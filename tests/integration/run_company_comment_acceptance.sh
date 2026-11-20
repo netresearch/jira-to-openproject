@@ -10,10 +10,10 @@ set -euo pipefail
 : "${J2O_COMPANY_COMMENT_STATE:?Set a private state directory outside the checkout}"
 : "${J2O_ACCEPT_JIRA_LICENSE:?Set a file with a Jira Software Data Center test license}"
 checkout=$(cd "$(dirname "$0")/../.." && pwd -P)
-state=$(mkdir -p -m 700 "$J2O_COMPANY_COMMENT_STATE" && cd "$J2O_COMPANY_COMMENT_STATE" && pwd -P)
+umask 077
+state=$(mkdir -p "$J2O_COMPANY_COMMENT_STATE" && cd "$J2O_COMPANY_COMMENT_STATE" && pwd -P)
 case "$state/" in "$checkout"/*) echo "State must live outside the checkout" >&2; exit 2 ;; esac
 chmod 700 "$state"
-umask 077
 jira_port=${J2O_ACCEPT_JIRA_PORT:-18443}
 op_port=${J2O_ACCEPT_OP_PORT:-18444}
 project=$(cat "$state/compose-project" 2>/dev/null || echo "j2o-accept-$(openssl rand -hex 4)")
