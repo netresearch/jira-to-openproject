@@ -82,6 +82,24 @@ puts JSON.generate({'updated' => updated, 'cleared' => cleared})
 puts $j2o_end_marker
 """
 
+_STORED = """
+require 'json'
+cf = WorkPackageCustomField.find_by(name: input_data.fetch('name'))
+ids = []
+if cf
+  in_project = WorkPackage.where(project_id: input_data.fetch('project')).select(:id)
+  ids = CustomValue.where(customized_type: 'WorkPackage', custom_field_id: cf.id, customized_id: in_project)
+    .distinct.pluck(:customized_id)
+end
+origin = WorkPackageCustomField.find_by(name: 'J2O Origin ID')&.id
+key = WorkPackageCustomField.find_by(name: 'J2O Origin Key')&.id
+values = CustomValue.where(customized_type: 'WorkPackage', customized_id: ids, custom_field_id: [origin, key].compact)
+  .pluck(:customized_id, :custom_field_id, :value)
+puts $j2o_start_marker
+puts JSON.generate({'ids' => ids, 'origin' => origin, 'key' => key, 'values' => values})
+puts $j2o_end_marker
+"""
+
 _COUNTS = (
     "issues_seen",
     "issues_written",
@@ -177,16 +195,45 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         mapped = self._mapped_targets(wanted)
         counts: Counter[str] = Counter()
         projects = {}
+        mapped_wps = {wp for targets in mapped.values() for wp, _ in targets.values()}
         for key, mapping in (self.mappings.get_mapping("project") or {}).items():
             pid = project_id(mapping)
-            targets = mapped.get(key)
-            if (wanted and key not in wanted) or not pid or not targets:
+            if (wanted and key not in wanted) or not pid:
+                continue
+            targets = dict(mapped.get(key, {}))
+            unkeyed = self._recover_targets(pid, targets, mapped_wps)
+            if not targets and not unkeyed:
                 continue
             rows, seen = self._project_rows(key, targets, fields, counts)
             counts["not_returned"] += len(targets) - seen
+            rows += unkeyed
             if rows:
                 projects[key] = {"project_id": pid, "rows": rows}
         return ComponentResult(success=True, data={"projects": projects}, details=dict(counts))
+
+    def _recover_targets(self, pid: int, targets: dict, mapped_wps: set[int]) -> list[dict]:
+        """Add stored values the work-package mapping misses to the targets, by their provenance.
+
+        The mapping is a cache, so a value stored in the project stays checked when its entry is gone.
+        A stored value without a usable J2O Origin Key, or for an issue another work package already
+        targets, gets a clear row instead.
+        """
+        data = self._script(_STORED, {"name": FIELD_NAME, "project": pid})
+        provenance: dict[int, dict[str, str]] = {}
+        for wp, cf_id, value in data["values"]:
+            name = {data["origin"]: "id", data["key"]: "key"}.get(cf_id)
+            if name:
+                provenance.setdefault(wp, {})[name] = str(value)
+        clears = []
+        for wp in data["ids"]:
+            if wp in mapped_wps:
+                continue
+            key, sid = provenance.get(wp, {}).get("key"), provenance.get(wp, {}).get("id")
+            if key and key not in targets and sid and sid.isdecimal():
+                targets[key] = (wp, sid)
+            else:
+                clears.append(self._clear_row(wp, sid))
+        return clears
 
     def _project_rows(self, key: str, targets: dict, fields: set, counts: Counter[str]) -> tuple[list[dict], int]:
         rows = []
