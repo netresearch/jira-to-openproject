@@ -42,10 +42,7 @@ class AgileBoardMigration(BaseMigration):
         sprint_payloads = []
         read_errors = []
         targets = self._board_work_package_mapping()
-        configured = config.migration_config.get("jira_project_filter")
-        if isinstance(configured, str):
-            configured = [configured]
-        selected = set(configured) if configured else None
+        selected = set(config.selected_jira_projects()) or None
         for board in self._list_boards(selected):
             try:
                 boards, sprints = self._read_board(board, selected, targets)

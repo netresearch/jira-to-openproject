@@ -187,8 +187,7 @@ class SimpleTasksMigration(BaseMigration):
                 data=[],
                 details={"source_tasklist_detected": False, "unverified_task_audience": 0, "unconfirmed_issues": 0},
             )
-        configured = config.jira_config.get("projects") or []
-        selected = {k.strip() for k in (configured.split(",") if isinstance(configured, str) else configured)}
+        selected = set(config.selected_jira_projects())
         mappings = self.mappings.get_mapping("project") or {}
         projects = []
         held = unavailable = 0

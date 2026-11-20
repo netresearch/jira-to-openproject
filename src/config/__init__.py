@@ -168,6 +168,7 @@ __all__ = [
     "migration_config",
     "openproject_config",
     "reset_mappings",
+    "selected_jira_projects",
     "update_from_cli_args",
     "validate_config",
     "var_dirs",
@@ -290,6 +291,24 @@ def get_path(path_type: DirType) -> Path:
     return var_dirs[path_type]
 
 
+def selected_jira_projects() -> list[str]:
+    """Return the upper-cased Jira project keys this run is limited to; an empty list selects every project.
+
+    The first non-empty source wins: ``--jira-project-filter``, then ``jira.projects``,
+    then ``migration.jira_project_filter``. Strings are comma-separated lists.
+    """
+    for raw in (
+        _cli_args.get("jira_project_filter"),
+        jira_config.get("projects"),
+        migration_config.get("jira_project_filter"),
+    ):
+        items = raw.split(",") if isinstance(raw, str) else raw if isinstance(raw, list | tuple) else []
+        keys = list(dict.fromkeys(key for key in (str(item).strip().upper() for item in items) if key))
+        if keys:
+            return keys
+    return []
+
+
 # Removed duplicate `update_from_cli_args` (see below) to avoid F811
 
 
@@ -372,6 +391,7 @@ def update_from_cli_args(args: object) -> None:
         try:
             keys = [k.strip() for k in str(keys_raw).split(",") if k.strip()]
             if keys:
+                _cli_args["jira_project_filter"] = keys
                 _config_loader.set_value("jira", "projects", keys)
                 jira_config["projects"] = keys
                 logger.info("Applied CLI Jira project filter: %s", keys)

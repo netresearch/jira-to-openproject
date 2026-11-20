@@ -190,8 +190,7 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
     def _extract(self) -> ComponentResult:
         approved = approved_field_ids(config.migration_config.get("history_approved_field_ids"))
         fields = custom_fields(self.jira_client.get_custom_fields(), approved)
-        selected = config.jira_config.get("projects") or []
-        wanted = {k.strip() for k in (selected.split(",") if isinstance(selected, str) else selected)}
+        wanted = set(config.selected_jira_projects())
         mapped = self._mapped_targets()
         # Every mapped work package, selected or not, so recovery never claims one another project maps.
         mapped_wps = {wp for targets in mapped.values() for wp, _ in targets.values()}

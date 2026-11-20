@@ -227,6 +227,17 @@ def test_complete_catalogue_includes_unassigned_versions_and_preserves_project_s
     assert len(op.created_payloads) == 1
 
 
+def test_cli_project_filter_limits_the_catalogues(monkeypatch):
+    from src import config
+    from tests.helpers.cli_project_filter import apply_cli_project_filter
+
+    jira, op = DummyJira(), DummyOp()
+    config.mappings.set_mapping("work_package", {})
+    apply_cli_project_filter(monkeypatch, "PRJ")
+    assert VersionsMigration(jira_client=jira, op_client=op).run().success
+    assert [payload["key"] for payload in op.created_payloads] == ["PRJ"]
+
+
 def test_unavailable_catalogue_is_a_failure_without_target_writes(monkeypatch):
     from unittest.mock import Mock
 

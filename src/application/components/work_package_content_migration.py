@@ -271,15 +271,9 @@ class WorkPackageContentMigration(BaseMigration):
         """Get list of Jira projects to migrate based on filter."""
         projects = self.jira_client.get_projects()
 
-        # CLI sets filter to jira_config["projects"] as a list
-        project_filter = config.jira_config.get("projects")
+        project_filter = config.selected_jira_projects()
         if project_filter:
-            # Handle both string and list formats
-            if isinstance(project_filter, str):
-                filter_keys = {k.strip().upper() for k in project_filter.split(",")}
-            else:
-                filter_keys = {str(k).strip().upper() for k in project_filter}
-            projects = [p for p in projects if p.get("key", "").upper() in filter_keys]
+            projects = [p for p in projects if p.get("key", "").upper() in project_filter]
             self.logger.info(
                 "Filtered to %d projects based on filter: %s",
                 len(projects),

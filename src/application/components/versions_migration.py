@@ -31,10 +31,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         """Read every selected, mapped project, including projects with no migrated issues."""
         mapping = self.mappings.get_mapping("project") or {}
-        configured = config.migration_config.get("jira_project_filter") or []
-        if isinstance(configured, str):
-            configured = [configured]
-        selected = {key.upper() for key in configured}
+        selected = set(config.selected_jira_projects())
         catalogues = {}
         for key, entry in mapping.items():
             pid = project_id(entry)

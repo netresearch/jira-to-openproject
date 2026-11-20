@@ -1353,7 +1353,7 @@ class WorkPackageMigration(BaseMigration):
         if selected:
             return sorted({key.strip().split("-", 1)[0] for key in selected.split(",") if "-" in key})
         projects = self.jira_client.get_projects()
-        configured = config.jira_config.get("projects") or []
+        configured = config.selected_jira_projects()
         return [
             project["key"]
             for project in projects
@@ -1747,7 +1747,7 @@ class WorkPackageMigration(BaseMigration):
     def _migrate_work_packages(self) -> dict[str, Any]:
         """Create new history-free work packages and report each confirmed target ID."""
         results: dict[str, Any] = {"total_created": 0, "projects": [], "total_issues": 0}
-        projects = config.jira_config.get("projects") or list(
+        projects = config.selected_jira_projects() or list(
             dict.fromkeys(entry["jira_key"] for entry in self.project_mapping.values() if entry.get("jira_key"))
         )
         batch_size = max(1, int(config.migration_config.get("batch_size", 100)))

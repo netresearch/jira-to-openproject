@@ -74,8 +74,7 @@ class ComponentsMigration(BaseMigration):
 
     def _extract(self) -> ComponentResult:
         base = self.jira_client.base_url
-        selected = config.jira_config.get("projects") or []
-        wanted = {k.strip() for k in (selected.split(",") if isinstance(selected, str) else selected)}
+        wanted = set(config.selected_jira_projects())
         mapped = self._mapped_targets(wanted)
         projects = {}
         skipped = 0
