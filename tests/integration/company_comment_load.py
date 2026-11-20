@@ -17,7 +17,47 @@ from tests.integration.company_comment_stack import JiraAdmin
 
 PROJECTS = {"ordinary": "ACCORD", "group": "ACCGRP", "role": "ACCROLE", "security": "ACCSEC"}
 SECURITY_GROUP = "j2o-accept-security"
-ROLES = ("Administrators", "Developers", "Users")
+# Jira role names that j2o's admin_schemes component turns into an OpenProject "Project member"
+# membership (ROLE_NAME_MAPPING). Both accounts need that membership to reach the work package.
+MEMBER_ROLES = ("Users", "Developers", "Members", "Team Members")
+
+
+def restriction_roles(cases: dict[str, Any]) -> set[str]:
+    """Name every project role that a sampled comment of any case is restricted to."""
+    return {
+        row["visibility"]["value"]
+        for source in cases.values()
+        for row in source["comments"]
+        if row["visibility"] and row["visibility"]["type"] == "role"
+    }
+
+
+def baseline_role(restricted: set[str]) -> str:
+    """Pick the role that grants project access and that no sampled comment is restricted to."""
+    taken = {name.casefold() for name in restricted}
+    for name in MEMBER_ROLES:
+        if name.casefold() not in taken:
+            return name
+    msg = "Every member role is a sampled comment restriction; no role is left for baseline access"
+    raise RuntimeError(msg)
+
+
+def role_actors(
+    case: str, admin_user: str, accounts: dict[str, dict[str, str]], comments: list[dict], baseline: str
+) -> dict[str, list[str]]:
+    """Assign project roles: baseline access for both accounts, restriction roles for the authorized one only.
+
+    The unauthorized account of the ordinary case gets no role at all.
+    """
+    authorized, other = accounts["authorized"]["name"], accounts["other"]["name"]
+    actors = {"Administrators": {admin_user}, baseline: {authorized}}
+    if case != "ordinary":
+        actors[baseline].add(other)
+    for row in comments:
+        visibility = row["visibility"]
+        if visibility and visibility["type"] == "role":
+            actors.setdefault(visibility["value"], set()).update({admin_user, authorized})
+    return {role: sorted(users) for role, users in actors.items()}
 
 
 def _role_ids(admin: JiraAdmin, needed: set[str]) -> dict[str, int]:
@@ -27,11 +67,14 @@ def _role_ids(admin: JiraAdmin, needed: set[str]) -> dict[str, int]:
     return existing
 
 
-def _permission_scheme(admin: JiraAdmin, roles: dict[str, int]) -> int:
-    """Grant browsing only through project roles. Anonymous users and application access get nothing."""
+def _permission_scheme(admin: JiraAdmin, roles: dict[str, int], baseline: str) -> int:
+    """Grant browsing only through the administrator and baseline roles.
+
+    Restriction roles grant nothing by themselves, and anonymous users and application access get nothing.
+    """
     grants = [
         {"holder": {"type": "projectRole", "parameter": str(roles[role])}, "permission": "BROWSE_PROJECTS"}
-        for role in roles
+        for role in ("Administrators", baseline)
     ]
     grants += [
         {"holder": {"type": "projectRole", "parameter": str(roles["Administrators"])}, "permission": permission}
@@ -87,9 +130,10 @@ def load(admin: JiraAdmin, fixture: dict[str, Any]) -> dict[str, Any]:
     """Create every case and return the private state that the verification reads."""
     admin.enable_group_comment_visibility()
     cases = fixture["cases"]
-    role_names = {row["visibility"]["value"] for row in cases["role"]["comments"] if row["visibility"]}
-    roles = _role_ids(admin, set(ROLES) | role_names)
-    scheme = _permission_scheme(admin, roles)
+    restricted = restriction_roles(cases)
+    baseline = baseline_role(restricted)
+    roles = _role_ids(admin, {"Administrators", baseline} | restricted)
+    scheme = _permission_scheme(admin, roles, baseline)
     state: dict[str, Any] = {"cases": {}}
     for case, source in cases.items():
         project = PROJECTS[case]
@@ -108,21 +152,11 @@ def load(admin: JiraAdmin, fixture: dict[str, Any]) -> dict[str, Any]:
             },
         )
         admin.rest("PUT", f"/rest/api/2/project/{project}/permissionscheme", json={"id": scheme})
-        actors = {"Administrators": [admin.user], "Users": [accounts["authorized"]["name"]]}
-        if case != "ordinary":
-            actors["Users"].append(accounts["other"]["name"])
-        visibilities = [row["visibility"] for row in source["comments"] if row["visibility"]]
-        for visibility in visibilities:
-            if visibility["type"] == "group":
-                _group(admin, visibility["value"], [admin.user, accounts["authorized"]["name"]])
-            else:
-                actors.setdefault(visibility["value"], []).extend([admin.user, accounts["authorized"]["name"]])
-        for role, users in actors.items():
-            admin.rest(
-                "POST",
-                f"/rest/api/2/project/{project}/role/{roles[role]}",
-                json={"user": sorted(set(users))},
-            )
+        for row in source["comments"]:
+            if row["visibility"] and row["visibility"]["type"] == "group":
+                _group(admin, row["visibility"]["value"], [admin.user, accounts["authorized"]["name"]])
+        for role, users in role_actors(case, admin.user, accounts, source["comments"], baseline).items():
+            admin.rest("POST", f"/rest/api/2/project/{project}/role/{roles[role]}", json={"user": users})
         fields: dict[str, Any] = {
             "project": {"key": project},
             "summary": source["summary"],
