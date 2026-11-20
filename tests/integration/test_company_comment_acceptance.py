@@ -178,8 +178,8 @@ def acceptance():
         )
     credentials = json.loads(credentials_file.read_text())
     session = f"{stack['compose_project']}-console"
-    start_console(container, session, CHECKOUT / "contrib" / "openproject.irbrc")
     try:
+        start_console(container, session, CHECKOUT / "contrib" / "openproject.irbrc")
         env = {
             "J2O_JIRA_URL": stack["jira"],
             "J2O_JIRA_USERNAME": admin.user,
