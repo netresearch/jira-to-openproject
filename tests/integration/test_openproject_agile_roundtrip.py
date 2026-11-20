@@ -1073,3 +1073,23 @@ def test_component_assignments_are_atomic_project_scoped_and_admin_recoverable(n
     with pytest.raises(AssertionError, match="Unexpected work package origin"):
         apply_component_assignments(client, invalid, {})
     assert query(f"[WorkPackage.find({wid}).category_id, Category.where(project_id: {pid}).count]") == [None, before]
+
+
+def test_board_snapshot_saves_from_a_console_without_a_current_admin(rails):
+    """The migration console runs as anonymous; board filters must still validate as the owner."""
+    client, query = rails
+    project_id, wp_id = query("""
+      template = WorkPackage.first!
+      template.project.update!(public: false)
+      User.current = User.anonymous
+      [template.project_id, template.id]
+    """)
+    result = OpenProjectContentService(client).create_or_update_query(
+        name="[Jira Board 5] J2O anonymous console",
+        project_id=project_id,
+        is_public=False,
+        options={"board_work_package_ids": [wp_id], "jira_board_id": 5},
+    )
+    assert result["success"] is True, result
+    saved = f"Query.find_by!(project_id: {project_id}, name: '[Jira Board 5] J2O anonymous console')"
+    assert query(f"User.execute_as(User.admin.first!) {{ {saved}.results.work_packages.pluck(:id) }}") == [wp_id]
