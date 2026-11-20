@@ -41,8 +41,9 @@ def test_restriction_roles_include_role_comments_of_every_case():
 def test_baseline_role_avoids_every_sampled_restriction():
     assert load.baseline_role(set()) == "Users"
     assert load.baseline_role({"users"}) == "Developers"
+    every_role = set(load.MEMBER_ROLES)
     with pytest.raises(RuntimeError, match="no role is left"):
-        load.baseline_role(set(load.MEMBER_ROLES))
+        load.baseline_role(every_role)
 
 
 def test_baseline_roles_become_openproject_memberships():

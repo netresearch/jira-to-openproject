@@ -12,7 +12,10 @@ set -euo pipefail
 checkout=$(cd "$(dirname "$0")/../.." && pwd -P)
 umask 077
 state=$(mkdir -p "$J2O_COMPANY_COMMENT_STATE" && cd "$J2O_COMPANY_COMMENT_STATE" && pwd -P)
-case "$state/" in "$checkout"/*) echo "State must live outside the checkout" >&2; exit 2 ;; esac
+case "$state/" in
+  "$checkout"/*) echo "State must live outside the checkout" >&2; exit 2 ;;
+  *) ;;
+esac
 chmod 700 "$state"
 jira_port=${J2O_ACCEPT_JIRA_PORT:-18443}
 op_port=${J2O_ACCEPT_OP_PORT:-18444}
