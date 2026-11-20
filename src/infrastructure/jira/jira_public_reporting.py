@@ -38,7 +38,8 @@ def public_report(
         session.trust_env = False
         session.verify = verify
         response = session.get(url, timeout=20, allow_redirects=False)
-        if response.status_code in {401, 403, 404} or response.is_redirect:
+        # Jira answers 400 "The selected filter is not available to you" for a filter it does not share.
+        if response.status_code in {400, 401, 403, 404} or response.is_redirect:
             return None
         response.raise_for_status()
         if response.headers.get("X-AUSERNAME", "").casefold() != "anonymous":
