@@ -56,10 +56,11 @@ class OpenProjectUserService:
 
     # ── reads ────────────────────────────────────────────────────────────
 
-    def get_users(self) -> list[dict[str, Any]]:
+    def get_users(self, *, refresh: bool = False) -> list[dict[str, Any]]:
         """Get all users from OpenProject.
 
-        Uses caching to avoid repeated Rails console queries.
+        Uses caching to avoid repeated Rails console queries. ``refresh`` reads
+        the current list, for example after users were created.
 
         Returns:
             List of OpenProject users
@@ -79,7 +80,7 @@ class OpenProjectUserService:
             and current_time - client._users_cache_time < USERS_CACHE_TTL_SECONDS
         )
 
-        if cache_valid:
+        if cache_valid and not refresh:
             self._logger.debug("Using cached users data (%d users)", len(client._users_cache))
             return client._users_cache
 

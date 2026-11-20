@@ -240,6 +240,18 @@ class ChangeAwareRunner:
                 f"total_changes={change_report.get('total_changes', 0)}",
             )
 
+            untracked = len(current_entities) - summary.get("current_entity_count", len(current_entities))
+            if untracked > 0:
+                # Entities without an identifier never reach the comparison, so
+                # "no changes" would only describe the identifiable rest.
+                self.logger.warning(
+                    "%d of %d current %s entities have no identifier; proceeding with migration",
+                    untracked,
+                    len(current_entities),
+                    entity_type,
+                )
+                return False, change_report
+
             should_skip = change_report["total_changes"] == 0
 
             if should_skip:

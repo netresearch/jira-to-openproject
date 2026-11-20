@@ -241,6 +241,8 @@ class ChangeDetector:
             "priorities": "id",
             "resolutions": "id",
             "customfields": "id",
+            # One aggregate per mapped project (roles plus permission scheme).
+            "admin_schemes": "project_key",
         }
 
         # Try specific field for entity type

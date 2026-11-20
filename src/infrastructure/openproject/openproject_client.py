@@ -1075,13 +1075,13 @@ class OpenProjectClient:
         """
         return self.file_transfer.transfer_file_from_container(container_path, local_path)
 
-    def get_users(self) -> list[dict[str, Any]]:
+    def get_users(self, *, refresh: bool = False) -> list[dict[str, Any]]:
         """Get all users from OpenProject.
 
         Thin delegator over ``self.users.get_users``. Uses caching to avoid
-        repeated Rails console queries.
+        repeated Rails console queries unless ``refresh`` is set.
         """
-        return self.users.get_users()
+        return self.users.get_users(refresh=refresh)
 
     def get_user(self, user_identifier: int | str) -> dict[str, Any]:
         """Get a single user by id, email, or login.

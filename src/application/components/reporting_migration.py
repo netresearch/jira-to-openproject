@@ -57,7 +57,8 @@ class ReportingMigration(BaseMigration):
         for kind, listing in (("filter", self.jira_client.get_filters), ("dashboard", self.jira_client.get_dashboards)):
             public, held = self._public_records(kind, listing())
             records[kind + "s"] = public + [{"id": identifier} for identifier in held]
-        return [{**records, "total_count": len(records["filters"]) + len(records["dashboards"])}]
+        total = len(records["filters"]) + len(records["dashboards"])
+        return [{"id": "jira-reporting-inventory", **records, "total_count": total}]
 
     def _extract(self) -> ComponentResult:
         """Fetch Jira filters and dashboards."""

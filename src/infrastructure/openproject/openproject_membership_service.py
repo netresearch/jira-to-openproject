@@ -206,18 +206,30 @@ class OpenProjectMembershipService:
                 "      group = Group.find_by(name: name)\n"
                 "      project = Project.find_by(id: project_id)\n"
                 "      next unless group && project\n"
-                "      member = Member.find_or_initialize_by(project: project, principal: group)\n"
-                "      existing_ids = Array(member.role_ids).map(&:to_i)\n"
+                "      member = Member.find_by(project: project, principal: group, entity: nil)\n"
+                # OpenProject's member services copy a group's roles to its users
+                # (inherited member roles); a bare Member#save grants only the group.
+                "      call = if member.nil?\n"
+                "        Members::CreateService.new(user: User.system)\n"
+                "          .call(principal: group, project: project, role_ids: role_ids, send_notifications: false)\n"
+                "      else\n"
+                "        existing_ids = member.member_roles.reject(&:inherited_from).map(&:role_id)\n"
                 # Additive merge by design — see Python docstring above.
-                "      new_ids = (existing_ids + role_ids).uniq\n"
-                "      if member.new_record? || new_ids.sort != existing_ids.sort\n"
-                "        member.role_ids = new_ids\n"
-                # ``save!`` so failed validations raise into the inner
-                # ``rescue`` (and are recorded under ``errors``) instead
-                # of silently incrementing ``updated``.
-                "        member.save!\n"
+                "        new_ids = (existing_ids + role_ids).uniq\n"
+                "        next_ids = new_ids.sort == existing_ids.sort ? nil : new_ids\n"
+                "        next_ids && Members::UpdateService.new(user: User.system, model: member)\n"
+                "          .call(role_ids: next_ids, send_notifications: false)\n"
+                "      end\n"
+                "      if call\n"
+                "        raise call.errors.full_messages.join(', ') unless call.success?\n"
                 "        updated += 1\n"
                 "      end\n"
+                # Also gives group members access where an earlier run saved the
+                # group membership directly. Inserts only missing rows.
+                "      inherited = Groups::CreateInheritedRolesService\n"
+                "        .new(group, current_user: User.system, contract_class: EmptyContract)\n"
+                "        .call(user_ids: group.user_ids, send_notifications: false, project_ids: [project.id])\n"
+                "      raise inherited.errors.full_messages.join(', ') unless inherited.success?\n"
                 "    rescue => e\n"
                 "      errors << { group: row['group_name'], project: row['project_id'], error: e.message }\n"
                 "    end\n"
@@ -283,20 +295,23 @@ if desired.empty?
   return { success: false, error: 'no roles specified' }
 end
 
-member = Member.find_or_initialize_by(project: project, principal: user)
-existing = Array(member.role_ids).map(&:to_i)
-
-if member.new_record? || (existing.sort != desired.sort)
-  member.role_ids = desired
-  changed = true
-else
-  changed = false
+member = Member.find_by(project: project, principal: user, entity: nil)
+# Compare direct roles only; roles inherited from groups stay untouched.
+existing = member ? member.member_roles.reject(&:inherited_from).map(&:role_id) : []
+call = if member.nil?
+  Members::CreateService.new(user: User.system)
+    .call(principal: user, project: project, role_ids: desired, send_notifications: false)
+elsif existing.sort != desired.sort
+  Members::UpdateService.new(user: User.system, model: member)
+    .call(role_ids: desired, send_notifications: false)
 end
 
-if member.save
-  { success: true, changed: changed, role_ids: member.role_ids }
+if call.nil?
+  { success: true, changed: false, role_ids: member.role_ids }
+elsif call.success?
+  { success: true, changed: true, role_ids: call.result.role_ids }
 else
-  { success: false, error: member.errors.full_messages.join(', ') }
+  { success: false, error: call.errors.full_messages.join(', ') }
 end
 """
         script = head + body

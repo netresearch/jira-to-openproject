@@ -397,8 +397,9 @@ class UserMigration(BaseMigration):
 
         self.logger.info("Extracting users from OpenProject...")
 
-        # Get users from OpenProject - no fallbacks or mocks
-        self.op_users = self.op_client.get_users()
+        # Get users from OpenProject - no fallbacks or mocks. A forced read also
+        # bypasses the client's user cache, which predates users created since.
+        self.op_users = self.op_client.get_users(refresh=True) if force else self.op_client.get_users()
 
         if not self.op_users:
             # Instead of failing completely, log a warning and continue with empty list
@@ -536,7 +537,7 @@ class UserMigration(BaseMigration):
             self.logger.info("J2O user custom fields available: %s", list(cf_ids.keys()))
 
         # Extract fresh OP users (force refresh to get latest provenance data)
-        self.op_users = self.op_client.get_users()
+        self.op_users = self.op_client.get_users(refresh=True)
         if not self.op_users:
             self.logger.warning("No users found in OpenProject")
             return {}
