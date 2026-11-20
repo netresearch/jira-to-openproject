@@ -137,6 +137,7 @@ class WorkflowMigration(BaseMigration):
         # Return aggregated data structure
         return [
             {
+                "id": "jira-workflow-inventory",
                 "issue_type_to_workflow": issue_type_to_workflow,
                 "workflow_transitions": workflow_transitions,
                 "workflow_statuses": workflow_statuses,
