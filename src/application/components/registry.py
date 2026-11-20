@@ -107,8 +107,6 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "accounts",
     # === Structure: Projects ===
     "projects",
-    # Groups read the project mapping to build project-role groups.
-    "groups",
     "workflows",
     # === Phase 1: Work Package Skeletons (no content) ===
     "work_packages_skeleton",
@@ -161,6 +159,10 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     # === Time Tracking ===
     "time_entries",
     # === Finalization ===
+    # Groups read the project mapping to build project-role groups and add the
+    # first project members. simpletasks and components stage their changes only
+    # in projects without members; category_defaults needs the members.
+    "groups",
     "category_defaults",
     "admin_schemes",
     "reporting",

@@ -22,7 +22,7 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 |-----------|----------|--------|--------|-------|
 | **Core Entities** |
 | UserMigration | `users` | Stable | Yes | Foundation - run first |
-| GroupMigration | `groups` | Stable | Yes | Requires users |
+| GroupMigration | `groups` | Stable | Yes | Requires users and projects; grants project access |
 | ProjectMigration | `projects` | Stable | Yes | Hierarchical structure |
 | WorkPackageMigration | `work_packages` | Stable | Yes | Legacy single-phase |
 | WorkPackageSkeletonMigration | `work_packages_skeleton` | Stable | Yes | Phase 1 - mapping |
@@ -175,7 +175,9 @@ Synchronizes Jira groups and role-based memberships to OpenProject.
 - Hierarchical group support
 - Membership synchronization
 
-**Dependencies**: UserMigration (users must exist)
+**Dependencies**: UserMigration (users must exist), ProjectMigration (project mapping for the project-role groups)
+
+**Sequence**: after `components` and before `category_defaults`. Its project-role groups add the first project members, while `simpletasks` and `components` change only projects without members and `category_defaults` needs them.
 
 **Example Usage**:
 ```bash
@@ -566,7 +568,7 @@ The component runs only when `migration.native_board_archive_project` in `config
 uv run python -m src.main migrate --components native_boards --no-confirm
 ```
 
-The [native sprint runner](native-completed-sprints.md) and the [deferred reference replay](deferred-references.md) remain separate operator commands. Both require a private project without members, but `projects` adds the mapped Jira project lead as a member. The sprint runner also accepts only one frozen manifest per project, and the reference replay needs the operator's age identity.
+The [native sprint runner](native-completed-sprints.md) and the [deferred reference replay](deferred-references.md) remain separate operator commands. Both require a private project without members; in the full profile `groups` adds the first members. The sprint runner also accepts only one frozen manifest per project, and the reference replay needs the operator's age identity.
 
 ---
 
@@ -1024,14 +1026,14 @@ CompanyMigration (Tempo)
 
 ### Recommended Order
 
-1. **Foundation**: users, groups
+1. **Foundation**: users
 2. **Configuration**: status, priority, issue_types, custom_fields
 3. **Structure**: projects, components, versions
 4. **Content**: work_packages, attachments
 5. **Relationships**: relations, watchers, links
 6. **Time Tracking**: time_entries
 7. **Agile**: sprints, boards
-8. **Workflow**: workflow, admin_schemes
+8. **Workflow**: workflow, groups, admin_schemes
 9. **Reporting**: reporting
 
 ---

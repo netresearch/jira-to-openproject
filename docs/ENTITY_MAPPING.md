@@ -470,7 +470,6 @@ writes appear in the component result.
 ```
 1. FOUNDATION
    └── users          # No dependencies
-   └── groups         # Depends on: users
 
 2. CONFIGURATION
    └── custom_fields  # No dependencies
@@ -509,6 +508,7 @@ writes appear in the component result.
 
 8. POST-PROCESSING
    └── inline_refs    # Updates references in descriptions
+   └── groups         # Depends on: users, projects — adds the first project members
    └── admin_schemes  # Role memberships
    └── reporting      # Saved queries, dashboards
 ```
