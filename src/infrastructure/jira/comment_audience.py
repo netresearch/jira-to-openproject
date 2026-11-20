@@ -14,6 +14,8 @@ from urllib.parse import quote, urlsplit
 
 import requests
 
+from src.infrastructure.jira.jira_public_reporting import anonymous_verify
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -286,6 +288,7 @@ def select_comments(client: Any, issue_key: str) -> CommentSelection:
         # Ignore netrc, proxy credentials and ambient client configuration. Discard
         # cookies even between pages. Require Jira to identify every reply as anonymous.
         session.trust_env = False
+        session.verify = anonymous_verify(client, client.base_url)
 
         def get(params: dict) -> requests.Response:
             session.cookies.clear()
