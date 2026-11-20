@@ -72,6 +72,7 @@ from src.application.components.versions_migration import VersionsMigration
 from src.application.components.votes_migration import VotesMigration
 from src.application.components.watcher_migration import WatcherMigration
 from src.application.components.work_package_content_migration import WorkPackageContentMigration
+from src.application.components.work_package_field_history_migration import WorkPackageFieldHistoryMigration
 from src.application.components.work_package_migration import WorkPackageMigration
 from src.application.components.work_package_skeleton_migration import WorkPackageSkeletonMigration
 from src.application.components.workflow_migration import WorkflowMigration
@@ -457,6 +458,9 @@ def _build_component_factories(
         "security_levels": lambda: SecurityLevelsMigration(jira_client=jira_client, op_client=op_client),
         "votes_reactions": lambda: VotesMigration(jira_client=jira_client, op_client=op_client),
         "customfields_generic": lambda: CustomFieldsGenericMigration(jira_client=jira_client, op_client=op_client),
+        "work_package_field_history": lambda: WorkPackageFieldHistoryMigration(
+            jira_client=jira_client, op_client=op_client
+        ),
         "story_points": lambda: StoryPointsMigration(jira_client=jira_client, op_client=op_client),
         "sprint_epic": lambda: SprintEpicMigration(jira_client=jira_client, op_client=op_client),
         "remote_links": lambda: RemoteLinksMigration(jira_client=jira_client, op_client=op_client),

@@ -67,3 +67,9 @@ python -m src.main migrate --components work_packages_content
 - `src/migrations/work_package_content_migration.py` - Phase 2
 - Registered as `work_packages_skeleton` and `work_packages_content` components
 - Legacy `work_packages` component retained for backward compatibility
+
+## Update 2026-11-19: field-change history
+
+Jira field-change history (changelog) is not replayed as native OpenProject journals. The legacy `work_packages` writer refuses journal replay (`LegacyJournalReplayError`), because a journal could not keep each change's reader audience. Instead, the `work_package_field_history` component writes the audience-safe changes of each issue as structured history: canonical JSON in the work-package text custom field "Jira Field Changes (structured history)".
+
+The audience argument: in Jira Server/DC an issue's History tab is readable by everyone who can browse the issue. Issues with a security level are not migrated as ordinary work packages, and the component itself only writes issues that Jira returns for `level IS EMPTY` in software and business projects. Comment changes and every event or item with audience or visibility metadata are withheld by the selection shared with `j2o-history`. The component stores the custom value directly, as `customfields_generic` does, without saving the work package. Whether OpenProject later shows that value in the journal of the next user edit has not been measured.

@@ -69,6 +69,11 @@ migration:
   enable_rails_meta_writes: true
   enable_runner_fallback: true
 
+  # Reviewed standard Jira text/select custom fields whose changes the
+  # work_package_field_history component may keep (and j2o-history --field-id).
+  # List of customfield_<number> IDs or a comma-separated string; empty by default.
+  history_approved_field_ids: []
+
   # Caching and Performance Optimization
   # Enable idempotent workflow with thread-safe caching (Option B implementation)
   # When true: uses run_idempotent() with cached API calls (80-95% reduction)

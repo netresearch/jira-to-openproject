@@ -12,7 +12,6 @@ import os
 import re
 import sys
 import tempfile
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,22 +21,9 @@ from pyrage import x25519
 from src.comment_archive.archive import encoded
 from src.comment_archive.cli import input_file
 from src.comment_archive.transport import Endpoint, publish, require
-from src.infrastructure.jira.comment_audience import has_comment_audience, may_copy_history_item
+from src.infrastructure.jira.field_history import ISSUE_KEY, custom_fields, is_complete_page, kept_events
 
 _FORMAT = "j2o-operator-field-history/1"
-_CORE_ADDITIONAL_FIELDS = {"WorklogId", "WorklogTimeSpent", "RemoteIssueLink"}
-_SYSTEM_CUSTOM = "com.atlassian.jira.plugin.system.customfieldtypes:"
-_AGILE_CUSTOM = "com.pyxis.greenhopper.jira:"
-_SCHEMA_TYPES = {
-    *(_SYSTEM_CUSTOM + kind for kind in ("textarea", "textfield", "select", "multicheckboxes", "multiselect", "float")),
-    *(
-        _AGILE_CUSTOM + kind
-        for kind in ("gh-sprint", "gh-epic-link", "gh-epic-label", "gh-epic-status", "gh-epic-color", "gh-lexo-rank")
-    ),
-    "com.tempoplugin.tempo-accounts:accounts.customfield",
-}
-_FIELDS = ("field", "fieldId", "fieldtype", "from", "fromString", "to", "toString")
-_ISSUE_KEY = re.compile(r"[A-Z][A-Z\d_]*-\d+", re.ASCII)
 
 
 @dataclass(frozen=True)
@@ -48,67 +34,6 @@ class Destination:
     project: int
     origin_id: int
     origin_url: int
-
-
-def custom_fields(fields: list[dict], approved: set[str]) -> set[tuple[str, str | None]]:
-    """Resolve unambiguous custom names and IDs from Jira's field catalogue."""
-    names = Counter(field["name"] for field in fields)
-    result: set[tuple[str, str | None]] = set()
-    for field in fields:
-        name, fid = field["name"], field["id"]
-        schema = field.get("schema", {}).get("custom", "")
-        if schema.startswith(_SYSTEM_CUSTOM) and fid not in approved:
-            continue
-        if re.fullmatch(r"customfield_\d+", fid, re.ASCII) and schema in _SCHEMA_TYPES:
-            result.add((name, fid))
-            if names[name] == 1:
-                result.add((name, None))
-    return result
-
-
-def _synthetic_reference(item: dict) -> bool:
-    if item.get("fieldId") or item["field"] not in {"Epic Child", "Parent Issue"}:
-        return False
-    for side in ("from", "to"):
-        value, label = item.get(side), item.get(side + "String")
-        if value is None and label is None:
-            continue
-        if not isinstance(label, str) or not _ISSUE_KEY.fullmatch(label):
-            return False
-        if not isinstance(value, str) or not ((value.isascii() and value.isdecimal()) or _ISSUE_KEY.fullmatch(value)):
-            return False
-    return item.get("from") is not None or item.get("to") is not None
-
-
-def _keep(item: dict, history: dict, fields: set[tuple[str, str | None]]) -> bool:
-    if "raw" in item or has_comment_audience(history) or has_comment_audience(item):
-        return False
-    if any(value is not None and type(value) not in (str, int) for value in (item.get(k) for k in _FIELDS)):
-        return False
-    name, fid = item.get("field"), item.get("fieldId")
-    if not isinstance(name, str):
-        return False
-    if item.get("fieldtype") == "jira":
-        if name.startswith("customfield_") or (fid and str(fid).casefold() != name.casefold()):
-            return False
-        return may_copy_history_item(item, history) or name in _CORE_ADDITIONAL_FIELDS
-    if item.get("fieldtype") != "custom" or not may_copy_history_item(item, history):
-        return False
-    return (name, fid) in fields or _synthetic_reference(item)
-
-
-def _event(history: dict, fields: set[tuple[str, str | None]]) -> dict:
-    values = [
-        {"position": index, **{k: item[k] for k in _FIELDS if k in item}}
-        for index, item in enumerate(history["items"])
-        if _keep(item, history, fields)
-    ]
-    return {
-        "id": str(history["id"]),
-        "created": history["created"],
-        "author": (history.get("author") or {}).get("key"),
-        "changes": values,
-    }
 
 
 def snapshot(issues: list[dict], fields: list[dict], project: str, jira: str, approved: set[str]) -> dict:
@@ -122,7 +47,7 @@ def snapshot(issues: list[dict], fields: list[dict], project: str, jira: str, ap
     for issue in issues:
         sid, key = str(issue["id"]), issue["key"]
         require(
-            sid.isascii() and sid.isdecimal() and _ISSUE_KEY.fullmatch(key) and key.rsplit("-", 1)[0] == project,
+            sid.isascii() and sid.isdecimal() and ISSUE_KEY.fullmatch(key) and key.rsplit("-", 1)[0] == project,
             "Invalid issue identity",
         )
         require(
@@ -132,22 +57,8 @@ def snapshot(issues: list[dict], fields: list[dict], project: str, jira: str, ap
         require(sid not in source and key not in keys, "Duplicate issue identity")
         keys.add(key)
         page = issue["changelog"]
-        histories = page["histories"]
-        require(
-            type(page["startAt"]) is int
-            and type(page["total"]) is int
-            and isinstance(histories, list)
-            and page.get("isLast") is not False,
-            "Invalid or partial history page",
-        )
-        require(
-            page["startAt"] == 0
-            and len(histories) == page["total"]
-            and len({str(h["id"]) for h in histories}) == len(histories),
-            "Incomplete or duplicate issue history",
-        )
-        events = [_event(h, resolved) for h in histories]
-        source[sid] = {"key": key, "events": [event for event in events if event["changes"]]}
+        require(is_complete_page(page), "Invalid, partial or duplicate issue history")
+        source[sid] = {"key": key, "events": kept_events(page["histories"], resolved)}
     return {"format": _FORMAT, "jira": jira, "project": project, "issues": source}
 
 
