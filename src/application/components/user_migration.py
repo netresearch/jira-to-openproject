@@ -168,6 +168,11 @@ def _apply_created_user_ids_to_mapping(
     return n
 
 
+def _is_inactive(jira_user: dict | None) -> bool:
+    """Only an explicit ``active: false`` proves a Jira account inactive."""
+    return jira_user is not None and jira_user.get("active") is False
+
+
 @register_entity_types("users", "user_accounts")
 class UserMigration(BaseMigration):
     """Handles the migration of users from Jira to OpenProject.
@@ -1118,6 +1123,7 @@ class UserMigration(BaseMigration):
 
         cf_ids = self._get_user_origin_cf_ids()
         jira_index = self._get_jira_user_index()
+        created_locked = self._keys_created_locked(missing_users, jira_index)
 
         if missing_users:
             with ProgressTracker(
@@ -1130,7 +1136,8 @@ class UserMigration(BaseMigration):
 
                     # Prepare data for user creation
                     users_to_create = [
-                        self._new_user_record(user, existing_emails, jira_index, cf_ids) for user in batch
+                        self._new_user_record(user, existing_emails, jira_index, cf_ids, created_locked)
+                        for user in batch
                     ]
 
                     batch_users = [user["jira_name"] for user in batch]
@@ -1181,13 +1188,161 @@ class UserMigration(BaseMigration):
         self.extract_openproject_users(force=True)
         self.create_user_mapping()
 
+        # Users created by earlier runs, or linked to existing accounts, keep
+        # whatever status they had; lock those whose Jira account is inactive.
+        lock_stats = self.lock_inactive_users()
+
         return {
             "created": created,
             "failed": failed,
             "total": total,
             "created_count": created,  # Add for test compatibility
             "created_users": created_users,
+            "locked": lock_stats,
         }
+
+    @staticmethod
+    def _keys_created_locked(missing_users: list, jira_index: dict) -> set[str]:
+        """Return the Jira keys whose new target may be created locked.
+
+        A taken login or email links a later identity to the account an earlier
+        one created, so identities sharing a login or a non-empty email, also
+        through others, can end up on one target. Such a group's target is
+        created locked only when every identity in the group is inactive.
+        """
+        parent = list(range(len(missing_users)))
+
+        def root(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        first_with: dict[tuple[str, str], int] = {}
+        for i, user in enumerate(missing_users):
+            for field in ("jira_name", "jira_email"):
+                value = str(user.get(field) or "").strip().lower()
+                if value:
+                    parent[root(i)] = root(first_with.setdefault((field, value), i))
+
+        keys = [str(user.get("jira_key")) for user in missing_users]
+        active_groups = {root(i) for i, key in enumerate(keys) if not _is_inactive(jira_index.get(key))}
+        return {key for i, key in enumerate(keys) if root(i) not in active_groups}
+
+    def _user_ids_to_lock(self) -> tuple[list[int], int]:
+        """Return target users whose every mapped Jira identity is inactive, plus skipped admins.
+
+        Only an explicit ``active: false`` counts as inactive; an identity whose
+        Jira record is missing or carries no flag keeps the target unlocked.
+        """
+        jira_index = self._get_jira_user_index()
+        inactive: set[int] = set()
+        keep_unlocked: set[int] = set()
+        for mapping in (self.user_mapping or {}).values():
+            try:
+                op_id = int(mapping.get("openproject_id"))
+            except TypeError, ValueError:
+                continue
+            if _is_inactive(jira_index.get(str(mapping.get("jira_key")))):
+                inactive.add(op_id)
+            else:
+                keep_unlocked.add(op_id)
+
+        op_users_by_id = self._target_users_by_id()
+        ids: list[int] = []
+        skipped_admin = 0
+        for op_id in sorted(inactive - keep_unlocked):
+            op_user = op_users_by_id.get(op_id) or {}
+            if op_user.get("status") == "locked":
+                continue
+            if op_user.get("admin"):
+                skipped_admin += 1
+                self.logger.warning(
+                    "Not locking OpenProject admin %s (id %s) although its Jira account is inactive",
+                    op_user.get("login"),
+                    op_id,
+                )
+                continue
+            ids.append(op_id)
+        return ids, skipped_admin
+
+    def lock_inactive_users(self) -> dict[str, int]:
+        """Lock mapped OpenProject users whose Jira account is inactive.
+
+        This only ever locks. The user provenance fields do not record who
+        locked an account, so a lock set by an administrator cannot be told
+        apart from one set by this tool, and no user is unlocked here.
+
+        Raises:
+            MigrationError: If OpenProject does not confirm every requested lock.
+
+        """
+        ids, skipped_admin = self._user_ids_to_lock()
+        stats = {"requested": len(ids), "locked": 0, "missing": 0, "skipped_admin": skipped_admin}
+        if not ids:
+            return stats
+
+        ruby = (
+            "require 'json'\n"
+            f"ids = JSON.parse({json.dumps(json.dumps(ids))})\n"
+            "locked = []\n"
+            "missing = []\n"
+            "admins = []\n"
+            "errors = []\n"
+            "ids.each do |id|\n"
+            "  begin\n"
+            "    outcome = User.transaction do\n"
+            "      user = User.lock.find_by(id: id)\n"
+            "      if user.nil?\n"
+            "        :missing\n"
+            "      elsif user.admin?\n"
+            "        :admin\n"
+            "      else\n"
+            "        unless user.locked?\n"
+            "          user.status = 'locked'\n"
+            "          user.save(validate: false)\n"
+            "        end\n"
+            "        :saved\n"
+            "      end\n"
+            "    end\n"
+            "    # Confirm from the committed row, after the transaction has ended.\n"
+            "    if outcome == :missing\n"
+            "      missing << id\n"
+            "    elsif outcome == :admin\n"
+            "      admins << id\n"
+            "    elsif User.find_by(id: id)&.locked?\n"
+            "      locked << id\n"
+            "    end\n"
+            "  rescue => e\n"
+            "    errors << { id: id, error: e.message }\n"
+            "  end\n"
+            "end\n"
+            "{ locked: locked, missing: missing, admins: admins, errors: errors }\n"
+        )
+        summary = self.op_client.execute_query_to_json_file(ruby, timeout=180)
+        if not isinstance(summary, dict):
+            msg = f"Locking inactive users returned no result for ids {ids}"
+            raise MigrationError(msg)
+
+        confirmed = {int(i) for i in summary.get("locked") or []}
+        missing = {int(i) for i in summary.get("missing") or []}
+        admins = {int(i) for i in summary.get("admins") or []}
+        unconfirmed = sorted(set(ids) - confirmed - missing - admins)
+        if unconfirmed:
+            msg = f"OpenProject did not confirm the lock of users {unconfirmed}: {summary.get('errors')}"
+            raise MigrationError(msg)
+        if missing:
+            self.logger.warning("Users to lock no longer exist in OpenProject: %s", sorted(missing))
+        if admins:
+            self.logger.warning(
+                "Not locking OpenProject admins %s although their Jira account is inactive", sorted(admins)
+            )
+
+        stats["locked"] = len(confirmed)
+        stats["missing"] = len(missing)
+        stats["skipped_admin"] += len(admins)
+        self.logger.info("Locked %d OpenProject users whose Jira account is inactive", len(confirmed))
+        return stats
 
     def backfill_user_origin_metadata(self) -> dict[str, int]:
         """Update origin custom fields and timezone for existing OpenProject users."""
@@ -1488,7 +1643,9 @@ class UserMigration(BaseMigration):
                     last = last[:start].strip()
         return _printable_name(first, "User"), _printable_name(last, "Unknown")
 
-    def _new_user_record(self, user: dict, existing_emails: set, jira_index: dict, cf_ids: dict) -> dict:
+    def _new_user_record(
+        self, user: dict, existing_emails: set, jira_index: dict, cf_ids: dict, created_locked: set[str]
+    ) -> dict:
         first_name, last_name = self._user_names(user)
         email = user["jira_email"]
         if not email or email.strip() == "":
@@ -1519,7 +1676,9 @@ class UserMigration(BaseMigration):
             "lastname": last_name,
             "mail": email,
             "admin": False,
-            "status": "active",
+            # An inactive Jira account must not become a usable OpenProject login,
+            # unless an active identity will be linked to the same account.
+            "status": "locked" if str(user.get("jira_key")) in created_locked else "active",
         }
         if cf_payload:
             user_record["custom_fields"] = cf_payload
