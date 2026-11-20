@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -123,3 +124,30 @@ def test_fixture_creates_a_missing_directory_owner_only(tmp_path: Path):
 def test_fixture_refuses_the_checkout():
     with pytest.raises(SystemExit, match="outside the checkout"):
         sample.private_output(sample.CHECKOUT / "var" / "fixture.json")
+
+
+def test_down_removes_the_state_of_the_destroyed_stack(tmp_path: Path):
+    state = tmp_path / "state"
+    (state / "var" / "state" / "checkpoints").mkdir(parents=True)
+    for name in ("loaded.json", "migration-credentials.json", "stack.json", "archive-role-0a1b.sqlite", "fixture.json"):
+        (state / name).write_text("{}")
+    (state / "compose-project").write_text("j2o-accept-test\n")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "docker").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$DOCKER_CALLS"\n')
+    (stub / "docker").chmod(0o700)
+    calls = tmp_path / "docker-calls"
+    env = {
+        **os.environ,
+        "PATH": f"{stub}:{os.environ['PATH']}",
+        "DOCKER_CALLS": str(calls),
+        "J2O_COMPANY_COMMENT_FIXTURE": str(state / "fixture.json"),
+        "J2O_COMPANY_COMMENT_STATE": str(state),
+        "J2O_ACCEPT_JIRA_LICENSE": str(tmp_path / "license"),
+    }
+    script = Path(sample.__file__).with_name("run_company_comment_acceptance.sh")
+    subprocess.run(["bash", str(script), "down"], env=env, check=True, timeout=60)
+    assert (
+        calls.read_text() == f"compose -p j2o-accept-test -f {state.resolve()}/compose.yml down -v --remove-orphans\n"
+    )
+    assert sorted(path.name for path in state.iterdir()) == ["fixture.json"]

@@ -128,7 +128,10 @@ PY
 
 down() {
     "${compose[@]}" down -v --remove-orphans
-    rm -f "$state/compose-project"
+    # Remove the state of the destroyed stack, so the next run loads the samples and migrates afresh.
+    rm -rf -- "${state:?}/var"
+    rm -f -- "$state/compose-project" "$state/stack.json" "$state/loaded.json" "$state/migration-credentials.json" \
+        "$state"/archive-*.sqlite
 }
 
 run_test() {
