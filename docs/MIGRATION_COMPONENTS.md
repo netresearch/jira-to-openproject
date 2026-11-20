@@ -33,6 +33,7 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 | IssueTypeMigration | `issue_types` | Stable | Yes | Work package types |
 | CustomFieldMigration | `custom_fields` | Stable | Yes | Field definitions |
 | CustomFieldsGenericMigration | `customfields_generic` | Stable | Yes | Field values |
+| WorkPackageFieldHistoryMigration | `work_package_field_history` | New | Unit | Structured field-change history |
 | ResolutionMigration | `resolutions` | Stable | Yes | Resolution values |
 | LinkTypeMigration | `link_types` | Stable | Yes | Relation types |
 | **Tempo Integration** |
@@ -930,22 +931,42 @@ The stage verifies the target project and each affected work package's origin in
 
 ---
 
+### WorkPackageFieldHistoryMigration
+
+The default and `full` profiles run `work_package_field_history` directly after `customfields_generic`. It keeps each migrated issue's Jira field changes as structured history in the work-package text custom field **Jira Field Changes (structured history)**. It does not create native OpenProject journals: those cannot keep each change's reader audience (see [ADR-001](adr/ADR-001-two-phase-work-package-migration.md)). A changelog event that touches a worklog (`WorklogId`, `WorklogTimeSpent`, together with the time-tracking totals it changes) stays out of this value, because a worklog can have its own visibility; the operator archive keeps it. When an issue later gains a security level or keeps no change, a re-run removes its stored value and the copies of that value in the work package's journals.
+
+The selection is the one `j2o-history` uses (`src/infrastructure/jira/field_history.py`). Recognized built-in fields, supported Agile and Tempo fields and reviewed standard custom fields are kept. Comment changes and every event or item that carries audience or visibility metadata are withheld.
+
+The stage reads each configured project through Jira's empty-security-level search with `expand=changelog`. Only mapped issues that this search returns are considered; an issue with a security level is skipped. The work-package mapping is a cache: a work package in the mapped project that holds a stored value but has no mapping entry is found through its `J2O Origin ID` and `J2O Origin Key` and checked like a mapped one. A blank stored value is ignored. When the work package has no usable origin key, or another work package already targets its issue, its stored value is removed; so is the value of one whose origin key belongs to another Jira project, because that project's search never returns it. A stored value whose work package has no `J2O Origin ID` cannot be confirmed: it counts as `clear_unconfirmed` and has to be removed by hand. Customer-facing project types (anything other than software and business) are skipped and need a separate access check. An issue's changelog must be one complete page (`startAt` 0, every history present once, `isLast` not false); otherwise the issue is skipped and counted as incomplete.
+
+The stored value is canonical JSON (sorted keys, no whitespace, UTF-8) of `{"jiraIssueId": "<id>", "events": [{"id", "created", "author", "changes": [{"position", "field", "fieldId", "fieldtype", "from", "fromString", "to", "toString"}]}]}`. `position` is the item's index in the original Jira event. An issue with no kept change gets no value.
+
+Before writing, the stage reads the stored values and the `J2O Origin ID` of each target. A work package whose origin differs from the Jira issue, or that is not in the mapped project, is skipped; when its stored value was due for removal, the skip counts as `clear_unconfirmed` and makes the result unsuccessful. A value is written only when it differs from the stored one, so a repeat run writes nothing. The write enables the field for the work package's project and type and stores the custom value directly, as `customfields_generic` does, without saving the work package.
+
+The result's `details` report `issues_seen`, `issues_written`, `cleared` (stored values removed), `unchanged`, `no_kept_changes`, `incomplete`, `restricted_skipped`, `not_returned` (mapped issues the empty-security-level search did not return), `unsupported_project_type`, `target_unconfirmed`, `failed`, `clear_unconfirmed` (stored values due for removal whose removal was not confirmed), `source_changes`, `kept_changes` and `withheld_changes`. The result is unsuccessful when `failed` or `clear_unconfirmed` is above zero.
+
+Standard Jira text and select custom fields (`com.atlassian.jira.plugin.system.customfieldtypes:*`) are withheld unless reviewed. List each reviewed field in `migration.history_approved_field_ids` in `config/config.yaml`, as a list of `customfield_<number>` IDs or one comma-separated string. The default is empty. It has the same effect as `j2o-history seal --field-id`. Review a free-text field before approving it.
+
+**Implementation:** `src/application/components/work_package_field_history_migration.py`
+
+**Depends on:** work package mappings and the `J2O Origin ID` provenance field (`work_packages_skeleton`, `wp_metadata_backfill`)
+
+---
+
 ## Migration Execution
 
 ### Migration Profiles
 
 Pre-defined component groups:
 
-**Default Profile**:
+**Default and Full Profile**:
 ```bash
 uv run python -m src.main migrate --no-confirm
-# Runs: users, groups, projects, work_packages, attachments
-```
-
-**Full Profile**:
-```bash
 uv run python -m src.main migrate --profile full --no-confirm
-# Includes: workflows, agile boards, admin schemes, reporting, all entities
+# Both run DEFAULT_COMPONENT_SEQUENCE (src/application/components/registry.py):
+# the two-phase work_packages_skeleton -> attachments -> work_packages_content
+# flow, then metadata, field history, relations, watchers, time entries and
+# finalization. The legacy work_packages component is not part of it.
 ```
 
 ### Individual Components

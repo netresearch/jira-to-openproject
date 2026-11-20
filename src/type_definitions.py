@@ -179,6 +179,7 @@ type ComponentName = Literal[
     "security_levels",
     "votes_reactions",
     "customfields_generic",
+    "work_package_field_history",
     "story_points",
     "sprint_epic",
     "remote_links",

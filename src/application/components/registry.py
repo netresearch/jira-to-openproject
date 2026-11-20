@@ -147,6 +147,10 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "security_levels",
     "affects_versions",
     "customfields_generic",
+    # Audience-safe Jira field-change history as structured JSON in one text
+    # custom field (not native journals, see ADR-001). Needs the work-package
+    # mapping and the J2O Origin ID that wp_metadata_backfill fills earlier.
+    "work_package_field_history",
     # === WP Relationships ===
     "relations",
     "remote_links",

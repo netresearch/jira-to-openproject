@@ -20,6 +20,8 @@ Store the SHA-256 digest printed by `seal` in your trusted recovery records. Com
 
 The archive retains issue and event IDs, timestamps, author keys, item positions and original before/after values. It includes recognized built-in changes and supported structured Agile and Tempo fields. For a reviewed standard custom field, pass its Jira ID with `--field-id`. Review its use before including it, especially for text fields. Unknown fields, comment fields and events or items with audience restrictions are skipped.
 
+The same selection (`src/infrastructure/jira/field_history.py`) is used by the `work_package_field_history` migration component, which writes the kept changes of unrestricted issues as readable structured history to each work package (see [Migration Components](MIGRATION_COMPONENTS.md)). There, `migration.history_approved_field_ids` in `config/config.yaml` takes the role of `--field-id`.
+
 Select a work package from this export. Supply its numeric OpenProject project ID and the native custom-field IDs for the Jira origin ID and URL. Set `J2O_ARCHIVE_PUBLISHER_TOKEN` to the publisher's OpenProject credential through your usual secret store. When needed, set `J2O_ARCHIVE_CA_BUNDLE` to the path of your trusted CA bundle.
 
 ```sh
