@@ -76,7 +76,7 @@ class DummyOp:
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch):
     import src.config as cfg
 
-    def anonymous(source, kind, identifier):
+    def anonymous(source, kind, identifier, *, verify=True):
         rows = source._filters if kind == "filter" else source._dashboards
         return next((row for row in rows if row["id"] == identifier and not row.get("private")), None)
 

@@ -15,7 +15,7 @@ from typing import Any
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.jira.jira_public_reporting import public_report
+from src.infrastructure.jira.jira_public_reporting import anonymous_verify, public_report
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult
 
@@ -172,7 +172,8 @@ class ReportingMigration(BaseMigration):
         held = []
         for row in catalog:
             identifier = row.get("id")
-            record = public_report(self.jira_client.base_url, kind, identifier)
+            base_url = self.jira_client.base_url
+            record = public_report(base_url, kind, identifier, verify=anonymous_verify(self.jira_client, base_url))
             if record is None:
                 held.append(identifier)
             else:

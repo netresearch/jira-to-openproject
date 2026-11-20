@@ -9,7 +9,22 @@ from urllib.parse import urlsplit
 import requests
 
 
-def public_report(base_url: str, kind: str, report_id: str | int | None) -> dict[str, Any] | None:
+def anonymous_verify(client: Any, url: str) -> str | bool:
+    """Return the CA bundle the Jira client's session uses for ``url``, else True.
+
+    Anonymous proofs keep ``trust_env = False``, so they would not see
+    ``REQUESTS_CA_BUNDLE``. Never returns False: these reads decide what is public.
+    """
+    session = getattr(getattr(client, "jira", None), "_session", None)
+    merge = getattr(session, "merge_environment_settings", None)
+    settings = merge(url, {}, None, None, None) if callable(merge) else None
+    verify = settings.get("verify") if isinstance(settings, dict) else None
+    return verify if isinstance(verify, str) and verify else True
+
+
+def public_report(
+    base_url: str, kind: str, report_id: str | int | None, *, verify: str | bool = True
+) -> dict[str, Any] | None:
     """Return an anonymously readable record, or None when access cannot be confirmed."""
     base = urlsplit(base_url)
     identifier = str(report_id)
@@ -21,6 +36,7 @@ def public_report(base_url: str, kind: str, report_id: str | int | None) -> dict
     with requests.Session() as session:
         # A dedicated session also excludes cookies, proxy credentials and .netrc.
         session.trust_env = False
+        session.verify = verify
         response = session.get(url, timeout=20, allow_redirects=False)
         if response.status_code in {401, 403, 404} or response.is_redirect:
             return None
