@@ -9,6 +9,11 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [ADR-001](ADR-001-two-phase-work-package-migration.md) | Two-Phase Work Package Migration | Accepted | 2024-12-11 |
 | [ADR-002](ADR-002-target-architecture.md) | Target architecture for j2o | Accepted | 2026-04-29 |
 | [ADR-003](ADR-003-rejected-architecture-patterns.md) | Rejected architecture patterns | Accepted | 2026-04-29 |
+| [ADR-004](ADR-004-audience-safe-field-history.md) | Audience-safe Jira field history as a structured value | Accepted | 2026-11-20 |
+| [ADR-005](ADR-005-project-access-after-memberless-staging.md) | Grant project access after memberless staging | Accepted | 2026-11-20 |
+| [ADR-006](ADR-006-lock-inactive-jira-users.md) | Inactive Jira users become locked OpenProject users | Accepted | 2026-11-20 |
+| [ADR-007](ADR-007-protected-comments-and-local-acceptance.md) | Protected comments stay out of native journals; acceptance runs locally | Accepted | 2026-11-20 |
+| [ADR-008](ADR-008-project-selection-and-fail-closed-anonymous-proofs.md) | One source for the project selection; fail-closed anonymous proofs | Accepted | 2026-11-20 |
 
 ## What is an ADR?
 
