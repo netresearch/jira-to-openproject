@@ -1093,3 +1093,34 @@ def test_board_snapshot_saves_from_a_console_without_a_current_admin(rails):
     assert result["success"] is True, result
     saved = f"Query.find_by!(project_id: {project_id}, name: '[Jira Board 5] J2O anonymous console')"
     assert query(f"User.execute_as(User.admin.first!) {{ {saved}.results.work_packages.pluck(:id) }}") == [wp_id]
+
+
+def test_bulk_created_custom_fields_reach_every_work_package_type(rails, monkeypatch):
+    """Fields from the bulk create helper must be writable on existing work packages."""
+    from src.application.components.custom_field_migration import CustomFieldMigration
+
+    client, query = rails
+    field_id, wp_id = query("""
+      field = WorkPackageCustomField.create!(name: 'J2O bulk field', field_format: 'text', is_for_all: true)
+      [field.id, WorkPackage.first!.id]
+    """)
+    # Each read drops OpenProject's per-session memo so it sees the stored types.
+    available = (
+        f"wp = WorkPackage.find({wp_id}); RequestStore.store.delete(WorkPackage.send(:available_custom_field_key, wp)); "
+        f"wp.available_custom_fields.map(&:id).include?({field_id})"
+    )
+    assert query(available) is False
+    mappings = {}
+    monkeypatch.setattr("src.config.mappings", SimpleNamespace(set_mapping=mappings.__setitem__))
+    migration = CustomFieldMigration.__new__(CustomFieldMigration)
+    migration.op_client = client
+    migration.logger = client.logger
+    migration.mapping = {"customfield_1": {"jira_name": "J2O bulk field", "openproject_name": "J2O bulk field"}}
+    client.bulk_create_records.return_value = {"status": "success", "created": [{"index": 0, "id": field_id}]}
+    client.bulk_record_entity_provenance.return_value = {}
+
+    fields = [{"jira_id": "customfield_1", "jira_name": "J2O bulk field", "openproject_type": "text"}]
+    assert migration.migrate_custom_fields_via_json(fields) is True
+
+    assert query(available) is True
+    assert mappings["custom_field"]["customfield_1"]["openproject_id"] == field_id
