@@ -56,6 +56,7 @@ from src.domain import provenance_fields
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.container_staging import private_container_directory
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.rails_console_client import RubyError
 from src.infrastructure.openproject.rails_execution import once_per_staging_directory
 
 _JSON_SUFFIX = ".json"
@@ -441,6 +442,10 @@ class OpenProjectBulkCreateService:
                     f"load '{runner.as_posix()}'", timeout=timeout or 120, suppress_output=True
                 )
                 return None, runner
+            except RubyError as exc:
+                # The script ran and failed; the runner would only meet its once-only guard.
+                msg = f"Rails execution failed for bulk_create_records: {exc}"
+                raise QueryExecutionError(msg) from exc
             except Exception as exc:
                 if os.getenv("J2O_ALLOW_RUNNER_FALLBACK", "0").lower() not in {"1", "true"}:
                     msg = "Rails console execution failed and runner fallback is disabled"

@@ -637,7 +637,10 @@ class OpenProjectRailsRunnerService:
                 try:
                     output = self._client.rails_client.execute(script)
                     self.check_console_output_for_errors(output or "", context=catalog)
-                except ConsoleNotReadyError, CommandExecutionError, QueryExecutionError:
+                except RubyError, QueryExecutionError:
+                    # The script ran and failed; the runner would only meet its once-only guard.
+                    raise
+                except ConsoleNotReadyError, CommandExecutionError:
                     if not config.migration_config.get("enable_runner_fallback", False):
                         raise
                     self._run_query_file(script, directory, None)
@@ -705,6 +708,9 @@ class OpenProjectRailsRunnerService:
                     f"load '{escape_ruby_single_quoted(path)}'", timeout=timeout or 90
                 )
                 self.check_console_output_for_errors(output or "", context="execute_large_query_to_json_file(load)")
+            except RubyError, QueryExecutionError:
+                # The script ran and failed; the runner would only meet its once-only guard.
+                raise
             except Exception:
                 self._run_staged_query(path, timeout)
             return
@@ -712,6 +718,8 @@ class OpenProjectRailsRunnerService:
         try:
             output = self._client.rails_client.execute(script, timeout=timeout or 90)
             self.check_console_output_for_errors(output or "", context="execute_large_query_to_json_file")
+        except RubyError:
+            raise
         except ConsoleNotReadyError, CommandExecutionError:
             if not config.migration_config.get("enable_runner_fallback", False):
                 raise
