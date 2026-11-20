@@ -16,6 +16,7 @@ Based on Zen TestGen analysis identifying critical gaps in:
 - Resource exhaustion handling
 """
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
@@ -147,6 +148,7 @@ class TestConcurrentResourceContention:
         """
         # Arrange: Mock database with limited connection pool
         db_connections = []
+        pool_lock = threading.Lock()
         max_connections = 3
 
         def mock_get_db_connection():
@@ -165,9 +167,15 @@ class TestConcurrentResourceContention:
         # Act: Multiple migrations trying to get connections
         migration_results = []
 
+        # All five workers ask for a connection before any releases one, so the
+        # pool limit is reached on every runner, however threads are scheduled.
+        started = threading.Barrier(5)
+
         def run_migration(migration_id) -> None:
+            started.wait(timeout=10)
             try:
-                conn = mock_get_db_connection()
+                with pool_lock:
+                    conn = mock_get_db_connection()
                 time.sleep(0.1)  # Simulate migration work
                 mock_release_connection(conn)
                 migration_results.append(f"migration_{migration_id}_success")
