@@ -249,3 +249,66 @@ def test_public_read_requires_anonymous_identity_and_matching_id(monkeypatch, st
         "https://jira.example.invalid/base/rest/api/2/filter/28", timeout=20, allow_redirects=False
     )
     assert (record is not None) is expected
+
+
+def _jira_response(status: int, body: dict, actor: str = "anonymous"):
+    import json
+
+    import requests
+
+    response = requests.Response()
+    response.status_code = status
+    response._content = json.dumps(body).encode()
+    response.headers.update({"Content-Type": "application/json;charset=UTF-8", "X-AUSERNAME": actor})
+    return response
+
+
+class _AnonymousSession:
+    def __init__(self, responses: dict[str, object]) -> None:
+        self.responses = responses
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def get(self, url, timeout, allow_redirects):
+        return self.responses[url.rsplit("/", 1)[-1]]
+
+
+# This Jira answers an anonymous read of a filter it does not share with 400.
+LIVE_400 = {"errorMessages": ["The selected filter is not available to you"], "errors": {}}
+
+
+def test_anonymous_400_holds_the_filter_back_and_the_component_continues(monkeypatch):
+    import src.config as cfg
+
+    responses = {
+        "19520": _jira_response(400, LIVE_400),
+        "28": _jira_response(200, {"id": "28", "name": "Public", "jql": "project = PROJ"}),
+    }
+    monkeypatch.setattr(
+        "src.infrastructure.jira.jira_public_reporting.requests.Session", lambda: _AnonymousSession(responses)
+    )
+    monkeypatch.setattr(cfg, "mappings", type("M", (), {"get_mapping": lambda self, name: {}})(), raising=False)
+    jira = DummyJira(filters=[{"id": 19520, "name": "Team only"}, {"id": 28, "name": "Public"}])
+    jira.base_url = "https://jira.example.invalid"
+    op = DummyOp()
+    result = ReportingMigration(jira_client=jira, op_client=op).run()
+    assert result.success
+    assert result.details["skipped_filters"] == [19520]
+    assert [page["title"] for page in op.wikis] == ["Jira Filter 28"]
+
+
+def test_anonymous_server_error_is_not_read_as_not_public(monkeypatch):
+    import requests
+
+    from src.infrastructure.jira.jira_public_reporting import public_report
+
+    responses = {"28": _jira_response(500, {"errorMessages": ["Internal error"]})}
+    monkeypatch.setattr(
+        "src.infrastructure.jira.jira_public_reporting.requests.Session", lambda: _AnonymousSession(responses)
+    )
+    with pytest.raises(requests.HTTPError):
+        public_report("https://jira.example.invalid", "filter", "28")
