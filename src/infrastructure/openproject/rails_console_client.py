@@ -462,7 +462,7 @@ class RailsConsoleClient:
                 script_end_marker=None,
             )
         else:
-            # Use state-machine semantics: wait for script-end echo, then ensure tail contains EXEC_END
+            # Wait until EXEC_END is printed as an output line (not the echoed Ruby string literal)
             tmux_output = self._send_command_to_tmux(
                 wrapped_command,
                 timeout,
@@ -524,6 +524,13 @@ class RailsConsoleClient:
         # Lines echoed by IRB contain the Ruby string literal, including its closing quote.
         return next((i for i in range(start, len(lines)) if lines[i].strip().endswith(marker)), -1)
 
+    @classmethod
+    def _own_output_start(cls, lines: list[str], left: int, right: int, echo: str) -> int:
+        # IRB prints the start marker before it echoes the wrapper's begin block, so this
+        # command's own output begins after the last script-end echo line before `right`.
+        echo_end = next((i for i in reversed(range(left + 1, right)) if echo in lines[i]), -1)
+        return max(left, echo_end)
+
     def _check_ruby_failure(self, output: str, where: str, *, include_ruby_error: bool = True) -> None:
         fatal = ("SystemStackError", _RUBY_STACK_OVERFLOW, _RUBY_FULL_MESSAGE_MARKER)
         if any(term in output for term in fatal) or (include_ruby_error and _RUBY_ERROR_PREFIX in output):
@@ -535,7 +542,8 @@ class RailsConsoleClient:
         left = self._output_marker(lines, start)
         right = self._output_marker(lines, end, left + 1)
         if left < 0:
-            self._check_ruby_failure(output, "with no markers")
+            # Without this command's start marker there is no own output region; only a crash counts.
+            self._check_ruby_failure(output, "with no markers", include_ruby_error=False)
         if left < 0 or right < 0:
             recovered = self._recapture_result(start, end, error, echo, recover_echo=left < 0)
             if recovered is not None:
@@ -544,9 +552,10 @@ class RailsConsoleClient:
             msg = f"Start marker '{start}' not found in output"
             raise CommandExecutionError(msg)
         if right < 0:
-            self._check_ruby_failure(output, "before end marker")
+            own = lines[self._own_output_start(lines, left, len(lines), echo) + 1 :]
+            self._check_ruby_failure("\n".join(own), "before end marker")
             if self._get_console_state(output[-50:])["ready"]:
-                candidate = filter_console_output_lines(lines[left + 1 :])
+                candidate = filter_console_output_lines(own)
                 if candidate:
                     return candidate
             msg = f"End marker '{end}' not found in output"
@@ -570,8 +579,10 @@ class RailsConsoleClient:
         return None
 
     def _marked_result(self, lines: list[str], left: int, right: int, error: str, echo: str) -> str:
-        body = lines[left + 1 : right]
+        body = lines[self._own_output_start(lines, left, right, echo) + 1 : right]
         if self._output_marker(body, error) >= 0:
+            # A wrapper IRB rejected still prints both markers; report IRB's error, not a stale `e`.
+            self._check_ruby_failure("\n".join(body), "in command output", include_ruby_error=False)
             msg = next((line.strip() for line in body if _RUBY_ERROR_PREFIX in line), "Ruby error detected")
             raise RubyError(msg)
         output = filter_console_output_lines(body)
@@ -626,61 +637,6 @@ class RailsConsoleClient:
             return result
 
         return result
-
-    def _wait_for_console_output(
-        self,
-        target: str,
-        marker: str | None,
-        timeout: int,
-    ) -> tuple[bool, str]:
-        """Wait for specific marker to appear in the console output.
-
-        Args:
-            target: tmux target (session:window.pane)
-            marker: Text to wait for in the output
-            timeout: Maximum time to wait in seconds
-
-        Returns:
-            tuple: (marker_found, output)
-
-        Raises:
-            CommandExecutionError: If timeout waiting for marker
-
-        """
-        start_time = time.time()
-        poll_interval = 0.05
-        max_interval = 0.5
-
-        if marker is None:
-            logger.debug("Waiting for console output without specific marker (polling only)")
-        else:
-            logger.debug("Waiting for marker '%s' in console output", marker)
-
-        while time.time() - start_time < timeout:
-            try:
-                current_output = self._capture_pane(target, 500)
-
-                # Detect fatal console errors early (prefer fatal over marker)
-                if self._has_fatal_console_error(current_output):
-                    logger.error("Fatal console error detected while waiting for marker")
-                    return False, current_output
-
-                normalized = current_output.replace("\n", "").replace("\r", "")
-                if marker is not None and marker in normalized:
-                    return True, current_output
-
-                time.sleep(poll_interval)
-                poll_interval = min(poll_interval * 1.5, max_interval)
-            except subprocess.SubprocessError as e:
-                logger.exception("Error capturing tmux pane")
-                msg = f"Error capturing tmux pane: {e}"
-                raise CommandExecutionError(msg) from e
-
-        if marker is not None:
-            logger.error("Marker '%s' not found after %ss", marker, timeout)
-        else:
-            logger.error("Console output wait timed out after %ss without marker", timeout)
-        return False, current_output
 
     def _wait_for_console_ready(self, target: str, timeout: int = 5, *, reset_on_stall: bool = True) -> bool:
         """Wait for the console to be in a ready state.
@@ -759,24 +715,23 @@ class RailsConsoleClient:
         logger.error("Console not ready after %ss", timeout)
         return False
 
-    def _wait_for_script_completion(self, target: str, marker: str, end: str | None, timeout: int) -> None:
-        found, baseline = self._wait_for_console_output(target, marker, timeout)
-        if not found:
-            if self._has_fatal_console_error(baseline):
-                msg = f"Rails console crashed before script-end echo: {self._extract_error_summary(baseline)}"
+    def _wait_for_script_completion(self, target: str, end: str, timeout: int) -> None:
+        """Wait until this command prints `end` as an output line.
+
+        The echoed wrapper also contains `end`, but inside a Ruby string literal, so only
+        a line ending in the bare marker counts. The wrapper's `ensure` prints it after
+        errors too, including SystemStackError.
+        """
+        deadline = time.monotonic() + timeout
+        poll_interval = 0.05
+        while True:
+            if self._output_marker(self._capture_pane(target, 1000).split("\n"), end) >= 0:
+                return
+            if time.monotonic() >= deadline:
+                msg = f"End marker '{end}' not observed within {timeout}s"
                 raise CommandExecutionError(msg)
-            msg = "Script end echo not observed in console output"
-            raise CommandExecutionError(msg)
-        current = baseline
-        deadline = time.monotonic() + max(2, min(timeout, 10))
-        while time.monotonic() < deadline:
-            current = self._capture_pane(target, 200)
-            if current != baseline:
-                break
-            time.sleep(0.1)
-        if end and not any(end in line for line in current.splitlines()[-200:]):
-            msg = "End marker not found in tail after post-script output"
-            raise CommandExecutionError(msg)
+            time.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, 0.5)
 
     def _send_command_to_tmux(
         self,
@@ -790,8 +745,9 @@ class RailsConsoleClient:
         Args:
             command: Command to send
             timeout: Timeout in seconds
-            wait_for_line: Optional line that must appear after script end
-            script_end_marker: Marker indicating end of script echo
+            wait_for_line: Optional end marker the script prints as a bare output line
+            script_end_marker: Marker in the last echoed script line; together with
+                wait_for_line it enables waiting for completion
 
         Returns:
             Command output as a string
@@ -829,9 +785,9 @@ class RailsConsoleClient:
             # Give the command a brief moment to start producing output
             time.sleep(0.2)
 
-            # State-machine: first observe script-end echo, then require post-script output to contain EXEC_END
-            if script_end_marker:
-                self._wait_for_script_completion(target, script_end_marker, wait_for_line, timeout)
+            # Wait until this command's own end marker is printed as an output line
+            if script_end_marker and wait_for_line:
+                self._wait_for_script_completion(target, wait_for_line, timeout)
 
             # Now ensure prompt is ready before final capture
             self._wait_for_console_ready(target, timeout, reset_on_stall=False)
