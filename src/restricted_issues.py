@@ -3,9 +3,11 @@
 
 """Inventory Jira issues with a security level and seal the non-static ones for the operator.
 
-No OpenProject request is made. Issues with a level stay out of the migration as
-before; this command only records who can read them and keeps every issue whose
-readers are not the level's static readers in an age-encrypted archive (ADR-009).
+``inventory`` makes no OpenProject request. Issues with a level stay out of the migration
+as before; it only records who can read them and keeps every issue whose readers are
+not the level's static readers in an age-encrypted archive (ADR-009). ``admins`` reads
+that archive, detects the OpenProject edition and reports the OpenProject administrators
+who are not static readers of a level; it warns and changes nothing (ADR-009, decision 4).
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from src.comment_archive.archive import encoded
 from src.comment_archive.cli import input_file
 from src.comment_archive.transport import ArchiveError, Endpoint, require
 from src.infrastructure.jira.security_levels import (
+    PER_ISSUE_KINDS,
+    STATIC_KINDS,
     Directory,
     ProjectInventory,
     SecurityLevelError,
@@ -32,10 +36,18 @@ from src.infrastructure.jira.security_levels import (
     restricted_total,
     scan_project,
 )
+from src.infrastructure.openproject.openproject_edition import (
+    Edition,
+    EditionError,
+    RailsReader,
+    administrators,
+    detect_edition,
+)
 from src.operator_history import _output_file, _private_create
 
 ARCHIVE_FORMAT = "j2o-restricted-issues/1"
 REPORT_FORMAT = "j2o-restricted-report/1"
+ADMIN_REPORT_FORMAT = "j2o-restricted-admins/1"
 KINDS = ("static", "per_issue", "unexplained")
 _AGE = ".age"
 _JSON = ".json"
@@ -192,6 +204,83 @@ def inventory(args: argparse.Namespace, identity: x25519.Identity) -> dict:
     return value
 
 
+def _mapped_jira_names(user_mapping: object) -> dict[int, set[str]]:
+    """Casefolded Jira user names per OpenProject user ID; an empty or malformed mapping raises.
+
+    Entries restored from OpenProject (``restored_from_op``) guess the Jira name from the
+    login and do not count.
+    """
+    if not isinstance(user_mapping, dict):
+        msg = "Malformed user mapping"
+        raise ArchiveError(msg)
+    jira_names: dict[int, set[str]] = {}
+    for entry in user_mapping.values():
+        if isinstance(entry, dict) and type(entry.get("openproject_id")) is int and not entry.get("restored_from_op"):
+            name = entry.get("jira_name")
+            if not isinstance(name, str) or not name:
+                msg = "User mapping entry without a Jira user name"
+                raise ArchiveError(msg)
+            jira_names.setdefault(entry["openproject_id"], set()).add(name.casefold())
+    # Without one usable entry every administrator would look unmapped; that is a missing input.
+    require(jira_names, "User mapping has no Jira-to-OpenProject entry")
+    return jira_names
+
+
+def admin_report(archive: dict, user_mapping: dict, admins: list[dict], edition: Edition, sha256: str) -> dict:
+    """Per level, the administrators whose mapped Jira users are not static readers; logins only.
+
+    An administrator maps to the Jira users whose user-mapping entry names its
+    OpenProject ID; it reads a level when any of them is a static reader.
+    """
+    jira_names = _mapped_jira_names(user_mapping)
+    shown = {row["id"]: {"login": row["login"], "status": row["status"]} for row in admins}
+    levels = []
+    for key in sorted(archive["levels"]):
+        level = archive["levels"][key]
+        computed = all(kind in STATIC_KINDS | PER_ISSUE_KINDS for kind, _ in level["grants"])
+        readers = {name.casefold() for name in level["static_readers"]}
+        outside = [shown[a] for a in shown if a in jira_names and not jira_names[a] & readers] if computed else []
+        levels.append(
+            {
+                "project": level["project"],
+                "level_id": level["id"],
+                "level": level["name"],
+                "readers_computed": computed,
+                "admins_not_readers": len(outside),
+                "admins": outside,
+            }
+        )
+    return {
+        "format": ADMIN_REPORT_FORMAT,
+        "archive_sha256": sha256,
+        "edition": edition.name,
+        "rails_features": edition.rails,
+        "available_features": list(edition.available_features),
+        "administrators": len(admins),
+        "mapped_openproject_users": len(jira_names),
+        "unmapped_admins": [shown[a] for a in shown if a not in jira_names],
+        "levels": levels,
+    }
+
+
+def admins(args: argparse.Namespace, identity: x25519.Identity, rails: RailsReader) -> dict:
+    """Detect the edition and write the administrator report; never stops the import."""
+    require(not _output_file(args.report, _JSON).exists(), "Report already exists")
+    user_mapping = json.loads(input_file(args.user_mapping).read_bytes())
+    data = input_file(args.archive).read_bytes()
+    archive = decrypt(data, identity)
+    api = Endpoint(
+        args.openproject,
+        os.environ.get("J2O_OPENPROJECT_API_KEY", ""),
+        jira=False,
+        ca=os.getenv("J2O_ARCHIVE_CA_BUNDLE") or True,
+    )
+    edition = detect_edition(rails, api)
+    value = admin_report(archive, user_mapping, administrators(rails), edition, hashlib.sha256(data).hexdigest())
+    _private_create(args.report, encoded(value), _JSON)
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     """Inventory restricted issues into an operator archive, or restore that archive."""
     parser = argparse.ArgumentParser(prog="j2o-restricted")
@@ -203,7 +292,11 @@ def main(argv: list[str] | None = None) -> int:
     scan.add_argument("--report", type=Path, required=True)
     restore = sub.add_parser("restore", help="Decrypt the archive into a new private JSON file")
     restore.add_argument("--output", type=Path, required=True)
-    for command in (scan, restore):
+    check = sub.add_parser("admins", help="Detect the OpenProject edition and report administrators per level")
+    check.add_argument("--openproject", required=True, help="OpenProject base URL for /api/v3/configuration")
+    check.add_argument("--user-mapping", type=Path, required=True, help="The migration's user_mapping.json")
+    check.add_argument("--report", type=Path, required=True)
+    for command in (scan, restore, check):
         command.add_argument("--identity", type=Path, required=True)
         command.add_argument("--archive", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -211,10 +304,21 @@ def main(argv: list[str] | None = None) -> int:
         identity = x25519.Identity.from_str(input_file(args.identity).read_text().strip())
         if args.command == "inventory":
             sys.stdout.write(json.dumps(inventory(args, identity)["totals"]) + "\n")
+        elif args.command == "admins":
+            # The Rails console connection comes from the j2o configuration (config/config.yaml).
+            from src.infrastructure.openproject.openproject_client import OpenProjectClient
+
+            value = admins(args, identity, OpenProjectClient())
+            listed = {"unmapped": len(value["unmapped_admins"])}
+            listed |= {f"{row['project']}:{row['level_id']}": row["admins_not_readers"] for row in value["levels"]}
+            sys.stderr.write(f"Administrators who are not static readers, per level: {json.dumps(listed)}\n")
+            sys.stdout.write(
+                json.dumps({"edition": value["edition"], "administrators": value["administrators"]}) + "\n"
+            )
         else:
             value = decrypt(input_file(args.archive).read_bytes(), identity)
             _private_create(args.output, encoded(value), _JSON)
-    except (ArchiveError, SecurityLevelError) as exc:
+    except (ArchiveError, SecurityLevelError, EditionError) as exc:
         sys.stderr.write(str(exc) + "\n")
         return 1
     except (
