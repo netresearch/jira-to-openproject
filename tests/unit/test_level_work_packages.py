@@ -436,6 +436,41 @@ def test_adopted_work_packages_are_saved_without_a_new_batch(setup):
     assert {key: entry["openproject_id"] for key, entry in saved.items()} == {"10": 900, "11": 901}
 
 
+def test_rerun_after_a_lost_batch_answer_adopts_instead_of_creating_again(setup):
+    mappings, _ = setup()
+    saved = []
+
+    def lost_answer(payloads):
+        start = len(saved)
+        saved.extend((900 + start + i, "APP-" + payload["subject"].split()[1]) for i, payload in enumerate(payloads))
+        raise RuntimeError("batch answer lost")
+
+    def run(existing):
+        jira, op = fake_jira([], level_issues()), FakeOpenProject(existing=existing)
+        if existing is None:
+            op._create_work_packages_batch.side_effect = lost_answer
+        migration = WorkPackageSkeletonMigration(jira_client=jira, op_client=op)
+        migration._get_j2o_origin_key_cf_id = lambda: 5
+        migration._build_skeleton_payload = lambda source, project_id, _cf: {
+            "subject": source.fields.summary,
+            "project_id": project_id,
+            "_jira_key": source.key,
+            "_jira_id": str(source.id),
+        }
+        return migration.run(), op
+
+    first, _ = run(None)
+    assert not first.success
+    assert [key for _, key in saved] == ["APP-10", "APP-11"]
+    held = {"field": True, "work_packages": [wp for wp, _ in saved], "keys": [list(pair) for pair in saved]}
+    second, op = run(held)
+    assert second.success
+    assert not op.payloads
+    assert second.details["security_level"]["adopted"] == 2
+    entries = mappings.data["security_level_work_package"]
+    assert {key: entry["openproject_id"] for key, entry in entries.items()} == {"10": 900, "11": 901}
+
+
 def test_a_failed_level_batch_makes_the_component_unsuccessful(setup):
     outcome = skeleton(setup, levels=level_issues(), fail=True)
     assert not outcome.result.success
@@ -453,6 +488,7 @@ def test_level_path_runs_when_the_parent_has_no_project_mapping(setup):
         ([row(), row(), row("10001", ("APP-20",), 0, 0)], None),
         ([row(), row("10001", ("APP-10", "APP-20"), 0, 0)], None),
         (None, [*ARCHIVED, {"key": "APP-30", "level_id": "10009", "class": "per_issue"}]),
+        (None, [*ARCHIVED, {"key": "APP-10", "level_id": "10009", "class": "per_issue"}]),
     ],
 )
 def test_a_report_with_a_key_or_level_listed_twice_stops_before_any_write(setup, report_levels, archived):

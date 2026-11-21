@@ -145,7 +145,8 @@ class LevelScope:
             raise LevelProjectError(msg)
         self.expected = {label: _expected_keys(row, archived) for label, row in zip(labels, self.levels, strict=True)}
         listed = [key for keys in self.expected.values() for key in keys]
-        if len(set(listed)) != len(listed) or not set(self.archived) <= set(listed):
+        owned = {key for keys in self.expected.values() for key, kind in keys.items() if kind != "static"}
+        if len(set(listed)) != len(listed) or owned != set(self.archived):
             msg = "An issue key belongs to more than one level in the inventory report"
             raise LevelProjectError(msg)
         self.kinds = _EDITIONS[edition]
