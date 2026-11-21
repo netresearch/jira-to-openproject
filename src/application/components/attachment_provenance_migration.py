@@ -239,12 +239,13 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                 " its mapping persisted) and re-run this component."
             )
             self.logger.error(msg)
-            return ComponentResult(
+            missing = ComponentResult(
                 success=False,
                 updated=0,
                 message=msg,
                 errors=["missing_work_package_mapping"],
             )
+            return missing if self._level is None else self._level.report(missing, self.logger)
 
         # Group jira keys by project for efficient processing. Each entry
         # is normalised through :class:`WorkPackageMappingEntry.from_legacy`
@@ -271,12 +272,13 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                 " the mapping shape."
             )
             self.logger.error(msg)
-            return ComponentResult(
+            missing = ComponentResult(
                 success=False,
                 updated=0,
                 message=msg,
                 errors=["missing_work_package_mapping"],
             )
+            return missing if self._level is None else self._level.report(missing, self.logger)
         self.logger.info(
             "Processing provenance for %d projects (%d issues total)",
             len(by_project),

@@ -303,6 +303,35 @@ def test_a_second_run_on_the_same_instance_resolves_the_level_again(setup):
     assert [row["work_package_id"] for row in op.attached].count(900) == 2
 
 
+def test_repeated_runs_refuse_an_issue_in_both_mappings_each_time(setup):
+    import src.config as cfg
+
+    prepare(setup, wp_map={**ORDINARY, "10": {"jira_key": "APP-10", "openproject_id": 510, "project_key": "APP"}})
+    jira, op = FakeJira(), FakeOpenProject()
+    migration = AttachmentsMigration(jira_client=jira, op_client=op)
+    first, second = migration.run(), migration.run()
+    assert [result.details["security_level"]["refused"] for result in (first, second)] == [1, 1]
+    assert not first.success
+    assert not second.success
+    assert all(key != "APP-10" for key, _ in targets(op))
+    cfg.migration_config["security_level_work_packages"] = False
+    op.attached.clear()
+    off = migration.run()
+    assert "security_level" not in off.details
+    assert targets(op) == {("APP-1", 500), ("APP-10", 510)}
+
+
+EMPTY_LIVE = {"field": True, "work_packages": [], "keys": []}
+
+
+def test_an_empty_lookup_still_reports_the_level_refusals(setup):
+    outcome = attachments(setup, wp_map={}, live=EMPTY_LIVE)
+    assert not outcome.result.success
+    assert outcome.result.details["security_level"] == {"work_packages": 0, "refused": 2}
+    assert outcome.result.failed == 2
+    assert not outcome.op.attached
+
+
 def provenance(setup, *, live=None, **kwargs):
     mappings, _ = prepare(setup, **kwargs)
     mappings.data["user"] = {"alice": {"openproject_id": 301}}
@@ -334,6 +363,14 @@ def test_provenance_of_level_attachments_goes_to_the_held_work_package(setup):
     assert not outcome.result.success
     assert outcome.result.details["security_level"]["refused"] == 2
     assert outcome.mappings.writes == []
+
+
+@pytest.mark.parametrize("wp_map", [{}, {"1": 500}], ids=["no-entries", "no-usable-entries"])
+def test_provenance_with_an_empty_map_still_reports_the_level_refusals(setup, wp_map):
+    outcome = provenance(setup, wp_map=wp_map, live=EMPTY_LIVE)
+    assert not outcome.result.success
+    assert outcome.result.details["security_level"] == {"work_packages": 0, "refused": 2}
+    assert not outcome.op.provenance
 
 
 def test_provenance_skips_an_ordinary_entry_of_an_archived_issue(setup):

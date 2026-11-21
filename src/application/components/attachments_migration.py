@@ -971,6 +971,8 @@ puts end_marker
         self._loss_counters.clear()
         self._level_work_packages = {}
         self._level_ids = {}
+        # The previous run may have left a lookup without its level issues; rebuild it.
+        self._wp_lookup_cache = None
 
         # Build the canonical Jira-key → wp-id lookup once, then group
         # the resolved Jira keys by project for batch-friendly processing.
@@ -984,7 +986,7 @@ puts end_marker
         self._receipts = ScopedReceipts(dict(self._wp_lookup_cache or {}))
         lookup = self._wp_lookup_by_jira_key()
         if not lookup:
-            return self._missing_work_package_mapping()
+            return self._with_level_report(self._missing_work_package_mapping())
 
         by_project = self._keys_by_project(lookup)
 
