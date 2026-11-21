@@ -193,11 +193,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             logger.error("Jira omitted issues during attachment extraction: %s", ", ".join(sorted(missing)))
 
         by_key: dict[str, list[dict[str, Any]]] = {}
-        for key, issue in issues.items():
-            if key in levels and level_issues.issue_level_id(issue) != levels[key]:
-                self._loss_counters["extract_level_changed"] += 1
-                logger.error("Level work package attachments refused: %s changed its level after the selection", key)
-                continue
+        for key, issue in self._with_unchanged_levels(issues, levels).items():
             try:
                 fields = getattr(issue, "fields", None)
                 atts = getattr(fields, "attachment", None)
@@ -213,6 +209,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 continue
 
         return by_key
+
+    def _with_unchanged_levels(self, issues: dict[str, Any], levels: dict[str, str]) -> dict[str, Any]:
+        """Drop each level issue whose level is no longer the one it was selected for; count it."""
+        kept = {}
+        for key, issue in issues.items():
+            if key in levels and level_issues.issue_level_id(issue) != levels[key]:
+                self._loss_counters["extract_level_changed"] += 1
+                logger.error("Level work package attachments refused: %s changed its level after the selection", key)
+            else:
+                kept[key] = issue
+        return kept
 
     def _attachment_records(self, attachments: list) -> list[dict[str, Any]]:
         """Keep attachments with a download URL and a recoverable filename."""
@@ -972,13 +979,10 @@ puts end_marker
         if level_issues.enabled():
             # Before the size cap is raised: a missing report stops the component here.
             try:
-                level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+                level, key_to_wp_id = self._resolve_level_work_packages(key_to_wp_id)
             except LevelProjectError as exc:
                 self.logger.error("Level work package attachments stopped: %s", exc)
                 return ComponentResult(success=False, message=str(exc), errors=["security_level"])
-            key_to_wp_id = self._wp_lookup_cache = level.without_level_issues(key_to_wp_id)
-            self._level_work_packages = dict(level.work_packages)
-            self._level_ids = dict(level.level_ids)
         self._receipts = ScopedReceipts(key_to_wp_id)
         if not key_to_wp_id and not self._level_work_packages:
             return self._missing_work_package_mapping()
@@ -1052,6 +1056,16 @@ puts end_marker
                         original_max_kb,
                         target_max_kb,
                     )
+
+    def _resolve_level_work_packages(
+        self, key_to_wp_id: dict[str, int]
+    ) -> tuple[level_issues.LevelWorkPackages, dict[str, int]]:
+        """Resolve the level work packages of this run; return them and the ordinary lookup without level issues."""
+        level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+        self._wp_lookup_cache = level.without_level_issues(key_to_wp_id)
+        self._level_work_packages = dict(level.work_packages)
+        self._level_ids = dict(level.level_ids)
+        return level, dict(self._wp_lookup_cache)
 
     def _missing_work_package_mapping(self) -> ComponentResult:
         """Distinguish an absent mapping from one containing only unusable rows."""
