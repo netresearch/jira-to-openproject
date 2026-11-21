@@ -18,7 +18,6 @@ from typing import Any
 
 from src import config
 from src.application.components.level_readers import READERS_SETTING, Readers, load_readers
-from src.application.components.security_level_projects_migration import load_reports
 
 
 def openproject_users(user_mapping: Mapping[str, Any]) -> dict[str, int | None]:
@@ -78,14 +77,17 @@ def audience(readers: Readers, user_mapping: Mapping[str, Any], *, shares: bool)
     return result
 
 
-def load_audience(mappings: Any) -> tuple[Audience, str]:
-    """Both reports, the readers file of the same inventory and the user mapping; any mismatch raises."""
-    report, edition = load_reports()
+def load_audience(mappings: Any, report: dict[str, Any], edition: str) -> Audience:
+    """The readers file checked against the caller's ``report``, and the user mapping; any mismatch raises.
+
+    The caller passes the report and edition it already read, so the issues it selects and the
+    grants it checks come from one inventory.
+    """
     readers = load_readers(report)
-    return audience(readers, mappings.get_mapping("user") or {}, shares=edition == "enterprise"), edition
+    return audience(readers, mappings.get_mapping("user") or {}, shares=edition == "enterprise")
 
 
-def staging_audience(mappings: Any) -> Audience:
+def staging_audience(mappings: Any, report: dict[str, Any], edition: str) -> Audience:
     """Who may already be a member while a level stage writes (ADR-012).
 
     Without a configured readers file nobody: the sub-projects must be memberless, as before the
@@ -93,4 +95,4 @@ def staging_audience(mappings: Any) -> Audience:
     """
     if not config.migration_config.get(READERS_SETTING):
         return Audience()
-    return load_audience(mappings)[0]
+    return load_audience(mappings, report, edition)

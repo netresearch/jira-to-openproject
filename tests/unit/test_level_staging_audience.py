@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.application.components.level_access import Audience, staging_audience
-from src.application.components.security_level_projects_migration import SecurityLevelProjectsMigration
+from src.application.components.security_level_projects_migration import SecurityLevelProjectsMigration, load_reports
 from src.infrastructure.openproject.component_assignments import apply_component_assignments
 from src.infrastructure.openproject.tasklist_origins import apply_tasklists
 from tests.unit import test_components_migration as components
@@ -43,17 +43,19 @@ def granted(access_grant):  # noqa: F811 (the imported fixture, requested by nam
 @pytest.fixture
 def readers(monkeypatch):
     """The staging audience the level scope gets from a readers file of the same inventory."""
-    monkeypatch.setattr("src.application.components.level_issues.staging_audience", lambda mappings: READERS)
+    monkeypatch.setattr(
+        "src.application.components.level_issues.staging_audience", lambda mappings, report, edition: READERS
+    )
 
 
 def test_without_a_readers_file_nobody_may_be_a_member(level_setup):
     mappings, _ = level_setup()
-    assert staging_audience(mappings).of_level("APP:10000") == NOBODY
+    assert staging_audience(mappings, {}, "community").of_level("APP:10000") == NOBODY
 
 
 def test_a_readers_file_gives_each_level_its_own_readers(granted):
     outcome = granted(edition="enterprise")
-    audience = staging_audience(outcome.component.mappings)
+    audience = staging_audience(outcome.component.mappings, *load_reports())
     assert audience.of_level("APP:10000") == OF_10000
     assert audience.of_level("APP:10001") == {"members": [], "shares": {}}
 
@@ -64,7 +66,7 @@ def test_a_readers_file_of_another_inventory_stops_the_staging_checks(granted):
 
     outcome = granted(readers={**FILE, "archive_sha256": "c" * 64})
     with pytest.raises(LevelProjectError, match="another inventory"):
-        staging_audience(outcome.component.mappings)
+        staging_audience(outcome.component.mappings, *load_reports())
 
 
 def _skeleton(level_setup, state, **kw):
@@ -160,7 +162,9 @@ def test_security_level_projects_accepts_an_existing_sub_project_of_readers(monk
     )
     monkeypatch.setattr(cfg, "mappings", FakeMappings({"APP": APP}))
     audience = Audience(members={"APP:10000": frozenset({41})})
-    monkeypatch.setattr("src.application.components.level_access.staging_audience", lambda mappings: audience)
+    monkeypatch.setattr(
+        "src.application.components.level_access.staging_audience", lambda mappings, report, edition: audience
+    )
     existing = {"id": 9, "identifier": "app_level_10000", "public": False, "parent_id": 7}
     for member_ids, success in (([41], True), ([41, 99], False)):
         target = FakeOpenProject(projects=[existing | {"members": len(member_ids), "member_ids": member_ids}])

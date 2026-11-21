@@ -23,7 +23,7 @@ from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration
 from src.application.components.level_access import Audience, load_audience
 from src.application.components.level_issues import LevelTarget, _target
-from src.application.components.security_level_projects_migration import LevelProjectError, _script
+from src.application.components.security_level_projects_migration import LevelProjectError, _script, load_reports
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.rails_console_client import RubyError
 from src.models import ComponentResult
@@ -175,8 +175,12 @@ class SecurityLevelAccessMigration(BaseMigration):
                 details={"status": "skipped", "reason": "security_level_work_packages_off"},
             )
         try:
-            scope = level_issues.LevelScope.load(self.mappings)
-            audience, edition = load_audience(self.mappings)
+            # One read of the reports: the issues the scope selects and the grants come from one inventory.
+            report, edition = load_reports()
+            audience = load_audience(self.mappings, report, edition)
+            scope = level_issues.LevelScope(
+                report, edition, self.mappings.get_mapping(level_issues.MAPPING) or {}, audience
+            )
             level = None
             if edition == "enterprise":
                 level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)

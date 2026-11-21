@@ -164,7 +164,7 @@ class LevelScope:
     def load(cls, mappings: Any) -> LevelScope:
         """Both reports (see ``load_reports``), the ``security_level_project`` mapping and the staging audience."""
         report, edition = load_reports()
-        return cls(report, edition, mappings.get_mapping(MAPPING) or {}, staging_audience(mappings))
+        return cls(report, edition, mappings.get_mapping(MAPPING) or {}, staging_audience(mappings, report, edition))
 
     def select(self, project_key: str, issues: Iterable[Any]) -> Selection:
         """Partition one project's level search by level and keep what goes to a sub-project."""

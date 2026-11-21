@@ -71,14 +71,14 @@ _CREATE = (
 )
 
 
-def _staging_audience(mappings: Any) -> Any:
+def _staging_audience(mappings: Any, report: dict[str, Any], edition: str) -> Any:
     """Who may already be a member of a sub-project (ADR-012).
 
     Imported here: ``level_access`` reads the reports through this module.
     """
     from src.application.components.level_access import staging_audience
 
-    return staging_audience(mappings)
+    return staging_audience(mappings, report, edition)
 
 
 class LevelProjectError(ValueError):
@@ -205,7 +205,7 @@ class SecurityLevelProjectsMigration(BaseMigration):
         try:
             report, edition = load_reports()
             levels = migratable_levels(report, edition)
-            audience = _staging_audience(self.mappings)
+            audience = _staging_audience(self.mappings, report, edition)
         except LevelProjectError as exc:
             self.logger.error("Security level sub-projects stopped: %s", exc)
             return ComponentResult(success=False, message=str(exc), errors=[str(exc)])
