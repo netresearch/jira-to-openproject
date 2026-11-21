@@ -63,6 +63,26 @@ uv run j2o-restricted admins --identity ~/restricted-inventory/operator.agekey \
 - **Edition.** Rails answers `EnterpriseToken.allows_to?` for `work_package_sharing` and `internal_comments`; `GET /api/v3/configuration` answers `availableFeatures`. The edition is `enterprise` only when both allow `work_package_sharing`; a disagreement is logged and means `community`. A failed or malformed answer, or a Rails console and API URL that report different host names, stops the command; so does a user mapping without a single usable entry. The report keeps both answers (feature names only).
 - **Administrators.** Every non-deleted administrator, with its status (`active`, `locked`, `registered`, `invited`). An administrator maps to the Jira users whose user-mapping entry names its OpenProject ID; user names are compared case-insensitively. Per level, `restricted-admins.json` (mode 600) lists the logins of the administrators none of whose Jira users is a static reader of the level. `unmapped_admins` lists administrators without a Jira user; an entry restored from OpenProject (`restored_from_op`) guesses the Jira name from the login and does not count as a mapping. A level with an unsupported grant has no computed readers (`readers_computed: false`) and lists nobody; its issues are archived anyway. The report names administrators only, never Jira readers.
 
+## Level sub-projects
+
+The `security_level_projects` component creates, for each Jira project and level with at least one issue that will go to OpenProject, one private sub-project under the project's OpenProject project (ADR-009, step 3 of the order of work). Static issues count on both editions, `per_issue` issues only when the administrator report says `enterprise`; `unexplained` issues never count. The component reads only the shared `report.json` and the administrator report, never the archive. It is in no profile yet; run it after `projects`:
+
+```yaml
+migration:
+  security_level_report: /home/me/restricted-inventory/report.json
+  security_level_admin_report: /path/to/j2o/restricted-admins.json
+```
+
+```sh
+uv run j2o migrate --components security_level_projects --no-confirm
+```
+
+- **Precondition.** Both files must exist, have their format and name the same `archive_sha256`; otherwise the component stops before any OpenProject request. The content of the administrator report never stops it; only its `edition` is used. That edition is the one detected when `admins` ran: run `admins` again after a licence change.
+- **Identifier and name.** The identifier is the Jira project's identifier (lower case, `-` for every other character, `p-` before a leading digit) followed by `_level_` and the level ID, for example `app_level_10000`. A key-derived identifier never contains `_`, so it cannot equal one; an identifier longer than 100 characters is refused. The name is the parent's OpenProject name with the level name in parentheses, for example `App (Management)`. An identifier or name that belongs to an entry of the project mapping is refused.
+- **Properties.** The sub-project is created with `public: false`, its parent's types and the modules `work_package_tracking` and `wiki`, through `Project.new` rather than `Projects::CreateService`, which would add the creating user as a member. No member is added; OpenProject 17.9.7 copies no memberships from a parent project. It carries no J2O Origin fields, so lookups by Jira project key keep finding only the parent.
+- **Mapping.** `security_level_project_mapping.json` holds one entry per `<Jira key>:<level ID>` with the OpenProject project ID and identifier. `project_mapping.json` stays one project per Jira project.
+- **Repeat runs.** An existing project with the identifier is accepted only when it is private, has no membership row (locked users and work package shares included) and has the expected parent. Otherwise that level is refused and reported, and the project is not changed. Restricted issues are still not migrated into the sub-projects.
+
 ## Repeat runs and known limits
 
 Grants and memberships can change until cutover. Repeat the inventory at cutover, in a new directory or with new file names: archive and report are never overwritten. A failed run is repeated the same way, in a new directory, even when it already wrote the archive.

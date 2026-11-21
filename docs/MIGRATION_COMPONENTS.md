@@ -64,6 +64,7 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 | EstimatesMigration | `estimates` | Stable | Yes | Time estimates |
 | StoryPointsMigration | `story_points` | Stable | Yes | Agile estimation |
 | SecurityLevelsMigration | `security_levels` | Stable | Yes | Access levels |
+| SecurityLevelProjectsMigration | `security_level_projects` | New | Unit | Private, memberless sub-project per Jira project and security level |
 | **Workflow & Admin** |
 | WorkflowMigration | `workflows` | Stable | Yes | Status transitions |
 | AdminSchemeMigration | `admin_schemes` | Stable | Yes | Role memberships |
@@ -893,6 +894,16 @@ The standard work-package import asks Jira for issues with an empty security lev
 - OpenProject project permissions govern access to those earlier work packages. The custom field stores metadata.
 
 **Dependencies**: CustomFieldMigration
+
+---
+
+### SecurityLevelProjectsMigration
+
+**Location**: `src/application/components/security_level_projects_migration.py`
+
+Creates one private, memberless OpenProject sub-project per Jira project and security level that has an issue to migrate, from the shared `j2o-restricted` report, and records it in `security_level_project_mapping.json`. It needs the administrator report of the same archive and is in no profile yet; see [Level sub-projects](operator-restricted-issues.md#level-sub-projects).
+
+**Dependencies**: ProjectMigration
 
 ---
 
