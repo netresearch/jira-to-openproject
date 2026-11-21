@@ -18,6 +18,8 @@ from typing import Any
 from src import config
 from src.application.components.base_migration import BaseMigration
 from src.application.components.project_migration import project_identifier
+from src.infrastructure.exceptions import QueryExecutionError
+from src.infrastructure.openproject.rails_console_client import RubyError
 from src.models import ComponentResult
 from src.restricted_issues import ADMIN_REPORT_FORMAT, REPORT_FORMAT
 
@@ -45,7 +47,11 @@ _CREATE = (
     'p = Project.new(name: input.fetch("name"), identifier: input.fetch("identifier"), '
     'description: input.fetch("description"), public: false, parent: parent)\n'
     'p.workspace_type = "project" if p.respond_to?(:workspace_type=)\n'
-    "p.types = parent.types\n"
+    # 17.9.7 enables types through ProjectType rows; a variant owned by the parent is not
+    # available to another project (app/models/project_type.rb:57-63), so it falls back to
+    # the type's base variant.
+    "parent.project_types.each { |t| p.project_types.build(type_id: t.type_id, "
+    "variant: t.variant.project_owned? ? nil : t.variant) }\n"
     "Project.transaction do\n"
     "  p.save!\n"
     '  p.enabled_module_names = ["work_package_tracking", "wiki"]\n'
@@ -161,7 +167,7 @@ class SecurityLevelProjectsMigration(BaseMigration):
             label = f"{key}:{row['level_id']}"
             try:
                 entry, created = self._ensure(row, projects.get(key), taken_ids, taken_names)
-            except LevelProjectError as exc:
+            except (LevelProjectError, QueryExecutionError, RubyError) as exc:
                 self.logger.error("Security level sub-project %s refused: %s", label, exc)
                 errors.append(f"{label}: {exc}")
                 continue

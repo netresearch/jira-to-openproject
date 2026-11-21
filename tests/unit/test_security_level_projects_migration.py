@@ -17,6 +17,7 @@ from src.application.components.security_level_projects_migration import (
     SecurityLevelProjectsMigration,
     level_identifier,
 )
+from src.infrastructure.exceptions import QueryExecutionError
 from src.migration import _build_component_factories
 from src.restricted_issues import ADMIN_REPORT_FORMAT, REPORT_FORMAT
 
@@ -52,6 +53,19 @@ class FakeOpenProject:
         return [script for script in self.scripts if "Project.new(" in script]
 
 
+class FailingOpenProject(FakeOpenProject):
+    """Raise like the Rails runner does when the script for one identifier fails."""
+
+    def __init__(self, failing):
+        super().__init__()
+        self.failing = failing
+
+    def execute_query_to_json_file(self, script):
+        if self.failing in script:
+            raise QueryExecutionError("save failed")
+        return super().execute_query_to_json_file(script)
+
+
 class FakeMappings:
     def __init__(self, project):
         self.data = {"project_mapping": project, "security_level_project_mapping": {}}
@@ -76,7 +90,7 @@ def level(level_id="10000", static=1, per_issue=0, unexplained=0, project="APP")
 
 @pytest.fixture
 def run(monkeypatch, tmp_path):
-    def _run(levels, *, edition="community", admin_sha=SHA, admins=True, projects=(), mapping=None):
+    def _run(levels, *, edition="community", admin_sha=SHA, admins=True, projects=(), mapping=None, selected=()):
         report = tmp_path / "report.json"
         report.write_text(json.dumps({"format": REPORT_FORMAT, "levels": levels, "archive_sha256": SHA}))
         settings = {"security_level_report": str(report)}
@@ -86,10 +100,12 @@ def run(monkeypatch, tmp_path):
                 json.dumps({"format": ADMIN_REPORT_FORMAT, "archive_sha256": admin_sha, "edition": edition})
             )
             settings["security_level_admin_report"] = str(admin)
+        elif admins is None:
+            settings["security_level_admin_report"] = str(tmp_path / "missing.json")
         mappings = mapping or FakeMappings({"APP": APP})
         monkeypatch.setattr("src.config.migration_config", settings)
         monkeypatch.setattr("src.config.mappings", mappings)
-        monkeypatch.setattr("src.config.selected_jira_projects", list)
+        monkeypatch.setattr("src.config.selected_jira_projects", lambda: list(selected))
         target = projects if isinstance(projects, FakeOpenProject) else FakeOpenProject(projects)
         result = SecurityLevelProjectsMigration(jira_client=Mock(), op_client=target).run()
         return SimpleNamespace(result=result, target=target, mapping=mappings.data["security_level_project_mapping"])
@@ -102,6 +118,7 @@ def test_creates_a_private_sub_project_without_members(run):
     assert outcome.result.success, outcome.result.errors
     [script] = outcome.target.creations()
     assert "public: false, parent: parent" in script
+    assert "p.project_types.build(type_id: t.type_id" in script and "p.types" not in script
     assert "Projects::CreateService" not in script
     assert not re.search(r"Members?::|Member\.(new|create)|members\s*<<|add_member", script)
     assert json.loads(script.split("\n")[1]) == {
@@ -201,7 +218,7 @@ def test_per_issue_only_levels_need_enterprise(run, edition, created):
 
 @pytest.mark.parametrize(
     ("admins", "admin_sha", "message"),
-    [(False, SHA, "not configured"), (True, "b" * 64, "another archive")],
+    [(False, SHA, "not configured"), (None, SHA, "FileNotFoundError"), (True, "b" * 64, "another archive")],
 )
 def test_missing_or_mismatched_admin_report_stops_before_any_write(run, admins, admin_sha, message):
     outcome = run([level()], admins=admins, admin_sha=admin_sha)
@@ -209,6 +226,24 @@ def test_missing_or_mismatched_admin_report_stops_before_any_write(run, admins, 
     assert message in outcome.result.message
     assert outcome.target.scripts == []
     assert outcome.mapping == {}
+
+
+def test_a_failing_level_does_not_stop_the_others_or_the_mapping(run):
+    target = FailingOpenProject("app_level_10001")
+    outcome = run([level("10000"), level("10001"), level("10002")], projects=target)
+    assert not outcome.result.success
+    assert outcome.result.errors == ["APP:10001: save failed"]
+    assert sorted(outcome.mapping) == ["APP:10000", "APP:10002"]
+
+
+def test_rerun_keeps_other_entries_and_honours_the_project_filter(run):
+    mappings = FakeMappings(
+        {"APP": APP, "OPS": {**APP, "jira_name": "Ops", "openproject_name": "Ops", "openproject_id": 8}}
+    )
+    mappings.data["security_level_project_mapping"] = {"OLD:1": {"openproject_id": 3}}
+    outcome = run([level(project="APP"), level(project="OPS")], mapping=mappings, selected=["OPS"])
+    assert sorted(outcome.mapping) == ["OLD:1", "OPS:10000"]
+    assert [json.loads(s.split("\n")[1])["identifier"] for s in outcome.target.creations()] == ["ops_level_10000"]
 
 
 def test_component_is_available_but_not_in_the_default_profile():
