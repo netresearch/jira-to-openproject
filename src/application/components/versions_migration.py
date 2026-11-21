@@ -8,8 +8,10 @@ from __future__ import annotations
 from typing import Any
 
 from src import config
+from src.application.components import level_issues, level_versions
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.project_named_records import apply_work_package_updates, project_id
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -44,6 +46,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 return ComponentResult(success=False, failed=1)
         wp_map = self.mappings.get_mapping("work_package") or {}
         keys = [key for key in self._jira_keys_from_wp_map(wp_map) if self._issue_project_key(key) in catalogues]
+        keys = self._without_level_issues(keys)
         issues = {}
         for key in catalogues:
             project_keys = [issue_key for issue_key in keys if self._issue_project_key(issue_key) == key]
@@ -53,12 +56,85 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 logger.exception("Could not verify unrestricted Jira issues for %s", key)
                 return ComponentResult(success=False, failed=1)
         held = len(set(keys) - issues.keys())
+        try:
+            plan = self._level_plan(catalogues)
+        except Exception:
+            logger.exception("Could not read the fix versions of level issues")
+            return ComponentResult(success=False, failed=1)
         return ComponentResult(
             success=True,
             extracted=sum(len(v) for _, v in catalogues.values()),
-            data={"catalogues": catalogues, "issues": issues},
+            data={"catalogues": catalogues, "issues": issues, "level": plan},
             details={"unconfirmed_issue_mappings": held},
         )
+
+    def _without_level_issues(self, keys: list[str]) -> list[str]:
+        """With the level switch on, an issue of a level search or of the archive loses its ordinary entry."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return keys
+        kept = level.without_level_issues(dict.fromkeys(keys, 0))
+        return [key for key in keys if key in kept]
+
+    def _level_plan(self, catalogues: dict[str, tuple[int, list]]) -> dict[str, dict[str, Any]]:
+        """Per level sub-project: its target, Jira project, catalogue and the issues with fix versions."""
+        level = getattr(self, "_level", None)
+        plan: dict[str, dict[str, Any]] = {}
+        if level is None:
+            return plan
+        for project, wps in sorted(level.by_project().items()):
+            if project not in catalogues:
+                level.refused.extend(f"{key}: no version catalogue of {project} in this run" for key in sorted(wps))
+                continue
+            fields = "project,security,fixVersions"
+            for key, issue in level_versions.selected_level_issues(
+                level, self.jira_client, project, wps, fields
+            ).items():
+                refs = level_versions.version_ids(issue.raw["fields"].get("fixVersions", []))
+                if refs and level_versions.shared_with_extra_readers(level, key):
+                    self._versions_withheld.append(key)
+                elif refs is None or not str(issue.id).isdecimal():
+                    level.refused.append(f"{key}: malformed fix versions or issue ID")
+                elif refs:
+                    target = level.targets[key]
+                    entry = plan.setdefault(
+                        target.label,
+                        {"target": target, "project": project, "catalogue": catalogues[project][1], "issues": []},
+                    )
+                    entry["issues"].append({"key": key, "id": str(issue.id), "wp": wps[key], "versions": refs})
+        return plan
+
+    def _level_copies(self, plan: dict[str, dict[str, Any]]) -> dict[str, dict[str, int]]:
+        """Create or adopt each sub-project's copies; a sub-project that fails refuses its issues."""
+        copies: dict[str, dict[str, int]] = {}
+        if not plan:
+            return copies
+        copier = level_versions.LevelVersionCopies(self.op_client, self.mappings, self.jira_client.base_url, logger)
+        for label, entry in plan.items():
+            ids = {sid for row in entry["issues"] for sid in row["versions"]}
+            made = copier.ensure(entry["target"], entry["project"], entry["catalogue"], ids)
+            if made is None:
+                self._level.refused.extend(f"{row['key']}: no version copy in {label}" for row in entry["issues"])
+            else:
+                copies[label] = made
+        return copies
+
+    def _level_assignments(self, plan: dict[str, dict[str, Any]], copies: dict[str, dict[str, int]]) -> list[dict]:
+        """The target versions of each level work package: its sub-project's copies, in Jira order."""
+        base = self.jira_client.base_url.rstrip("/")
+        updates = []
+        for label, made in copies.items():
+            entry = plan[label]
+            for row in entry["issues"]:
+                origin = {
+                    "project": entry["target"].project_id,
+                    "id": row["id"],
+                    "key": row["key"],
+                    "url": f"{base}/browse/{row['key']}",
+                }
+                ids = [made[sid] for sid in row["versions"]]
+                updates.append({"id": row["wp"], "target_version_ids": ids, "jira_version_issue_origin": origin})
+        return updates
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
@@ -75,12 +151,18 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             versions[str(pid)] = records
             changed += count
         self.mappings.set_mapping("version", versions)
-        return ComponentResult(success=True, updated=changed, data={"version_map": indexed, "issues": data["issues"]})
+        plan = data.get("level", {})
+        return ComponentResult(
+            success=True,
+            updated=changed,
+            data={"version_map": indexed, "issues": data["issues"], "level": plan, "copies": self._level_copies(plan)},
+        )
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         version_map: dict[str, dict[str, int]] = data.get("version_map", {})
         issues: dict[str, Any] = data.get("issues", {})
+        level_updates = self._level_assignments(data.get("level", {}), data.get("copies", {}))
         if not version_map and not issues:
             return ComponentResult(success=True, updated=0)
 
@@ -100,7 +182,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 )
                 failed += 1
 
-        return apply_work_package_updates(self, updates, failed)
+        return apply_work_package_updates(self, updates + level_updates, failed)
 
     def _version_assignment(self, key: str, entry: Any, issues: dict, projects: dict, versions: dict) -> dict | None:
         if not isinstance(entry, (dict, int)):
@@ -134,7 +216,29 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         return {"id": int(wp_id), "target_version_ids": target_ids, "jira_version_issue_origin": origin}
 
     def run(self) -> ComponentResult:
-        """Execute versions migration pipeline."""
+        """Execute versions migration pipeline.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009); each gets the copies of its fix versions in its own sub-project
+        (ADR-010), and the refusals are counted into the result on every return.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        self._versions_withheld: list[str] = []
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger
+                )
+            except LevelProjectError as exc:
+                self.logger.error("Level work package versions stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+        result = self._run_versions()
+        if self._level is None:
+            return result
+        level_versions.report_withheld(result, self._versions_withheld, self.logger)
+        return self._level.report(result, self.logger)
+
+    def _run_versions(self) -> ComponentResult:
         self.logger.info("Starting versions migration")
 
         extracted = self._extract()
