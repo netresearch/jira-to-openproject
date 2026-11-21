@@ -334,6 +334,13 @@ class LevelWorkPackages:
     # Jira key to the sub-project its work package was resolved in (ID and parent from the mapping).
     targets: dict[str, LevelTarget] = field(default_factory=dict)
 
+    def by_project(self) -> dict[str, dict[str, int]]:
+        """Jira project key to the work packages of its selected issues, for one level search per project."""
+        projects: dict[str, dict[str, int]] = {}
+        for key, target in self.targets.items():
+            projects.setdefault(target.label.rpartition(":")[0], {})[key] = self.work_packages[key]
+        return projects
+
     def without_level_issues(self, lookup: Mapping[str, int]) -> dict[str, int]:
         """The ordinary key lookup without any issue of a level search or of the archive.
 

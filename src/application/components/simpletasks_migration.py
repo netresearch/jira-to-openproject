@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from decimal import Decimal
 from functools import cached_property
 from itertools import batched
@@ -43,6 +44,9 @@ def _checklist_row(task: dict) -> str:
     return f"- [{'x' if task['checked'] else ' '}] {fence} {title} {fence}{mandatory}"
 
 
+_SOURCE_FIELDS = "project,security,description"
+
+
 class _LevelChangedError(Exception):
     """A level issue whose re-read shows another level than it was selected for."""
 
@@ -63,6 +67,10 @@ class SimpleTasksMigration(BaseMigration):
     @property
     def _task_count_field(self) -> str | None:
         return self._task_fields.get("com.topshelfsolution.simpletasklists:all-tasks-count-cftype")
+
+    def _source_fields(self) -> str:
+        """The issue fields every tasklist read requests."""
+        return _SOURCE_FIELDS + ("," + self._task_count_field if self._task_count_field else "")
 
     @cached_property
     def _server_tasklist(self) -> bool:
@@ -111,9 +119,7 @@ class SimpleTasksMigration(BaseMigration):
 
     def _project_rows(self, project: str, targets: dict, pid: int) -> tuple[dict, int, int]:
         jql = f"{unrestricted_project_jql(project)} ORDER BY id"
-        fields = "project,security,description"
-        if self._task_count_field:
-            fields += "," + self._task_count_field
+        fields = self._source_fields()
 
         def fetch(offset: int, size: int) -> list:
             return fetch_issue_page_with_retry(
@@ -168,10 +174,7 @@ class SimpleTasksMigration(BaseMigration):
                 return None, 0  # Missing app data does not prove that a previously imported list is empty.
             if Decimal(str(count)) == 0:
                 return {**ref, "tasks": [], "markdown": ""}, 0
-        fields = "project,security,description"
-        if self._task_count_field:
-            fields += "," + self._task_count_field
-        raw = self.jira_client.jira.issue(issue.key, fields=fields, expand="renderedFields").raw
+        raw = self.jira_client.jira.issue(issue.key, fields=self._source_fields(), expand="renderedFields").raw
         if (
             raw.get("key") != issue.key
             or str(raw["id"]) != str(issue.id)
@@ -211,9 +214,8 @@ class SimpleTasksMigration(BaseMigration):
                 projects.append(scope)
             held += unknown
             unavailable += missing
-        for scope, unknown, missing in self._level_projects():
-            if scope["rows"]:
-                projects.append(scope)
+        for scopes, unknown, missing in self._level_projects():
+            projects.extend(scope for scope in scopes if scope["rows"])
             held += unknown
             unavailable += missing
         return ComponentResult(
@@ -229,62 +231,73 @@ class SimpleTasksMigration(BaseMigration):
         kept = level.without_level_issues(flat)
         return {project: {k: v for k, v in targets.items() if k in kept} for project, targets in by_project.items()}
 
-    def _level_projects(self) -> list[tuple[dict, int, int]]:
-        """One scope per level sub-project, for the selected issues resolved in it this run (ADR-009)."""
+    def _level_projects(self) -> list[tuple[list[dict], int, int]]:
+        """Per Jira project, one scope per level sub-project of the issues resolved this run (ADR-009)."""
         level = getattr(self, "_level", None)
         if level is None:
             return []
-        by_label: dict[str, tuple[level_issues.LevelTarget, dict[str, int]]] = {}
-        for key, target in level.targets.items():
-            by_label.setdefault(target.label, (target, {}))[1][key] = level.work_packages[key]
-        return [self._level_rows(level, target, wps) for _, (target, wps) in sorted(by_label.items())]
+        return [self._level_scopes(level, project, wps) for project, wps in sorted(level.by_project().items())]
 
-    def _level_rows(
-        self, level: level_issues.LevelWorkPackages, target: level_issues.LevelTarget, wps: dict[str, int]
-    ) -> tuple[dict, int, int]:
-        """Rows of one sub-project; an issue whose level changed or that the search omits is refused."""
-        project = target.label.rpartition(":")[0]
-        fields = "project,security,description"
-        if self._task_count_field:
-            fields += "," + self._task_count_field
-        rows: list[dict] = []
-        held = unconfirmed = 0
-        source_pid = None
+    def _level_scopes(
+        self, level: level_issues.LevelWorkPackages, project: str, wps: dict[str, int]
+    ) -> tuple[list[dict], int, int]:
+        """One level search for the project; an issue whose level changed or that it omits is refused."""
+        rows: dict[str, list[dict]] = {}
+        counts: Counter[str] = Counter()
+        source: set[str] = set()
         seen = set()
-        for issue in level_issues.iter_level_issues(self.jira_client, project, 100, fields):
-            if issue.key not in wps or issue.key in seen:
-                continue
-            seen.add(issue.key)
-            if level_issues.issue_level_id(issue) != target.level_id:
-                level.refused.append(f"{issue.key}: changed its level after the selection")
-                continue
-            project_ref = issue.raw["fields"]["project"]
-            if project_ref.get("projectTypeKey") not in {"software", "business"}:
-                unconfirmed += 1
-                continue
-            source_id = str(project_ref["id"])
-            if project_ref["key"] != project or source_pid not in (None, source_id):
-                msg = "Jira tasklist project identity mismatch"
-                raise ValueError(msg)
-            source_pid = source_id
-            try:
-                row, unknown = self._issue_row(issue, (wps[issue.key], None), target.level_id)
-            except _LevelChangedError:
-                level.refused.append(f"{issue.key}: changed its level after the selection")
-                continue
-            if row:
-                rows.append(row)
-            held += unknown
+        for issue in level_issues.iter_level_issues(self.jira_client, project, 100, self._source_fields()):
+            if issue.key in wps and issue.key not in seen:
+                seen.add(issue.key)
+                target = level.targets[issue.key]
+                row = self._level_row(level, target, issue, wps[issue.key], (project, source), counts=counts)
+                if row:
+                    rows.setdefault(target.label, []).append(row)
         level.refused.extend(f"{key}: not returned by the level search" for key in sorted(set(wps) - seen))
-        scope = {
-            "project": target.project_id,
-            "parent": target.parent_id,
-            "key": project,
-            "source_id": source_pid,
-            "base": self.jira_client.base_url,
-            "rows": rows,
-        }
-        return scope, held, unconfirmed
+        targets = {level.targets[key].label: level.targets[key] for key in wps}
+        scopes = [
+            {
+                "project": target.project_id,
+                "parent": target.parent_id,
+                "key": project,
+                "source_id": next(iter(source), None),
+                "base": self.jira_client.base_url,
+                "rows": rows.get(label, []),
+            }
+            for label, target in sorted(targets.items())
+        ]
+        return scopes, counts["held"], counts["unconfirmed"]
+
+    def _level_row(
+        self,
+        level: level_issues.LevelWorkPackages,
+        target: level_issues.LevelTarget,
+        issue: Any,
+        wp_id: int,
+        origin: tuple[str, set[str]],
+        *,
+        counts: Counter[str],
+    ) -> dict | None:
+        """The row of one selected issue, or None when it is refused or not confirmed."""
+        project, source = origin
+        if level_issues.issue_level_id(issue) != target.level_id:
+            level.refused.append(f"{issue.key}: changed its level after the selection")
+            return None
+        project_ref = issue.raw["fields"]["project"]
+        if project_ref.get("projectTypeKey") not in {"software", "business"}:
+            counts["unconfirmed"] += 1
+            return None
+        source.add(str(project_ref["id"]))
+        if project_ref["key"] != project or len(source) > 1:
+            msg = "Jira tasklist project identity mismatch"
+            raise ValueError(msg)
+        try:
+            row, unknown = self._issue_row(issue, (wp_id, None), target.level_id)
+        except _LevelChangedError:
+            level.refused.append(f"{issue.key}: changed its level after the selection")
+            return None
+        counts["held"] += unknown
+        return row
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         counts = {"updated": 0, "tasks": 0}

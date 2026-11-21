@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator
 from itertools import batched
 from typing import Any
@@ -92,10 +93,7 @@ class ComponentsMigration(BaseMigration):
                 skipped += len(targets) - len(rows)
                 if rows:
                     projects[key] = {"project_id": pid, "jira_id": source_pid, "key": key, "jira": base, "issues": rows}
-        for label, scope, unconfirmed in self._level_projects(base):
-            skipped += unconfirmed
-            if scope["issues"]:
-                projects[label] = scope
+        skipped += self._add_level_projects(projects, base)
         warnings = []
         if skipped:
             warnings.append(f"Jira could not confirm {skipped} mapped work packages for ordinary component assignment.")
@@ -113,70 +111,80 @@ class ComponentsMigration(BaseMigration):
         kept = level.without_level_issues(flat)
         return {project: {k: v for k, v in targets.items() if k in kept} for project, targets in projects.items()}
 
-    def _level_projects(self, base: str) -> list[tuple[str, dict, int]]:
-        """One payload per level sub-project, for the selected issues resolved in it this run (ADR-009).
+    def _add_level_projects(self, projects: dict, base: str) -> int:
+        """Add one payload per level sub-project of the issues resolved this run (ADR-009).
 
         Categories are per project in OpenProject, so the payload names the sub-project: its
-        categories are created and assigned there, never in the parent.
+        categories are created and assigned there, never in the parent. Returns the issues that
+        could not be confirmed.
         """
         level = getattr(self, "_level", None)
         if level is None:
-            return []
-        by_label: dict[str, tuple[level_issues.LevelTarget, dict[str, int]]] = {}
-        for key, target in level.targets.items():
-            by_label.setdefault(target.label, (target, {}))[1][key] = level.work_packages[key]
-        payloads = []
-        for label, (target, wps) in sorted(by_label.items()):
-            project = label.rpartition(":")[0]
-            rows, source_pid, unconfirmed = self._level_rows(level, project, target, wps, base)
-            scope = {
-                "project_id": target.project_id,
-                "parent_id": target.parent_id,
-                "jira_id": source_pid,
-                "key": project,
-                "jira": base,
-                "issues": rows,
-            }
-            payloads.append((label, scope, unconfirmed))
-        return payloads
+            return 0
+        unconfirmed = 0
+        for project, wps in sorted(level.by_project().items()):
+            rows, source_pid, skipped = self._level_rows(level, project, wps, base)
+            unconfirmed += skipped
+            targets = {level.targets[key].label: level.targets[key] for key in wps}
+            for label, target in sorted(targets.items()):
+                if rows.get(label):
+                    projects[label] = {
+                        "project_id": target.project_id,
+                        "parent_id": target.parent_id,
+                        "jira_id": source_pid,
+                        "key": project,
+                        "jira": base,
+                        "issues": rows[label],
+                    }
+        return unconfirmed
 
     def _level_rows(
-        self,
-        level: level_issues.LevelWorkPackages,
-        project: str,
-        target: level_issues.LevelTarget,
-        wps: dict[str, int],
-        base: str,
-    ) -> tuple[list, str | None, int]:
-        rows = []
-        source_pid = None
-        unconfirmed = 0
+        self, level: level_issues.LevelWorkPackages, project: str, wps: dict[str, int], base: str
+    ) -> tuple[dict[str, list], str | None, int]:
+        """One level search for the project; an issue whose level changed or that it omits is refused."""
+        rows: dict[str, list] = {}
+        counts: Counter[str] = Counter()
+        source: set[str] = set()
         seen = set()
         for issue in level_issues.iter_level_issues(self.jira_client, project, 100, "project,components,security"):
-            if issue.key not in wps or issue.key in seen:
-                continue
-            seen.add(issue.key)
-            if level_issues.issue_level_id(issue) != target.level_id:
-                level.refused.append(f"{issue.key}: changed its level after the selection")
-                continue
-            fields = issue.raw["fields"]
-            ref = fields["project"]
-            if ref.get("projectTypeKey") not in {"software", "business"}:
-                unconfirmed += 1
-                continue
-            pid = str(ref["id"])
-            if ref["key"] != project or not pid.isdecimal() or source_pid not in (None, pid):
-                msg = "Jira returned inconsistent project origins"
-                raise ValueError(msg)
-            source_pid = pid
-            if not str(issue.id).isdecimal():
-                msg = "Mapped source ID differs from Jira"
-                raise ValueError(msg)
-            components = _component_refs(fields.get("components"), base)
-            rows.append({"id": str(issue.id), "key": issue.key, "wp": wps[issue.key], "components": components})
+            if issue.key in wps and issue.key not in seen:
+                seen.add(issue.key)
+                row = self._level_row(level, issue, wps[issue.key], (project, source), base, counts=counts)
+                if row:
+                    rows.setdefault(level.targets[issue.key].label, []).append(row)
         level.refused.extend(f"{key}: not returned by the level search" for key in sorted(set(wps) - seen))
-        self._check_catalogue(project, rows, base)
-        return rows, source_pid, unconfirmed
+        self._check_catalogue(project, [row for label_rows in rows.values() for row in label_rows], base)
+        return rows, next(iter(source), None), counts["unconfirmed"]
+
+    def _level_row(
+        self,
+        level: level_issues.LevelWorkPackages,
+        issue: Any,
+        wp_id: int,
+        origin: tuple[str, set[str]],
+        base: str,
+        *,
+        counts: Counter[str],
+    ) -> dict | None:
+        """The row of one selected issue, or None when it is refused or not confirmed."""
+        project, source = origin
+        if level_issues.issue_level_id(issue) != level.targets[issue.key].level_id:
+            level.refused.append(f"{issue.key}: changed its level after the selection")
+            return None
+        fields = issue.raw["fields"]
+        ref = fields["project"]
+        if ref.get("projectTypeKey") not in {"software", "business"}:
+            counts["unconfirmed"] += 1
+            return None
+        source.add(str(ref["id"]))
+        if ref["key"] != project or not str(ref["id"]).isdecimal() or len(source) > 1:
+            msg = "Jira returned inconsistent project origins"
+            raise ValueError(msg)
+        if not str(issue.id).isdecimal():
+            msg = "Mapped source ID differs from Jira"
+            raise ValueError(msg)
+        components = _component_refs(fields.get("components"), base)
+        return {"id": str(issue.id), "key": issue.key, "wp": wp_id, "components": components}
 
     def _target_origins(self, key: str, pid: int, mapped: dict) -> dict:
         targets = dict(mapped)

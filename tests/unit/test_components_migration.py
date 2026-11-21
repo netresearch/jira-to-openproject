@@ -11,7 +11,10 @@ import pytest
 from src.application.components.components_migration import ComponentsMigration
 from src.migration import _invoke_component
 from src.models import ComponentResult
-from tests.unit.test_level_work_packages import level_issues
+from tests.unit.test_level_attachments import LEVEL_MAP, LEVEL_OF
+from tests.unit.test_level_attachments import LIGHT as LEVEL_LIGHT
+from tests.unit.test_level_attachments import LIVE as LEVEL_LIVE
+from tests.unit.test_level_work_packages import SUB_PROJECT, level_issues
 from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 
@@ -129,22 +132,10 @@ def level_setup(level_work_package_setup):  # noqa: F811 (the imported fixture, 
     return level_work_package_setup
 
 
-LEVEL_LIGHT = 'project = "APP" AND level IS NOT EMPTY ORDER BY created ASC, key ASC'
 LEVEL_ORDINARY = 'project = "APP" AND level IS EMPTY ORDER BY id'
-LEVEL_LIVE = {"field": True, "work_packages": [900, 901], "keys": [[900, "APP-10"], [901, "APP-11"]]}
-LEVEL_MAP = {
-    str(n): {
-        "jira_key": f"APP-{n}",
-        "openproject_id": wp,
-        "project_key": "APP",
-        "openproject_project_id": 100,
-        "security_level_id": "10000",
-        "security_level_project": "APP:10000",
-        "security_class": "static",
-    }
-    for n, wp in ((10, 900), (11, 901))
-}
-LEVEL_OF = {10: "10000", 11: "10000", 12: "10000", 13: "10000", 20: "10001"}
+# A second sub-project of the same Jira project, for level 10001 (APP-20).
+SECOND_LEVEL = {**SUB_PROJECT, "level_id": "10001", "openproject_id": 101, "openproject_identifier": "app_level_10001"}
+SECOND_LIVE = {101: {"field": True, "work_packages": [920], "keys": [[920, "APP-20"]]}}
 BACKEND = {"id": "420", "name": "Backend", "self": "https://jira.local/rest/api/2/component/420"}
 
 
@@ -187,13 +178,15 @@ class _LevelJira:
 class _LevelOpenProject:
     """Answer the live sub-project read and the parent snapshot; decode and record each payload."""
 
-    def __init__(self, live=None):
+    def __init__(self, live=None, by_project=None):
         self.live = LEVEL_LIVE if live is None else live
+        self.by_project = by_project or {}
         self.live_reads, self.payloads, self.snapshots = [], [], []
 
     def execute_query_to_json_file(self, script):
-        self.live_reads.append(json.loads(script.split("\n")[1]))
-        return json.loads(json.dumps(self.live))
+        values = json.loads(script.split("\n")[1])
+        self.live_reads.append(values)
+        return json.loads(json.dumps(self.by_project.get(values["project_id"], self.live)))
 
     def get_project_wp_cf_snapshot(self, pid):
         self.snapshots.append(pid)
@@ -217,8 +210,11 @@ def _level_run(
     categories=None,
     catalogue=None,
     runs=1,
+    second_level=False,
     **kw,
 ):
+    if second_level:
+        kw["mapping"] = {"security_level_project": {"APP:10000": SUB_PROJECT, "APP:10001": SECOND_LEVEL}}
     mappings, _ = level_setup(**kw)
     mappings.data["work_package"] = {"1": {"jira_key": "APP-1", "openproject_id": 500, "project_key": "APP"}}
     mappings.data["work_package"].update(ordinary or {})
@@ -227,7 +223,7 @@ def _level_run(
     writes = []
     original = mappings.set_mapping
     mappings.set_mapping = lambda name, value: (writes.append(name), original(name, value))
-    jira, op = _LevelJira(moved, omitted), _LevelOpenProject(live)
+    jira, op = _LevelJira(moved, omitted), _LevelOpenProject(live, SECOND_LIVE if second_level else None)
     if catalogue is not None:
         jira.jira.project_components.return_value = catalogue
     migration = ComponentsMigration(jira_client=jira, op_client=op)
@@ -272,6 +268,16 @@ def test_level_switch_on_assigns_categories_of_the_sub_project_only(level_setup)
     # Categories are recorded per OpenProject project; no work-package mapping is written.
     assert outcome.writes == ["category", "category"]
     assert outcome.mappings.data["category"] == {"7": {"Backend": 57}, "100": {"Backend": 150}}
+
+
+def test_level_sub_projects_of_one_jira_project_share_one_level_search(level_setup):
+    outcome = _level_run(level_setup, second_level=True)
+    assert outcome.result.success, outcome.result
+    assert (101, 7, "APP-20", 920) in _targets(outcome.op)
+    assert sorted(p["project_id"] for p in outcome.op.payloads) == [7, 100, 101]
+    # One search per Jira project: the first page and the empty page that ends it.
+    assert outcome.jira.searches.count((LEVEL_LIGHT, "project,components,security")) == 2
+    assert outcome.mappings.data["category"]["101"] == {"Backend": 151}
 
 
 @pytest.mark.parametrize(
