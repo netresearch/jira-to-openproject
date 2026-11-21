@@ -129,14 +129,6 @@ class CustomFieldsGenericMigration(LevelFieldsMigration):  # noqa: D101
 
         return ComponentResult(success=True, data={"values_by_wp": values_by_wp, "wp_to_project": wp_to_project})
 
-    def _index_by_jira_key(self, wp_map):
-        entry_by_jira_key: dict[str, Any] = {}
-        for outer_key, raw in wp_map.items():
-            inner_key = self._inner_jira_key(outer_key, raw)
-            if inner_key is not None:
-                entry_by_jira_key[inner_key] = raw
-        return entry_by_jira_key
-
     def _unmapped_values(self, fields, cf_mapping):
         values = []
         for attr in dir(fields):

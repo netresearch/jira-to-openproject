@@ -13,7 +13,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -21,7 +22,7 @@ from src.models.jira import JiraIssueFields
 
 
 @register_entity_types("native_tags")
-class NativeTagsMigration(BaseMigration):  # noqa: D101
+class NativeTagsMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
@@ -41,7 +42,7 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         Boundary parse via :meth:`JiraIssueFields.from_issue_any` gives us
         a typed ``list[str]`` for labels — no more attribute walking.
         """
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         keys = self._jira_keys_from_wp_map(wp_map)
         if not keys:
             return ComponentResult(success=True, data={"by_key": {}})
@@ -60,7 +61,10 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         by_key: dict[str, list[str]] = data.get("by_key", {}) if isinstance(data, dict) else {}
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._index_by_jira_key(self._work_package_map())
+        # A Tag is an instance-wide record: the label names of a level issue never go into one (ADR-009).
+        level_ids = self._level_work_package_ids()
+        withheld = 0
         updates: list[dict[str, Any]] = []
         for jira_key, names in by_key.items():
             raw_entry = wp_map.get(jira_key)
@@ -73,15 +77,19 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
                 # preserve the pre-typed call-site behaviour.
                 continue
             wp_id = int(entry.openproject_id)
+            if wp_id in level_ids:
+                withheld += 1
+                continue
             tag_defs = [{"name": n, "color": self._name_to_color_hex(n)} for n in names]
             updates.append({"work_package_id": wp_id, "tags": tag_defs})
-        return ComponentResult(success=True, data={"updates": updates})
+        return ComponentResult(success=True, data={"updates": updates}, details=self._withheld_details(withheld))
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         updates = data.get("updates", []) if isinstance(data, dict) else []
+        details = mapped.details
         if not updates:
-            return ComponentResult(success=True, updated=0)
+            return ComponentResult(success=True, updated=0, details=details)
         # Script ensures Tag records, then assigns to WP via wp.tags= collection if available,
         # else tries tag_list interface.
         script = (
@@ -124,8 +132,13 @@ class NativeTagsMigration(BaseMigration):  # noqa: D101
         res = self.op_client.execute_script_with_data(script, updates)
         updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
         failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+        return ComponentResult(success=failed == 0, updated=updated, failed=failed, details=details)
+
+    @staticmethod
+    def _withheld_details(withheld: int) -> dict[str, Any]:
+        """Count the level work packages that got no tags; nothing when there are none."""
+        return {"level_tags_withheld": withheld} if withheld else {}
 
     def run(self) -> ComponentResult:
-        """Run Native tags migration."""
-        return self._run_etl_pipeline("Native tags")
+        """Run Native tags migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Native tags"))

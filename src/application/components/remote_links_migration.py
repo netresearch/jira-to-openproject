@@ -9,7 +9,8 @@ This avoids CF proliferation and presents links inline for users.
 
 from __future__ import annotations
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -20,7 +21,7 @@ SECTION_TITLE = "Remote Links"
 
 
 @register_entity_types("remote_links")
-class RemoteLinksMigration(BaseMigration):  # noqa: D101
+class RemoteLinksMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
@@ -43,7 +44,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         return pairs
 
     def _extract(self) -> ComponentResult:
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         keys = self._jira_keys_from_wp_map(wp_map)
         if not keys:
             return ComponentResult(success=True, data={"links": {}})
@@ -80,7 +81,7 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
         md_by_key: dict[str, str] = data.get("markdown", {}) if isinstance(data, dict) else {}
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._index_by_jira_key(self._work_package_map())
 
         # Collect all sections for bulk update
         sections_to_upsert: list[dict] = []
@@ -116,5 +117,5 @@ class RemoteLinksMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run Remote links migration."""
-        return self._run_etl_pipeline("Remote links")
+        """Run Remote links migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Remote links"))

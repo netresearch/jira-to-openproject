@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -22,7 +23,7 @@ SECURITY_LEVEL_CF_NAME = "Security Level"
 
 
 @register_entity_types("security_levels")
-class SecurityLevelsMigration(BaseMigration):  # noqa: D101
+class SecurityLevelsMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
@@ -45,7 +46,7 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
 
     def _extract(self) -> ComponentResult:
         """Extract Jira security level names per issue mapped to a WP."""
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         keys = self._jira_keys_from_wp_map(wp_map)
         issues = self._merge_batch_issues(keys)
 
@@ -65,7 +66,7 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
         if not cf_id:
             return ComponentResult(success=False, failed=1)
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._index_by_jira_key(self._work_package_map())
         sec_by_key: dict[str, str] = (mapped.data or {}).get("security", {})  # type: ignore[assignment]
 
         updated = 0
@@ -93,5 +94,5 @@ class SecurityLevelsMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run Security levels migration."""
-        return self._run_etl_pipeline("Security levels")
+        """Run Security levels migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Security levels"))

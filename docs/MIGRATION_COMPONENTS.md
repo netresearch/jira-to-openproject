@@ -398,6 +398,8 @@ Migrates Jira resolutions to OpenProject custom field values.
 
 **Dependencies**: CustomFieldMigration
 
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and the field is enabled in the level sub-project, never in the parent. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### CustomFieldMigration
@@ -788,6 +790,8 @@ Migrates Jira votes to OpenProject custom field.
 
 **Dependencies**: WorkPackageMigration, CustomFieldMigration
 
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and the field is enabled in the level sub-project, never in the parent. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### LabelsMigration
@@ -805,6 +809,8 @@ Migrates Jira labels to OpenProject tags.
 
 **Related**: NativeTagsMigration
 
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and the field is enabled in the level sub-project, never in the parent. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### NativeTagsMigration
@@ -820,6 +826,8 @@ Alternative tag migration using OpenProject native tags.
 
 **Dependencies**: WorkPackageMigration
 
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), a level work package gets no tags: a `Tag` is an instance-wide record, so the label names of a level issue would be visible outside the level; `details.level_tags_withheld` counts these work packages, and they are no failure. An ordinary entry of a level issue is refused. OpenProject 17.9.7 has no `Tag` model and its work packages have neither `tags` nor `tag_list`, so there the component sends its updates but writes no tags. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### RemoteLinksMigration
@@ -834,6 +842,8 @@ Migrates Jira remote links to OpenProject custom field.
 - Icon/application metadata
 
 **Dependencies**: WorkPackageMigration, CustomFieldMigration
+
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused; the section goes into the description of the level work package. In production the component writes nothing yet: a Jira search does not return remote links, and nothing reads the remote-link endpoint ([#501](https://github.com/netresearch/jira-to-openproject/issues/501)); the tests supply the field directly. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -926,6 +936,8 @@ The standard work-package import asks Jira for issues with an empty security lev
 - OpenProject project permissions govern access to those earlier work packages. The custom field stores metadata.
 
 **Dependencies**: CustomFieldMigration
+
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and the field is enabled in the level sub-project, never in the parent. A level work package gets the name of its own level, which Jira shows to every reader of the issue; an issue whose level changed since the selection, or that the level search omits, is refused, so the name of another level is never written. With the switch on, the ordinary entry of every issue that has a level when the run starts is refused; an issue that gains a level between the level resolution and the batch read still takes the ordinary path, and its level name then goes into its ordinary work package. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 

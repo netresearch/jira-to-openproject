@@ -554,6 +554,22 @@ class BaseMigration:
         return keys
 
     @staticmethod
+    def _index_by_jira_key(wp_map: dict[str, Any]) -> dict[str, Any]:
+        """Index the raw work-package mapping entries by their Jira issue key.
+
+        ``work_packages_skeleton`` keys ``work_package_mapping.json`` by Jira issue ID and
+        stores the key inside the entry; legacy and test mappings are keyed by the issue key.
+        The inner ``jira_key`` wins, else the outer key (#260, #498), so a mapping keyed by
+        issue key resolves exactly as ``wp_map.get(jira_key)`` did. The entries stay raw, so
+        each caller keeps its own rules for which entry shapes it accepts.
+        """
+        entry_by_jira_key: dict[str, Any] = {}
+        for outer_key, raw in wp_map.items():
+            inner_key = raw.get("jira_key") if isinstance(raw, dict) else None
+            entry_by_jira_key[str(inner_key or outer_key)] = raw
+        return entry_by_jira_key
+
+    @staticmethod
     def _issue_project_key(issue_key: str) -> str:
         """Extract the project key from a Jira issue key (e.g. 'PROJ-123' -> 'PROJ')."""
         try:

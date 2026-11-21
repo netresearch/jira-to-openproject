@@ -77,8 +77,9 @@ migration:
   # sub-project.
   # Off until the dependent components and the late access grant exist; only the boolean true enables it.
   # security_level_work_packages: false
-  # With it, customfields_generic, priorities, story_points, estimates and wp_metadata_backfill (without
-  # the assignee) write the level work packages too.
+  # With it, customfields_generic, priorities, story_points, estimates, wp_metadata_backfill (without
+  # the assignee), labels, votes, remote_links, resolution and security_levels write the level work
+  # packages too; native_tags gives them no tags.
 
   # Jira keys as native semantic work package identifiers (semantic_identifiers, after
   # work_packages_skeleton; ADR-011): identifier, sequence number, aliases from the Key changelog,
