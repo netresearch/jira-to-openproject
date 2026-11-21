@@ -6,15 +6,18 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from decimal import Decimal
 from functools import cached_property
 from itertools import batched
 from typing import Any
 
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.issue_security import permits_unrestricted_result, unrestricted_project_jql
 from src.application.components.project_named_records import project_id
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.infrastructure.jira.description_tasks import description_tasks
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
@@ -41,6 +44,13 @@ def _checklist_row(task: dict) -> str:
     return f"- [{'x' if task['checked'] else ' '}] {fence} {title} {fence}{mandatory}"
 
 
+_SOURCE_FIELDS = "project,security,description"
+
+
+class _LevelChangedError(Exception):
+    """A level issue whose re-read shows another level than it was selected for."""
+
+
 @register_entity_types("simpletasks")
 class SimpleTasksMigration(BaseMigration):
     """Transfer ordinary task origins through the selected projects' verified issue mappings."""
@@ -57,6 +67,10 @@ class SimpleTasksMigration(BaseMigration):
     @property
     def _task_count_field(self) -> str | None:
         return self._task_fields.get("com.topshelfsolution.simpletasklists:all-tasks-count-cftype")
+
+    def _source_fields(self) -> str:
+        """The issue fields every tasklist read requests."""
+        return _SOURCE_FIELDS + ("," + self._task_count_field if self._task_count_field else "")
 
     @cached_property
     def _server_tasklist(self) -> bool:
@@ -105,9 +119,7 @@ class SimpleTasksMigration(BaseMigration):
 
     def _project_rows(self, project: str, targets: dict, pid: int) -> tuple[dict, int, int]:
         jql = f"{unrestricted_project_jql(project)} ORDER BY id"
-        fields = "project,security,description"
-        if self._task_count_field:
-            fields += "," + self._task_count_field
+        fields = self._source_fields()
 
         def fetch(offset: int, size: int) -> list:
             return fetch_issue_page_with_retry(
@@ -146,7 +158,9 @@ class SimpleTasksMigration(BaseMigration):
             len(targets) - confirmed,
         )
 
-    def _issue_row(self, issue: Any, target: tuple[int, str | None]) -> tuple[dict | None, int]:
+    def _issue_row(
+        self, issue: Any, target: tuple[int, str | None], level_id: str | None = None
+    ) -> tuple[dict | None, int]:
         target_id, source_id = target
         if source_id is not None and source_id != str(issue.id):
             msg = "Mapped Jira tasklist issue ID changed"
@@ -160,19 +174,18 @@ class SimpleTasksMigration(BaseMigration):
                 return None, 0  # Missing app data does not prove that a previously imported list is empty.
             if Decimal(str(count)) == 0:
                 return {**ref, "tasks": [], "markdown": ""}, 0
-        fields = "project,security,description"
-        if self._task_count_field:
-            fields += "," + self._task_count_field
-        raw = self.jira_client.jira.issue(issue.key, fields=fields, expand="renderedFields").raw
+        raw = self.jira_client.jira.issue(issue.key, fields=self._source_fields(), expand="renderedFields").raw
         if (
             raw.get("key") != issue.key
             or str(raw["id"]) != str(issue.id)
             or raw["fields"]["project"]["id"] != issue.raw["fields"]["project"]["id"]
             or raw["fields"]["project"].get("projectTypeKey") != issue.raw["fields"]["project"].get("projectTypeKey")
-            or not permits_unrestricted_result(raw)
+            or (level_id is None and not permits_unrestricted_result(raw))
         ):
             msg = "Jira tasklist issue identity or visibility changed"
             raise ValueError(msg)
+        if level_id is not None and level_issues.issue_level_id(raw) != level_id:
+            raise _LevelChangedError(issue.key)
         tasks, held = self._confirmed_tasks(raw)
         return {
             **ref,
@@ -191,7 +204,7 @@ class SimpleTasksMigration(BaseMigration):
         mappings = self.mappings.get_mapping("project") or {}
         projects = []
         held = unavailable = 0
-        for key, targets in self._targets(selected).items():
+        for key, targets in self._without_level_issues(self._targets(selected)).items():
             pid = project_id(mappings.get(key))
             if not pid:
                 msg = "Missing source project mapping for Jira tasklists"
@@ -201,9 +214,90 @@ class SimpleTasksMigration(BaseMigration):
                 projects.append(scope)
             held += unknown
             unavailable += missing
+        for scopes, unknown, missing in self._level_projects():
+            projects.extend(scope for scope in scopes if scope["rows"])
+            held += unknown
+            unavailable += missing
         return ComponentResult(
             success=True, data=projects, details={"unverified_task_audience": held, "unconfirmed_issues": unavailable}
         )
+
+    def _without_level_issues(self, by_project: dict) -> dict:
+        """With the level switch on, no issue of a level search or of the archive keeps an ordinary target."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return by_project
+        flat = {key: wp for targets in by_project.values() for key, (wp, _) in targets.items()}
+        kept = level.without_level_issues(flat)
+        return {project: {k: v for k, v in targets.items() if k in kept} for project, targets in by_project.items()}
+
+    def _level_projects(self) -> list[tuple[list[dict], int, int]]:
+        """Per Jira project, one scope per level sub-project of the issues resolved this run (ADR-009)."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return []
+        return [self._level_scopes(level, project, wps) for project, wps in sorted(level.by_project().items())]
+
+    def _level_scopes(
+        self, level: level_issues.LevelWorkPackages, project: str, wps: dict[str, int]
+    ) -> tuple[list[dict], int, int]:
+        """One level search for the project; an issue whose level changed or that it omits is refused."""
+        rows: dict[str, list[dict]] = {}
+        counts: Counter[str] = Counter()
+        source: set[str] = set()
+        seen = set()
+        for issue in level_issues.iter_level_issues(self.jira_client, project, 100, self._source_fields()):
+            if issue.key in wps and issue.key not in seen:
+                seen.add(issue.key)
+                target = level.targets[issue.key]
+                row = self._level_row(level, target, issue, wps[issue.key], (project, source), counts=counts)
+                if row:
+                    rows.setdefault(target.label, []).append(row)
+        level.refused.extend(f"{key}: not returned by the level search" for key in sorted(set(wps) - seen))
+        targets = {level.targets[key].label: level.targets[key] for key in wps}
+        scopes = [
+            {
+                "project": target.project_id,
+                "parent": target.parent_id,
+                "key": project,
+                "source_id": next(iter(source), None),
+                "base": self.jira_client.base_url,
+                "rows": rows.get(label, []),
+            }
+            for label, target in sorted(targets.items())
+        ]
+        return scopes, counts["held"], counts["unconfirmed"]
+
+    def _level_row(
+        self,
+        level: level_issues.LevelWorkPackages,
+        target: level_issues.LevelTarget,
+        issue: Any,
+        wp_id: int,
+        origin: tuple[str, set[str]],
+        *,
+        counts: Counter[str],
+    ) -> dict | None:
+        """The row of one selected issue, or None when it is refused or not confirmed."""
+        project, source = origin
+        if level_issues.issue_level_id(issue) != target.level_id:
+            level.refused.append(f"{issue.key}: changed its level after the selection")
+            return None
+        project_ref = issue.raw["fields"]["project"]
+        if project_ref.get("projectTypeKey") not in {"software", "business"}:
+            counts["unconfirmed"] += 1
+            return None
+        source.add(str(project_ref["id"]))
+        if project_ref["key"] != project or len(source) > 1:
+            msg = "Jira tasklist project identity mismatch"
+            raise ValueError(msg)
+        try:
+            row, unknown = self._issue_row(issue, (wp_id, None), target.level_id)
+        except _LevelChangedError:
+            level.refused.append(f"{issue.key}: changed its level after the selection")
+            return None
+        counts["held"] += unknown
+        return row
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         counts = {"updated": 0, "tasks": 0}
@@ -226,8 +320,22 @@ class SimpleTasksMigration(BaseMigration):
         raise ValueError(msg)
 
     def run(self) -> ComponentResult:
-        """Reconcile Jira tasks and their source metadata."""
-        return self._run_etl_pipeline("Simpletasks")
+        """Reconcile Jira tasks and their source metadata.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009) and their refusals are counted into the result.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger
+                )
+            except LevelProjectError as exc:
+                self.logger.error("Level work package tasklists stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+        result = self._run_etl_pipeline("Simpletasks")
+        return result if self._level is None else self._level.report(result, self.logger)
 
     def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
         """Task edits can occur independently of Jira's issue update timestamp."""

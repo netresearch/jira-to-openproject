@@ -14,12 +14,17 @@ require "digest"
 project = Project.find(data.fetch("project"))
 project.with_lock(requires_new: true) do
   raise "Private target required for tasklists" if project.public?
+  # A level sub-project (ADR-009) has no origin of its own: its parent carries the Jira project's
+  # origin, and every membership row of the sub-project, locked users and shares included, is access.
+  level = data.key?("parent")
+  source = level ? Project.find(data.fetch("parent")) : project
+  raise "Unexpected tasklist sub-project" if level && project.parent_id != source.id
   origin = {"Jira Project Key"=>data.fetch("key"), "Jira Project ID"=>data.fetch("source_id"), "Jira Base URL"=>data.fetch("base")}
   origins = lambda do |obj, type, names|
     obj.custom_values.joins(:custom_field).where(custom_fields: {type: type, name: names})
        .pluck("custom_fields.name", :value).group_by(&:first).transform_values { |v| v.sole.last }
   end
-  actual = origins.call(project, "ProjectCustomField", origin.keys)
+  actual = origins.call(source, "ProjectCustomField", origin.keys)
   # Older migrated projects predate the Jira Base URL attribute. In that case
   # each affected work package must still have its exact source URL, key and ID.
   expected = actual.key?("Jira Base URL") ? origin : origin.except("Jira Base URL")
@@ -50,6 +55,7 @@ project.with_lock(requires_new: true) do
     changed = wp.description.to_s != expected
     if changed
       raise "Stage checklist changes before granting project access" if project.members.exists?
+      raise "Stage checklist changes before granting project access" if level && Member.where(project_id: project.id).exists?
       wp.update_columns(description: expected)
       raise "Native checklist readback failed" unless wp.reload.description == expected
     end
