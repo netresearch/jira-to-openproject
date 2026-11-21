@@ -40,10 +40,28 @@ Project.transaction do
   end
 """
 
-# The sub-project's own copy of each Jira version (ADR-010): sharing none, adopted by its origin on
-# a repeat run. A copy is created or changed only while the sub-project has no membership row,
-# locked users and work package shares included (ADR-005); the parent's versions are not read.
-_LEVEL_SYNC = """
+# The rows of the level copies: Jira releases from the catalogue (fix and affected versions), or
+# the parent's sprint versions, whose attributes the copy takes over.
+_LEVEL_RELEASES = """
+  rows = data.fetch('versions').map do |row|
+    origin = {'source'=>source, 'id'=>row.fetch('id'), 'archived'=>row.fetch('archived'), 'released'=>row.fetch('released')}
+    {'id'=>row.fetch('id'), 'attributes'=>row.fetch('attributes'), 'origin'=>origin}
+  end
+"""
+
+_LEVEL_SPRINTS = """
+  rows = data.fetch('sprints').map do |row|
+    sprint = owner.versions.find(row.fetch('version'))
+    id = 'sprint:' + row.fetch('id')
+    attrs = sprint.attributes.slice('name', 'description', 'status', 'start_date', 'effective_date')
+    {'id'=>id, 'attributes'=>attrs, 'origin'=>{'source'=>source, 'id'=>id, 'version'=>sprint.id}}
+  end
+"""
+
+# The sub-project's own copy of each row (ADR-010): sharing none, adopted by its origin on a
+# repeat run. A copy is created or changed only while the sub-project has no membership row,
+# locked users and work package shares included (ADR-005); the parent's versions are not changed.
+_LEVEL_COPIES = """
   staging = !project.members.exists? && !Member.where(project_id: project.id).exists?
   field = VersionCustomField.find_or_create_by!(name: 'Jira Version Origin') { |f| f.field_format = 'text' }
   raise 'Unexpected version origin field' unless field.field_format == 'text' && !field.multi_value?
@@ -55,7 +73,7 @@ _LEVEL_SYNC = """
     by_source[key] = value.customized
   end
   changes = 0
-  versions = data.fetch('versions').to_h do |row|
+  versions = rows.to_h do |row|
     attrs = row.fetch('attributes').merge('sharing' => 'none')
     version = by_source[[source, row.fetch('id')]]
     if version.nil?
@@ -70,7 +88,7 @@ _LEVEL_SYNC = """
       version.save!
     end
     origin = version.custom_values.find_or_initialize_by(custom_field: field)
-    origin.value = JSON.generate({'source'=>source, 'id'=>row.fetch('id'), 'archived'=>row.fetch('archived'), 'released'=>row.fetch('released')})
+    origin.value = JSON.generate(row.fetch('origin'))
     if origin.new_record? || origin.changed?
       raise 'Create or change level versions before granting project access' unless staging
       origin.save!
@@ -204,13 +222,40 @@ def sync_level_versions(
         return {}
     project, parent = sub_project
     payload = _catalogue_payload(project, source, project_key, rows) | {"parent_id": parent}
-    result = level_version_project_query(client, payload, _LEVEL_SYNC)
+    result = level_version_project_query(client, payload, _LEVEL_RELEASES + _LEVEL_COPIES)
+    return _level_copies(result, {row["id"] for row in payload["versions"]})
+
+
+def sync_level_sprints(
+    client: OpenProjectClient, sub_project: tuple[int, int], origin: tuple[str, str, str], sprints: dict[str, int]
+) -> dict[str, int]:
+    """Jira sprint ID to the sub-project's copy of the parent's sprint version (ADR-010).
+
+    ``origin`` is the Jira base URL, project key and project ID the parent must carry;
+    ``sprints`` maps each Jira sprint ID to the parent's version of that sprint.
+    """
+    if not sprints:
+        return {}
+    (project, parent), (source, project_key, jira_project_id) = sub_project, origin
+    if not jira_project_id.isdecimal() or not all(sid.isdecimal() and type(v) is int for sid, v in sprints.items()):
+        msg = "Invalid Jira sprint or project identity"
+        raise ValueError(msg)
+    payload = {
+        "project": project,
+        "parent_id": parent,
+        "source": source.rstrip("/"),
+        "key": project_key,
+        "jira_project_id": jira_project_id,
+        "sprints": [{"id": sid, "version": version} for sid, version in sorted(sprints.items())],
+    }
+    result = level_version_project_query(client, payload, _LEVEL_SPRINTS + _LEVEL_COPIES)
+    copies = _level_copies(result, {f"sprint:{sid}" for sid in sprints})
+    return {sid.removeprefix("sprint:"): copy for sid, copy in copies.items()}
+
+
+def _level_copies(result: object, ids: set[str]) -> dict[str, int]:
     copies = result.get("versions") if isinstance(result, dict) else None
-    if (
-        not isinstance(copies, dict)
-        or set(copies) != {row["id"] for row in payload["versions"]}
-        or not all(type(value) is int for value in copies.values())
-    ):
+    if not isinstance(copies, dict) or set(copies) != ids or not all(type(value) is int for value in copies.values()):
         msg = "Incomplete OpenProject level version response"
         raise ValueError(msg)
     return copies

@@ -12,7 +12,7 @@ from itertools import batched
 from typing import Any
 
 from src import config
-from src.application.components import level_issues
+from src.application.components import level_issues, level_versions
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.security_level_projects_migration import LevelProjectError
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -48,14 +48,29 @@ def _encode_sprint_history(sprints: list[tuple[str, str]]) -> str:
     return json.dumps(records, ensure_ascii=False)
 
 
+def _parent_sprint(sprints: list[tuple[str, str]], parent_id: int, versions: dict) -> tuple[str, int] | None:
+    """The first sprint, by name, with an ID and a mapped version of the parent project."""
+    for sprint_id, name in sorted(sprints, key=lambda ref: ref[1]):
+        version = versions.get(sprint_id or name)
+        if (
+            sprint_id
+            and isinstance(version, dict)
+            and type(version.get("openproject_id")) is int
+            and str(version.get("project_id")) == str(parent_id)
+        ):
+            return sprint_id, version["openproject_id"]
+    return None
+
+
 @register_entity_types("sprint_epic")
 class SprintEpicMigration(BaseMigration):
     """Preserve epic hierarchy, sprint names and the sprint version fallback.
 
     With ``migration.security_level_work_packages`` on, an issue of a level search or of the
-    archive gets nothing here and loses its ordinary entry, also one the origin scan recovers
-    (ADR-009). Its level work package gets no sprint, sprint field or parent link, and no
-    ordinary work package is linked to it.
+    archive loses its ordinary entry, also one the origin scan recovers (ADR-009), and no
+    ordinary work package is linked to it. A selected level work package without fix versions
+    gets the copy of its parent sprint version in its own sub-project (ADR-010), but no sprint
+    field and no parent link.
     """
 
     def _recover_work_packages(self) -> dict[str, Any]:
@@ -93,7 +108,76 @@ class SprintEpicMigration(BaseMigration):
             )
 
         records, missing = self._extract_sprint_records(keys)
+        self._level_sprints = self._level_sprint_plan()
         return ComponentResult(success=True, data=records, details={"missing_issues": missing})
+
+    def _level_sprint_plan(self) -> dict[str, dict[str, Any]]:
+        """Per level sub-project: the parent sprint versions its selected issues need, and those issues."""
+        level = getattr(self, "_level", None)
+        plan: dict[str, dict[str, Any]] = {}
+        if level is None:
+            return plan
+        versions = self.mappings.get_mapping("sprint") or {}
+        fields = f"project,security,fixVersions,{self._sprint_field}"
+        for project, wps in sorted(level.by_project().items()):
+            for key, issue in level_versions.selected_level_issues(
+                level, self.jira_client, project, wps, fields
+            ).items():
+                self._plan_level_sprint(plan, level, versions, issue, wps[key])
+        return plan
+
+    def _plan_level_sprint(
+        self, plan: dict, level: level_issues.LevelWorkPackages, versions: dict, issue: Any, wp_id: int
+    ) -> None:
+        """Add one issue; fix versions own the target version, as on the ordinary path."""
+        fields = issue.raw["fields"]
+        sprints = _sprint_references(fields.get(self._sprint_field))
+        if not sprints or fields.get("fixVersions"):
+            return
+        if level_versions.shared_with_extra_readers(level, issue.key):
+            self._sprints_withheld.append(issue.key)
+            return
+        target = level.targets[issue.key]
+        sprint = _parent_sprint(sprints, target.parent_id, versions)
+        if sprint is None or not str(issue.id).isdecimal():
+            level.refused.append(f"{issue.key}: no sprint version of the parent project for its sprints")
+            return
+        group = plan.setdefault(
+            target.label,
+            {
+                "target": target,
+                "origin": (target.label.rpartition(":")[0], str(fields["project"]["id"])),
+                "sprints": {},
+            },
+        )
+        group["sprints"][sprint[0]] = sprint[1]
+        group.setdefault("issues", []).append({"key": issue.key, "id": str(issue.id), "wp": wp_id, "sprint": sprint[0]})
+
+    def _level_sprint_assignments(self) -> list[dict[str, Any]]:
+        """Create or adopt the sprint copies of each sub-project; a failed one refuses its issues."""
+        plan = getattr(self, "_level_sprints", {})
+        if not plan:
+            return []
+        copier = level_versions.LevelVersionCopies(
+            self.op_client, self.mappings, self.jira_client.base_url, self.logger
+        )
+        base = self.jira_client.base_url.rstrip("/")
+        rows = []
+        for label, group in plan.items():
+            copies = copier.ensure_sprints(group["target"], group["origin"], group["sprints"])
+            if copies is None:
+                self._level.refused.extend(f"{row['key']}: no sprint copy in {label}" for row in group["issues"])
+                continue
+            for row in group["issues"]:
+                origin = {"project": group["target"].project_id, "id": row["id"], "key": row["key"]}
+                rows.append(
+                    {
+                        "id": row["wp"],
+                        "target_version_ids": [copies[row["sprint"]]],
+                        "jira_version_issue_origin": origin | {"url": f"{base}/browse/{row['key']}"},
+                    }
+                )
+        return rows
 
     def _without_level_issues(self, mappings: dict[str, Any], keys: list[str]) -> tuple[dict[str, Any], list[str]]:
         """Drop every entry of an issue of a level search or of the archive; refuse those of this run."""
@@ -175,7 +259,8 @@ class SprintEpicMigration(BaseMigration):
         details = dict(mapped.details)
         failed = sum(len(value) for value in mapped.details.values())
         updated = 0
-        for operation, rows in (("parent_links", data["parents"]), ("version_assignments", data["assignments"])):
+        assignments = data["assignments"] + self._level_sprint_assignments()
+        for operation, rows in (("parent_links", data["parents"]), ("version_assignments", assignments)):
             count, errors = self._apply_batches(rows, self.op_client.batch_update_work_packages, operation)
             details[operation] = count
             updated += count
@@ -220,6 +305,7 @@ class SprintEpicMigration(BaseMigration):
         write (ADR-009) and their refusals are counted into the result.
         """
         self._level: level_issues.LevelWorkPackages | None = None
+        self._sprints_withheld: list[str] = []
         if level_issues.enabled():
             try:
                 self._level = level_issues.level_work_packages(
@@ -229,7 +315,10 @@ class SprintEpicMigration(BaseMigration):
                 self.logger.error("Level work package components stopped: %s", exc)
                 return ComponentResult(success=False, message=str(exc), errors=["security_level"])
         result = self._run_etl_pipeline("Sprint and epic")
-        return result if self._level is None else self._level.report(result, self.logger)
+        if self._level is None:
+            return result
+        level_versions.report_withheld(result, self._sprints_withheld, self.logger)
+        return self._level.report(result, self.logger)
 
     def _recover_project_issues(self, project: str, project_id: Any, restored: dict) -> None:
         """Collect unique issue origins for one project."""
@@ -246,7 +335,7 @@ class SprintEpicMigration(BaseMigration):
         """Read the sprint and parent references in bounded Jira batches."""
         # Jira Software exposes tenant-specific field IDs; their display names can be translated.
         custom_fields = {(f.get("schema") or {}).get("custom"): f["id"] for f in self.jira_client.get_custom_fields()}
-        sprint_field = custom_fields.get(_GREENHOPPER + "gh-sprint", "sprint")
+        sprint_field = self._sprint_field = custom_fields.get(_GREENHOPPER + "gh-sprint", "sprint")
         epic_field = custom_fields.get(_GREENHOPPER + "gh-epic-link", "epicLink")
         records: dict[str, Any] = {}
         missing = []
