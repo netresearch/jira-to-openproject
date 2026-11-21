@@ -69,6 +69,8 @@ migration:
   # Both files must belong to the same restricted-issue archive.
   # security_level_report: "restricted-report.json"
   # security_level_admin_report: "restricted-admins.json"
+  # The operator-only readers file of the same inventory (mode 600, keep it next to the archive).
+  # security_level_readers: "/home/me/restricted-inventory/readers.json"
   # Work packages of issues with a security level in their level sub-project
   # (work_packages_skeleton, work_packages_content, the attachment components, simpletasks, components,
   # work_package_field_history, time_entries, versions, affects_versions, relations and inline_refs);

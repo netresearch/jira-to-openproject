@@ -5,7 +5,8 @@
 
 ``inventory`` makes no OpenProject request. Issues with a level stay out of the migration
 unless ``migration.security_level_work_packages`` is on; it only records who can read them and keeps every issue whose readers are
-not the level's static readers in an age-encrypted archive (ADR-009). ``admins`` reads
+not the level's static readers in an age-encrypted archive (ADR-009). Next to its report it
+writes an operator-only readers file with the reader names the late access grant needs. ``admins`` reads
 that archive, detects the OpenProject edition and reports the OpenProject administrators
 who are not static readers of a level; it warns and changes nothing (ADR-009, decision 4).
 """
@@ -47,6 +48,7 @@ from src.operator_history import _output_file, _private_create
 
 ARCHIVE_FORMAT = "j2o-restricted-issues/1"
 REPORT_FORMAT = "j2o-restricted-report/2"
+READERS_FORMAT = "j2o-restricted-readers/1"
 ADMIN_REPORT_FORMAT = "j2o-restricted-admins/1"
 KINDS = ("static", "per_issue", "unexplained")
 _AGE = ".age"
@@ -163,6 +165,33 @@ def archive_value(jira: Endpoint, scans: list[ProjectInventory], account: str) -
     }
 
 
+def readers_value(archive: dict, sha256: str) -> dict:
+    """The operator-only readers file: Jira user names per level and per ``per_issue`` issue.
+
+    Each level's static readers and each ``per_issue`` issue's extra readers, as the archive
+    records them, bound to the archive by its digest. Groups and roles are already expanded
+    into users and intersected with Browse (ADR-009, decision 1); the migration account's
+    temporary grant is not in them (decision 3).
+    """
+    levels = []
+    for label in sorted(archive["levels"]):
+        level = archive["levels"][label]
+        extra = {
+            row["key"]: row["extra_readers"]
+            for row in archive["issues"].values()
+            if row["class"] == "per_issue" and row["project"] == level["project"] and row["level_id"] == level["id"]
+        }
+        levels.append(
+            {
+                "project": level["project"],
+                "level_id": level["id"],
+                "static_readers": level["static_readers"],
+                "per_issue": dict(sorted(extra.items())),
+            }
+        )
+    return {"format": READERS_FORMAT, "jira": archive["jira"], "archive_sha256": sha256, "levels": levels}
+
+
 def decrypt(data: bytes, identity: x25519.Identity) -> dict:
     """Authenticate the archive and check its format."""
     value = json.loads(pyrage.decrypt(data, [identity]))
@@ -183,6 +212,8 @@ def inventory(args: argparse.Namespace, identity: x25519.Identity) -> dict:
     """Scan the selected projects, seal the archive and return the shared report."""
     require(not _output_file(args.archive, _AGE).exists(), "Archive already exists")
     require(not _output_file(args.report, _JSON).exists(), "Report already exists")
+    require(not _output_file(args.readers, _JSON).exists(), "Readers file already exists")
+    require(args.readers.name != args.report.name, "Report and readers file need different names")
     jira = Endpoint(
         args.jira,
         os.environ["J2O_ARCHIVE_INVENTORY_TOKEN"],
@@ -199,9 +230,13 @@ def inventory(args: argparse.Namespace, identity: x25519.Identity) -> dict:
     if not args.project:
         counted = sum(len(rows) for scan in scans for rows in scan.issues.values())
         require(restricted_total(jira) == counted, "Restricted issues outside the scanned projects")
-    data = seal(archive_value(jira, scans, account), identity, args.archive)
-    value = report(jira.url, scans, hashlib.sha256(data).hexdigest())
+    archive = archive_value(jira, scans, account)
+    data = seal(archive, identity, args.archive)
+    sha256 = hashlib.sha256(data).hexdigest()
+    value = report(jira.url, scans, sha256)
     _private_create(args.report, encoded(value), _JSON)
+    # Operator-only: reader names never go into the shared report.
+    _private_create(args.readers, encoded(readers_value(archive, sha256)), _JSON)
     return value
 
 
@@ -291,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     scan.add_argument("--project", action="append", default=[], help="Limit to this Jira project (default: all)")
     scan.add_argument("--migration-account", help="Jira user name of the temporary grant (default: J2O_JIRA_USERNAME)")
     scan.add_argument("--report", type=Path, required=True)
+    scan.add_argument("--readers", type=Path, required=True, help="Operator-only readers file for the importer")
     restore = sub.add_parser("restore", help="Decrypt the archive into a new private JSON file")
     restore.add_argument("--output", type=Path, required=True)
     check = sub.add_parser("admins", help="Detect the OpenProject edition and report administrators per level")
