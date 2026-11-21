@@ -14,6 +14,9 @@ from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PRED
 from src.config_loader import ConfigLoader
 from src.migration import _build_component_factories, _component_status, _run_component
 from src.migration_progress import _reported_counts
+from tests.unit.test_level_attachments import LEVEL_MAP, LIVE
+from tests.unit.test_level_work_packages import issue, level_issues
+from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 COLUMNS = [{"name": "Open", "statuses": [{"id": "1"}]}, {"name": "Done", "statuses": [{"id": "2"}]}]
 
@@ -210,3 +213,155 @@ def test_cli_stops_when_a_board_changes_during_capture(monkeypatch):
     monkeypatch.setattr("src.infrastructure.openproject.openproject_client.OpenProjectClient", FakeTarget)
     with pytest.raises(RuntimeError, match="changed during capture"):
         native_boards.main(["--jira-project", "APP", "--target-project", "app", "--archive-project", "board-archive"])
+
+
+# --- Level work packages (ADR-009, step 5c) ---------------------------------------------------
+
+LEVELS = 'project = "APP" AND level IS NOT EMPTY ORDER BY created ASC, key ASC'
+# Every issue of the project is on the board: APP-1 is ordinary, APP-10 and APP-11 are selected
+# for the sub-project of level 10000, APP-12 and APP-13 are archived, APP-20 has no sub-project.
+CARDS = (1, 10, 11, 12, 13, 20)
+
+
+class LevelTarget(FakeTarget):
+    """Also answer the live read of a level sub-project."""
+
+    def __init__(self, live=None):
+        super().__init__()
+        self.live = LIVE if live is None else live
+        self.live_reads = []
+
+    def execute_query_to_json_file(self, script):
+        self.live_reads.append(json.loads(script.split("\n")[1]))
+        return json.loads(json.dumps(self.live))
+
+
+def level_board_jira(level_rows=None):
+    jira = fake_jira([{"id": 1, "name": "Scrum", "project": "APP"}])
+    jira.get_projects.return_value = [{"key": "APP"}]
+    jira.searches = []
+    rows = level_issues() if level_rows is None else level_rows
+
+    def search(jql, startAt, maxResults, **kwargs):
+        jira.searches.append((jql, kwargs.get("fields")))
+        assert jql == LEVELS
+        return rows[startAt : startAt + maxResults]
+
+    jira.jira.search_issues.side_effect = search
+    jira.agile.ranked_board_issues.side_effect = lambda board_id, key: [
+        {"id": str(n), "key": f"APP-{n}", "fields": {"status": {"id": "1"}}} for n in CARDS
+    ]
+    return jira
+
+
+@pytest.fixture
+def level_setup(level_work_package_setup):  # noqa: F811 (the imported fixture, requested by name)
+    """The level reports and mappings, a project identifier and the board archive setting."""
+    from src import config
+
+    def _setup(*, level_map=None, **kwargs):
+        mappings, _ = level_work_package_setup(
+            mapping={"project": {"APP": {"openproject_id": 7, "openproject_identifier": "app"}}}, **kwargs
+        )
+        mappings.data["security_level_work_package"] = dict(LEVEL_MAP if level_map is None else level_map)
+        config.migration_config["native_board_archive_project"] = "board-archive"
+        return mappings
+
+    return _setup
+
+
+def level_boards(level_setup, *, live=None, level_rows=None, runs=1, **kwargs):
+    level_setup(**kwargs)
+    jira, target = level_board_jira(level_rows), LevelTarget(live)
+    results = [component(jira, target).run() for _ in range(runs)]
+    return SimpleNamespace(result=results[-1], results=results, jira=jira, target=target)
+
+
+def card_keys(payload):
+    return [card["key"] for column in payload["cards"] for card in column]
+
+
+def test_level_switch_off_snapshots_the_board_as_before(level_setup):
+    outcome = level_boards(level_setup, on=False, reports=False)
+    assert outcome.result.success, outcome.result
+    # The same calls as before: no level search, no project listing, no sub-project read.
+    assert outcome.jira.searches == []
+    outcome.jira.get_projects.assert_not_called()
+    assert outcome.target.live_reads == []
+    [payload] = outcome.target.payloads
+    assert card_keys(payload) == ["APP-1", "APP-10", "APP-11", "APP-12", "APP-13", "APP-20"]
+    assert payload == native_boards.layout(outcome.jira, {"id": 1, "name": "Scrum"}, "APP") | {
+        "target": "app",
+        "archive": "board-archive",
+    }
+    assert "security_level" not in outcome.result.details
+
+
+def test_level_switch_on_leaves_every_level_card_out_of_the_parent_snapshot(level_setup):
+    outcome = level_boards(level_setup)
+    assert outcome.result.success, outcome.result
+    [payload] = outcome.target.payloads
+    assert card_keys(payload) == ["APP-1"]
+    # The revision is hashed over the filtered layout, so it never depends on a level card.
+    unfiltered = native_boards.layout(outcome.jira, {"id": 1, "name": "Scrum"}, "APP")
+    assert payload["revision"] != unfiltered["revision"]
+    assert outcome.jira.searches == [(LEVELS, "security"), (LEVELS, "security")]
+    assert outcome.target.live_reads == [{"project_id": 100, "field": "J2O Origin Key"}]
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}},
+        {"live": {"field": True}},
+        {"level_map": {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}},
+        {
+            "level_rows": [
+                issue(10, "10001"),
+                issue(11, "10000"),
+                issue(12, "10000"),
+                issue(13, "10000"),
+                issue(20, "10001"),
+            ]
+        },
+    ],
+    ids=["moved-work-package", "unreadable-sub-project", "unselected-issue", "level-changed"],
+)
+def test_level_refusals_fail_the_component_and_no_level_card_reaches_a_board(level_setup, options):
+    outcome = level_boards(level_setup, **options)
+    assert not outcome.result.success
+    assert [card_keys(p) for p in outcome.target.payloads] == [["APP-1"]]
+    refused = outcome.result.details["security_level"]["refused"]
+    assert refused >= 1
+    assert outcome.result.failed_count == refused
+    assert outcome.result.total_count == 1 + refused
+
+
+def test_level_repeated_run_verifies_the_same_revision(level_setup):
+    outcome = level_boards(level_setup, runs=2)
+    first, second = outcome.results
+    assert (first.details["created"], second.details["verified"]) == (1, 1)
+    assert outcome.target.payloads[0] == outcome.target.payloads[1]
+    assert first.details["security_level"] == second.details["security_level"]
+    assert len(outcome.target.live_reads) == 2
+
+
+def test_level_refusals_are_reported_when_the_board_listing_fails(level_setup):
+    level_setup()
+    jira, target = level_board_jira(), LevelTarget({"field": True})
+    jira.get_boards_for_project.side_effect = OSError("down")
+    result = component(jira, target).run()
+    assert not result.success
+    assert target.payloads == []
+    assert result.details["security_level"] == {"work_packages": 0, "refused": 2}
+
+
+def test_level_switch_on_without_reports_stops_before_any_board_read(level_setup):
+    level_setup(reports=False)
+    jira, target = level_board_jira(), LevelTarget()
+    result = component(jira, target).run()
+    assert not result.success
+    assert result.errors == ["security_level"]
+    jira.get_boards_for_project.assert_not_called()
+    assert target.payloads == []

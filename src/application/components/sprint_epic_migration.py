@@ -12,7 +12,9 @@ from itertools import batched
 from typing import Any
 
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.models import ComponentResult, WorkPackageMappingEntry
 
 SPRINT_CF_NAME = "Sprint"
@@ -48,7 +50,13 @@ def _encode_sprint_history(sprints: list[tuple[str, str]]) -> str:
 
 @register_entity_types("sprint_epic")
 class SprintEpicMigration(BaseMigration):
-    """Preserve epic hierarchy, sprint names and the sprint version fallback."""
+    """Preserve epic hierarchy, sprint names and the sprint version fallback.
+
+    With ``migration.security_level_work_packages`` on, an issue of a level search or of the
+    archive gets nothing here and loses its ordinary entry, also one the origin scan recovers
+    (ADR-009). Its level work package gets no sprint, sprint field or parent link, and no
+    ordinary work package is linked to it.
+    """
 
     def _recover_work_packages(self) -> dict[str, Any]:
         """Recover locally needed issue keys from their target projects' origin fields."""
@@ -74,10 +82,11 @@ class SprintEpicMigration(BaseMigration):
                     success=False, failed=1, message=f"Could not read work-package provenance: {exc}"
                 )
             keys = list(mappings)
-        self._work_package_mapping = mappings  # full mapping: parents may sit in other projects
         selected = set(config.selected_jira_projects())
         if selected:
             keys = [key for key in keys if str(key).rsplit("-", 1)[0].upper() in selected]
+        mappings, keys = self._without_level_issues(mappings, keys)
+        self._work_package_mapping = mappings  # full mapping: parents may sit in other projects
         if not keys:
             return ComponentResult(
                 success=False, failed=1, message="No mapped work packages. Run work_packages_skeleton first."
@@ -85,6 +94,17 @@ class SprintEpicMigration(BaseMigration):
 
         records, missing = self._extract_sprint_records(keys)
         return ComponentResult(success=True, data=records, details={"missing_issues": missing})
+
+    def _without_level_issues(self, mappings: dict[str, Any], keys: list[str]) -> tuple[dict[str, Any], list[str]]:
+        """Drop every entry of an issue of a level search or of the archive; refuse those of this run."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return mappings, keys
+        level.without_level_issues({key: 0 for key in keys if key in level.level_keys})
+        kept = {
+            outer: raw for outer, raw in mappings.items() if self._inner_jira_key(outer, raw) not in level.level_keys
+        }
+        return kept, [key for key in keys if key not in level.level_keys]
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         wp_map = self._work_package_mapping
@@ -194,8 +214,22 @@ class SprintEpicMigration(BaseMigration):
         return count, field_id
 
     def run(self) -> ComponentResult:
-        """Run on each pass: memberships also depend on mappings from earlier components."""
-        return self._run_etl_pipeline("Sprint and epic")
+        """Run on each pass: memberships also depend on mappings from earlier components.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009) and their refusals are counted into the result.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger
+                )
+            except LevelProjectError as exc:
+                self.logger.error("Level work package components stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+        result = self._run_etl_pipeline("Sprint and epic")
+        return result if self._level is None else self._level.report(result, self.logger)
 
     def _recover_project_issues(self, project: str, project_id: Any, restored: dict) -> None:
         """Collect unique issue origins for one project."""

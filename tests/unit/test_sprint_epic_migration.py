@@ -9,6 +9,9 @@ import pytest
 
 from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES
 from src.application.components.sprint_epic_migration import SprintEpicMigration
+from tests.unit.test_level_attachments import LEVEL_MAP, LIVE
+from tests.unit.test_level_work_packages import issue, level_issues
+from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 
 @pytest.fixture
@@ -200,3 +203,183 @@ def test_cached_keys_of_unselected_projects_are_not_read(migration, monkeypatch)
     read = [key for call in mig.jira_client.batch_get_issues.call_args_list for key in call.args[0]]
     assert "OTHER-1" not in read
     assert {"DEMO-1", "DEMO-2"} <= set(read)
+
+
+# --- Level work packages (ADR-009, step 5c) ---------------------------------------------------
+
+LEVELS = 'project = "APP" AND level IS NOT EMPTY ORDER BY created ASC, key ASC'
+SPRINT_FIELDS = [
+    {"id": "customfield_123", "schema": {"custom": "com.pyxis.greenhopper.jira:gh-sprint"}},
+    {"id": "customfield_456", "schema": {"custom": "com.pyxis.greenhopper.jira:gh-epic-link"}},
+]
+STALE = {"11": {"jira_key": "APP-11", "openproject_id": 510, "project_key": "APP"}}
+
+
+@pytest.fixture
+def level_setup(level_work_package_setup):  # noqa: F811 (the imported fixture, requested by name)
+    """The level reports and mappings, one ordinary work package (APP-1) and one sprint version."""
+
+    def _setup(*, level_map=None, ordinary=None, work_packages=None, **kwargs):
+        mappings, _ = level_work_package_setup(**kwargs)
+        if work_packages is None:
+            work_packages = {"1": {"jira_key": "APP-1", "openproject_id": 500, "project_key": "APP"}}
+        mappings.data["work_package"] = {**work_packages, **(ordinary or {})}
+        mappings.data["sprint"] = {"42": {"openproject_id": 9, "project_id": 7}}
+        mappings.data["security_level_work_package"] = dict(LEVEL_MAP if level_map is None else level_map)
+        return mappings
+
+    return _setup
+
+
+def sprint_issue(epic=None):
+    fields = {"customfield_123": [{"id": 42, "name": "Sprint 42"}]}
+    if epic:
+        fields["customfield_456"] = epic
+    return {"fields": fields}
+
+
+def level_sprint_jira(level_rows=None):
+    jira = Mock()
+    jira.get_projects.return_value = [{"key": "APP"}]
+    jira.get_custom_fields.return_value = SPRINT_FIELDS
+    jira.searches = []
+    rows = level_issues() if level_rows is None else level_rows
+
+    def search(jql, startAt, maxResults, **kwargs):
+        jira.searches.append((jql, kwargs.get("fields")))
+        assert jql == LEVELS
+        return rows[startAt : startAt + maxResults]
+
+    jira.jira.search_issues.side_effect = search
+    # APP-1 names the level issue APP-10 as its epic; every issue is in sprint 42.
+    jira.batch_get_issues.side_effect = lambda keys: {
+        key: sprint_issue("APP-10" if key == "APP-1" else None) for key in keys
+    }
+    return jira
+
+
+def level_op(live=None, snapshot=()):
+    op = Mock()
+    op.live_reads = []
+
+    def read(script):
+        op.live_reads.append(json.loads(script.split("\n")[1]))
+        return json.loads(json.dumps(LIVE if live is None else live))
+
+    op.execute_query_to_json_file.side_effect = read
+    op.get_project_wp_cf_snapshot.return_value = [dict(row) for row in snapshot]
+    op.ensure_wp_custom_field_id.return_value = 101
+    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
+    op.bulk_set_wp_custom_field_values.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
+    return op
+
+
+def level_sprints(level_setup, *, live=None, level_rows=None, snapshot=(), runs=1, **kwargs):
+    level_setup(**kwargs)
+    jira, op = level_sprint_jira(level_rows), level_op(live, snapshot)
+    migration = SprintEpicMigration(jira_client=jira, op_client=op)
+    results = [migration.run() for _ in range(runs)]
+    return SimpleNamespace(result=results[-1], results=results, jira=jira, op=op)
+
+
+def written(op):
+    """Every work package any write names, with the kind of write."""
+    rows = [("wp", r) for c in op.batch_update_work_packages.call_args_list for r in c.args[0]]
+    rows += [("field", r) for c in op.bulk_set_wp_custom_field_values.call_args_list for r in c.args[0]]
+    return {(kind, r.get("id", r.get("work_package_id")), r.get("parent_id")) for kind, r in rows}
+
+
+def read_keys(jira):
+    return [key for call in jira.batch_get_issues.call_args_list for key in call.args[0]]
+
+
+def test_level_switch_off_reads_and_writes_as_before(level_setup):
+    outcome = level_sprints(level_setup, on=False, reports=False, ordinary=STALE)
+    # Before the switch, the ordinary entry of APP-11 is read and written like any other.
+    assert read_keys(outcome.jira) == ["APP-1", "APP-11"]
+    assert {wp for _, wp, _ in written(outcome.op)} == {500, 510}
+    assert outcome.jira.searches == []
+    outcome.jira.get_projects.assert_not_called()
+    assert outcome.op.live_reads == []
+    assert "security_level" not in outcome.result.details
+
+
+def test_level_switch_on_gives_level_issues_nothing_and_links_nothing_to_them(level_setup):
+    outcome = level_sprints(level_setup)
+    assert read_keys(outcome.jira) == ["APP-1"]
+    # APP-1 gets its sprint; its epic is a level issue, so it gets no parent link.
+    assert written(outcome.op) == {("wp", 500, None), ("field", 500, None)}
+    assert outcome.result.details["unresolved_epics"] == {"APP-1": "APP-10"}
+    assert outcome.jira.searches == [(LEVELS, "security"), (LEVELS, "security")]
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
+
+
+def test_level_issue_with_an_ordinary_entry_is_refused_and_not_read(level_setup):
+    outcome = level_sprints(level_setup, ordinary=STALE)
+    assert not outcome.result.success
+    assert read_keys(outcome.jira) == ["APP-1"]
+    assert {wp for _, wp, _ in written(outcome.op)} == {500}
+    assert outcome.result.details["security_level"] == {"work_packages": 1, "refused": 1}
+
+
+def test_level_issue_recovered_from_the_parent_origin_scan_is_refused(level_setup):
+    # Without a work-package mapping the keys come from the origin scan of the parent, which
+    # also names a parent work package of the level issue APP-10.
+    snapshot = [{"id": 500, "jira_issue_key": "APP-1"}, {"id": 510, "jira_issue_key": "APP-10"}]
+    outcome = level_sprints(level_setup, snapshot=snapshot, work_packages={})
+    outcome.op.get_project_wp_cf_snapshot.assert_called_once_with(7)
+    assert read_keys(outcome.jira) == ["APP-1"]
+    # APP-1 names APP-10 as its epic; the recovered parent work package of APP-10 is no target.
+    assert written(outcome.op) == {("wp", 500, None), ("field", 500, None)}
+    assert outcome.result.details["security_level"]["refused"] == 1
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}},
+        {"live": {"field": True}},
+        {"level_map": {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}},
+        {
+            "level_rows": [
+                issue(10, "10001"),
+                issue(11, "10000"),
+                issue(12, "10000"),
+                issue(13, "10000"),
+                issue(20, "10001"),
+            ]
+        },
+    ],
+    ids=["moved-work-package", "unreadable-sub-project", "unselected-issue", "level-changed"],
+)
+def test_level_refusals_fail_the_component_and_level_work_packages_get_nothing(level_setup, options):
+    outcome = level_sprints(level_setup, **options)
+    assert not outcome.result.success
+    assert read_keys(outcome.jira) == ["APP-1"]
+    assert {wp for _, wp, _ in written(outcome.op)} == {500}
+    assert outcome.result.details["security_level"]["refused"] >= 1
+
+
+def test_level_repeated_run_gives_the_same_result(level_setup):
+    outcome = level_sprints(level_setup, ordinary=STALE, runs=2)
+    first, second = outcome.results
+    assert first.details["security_level"] == second.details["security_level"] == {"work_packages": 1, "refused": 1}
+    assert read_keys(outcome.jira) == ["APP-1", "APP-1"]
+    assert len(outcome.op.live_reads) == 2
+
+
+def test_level_refusals_are_reported_when_no_ordinary_work_package_is_left(level_setup):
+    outcome = level_sprints(level_setup, work_packages=dict(STALE))
+    assert not outcome.result.success
+    assert "No mapped work packages" in outcome.result.message
+    outcome.jira.batch_get_issues.assert_not_called()
+    assert written(outcome.op) == set()
+    assert outcome.result.details["security_level"] == {"work_packages": 1, "refused": 1}
+
+
+def test_level_switch_on_without_reports_stops_before_any_read_or_write(level_setup):
+    outcome = level_sprints(level_setup, reports=False)
+    assert not outcome.result.success
+    assert outcome.result.errors == ["security_level"]
+    outcome.jira.batch_get_issues.assert_not_called()
+    assert written(outcome.op) == set()
