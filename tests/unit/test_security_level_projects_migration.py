@@ -118,7 +118,8 @@ def test_creates_a_private_sub_project_without_members(run):
     assert outcome.result.success, outcome.result.errors
     [script] = outcome.target.creations()
     assert "public: false, parent: parent" in script
-    assert "p.project_types.build(type_id: t.type_id" in script and "p.types" not in script
+    assert "p.project_types.build(type_id: t.type_id" in script
+    assert "p.types" not in script
     assert "Projects::CreateService" not in script
     assert not re.search(r"Members?::|Member\.(new|create)|members\s*<<|add_member", script)
     assert json.loads(script.split("\n")[1]) == {
