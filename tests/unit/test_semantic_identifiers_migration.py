@@ -148,6 +148,30 @@ def test_a_refused_work_package_fails_the_run(migration, reason):
     assert result.updated == 1
 
 
+def test_a_mapped_issue_the_search_does_not_return_is_counted(migration):
+    result = run(migration, source(1))
+    assert result.details["not_returned"] == 1
+    assert migration.op_client.payloads("write")[0]["rows"] == [row(1)]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"written": 1, "unchanged": 0, "refused": []},
+        {"written": 2, "unchanged": 1, "refused": []},
+        {"written": True, "unchanged": 1, "refused": []},
+        {"written": 3, "unchanged": -1, "refused": []},
+        {"written": 1, "unchanged": 0, "refused": ["APP-1"]},
+    ],
+)
+def test_an_answer_that_does_not_account_for_every_row_fails_the_batch(migration, answer):
+    migration.op_client.write_answer = answer
+    result = run(migration, source(1), source(2))
+    assert not result.success
+    assert result.details["failed"] == 2
+    assert result.updated == 0
+
+
 def test_a_failed_batch_counts_every_row(migration):
     migration.op_client.write_fails = True
     result = run(migration, source(1), source(2))

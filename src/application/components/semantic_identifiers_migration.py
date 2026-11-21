@@ -160,6 +160,16 @@ def issue_row(issue: Any, wp_id: int, project_key: str) -> dict[str, Any] | None
     return {"wp": wp_id, "id": str(issue.id), "key": issue.key, "seq": int(match.group(2)), "aliases": aliases}
 
 
+def _batch_outcome(result: dict, size: int) -> tuple[int, int, list[dict]] | None:
+    """Written, unchanged and refused rows of one batch; None unless they account for every row."""
+    written, unchanged, refused = result.get("written"), result.get("unchanged"), result.get("refused")
+    if type(written) is not int or type(unchanged) is not int or not isinstance(refused, list):
+        return None
+    if not all(isinstance(row, dict) for row in refused) or min(written, unchanged) < 0:
+        return None
+    return (written, unchanged, refused) if written + unchanged + len(refused) == size else None
+
+
 @register_entity_types("semantic_identifiers")
 class SemanticIdentifiersMigration(BaseMigration):
     """Give every migrated work package its Jira key as its semantic identifier."""
@@ -248,16 +258,20 @@ class SemanticIdentifiersMigration(BaseMigration):
         return iter_issue_pages(key, fetch, _BATCH)
 
     def _rows(self, key: str, issues: Iterable[Any], targets: Mapping[str, int]) -> list[dict[str, Any]]:
+        """Rows of the mapped issues the search returns; the others are counted as ``not_returned``."""
         rows = []
+        seen = set()
         for issue in issues:
             wp_id = targets.get(str(issue.id))
-            if wp_id is None:
+            if wp_id is None or str(issue.id) in seen:
                 continue
+            seen.add(str(issue.id))
             row = issue_row(issue, wp_id, key)
             if row is None:
                 self._refused.append(f"{issue.key}: not a semantic key of {key}")
             else:
                 rows.append(row)
+        self._counts["not_returned"] += len(set(targets) - seen)
         return rows
 
     def _level_rows(self, key: str) -> dict[int, list[dict[str, Any]]]:
@@ -284,14 +298,17 @@ class SemanticIdentifiersMigration(BaseMigration):
     def _write(self, key: str, pid: int, rows: list[dict[str, Any]]) -> None:
         for batch in batched(rows, _BATCH, strict=False):
             try:
-                result = self._script(_WRITE, {"project": pid, "rows": list(batch)})
+                outcome = _batch_outcome(self._script(_WRITE, {"project": pid, "rows": list(batch)}), len(batch))
             except Exception:
                 self.logger.exception("Could not write semantic identifiers for %s", key)
+                outcome = None
+            if outcome is None:
+                self.logger.error("OpenProject did not confirm the semantic identifiers of a batch of %s", key)
                 self._counts["failed"] += len(batch)
                 continue
-            self._counts.update(written=int(result.get("written", 0)), unchanged=int(result.get("unchanged", 0)))
-            for row in result.get("refused") or []:
-                self._refused.append(f"{row.get('key')}: {row.get('reason')}")
+            written, unchanged, refused = outcome
+            self._counts.update(written=written, unchanged=unchanged)
+            self._refused.extend(f"{row.get('key')}: {row.get('reason')}" for row in refused)
 
     def _script(self, script: str, payload: dict) -> dict:
         envelope = self.op_client.execute_script_with_data(script, payload)
@@ -304,6 +321,9 @@ class SemanticIdentifiersMigration(BaseMigration):
     def _result(self) -> ComponentResult:
         for reason in self._refused:
             self.logger.error("Semantic identifier refused: %s", reason)
+        if self._counts["not_returned"]:
+            # Moved, deleted or newly restricted issues: their work packages keep no Jira key (README check).
+            self.logger.warning("%d mapped work packages not returned by Jira", self._counts["not_returned"])
         self._counts["refused"] = len(self._refused)
         result = ComponentResult(
             success=not (self._refused or self._counts["failed"]),

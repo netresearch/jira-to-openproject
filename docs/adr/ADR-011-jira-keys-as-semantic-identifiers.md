@@ -33,7 +33,7 @@ The project owner decided on 2026-11-21 that the target instance switches to `se
 
 Per work package the component writes `identifier` = Jira key and `sequence_number` = the key's number with `update_columns`, and adds the aliases `alias_rows_for_sequence_number` yields, every key of the issue's `Key` changelog, and the Jira key itself. The last one is redundant for an ordinary work package once its project carries the key; it is what keeps a level work package reachable (see 5). The Jira issue comes from the same unrestricted search as the other components, the work package from the work-package mapping; Rails confirms the work package's project and its `J2O Origin ID` before it writes.
 
-A work package is refused, never overwritten, when it has another identifier or sequence number, when its key, an alias or its sequence number in the project belongs to another work package, or when it is in another project or carries another `J2O Origin ID`. A refusal or a failed batch makes the component unsuccessful. A repeat run writes nothing for a work package that already has its identifier and aliases and counts it as unchanged.
+A work package is refused, never overwritten, when it has another identifier or sequence number, when its key, an alias or its sequence number in the project belongs to another work package, or when it is in another project or carries another `J2O Origin ID`. A refusal or a failed batch makes the component unsuccessful. A repeat run writes nothing for a work package that already has its identifier and aliases and counts it as unchanged. A mapped issue that the search no longer returns (moved, deleted, or given a security level) is counted as `not_returned` and keeps no key; the README check before the switch counts every such work package on OpenProject.
 
 ### 3. The Jira key as project slug
 
@@ -45,7 +45,7 @@ A project's counter becomes the greatest of its current value, the highest seque
 
 ### 5. Level work packages
 
-A level work package (ADR-009) gets the Jira key as identifier and as alias, as the official importer would write it. Its sub-project's identifier (`app_level_10000`) is never a valid semantic identifier and never the key's prefix, so the switch renames the sub-project from its name and renumbers its work packages (conversion steps 1 and 2). After the switch a level work package displays the sub-project's identifier and number; its Jira key still resolves through the alias. A lookup runs inside the caller's visibility scope: a user who cannot see the sub-project gets the same "not found" for a level key as for a key that does not exist.
+A level work package (ADR-009) gets the Jira key as identifier and as alias, as the official importer would write it. Its sub-project's identifier (`app_level_10000`) is never a valid semantic identifier and never the key's prefix, so the switch renames the sub-project from its name and renumbers its work packages (conversion steps 1 and 2). After the switch a level work package displays the sub-project's identifier and number; its Jira key still resolves through the alias. A lookup runs inside the caller's visibility scope: a user who cannot see the sub-project gets the same "not found" for a level key as for a key that does not exist (measured on API v3, read for the HTML route; see below).
 
 ### 6. The instance setting stays with the operator
 
@@ -57,12 +57,16 @@ OpenProject `dev` (migration `20261101120015`) adds `work_packages.origin_source
 
 ## Measured on the pilot
 
-On the OpenProject 17.9.7 pilot, inside one transaction that was rolled back, with a throwaway project `zzsemt` (Jira key `ZZSEMT`), its level sub-project and a second project, the component's Ruby:
+On the OpenProject 17.9.7 pilot, inside one transaction that was rolled back, with a throwaway project `zzsemt` (Jira key `ZZSEMT`), its level sub-project and two more projects, the component's Ruby (the strings of `semantic_identifiers_migration.py`):
 
-- wrote `ZZSEMT-1` and `ZZSEMT-2` (with the alias `OLDZZ-4` from a `Key` change) and the level work package `ZZSEMT-10`; refused a work package that already had `ZZSEMT-77`, one whose alias belonged to another work package, a level work package sent for the parent project, and the key `ZZSEMT` for the second project; a second run wrote nothing and left identifiers and aliases unchanged;
-- raised the parent's counter to 77 (the refused work package's `ZZSEMT-77`) and the sub-project's to 10.
+- wrote `ZZSEMT-1`, `ZZSEMT-2` (with the alias `OLDZZ-4` from a `Key` change) and the level work package `ZZSEMT-10`;
+- refused, with one reason each: a work package that already had `ZZSEMT-6`; one whose alias was another work package's identifier; one whose alias was another work package's alias row; one whose sequence number another work package of the project held; a row with another `J2O Origin ID`; a missing work package; the level work package sent for the parent project; the key `ZZSEMT` for a second project; and a key for a project that already had another semantic identifier;
+- wrote nothing on a second run and left identifiers and aliases unchanged;
+- raised the parent's counter to 20, the number of a `ZZSEMT-20` alias held by a work package in another project (a moved-out issue), above the parent's highest own sequence number 8 and the level key 10; the sub-project's counter became 10.
 
-After `ConvertProjectToSemanticService` for the three projects and the setting `semantic`: the project identifier was `ZZSEMT`; `ZZSEMT-1`, `ZZSEMT-2` and `OLDZZ-4` resolved to their work packages, which displayed `ZZSEMT-1` and `ZZSEMT-2`; the level work package displayed `ZSLL-11` and `ZZSEMT-10` resolved to it and to nothing else; a work package without key got `ZZSEMT-79` and a new work package `ZZSEMT-80`. A member of the parent project only got HTTP 200 from `GET /api/v3/work_packages/ZZSEMT-1` and `OLDZZ-4`, and HTTP 404 with the same body for `ZZSEMT-10` and for the nonexistent `ZZSEMT-999`. Projects, work packages, aliases, slugs, custom values, users, jobs and the setting (`classic`) were unchanged afterwards, read again from a new process.
+After `ConvertProjectToSemanticService` for the projects and the setting `semantic`: the project identifier was `ZZSEMT`; `ZZSEMT-1`, `ZZSEMT-2` and `OLDZZ-4` resolved to their work packages, which displayed `ZZSEMT-1` and `ZZSEMT-2`; the level work package displayed `ZSLL-11`, and `ZZSEMT-10` resolved to it and to nothing else; `ZZSEMT-20` still resolved only to the moved-out work package; the refused and unkeyed work packages got `ZZSEMT-21` to `ZZSEMT-25`, and a new work package `ZZSEMT-26`. A repeat write after the switch left the ordinary work packages unchanged and refused the level work package (another identifier). A member of the parent project only got HTTP 200 from `GET /api/v3/work_packages/ZZSEMT-1` and `OLDZZ-4`, and HTTP 404 with the same body for `ZZSEMT-10` and for the nonexistent `ZZSEMT-999`. Projects, work packages, aliases, slugs, custom values, users, jobs and the setting (`classic`) were unchanged afterwards, read again from a new process.
+
+Read, not measured: the HTML route `/work_packages/<id>` answers "not found" through `authorize_on_work_package` before `redirect_to_complete_route` can name the project (`app/controllers/work_packages_controller.rb`, 17.9.7); the PDF mention renderers look up the identifier without scope and then check `visible?` (`work_package/pdf_export/generator/generator.rb`, `exports/pdf/common/markdown.rb`).
 
 ## Consequences
 
@@ -75,7 +79,8 @@ After `ConvertProjectToSemanticService` for the three projects and the setting `
 ### Negative
 
 - Level work packages do not display their Jira key after the switch; the key only resolves.
-- A refused work package keeps no key and gets a new number from the switch; the run has to be clean before the switch.
+- A refused or not returned work package keeps no key and gets a new number from the switch; the run has to be clean before the switch.
+- Runs after the switch are not supported: the conversion renumbered the level work packages, so a repeat run refuses each of them, and a work package created in semantic mode gets an allocated identifier, which the component then refuses.
 - Earlier keys of a Jira project (a renamed project key) are not added as slugs; only issue `Key` changes become aliases.
 - The switch derives the level sub-projects' semantic identifiers from their names.
 - The project identifier changes from the lower-case key to the key at the switch; the lower-case form stays a slug, so old project URLs keep working.
