@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.application.components import security_level_access_migration as access
 from src.application.components.security_level_access_migration import SecurityLevelAccessMigration
 from src.restricted_issues import READERS_FORMAT
 from tests.unit.test_level_work_packages import LEVELS, SHA, level_issues, row
@@ -242,3 +243,23 @@ def test_shares_belong_to_the_sub_project_of_their_work_package():
     shared = Audience(shares={"APP-12": frozenset({43}), "APP-21": frozenset({44}), "APP-99": frozenset({45})})
     assert SecurityLevelAccessMigration._shares(level, shared, here) == {902: {43}}
     assert SecurityLevelAccessMigration._shares(None, shared, here) == {}
+
+
+def test_the_state_read_drops_every_role_that_widens_the_audience():
+    # Live-checked on 17.9.7 (ADR-012, decision 3): "Project admin" holds all five permissions.
+    assert set(access.WIDENING_PERMISSIONS) == {
+        "manage_members",
+        "invite_members_by_email",
+        "share_work_packages",
+        "share_sprint",
+        "edit_project",
+    }
+    assert (
+        "widening = %i[manage_members invite_members_by_email share_work_packages share_sprint edit_project]"
+        in access._STATE
+    )
+
+
+def test_parent_roles_and_the_reader_role_both_pass_the_filter():
+    assert "m.roles.select(&narrow)" in access._STATE
+    assert "(reader if reader && narrow.call(reader))&.id" in access._STATE

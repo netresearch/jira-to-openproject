@@ -28,6 +28,14 @@ from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.rails_console_client import RubyError
 from src.models import ComponentResult
 
+# Permissions that let a member widen the audience of a level sub-project (ADR-012, decision 3).
+WIDENING_PERMISSIONS = (
+    "manage_members",
+    "invite_members_by_email",
+    "share_work_packages",
+    "share_sprint",
+    "edit_project",
+)
 READER_ROLE = "Reader"  # seeded project role of OpenProject 17.9.7 (view only)
 
 _MEMBERS = (
@@ -47,7 +55,7 @@ _MEMBERS = (
 # A reader left without a role gets "Reader", itself refused if it grants one of these.
 # The share role is found by its builtin value, not by its name.
 _STATE = _MEMBERS + (
-    "widening = %i[manage_members invite_members_by_email share_work_packages share_sprint edit_project]\n"
+    f"widening = %i[{' '.join(WIDENING_PERMISSIONS)}]\n"
     "narrow = ->(r) { r.is_a?(ProjectRole) && widening.none? { |p| r.has_permission?(p) } }\n"
     'reader = ProjectRole.find_by(name: input.fetch("reader"), builtin: Role::NON_BUILTIN)\n'
     'ids = input.fetch("users")\n'
