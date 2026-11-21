@@ -141,7 +141,9 @@ def _run(level_setup, component, *, live=None, ordinary=None, level_map=None, ru
         start = len(op.method_calls)
         results.append(migration.run())
         written.append(_written(op.method_calls[start:]))
-    return SimpleNamespace(result=results[-1], results=results, written=written, jira=jira, op=op, mappings=mappings)
+    return SimpleNamespace(
+        result=results[-1] if results else None, results=results, written=written, jira=jira, op=op, mappings=mappings
+    )
 
 
 def _written(calls):
@@ -242,6 +244,19 @@ def test_refusals_are_reported_on_an_early_return(level_setup, component):
     assert outcome.written == [set()]
     assert outcome.jira.batches == []
     assert _refused(outcome) == 2
+
+
+@ALL
+def test_the_component_runner_reaches_the_level_path(level_setup, component):
+    # The migration runner calls run_with_change_detection, which ends in run().
+    from src.migration import _invoke_component
+
+    outcome = _run(level_setup, component, runs=0)
+    start = len(outcome.op.method_calls)
+    result = _invoke_component(component, COMPONENTS[component](jira_client=outcome.jira, op_client=outcome.op))
+    assert result.success, result.message
+    assert _written(outcome.op.method_calls[start:]) == {500, 501, 900, 901}
+    assert result.details["security_level"] == {"work_packages": 2, "refused": 0}
 
 
 @ALL
