@@ -733,6 +733,8 @@ The native version custom field `Jira Version Origin` stores the Jira URL, immut
 
 The target project must have matching Jira key, ID and base URL provenance. Work package assignments require a positive unrestricted Jira search result and matching target issue ID, key, URL and project. Shared versions or conflicting origins stop the operation.
 
+With `migration.security_level_work_packages: true` (off by default), a selected level issue gets its fix versions as copies in its level sub-project, in the work package the sub-project holds for it, read live by `J2O Origin Key`. Each copy has sharing `none` and the catalogue's name, description, status and dates, carries the parent version's `Jira Version Origin` and is recorded in `security_level_version_mapping.json`; a repeat run adopts it. The sub-project transaction checks the parent's Jira origin and creates or changes a copy only while the sub-project has no membership row. The parent's versions are not changed and `version_mapping.json` holds no sub-project. See [ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md) and [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### AffectsVersionsMigration
@@ -742,6 +744,8 @@ The `affects_versions` component imports Jira's `versions` issue field into Open
 A rerun reconciles only native links previously added by this component. Independently added links and target-version assignments remain intact. An issue omitted from Jira's unrestricted result or a missing source field never clears a target.
 
 Requires the project and work-package mappings. Run `versions` first on targets with native observed-in links.
+
+With `migration.security_level_work_packages: true`, a selected level issue's affected versions link to the copies in its level sub-project, created as in `versions` when they are missing; the observed-version transaction checks the parent's Jira origin and that the sub-project is its private child. See [ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md).
 
 ---
 
@@ -900,7 +904,7 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, `work_package_field_history` and `time_entries` their field history and time entries, and `agile_boards`, `native_boards` and `sprint_epic` keep them out of the boards and sprints of the parent; level work packages get no versions or sprints yet. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, `work_package_field_history` and `time_entries` their field history and time entries, `versions` and `affects_versions` their fix and affected versions as copies in the sub-project ([ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)), and `agile_boards`, `native_boards` and `sprint_epic` keep them out of the boards and sprints of the parent; level work packages get no sprints yet. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Features**:
 - On previously mapped issues, this component records the source level name in the “Security Level” custom field.
