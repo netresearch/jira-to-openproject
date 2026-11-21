@@ -164,6 +164,19 @@ class TimeEntryMigration(BaseMigration):
         )
         return rows
 
+    def _with_level_report(self, result: ComponentResult) -> ComponentResult:
+        """Count this run's level refusals into the result, its counters and its status (ADR-009)."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return result
+        level.report(result, logger)
+        if level.refused:
+            # A refused level issue is a failed item of this component, as a catalogue failure is.
+            result.failed_count += len(level.refused)
+            result.total_count += len(level.refused)
+            result.details["status"] = "partial_success" if result.success_count else "failed"
+        return result
+
     def _refuse_unread_level_issues(self) -> None:
         """A level issue whose work logs were not read (its level changed, say) is a refusal."""
         level = getattr(self, "_level", None)
@@ -174,15 +187,7 @@ class TimeEntryMigration(BaseMigration):
 
     def run(self) -> ComponentResult:
         """Import time entries and an explicitly selected operator-only instance catalogue."""
-        result = self._run_time_entries()
-        level = getattr(self, "_level", None)
-        if level is not None:
-            level.report(result, logger)
-            if level.refused:
-                # A refused level issue is a failed item of this component, as a catalogue failure is.
-                result.failed_count += len(level.refused)
-                result.total_count += len(level.refused)
-                result.details["status"] = "partial_success" if result.success_count else "failed"
+        result = self._with_level_report(self._run_time_entries())
         project = os.environ.get(SETTING)
         if not project:
             return result
