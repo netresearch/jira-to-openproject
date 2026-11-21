@@ -986,12 +986,7 @@ puts end_marker
         if not lookup:
             return self._missing_work_package_mapping()
 
-        by_project: dict[str, list[str]] = {}
-        for jira_key in lookup:
-            project_key = self._issue_project_key(jira_key)
-            if project_key not in by_project:
-                by_project[project_key] = []
-            by_project[project_key].append(jira_key)
+        by_project = self._keys_by_project(lookup)
 
         total_issues = sum(len(keys) for keys in by_project.values())
         self.logger.info(
@@ -1054,6 +1049,13 @@ puts end_marker
                         original_max_kb,
                         target_max_kb,
                     )
+
+    def _keys_by_project(self, lookup: dict[str, int]) -> dict[str, list[str]]:
+        """Group the Jira keys by their key prefix, for batching only."""
+        by_project: dict[str, list[str]] = {}
+        for jira_key in lookup:
+            by_project.setdefault(self._issue_project_key(jira_key), []).append(jira_key)
+        return by_project
 
     def _prepare_level_work_packages(self, key_to_wp_id: dict[str, int]) -> ComponentResult | None:
         """With the level switch on, resolve this run's level work packages (ADR-009).
