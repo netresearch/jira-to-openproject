@@ -352,6 +352,11 @@ class AgileBoardMigration(BaseMigration):
 
     def _board_work_package_ids(self, board_id: int, key: str, targets: dict[str, int]) -> list[int]:
         issue_keys = self.jira_client.get_board_issue_keys(board_id, key)
+        level = getattr(self, "_level", None)
+        if level is not None:
+            # An issue of a level search or of the archive never reaches a board, whatever its
+            # level is now (ADR-009); the security search below covers the other unmapped cards.
+            issue_keys = [issue for issue in issue_keys if issue not in level.level_keys]
         unmapped = [issue for issue in issue_keys if issue not in targets]
         # The skeleton imports only issues Jira confirms have no security level.
         withheld = self._security_withheld(key, unmapped) if unmapped else set()

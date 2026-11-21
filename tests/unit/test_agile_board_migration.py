@@ -408,7 +408,9 @@ class LevelOp(DummyOp):
         return json.loads(json.dumps(self.live))
 
 
-def level_board(level_setup, monkeypatch, *, live=None, level_rows=None, runs=1, detect=False, **kwargs):
+def level_board(
+    level_setup, monkeypatch, *, live=None, level_rows=None, runs=1, detect=False, unrestricted=(), **kwargs
+):
     level_setup(**kwargs)
     withheld_queries = []
 
@@ -416,7 +418,11 @@ def level_board(level_setup, monkeypatch, *, live=None, level_rows=None, runs=1,
         # Jira reports every listed board issue except APP-1 with a security level.
         withheld_queries.append(jql)
         keys = jql.split("key in (")[1].split(")")[0].replace('"', "").split(", ")
-        rows = [SimpleNamespace(key=key, raw={"fields": {"security": {"id": "10000"}}}) for key in keys]
+        rows = [
+            SimpleNamespace(key=key, raw={"fields": {"security": {"id": "10000"}}})
+            for key in keys
+            if key not in unrestricted
+        ]
         return rows if start_at == 0 else []
 
     monkeypatch.setattr("src.application.components.agile_board_migration.fetch_issue_page_with_retry", search)
@@ -471,10 +477,19 @@ def test_level_issue_with_an_ordinary_entry_is_refused_and_stays_off_the_board(l
     outcome = level_board(level_setup, monkeypatch, ordinary=ordinary)
     assert not outcome.result.success
     assert board_ids(outcome.op) == [[500]]
-    # The first page and the empty page that ends the search.
-    assert outcome.withheld == [withheld_query(*BOARD_KEYS[1:])] * 2
+    # Every other card is an issue of a level search or of the archive: none is searched for.
+    assert outcome.withheld == []
     assert outcome.result.details["security_level"] == {"work_packages": 1, "refused": 1}
     assert outcome.result.failed_count == 1
+
+
+def test_level_archived_card_that_lost_its_level_stays_off_the_board(level_setup, monkeypatch):
+    # The archived APP-12 has an ordinary entry, and Jira now reports it without a level.
+    ordinary = {"12": {"jira_key": "APP-12", "openproject_id": 512, "project_key": "APP"}}
+    outcome = level_board(level_setup, monkeypatch, ordinary=ordinary, unrestricted={"APP-12"})
+    assert board_ids(outcome.op) == [[500]]
+    assert not outcome.result.details.get("board_errors")
+    assert outcome.result.details["security_level"]["refused"] == 1
 
 
 @pytest.mark.parametrize("options", LEVEL_REFUSALS)
