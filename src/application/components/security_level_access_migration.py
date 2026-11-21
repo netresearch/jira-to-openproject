@@ -42,14 +42,20 @@ _MEMBERS = (
     'raise "Level sub-project is public" if project.public?\n'
 )
 # The parent's roles include those inherited from groups (the J2O Role groups, ADR-005); only
-# project roles count. The share role is found by its builtin value, not by its name.
+# project roles count, and none that lets a member widen the audience (ADR-012): adding or inviting
+# members, sharing work packages or sprints, or editing the project (which can make it public).
+# A reader left without a role gets "Reader", itself refused if it grants one of these.
+# The share role is found by its builtin value, not by its name.
 _STATE = _MEMBERS + (
+    "widening = %i[manage_members invite_members_by_email share_work_packages share_sprint edit_project]\n"
+    "narrow = ->(r) { r.is_a?(ProjectRole) && widening.none? { |p| r.has_permission?(p) } }\n"
+    'reader = ProjectRole.find_by(name: input.fetch("reader"), builtin: Role::NON_BUILTIN)\n'
     'ids = input.fetch("users")\n'
     "users = User.where(id: ids).to_a\n"
     "parent = Member.where(project_id: project.parent_id, entity_id: nil, user_id: ids).includes(:roles)\n"
-    '{"reader_role" => ProjectRole.find_by(name: input.fetch("reader"), builtin: Role::NON_BUILTIN)&.id, '
+    '{"reader_role" => (reader if reader && narrow.call(reader))&.id, '
     '"viewer_role" => Role.find_by(builtin: Role::BUILTIN_WORK_PACKAGE_VIEWER)&.id, '
-    '"parent_roles" => parent.to_h { |m| [m.user_id.to_s, m.roles.select { |r| r.is_a?(ProjectRole) }.map(&:id).uniq.sort] }, '
+    '"parent_roles" => parent.to_h { |m| [m.user_id.to_s, m.roles.select(&narrow).map(&:id).uniq.sort] }, '
     '"locked" => users.select(&:locked?).map(&:id), "found" => users.map(&:id), "members" => rows.call(project)}'
 )
 # Project memberships go through Members::CreateService (ADR-005). Shares are saved directly:
