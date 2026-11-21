@@ -14,14 +14,19 @@ _APPLY = """
 project = Project.find(data.fetch("project_id"))
 project.with_lock(requires_new: true) do
   raise "Component migration requires a private project" if project.public?
+  # A level sub-project (ADR-009) has no origin of its own: its parent carries the Jira project's
+  # origin, and every membership row of the sub-project, locked users and shares included, is access.
+  level = data.key?("parent_id")
+  owner = level ? Project.find(data.fetch("parent_id")) : project
+  raise "Unexpected target sub-project" if level && project.parent_id != owner.id
   origins = lambda do |entity, field_type, names|
     entity.custom_values.joins(:custom_field).where(custom_fields: {type: field_type, name: names})
           .pluck("custom_fields.name", :value).group_by(&:first).transform_values { |rows| rows.sole.last }
   end
   source = {"Jira Project Key"=>data.fetch("key"), "Jira Project ID"=>data.fetch("jira_id"), "Jira Base URL"=>data.fetch("jira")}
-  raise "Unexpected target project origin" unless origins.call(project, "ProjectCustomField", source.keys) == source
+  raise "Unexpected target project origin" unless origins.call(owner, "ProjectCustomField", source.keys) == source
 
-  private_staging = !project.members.exists?
+  private_staging = !project.members.exists? && !(level && Member.where(project_id: project.id).exists?)
   existing_field = ProjectCustomField.find_by(name: data.fetch("register"))
   if data.fetch("issues").all? { |row| row.fetch("components").empty? } &&
       (!existing_field || !project.custom_values.exists?(custom_field_id: existing_field.id))

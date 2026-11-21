@@ -10,9 +10,11 @@ from itertools import batched
 from typing import Any
 
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.issue_security import permits_unrestricted_result, unrestricted_project_jql
 from src.application.components.project_named_records import project_id
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
 from src.infrastructure.openproject.component_assignments import apply_component_assignments
@@ -75,7 +77,7 @@ class ComponentsMigration(BaseMigration):
     def _extract(self) -> ComponentResult:
         base = self.jira_client.base_url
         wanted = set(config.selected_jira_projects())
-        mapped = self._mapped_targets(wanted)
+        mapped = self._without_level_issues(self._mapped_targets(wanted))
         projects = {}
         skipped = 0
         for key, mapping in (self.mappings.get_mapping("project") or {}).items():
@@ -90,6 +92,10 @@ class ComponentsMigration(BaseMigration):
                 skipped += len(targets) - len(rows)
                 if rows:
                     projects[key] = {"project_id": pid, "jira_id": source_pid, "key": key, "jira": base, "issues": rows}
+        for label, scope, unconfirmed in self._level_projects(base):
+            skipped += unconfirmed
+            if scope["issues"]:
+                projects[label] = scope
         warnings = []
         if skipped:
             warnings.append(f"Jira could not confirm {skipped} mapped work packages for ordinary component assignment.")
@@ -97,6 +103,80 @@ class ComponentsMigration(BaseMigration):
         return ComponentResult(
             success=True, data=projects, details={"unconfirmed_work_packages": skipped}, warnings=warnings
         )
+
+    def _without_level_issues(self, projects: dict) -> dict:
+        """With the level switch on, no issue of a level search or of the archive keeps an ordinary target."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return projects
+        flat = {key: wp for targets in projects.values() for key, (wp, _) in targets.items()}
+        kept = level.without_level_issues(flat)
+        return {project: {k: v for k, v in targets.items() if k in kept} for project, targets in projects.items()}
+
+    def _level_projects(self, base: str) -> list[tuple[str, dict, int]]:
+        """One payload per level sub-project, for the selected issues resolved in it this run (ADR-009).
+
+        Categories are per project in OpenProject, so the payload names the sub-project: its
+        categories are created and assigned there, never in the parent.
+        """
+        level = getattr(self, "_level", None)
+        if level is None:
+            return []
+        by_label: dict[str, tuple[level_issues.LevelTarget, dict[str, int]]] = {}
+        for key, target in level.targets.items():
+            by_label.setdefault(target.label, (target, {}))[1][key] = level.work_packages[key]
+        payloads = []
+        for label, (target, wps) in sorted(by_label.items()):
+            project = label.rpartition(":")[0]
+            rows, source_pid, unconfirmed = self._level_rows(level, project, target, wps, base)
+            scope = {
+                "project_id": target.project_id,
+                "parent_id": target.parent_id,
+                "jira_id": source_pid,
+                "key": project,
+                "jira": base,
+                "issues": rows,
+            }
+            payloads.append((label, scope, unconfirmed))
+        return payloads
+
+    def _level_rows(
+        self,
+        level: level_issues.LevelWorkPackages,
+        project: str,
+        target: level_issues.LevelTarget,
+        wps: dict[str, int],
+        base: str,
+    ) -> tuple[list, str | None, int]:
+        rows = []
+        source_pid = None
+        unconfirmed = 0
+        seen = set()
+        for issue in level_issues.iter_level_issues(self.jira_client, project, 100, "project,components,security"):
+            if issue.key not in wps or issue.key in seen:
+                continue
+            seen.add(issue.key)
+            if level_issues.issue_level_id(issue) != target.level_id:
+                level.refused.append(f"{issue.key}: changed its level after the selection")
+                continue
+            fields = issue.raw["fields"]
+            ref = fields["project"]
+            if ref.get("projectTypeKey") not in {"software", "business"}:
+                unconfirmed += 1
+                continue
+            pid = str(ref["id"])
+            if ref["key"] != project or not pid.isdecimal() or source_pid not in (None, pid):
+                msg = "Jira returned inconsistent project origins"
+                raise ValueError(msg)
+            source_pid = pid
+            if not str(issue.id).isdecimal():
+                msg = "Mapped source ID differs from Jira"
+                raise ValueError(msg)
+            components = _component_refs(fields.get("components"), base)
+            rows.append({"id": str(issue.id), "key": issue.key, "wp": wps[issue.key], "components": components})
+        level.refused.extend(f"{key}: not returned by the level search" for key in sorted(set(wps) - seen))
+        self._check_catalogue(project, rows, base)
+        return rows, source_pid, unconfirmed
 
     def _target_origins(self, key: str, pid: int, mapped: dict) -> dict:
         targets = dict(mapped)
@@ -186,8 +266,22 @@ class ComponentsMigration(BaseMigration):
             self.mappings.set_mapping("category", categories)
 
     def run(self) -> ComponentResult:
-        """Check the source and the target on every pass, including retries."""
-        return self._run_etl_pipeline("Components")
+        """Check the source and the target on every pass, including retries.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009) and their refusals are counted into the result.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger
+                )
+            except LevelProjectError as exc:
+                self.logger.error("Level work package components stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+        result = self._run_etl_pipeline("Components")
+        return result if self._level is None else self._level.report(result, self.logger)
 
     def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
         """Target category and origin changes can occur independently of Jira updates."""
