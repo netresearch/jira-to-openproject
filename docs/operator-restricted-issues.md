@@ -51,7 +51,7 @@ uv run --project /path/to/j2o j2o-restricted restore --identity operator.agekey 
 
 ## Edition and administrator report
 
-OpenProject administrators see every work package, so they will see the work packages of every level sub-project. The import does not stop for that (ADR-009, decision 4); `admins` lists them before any level sub-project is created. Run it from the j2o working directory of the migration: the Rails console connection comes from its `config/config.yaml`, and `--user-mapping` names the migration's `var/data/user_mapping.json`. Set `J2O_OPENPROJECT_API_KEY` through your secret store. The report is written to the working directory and must not exist yet.
+OpenProject administrators see every work package, so they will see the work packages of every level sub-project. The import does not stop for that (ADR-009, decision 4); `admins` lists them before any level sub-project is created. Run it from the j2o working directory of the migration: the Rails console connection comes from its `config/config.yaml`, and `--user-mapping` names the migration's `var/data/user_mapping.json`. Set `J2O_OPENPROJECT_API_KEY` through your secret store. The report is written to the working directory and must not exist yet; the checkout ignores `restricted-admins*.json`, so keep that name.
 
 ```sh
 cd /path/to/j2o
