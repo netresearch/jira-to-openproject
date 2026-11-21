@@ -52,6 +52,7 @@ _NAMED = {
     "Single user": "user",
     "User custom field value": "user_field",
 }
+_ROLE_ACTORS = frozenset({"atlassian-user-role-actor", "atlassian-group-role-actor"})
 _LABEL = re.compile(r"(?P<kind>[A-Za-z ]+?) \((?P<value>.+)\)")
 
 
@@ -266,31 +267,36 @@ def static_readers(
     jira = directory.jira
     users: set[str] = set()
     ignored = 0
-    roles: dict[str, str] | None = None
     for grant in level.grants:
         if grant.kind == "group":
             users |= directory.group(str(grant.value))
         elif grant.kind == "lead":
             users.add(str(jira.get(f"/rest/api/2/project/{project}")["lead"]["name"]))
+        elif grant.kind == "role":
+            users |= _role_users(directory, project, str(grant.value))
         elif grant.kind == "user":
             name = directory.single_user(str(grant.value))
             if name == account:
-                ignored += 1
+                ignored += 1  # the temporary grant (ADR-009)
             else:
                 users.add(name)
-        elif grant.kind == "role":
-            if roles is None:
-                roles = jira.get(f"/rest/api/2/project/{project}/role")
-            url = roles.get(str(grant.value)) if isinstance(roles, dict) else None
-            _require(isinstance(url, str) and url.startswith(jira.url + "/"), "Unknown project role in a grant")
-            for actor in jira.get(url.removeprefix(jira.url))["actors"]:
-                if actor["type"] == "atlassian-user-role-actor":
-                    users.add(str(actor["name"]))
-                elif actor["type"] == "atlassian-group-role-actor":
-                    users |= directory.group(str(actor["name"]))
-                else:
-                    _require(False, "Unknown project role actor type")  # noqa: FBT003
     return LevelReaders(level, frozenset(users) & browse, ignored)
+
+
+def _role_users(directory: Directory, project: str, role: str) -> set[str]:
+    """User actors and expanded group actors of one project role."""
+    jira = directory.jira
+    roles = jira.get(f"/rest/api/2/project/{project}/role")
+    url = roles.get(role) if isinstance(roles, dict) else None
+    _require(isinstance(url, str) and url.startswith(jira.url + "/"), "Unknown project role in a grant")
+    users: set[str] = set()
+    for actor in jira.get(url.removeprefix(jira.url))["actors"]:
+        _require(actor["type"] in _ROLE_ACTORS, "Unknown project role actor type")
+        if actor["type"] == "atlassian-user-role-actor":
+            users.add(str(actor["name"]))
+        else:
+            users |= directory.group(str(actor["name"]))
+    return users
 
 
 def project_issues(jira: JiraReader, project: str, levels: list[Level], fields: list[str]) -> dict[str, list[dict]]:
@@ -351,14 +357,16 @@ def per_issue_grantees(issue: dict, level: Level, field_ids: dict[str, str]) -> 
     names: set[str] = set()
     for grant in level.grants:
         if grant.kind in ("assignee", "reporter"):
-            user = fields.get(grant.kind)
-            if user:
-                names.add(str(user["name"]))
+            names.update(_user_names(fields.get(grant.kind)))
         elif grant.kind == "user_field":
-            value = fields.get(field_ids[str(grant.value)])
-            for user in value if isinstance(value, list) else [value] if value else []:
-                names.add(str(user["name"]))
+            names.update(_user_names(fields.get(field_ids[str(grant.value)])))
     return frozenset(names)
+
+
+def _user_names(value: object) -> set[str]:
+    """User names of a single-user or multi-user field value."""
+    users = value if isinstance(value, list) else [value]
+    return {str(user["name"]) for user in users if user}
 
 
 def classify(

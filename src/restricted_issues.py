@@ -37,6 +37,8 @@ from src.operator_history import _output_file, _private_create
 ARCHIVE_FORMAT = "j2o-restricted-issues/1"
 REPORT_FORMAT = "j2o-restricted-report/1"
 KINDS = ("static", "per_issue", "unexplained")
+_AGE = ".age"
+_JSON = ".json"
 
 
 def migration_account(jira: Endpoint, explicit: str | None) -> str:
@@ -149,8 +151,8 @@ def decrypt(data: bytes, identity: x25519.Identity) -> dict:
 
 def seal(value: dict, identity: x25519.Identity, path: Path) -> bytes:
     """Write a new archive for the operator key and verify it decrypts to the same value."""
-    target = _output_file(path, ".age")
-    _private_create(path, pyrage.encrypt(encoded(value), [identity.to_public()]), ".age")
+    target = _output_file(path, _AGE)
+    _private_create(path, pyrage.encrypt(encoded(value), [identity.to_public()]), _AGE)
     data = input_file(target).read_bytes()
     require(decrypt(data, identity) == value, "Sealed archive differs from the inventory")
     return data
@@ -158,8 +160,8 @@ def seal(value: dict, identity: x25519.Identity, path: Path) -> bytes:
 
 def inventory(args: argparse.Namespace, identity: x25519.Identity) -> dict:
     """Scan the selected projects, seal the archive and return the shared report."""
-    require(not _output_file(args.archive, ".age").exists(), "Archive already exists")
-    require(not _output_file(args.report, ".json").exists(), "Report already exists")
+    require(not _output_file(args.archive, _AGE).exists(), "Archive already exists")
+    require(not _output_file(args.report, _JSON).exists(), "Report already exists")
     jira = Endpoint(
         args.jira,
         os.environ["J2O_ARCHIVE_INVENTORY_TOKEN"],
@@ -178,7 +180,7 @@ def inventory(args: argparse.Namespace, identity: x25519.Identity) -> dict:
         require(restricted_total(jira) == counted, "Restricted issues outside the scanned projects")
     data = seal(archive_value(jira, scans, account), identity, args.archive)
     value = report(jira.url, scans, hashlib.sha256(data).hexdigest())
-    _private_create(args.report, encoded(value), ".json")
+    _private_create(args.report, encoded(value), _JSON)
     return value
 
 
@@ -203,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(json.dumps(inventory(args, identity)["totals"]) + "\n")
         else:
             value = decrypt(input_file(args.archive).read_bytes(), identity)
-            _private_create(args.output, encoded(value), ".json")
+            _private_create(args.output, encoded(value), _JSON)
     except (ArchiveError, SecurityLevelError) as exc:
         sys.stderr.write(str(exc) + "\n")
         return 1

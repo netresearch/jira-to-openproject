@@ -100,8 +100,9 @@ class FakeJira:
 
     url = _JIRA
 
-    def __init__(self, issues=ISSUES, page=PAGE, levels=("Board", "Legacy"), browse=_BROWSE, elsewhere=0):
+    def __init__(self, issues=ISSUES, page=PAGE, *, levels=("Board", "Legacy"), browse=_BROWSE, elsewhere=0, leads=()):
         self.issues = issues
+        self.leads = ["alice", "ivan", *leads]
         self.elsewhere = elsewhere  # issues with a level outside the listed projects
         self.page = page
         self.levels = levels
@@ -133,7 +134,7 @@ class FakeJira:
             start = p["startAt"]
             return Response(200, [_user(n) for n in names[start : start + min(p["maxResults"], _PAGE_CAP)]])
         if path == "/rest/api/2/group/member":
-            members = {"leads": ["alice", "ivan"], "devs": ["ivan"]}[p["groupname"]]
+            members = {"leads": self.leads, "devs": ["ivan"]}[p["groupname"]]
             return Response(200, {"startAt": p["startAt"], "isLast": True, "values": [_user(n) for n in members]})
         if path == "/rest/api/2/user/search":
             names = {"Dana Sample": ["dana"], "Migration Bot": [_ACCOUNT], "Twin Name": ["twin1", "twin2"]}
@@ -199,10 +200,12 @@ def test_parses_grants_and_fails_closed_on_unknown_pages():
     assert grants["Legacy"][1] == sl.Grant("unsupported", "Current user")
     with pytest.raises(sl.SecurityLevelError, match="table not found"):
         sl.parse_grant_page("<html><title>Administrator Access</title></html>")
+    duplicate = PAGE.replace("Legacy", "Board")
     with pytest.raises(sl.SecurityLevelError, match="duplicate"):
-        sl.parse_grant_page(PAGE.replace("Legacy", "Board"))
+        sl.parse_grant_page(duplicate)
+    renamed = FakeJira(levels=("Board", "Renamed"))
     with pytest.raises(sl.SecurityLevelError, match="differ"):
-        scan(FakeJira(levels=("Board", "Renamed")))
+        scan(renamed)
 
 
 def test_issue_readers_come_from_the_issue_not_the_project():
@@ -233,6 +236,10 @@ def test_temporary_grant_does_not_make_the_migration_account_a_reader():
 
 
 def test_migration_account_counts_when_a_static_grant_explains_it():
+    # The account holds the temporary grant and is also a member of a granted group.
+    board = scan(FakeJira(leads=[_ACCOUNT])).levels[0]
+    assert board.readers == {"alice", "bob", _ACCOUNT}
+    assert board.account_grants == 1
     level = sl.Level("1", "L", (sl.Grant("group", "g"),))
     readers = sl.LevelReaders(level, frozenset({"alice", _ACCOUNT}), 0)
     row = sl.classify({"fields": {}}, readers, frozenset({"alice", _ACCOUNT}), {}, _ACCOUNT)
@@ -254,14 +261,17 @@ def test_classifies_per_issue_and_unexplained_readers():
 def test_rejects_contradicting_searches_and_ambiguous_grants():
     other_level = copy.deepcopy(ISSUES)
     other_level[0]["fields"]["security"]["id"] = "20009"
-    with pytest.raises(sl.SecurityLevelError, match="outside its scheme"):
-        scan(FakeJira(issues=other_level))
-    with pytest.raises(sl.SecurityLevelError, match="exactly one Jira user"):
-        scan(FakeJira(page=PAGE.replace("Dana Sample", "Twin Name")))
-    with pytest.raises(sl.SecurityLevelError, match="exactly one field"):
-        scan(FakeJira(page=PAGE.replace("(Extra Readers)", "(Unknown Field)")))
+    cases = [
+        (FakeJira(issues=other_level), "outside its scheme"),
+        (FakeJira(page=PAGE.replace("Dana Sample", "Twin Name")), "exactly one Jira user"),
+        (FakeJira(page=PAGE.replace("(Extra Readers)", "(Unknown Field)")), "exactly one field"),
+    ]
+    for jira, message in cases:
+        with pytest.raises(sl.SecurityLevelError, match=message):
+            scan(jira)
+    without_scheme = SimpleNamespace(url=_JIRA, **_none_with_issues())
     with pytest.raises(sl.SecurityLevelError, match="no security scheme"):
-        sl.scan_project(SimpleNamespace(url=_JIRA, **_none_with_issues()), "NONE", _ACCOUNT)
+        sl.scan_project(without_scheme, "NONE", _ACCOUNT)
 
 
 def _none_with_issues():
