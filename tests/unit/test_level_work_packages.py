@@ -71,16 +71,25 @@ class FakeMappings:
         self.data[name] = json.loads(json.dumps(dict(value)))
 
 
-def FakeOpenProject(state=None):
-    """Record batch payloads and answer the sub-project read with ``state``."""
+NO_WORK_PACKAGES = {"field": True, "work_packages": [], "keys": []}
+
+
+def FakeOpenProject(state=None, existing=None, fail=False):
+    """Record batch payloads; answer the sub-project read with ``state``, the work-package read with ``existing``."""
     op = Mock()
-    op.payloads, op.reads = [], []
+    op.payloads, op.reads, op.existing_reads = [], [], []
 
     def read(script):
-        op.reads.append(json.loads(script.split("\n")[1]))
+        values = json.loads(script.split("\n")[1])
+        if "CustomValue" in script:
+            op.existing_reads.append(values)
+            return json.loads(json.dumps(NO_WORK_PACKAGES if existing is None else existing))
+        op.reads.append(values)
         return dict(STATE if state is None else state)
 
     def create(payloads):
+        if fail:
+            raise RuntimeError("batch answer lost")
         start = len(op.payloads)
         op.payloads.extend(payloads)
         rows = [{"status": "created", "id": 500 + start + i} for i in range(len(payloads))]
@@ -151,9 +160,9 @@ def setup(monkeypatch, tmp_path):
     return _setup
 
 
-def skeleton(setup, *, unrestricted=(), levels=(), state=None, **kwargs):
+def skeleton(setup, *, unrestricted=(), levels=(), state=None, existing=None, fail=False, **kwargs):
     mappings, data = setup(**kwargs)
-    jira, op = fake_jira(list(unrestricted), list(levels)), FakeOpenProject(state)
+    jira, op = fake_jira(list(unrestricted), list(levels)), FakeOpenProject(state, existing, fail)
     migration = WorkPackageSkeletonMigration(jira_client=jira, op_client=op)
     migration._get_j2o_origin_key_cf_id = lambda: 5
     migration._build_skeleton_payload = lambda source, project_id, _cf: {
@@ -387,3 +396,67 @@ def test_level_mapping_round_trips_through_the_real_mapping_facade(setup, monkey
     again._get_j2o_origin_key_cf_id = lambda: 5
     assert again.run().details["security_level"]["skipped"] == 2
     assert not op.payloads
+
+
+def test_lost_mapping_adopts_the_work_package_the_sub_project_already_holds(setup):
+    existing = {"field": True, "work_packages": [900], "keys": [[900, "APP-10"]]}
+    outcome = skeleton(setup, levels=level_issues(), existing=existing)
+    assert outcome.result.success
+    assert outcome.created == {("Issue 11", 100)}
+    entry = outcome.mappings.data["security_level_work_package"]["10"]
+    assert (entry["openproject_id"], entry["security_level_project"]) == (900, "APP:10000")
+    assert outcome.result.details["security_level"]["adopted"] == 1
+    assert outcome.op.existing_reads == [{"project_id": 100, "field": "J2O Origin Key"}]
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        {"field": True, "work_packages": [900], "keys": []},
+        {"field": False, "work_packages": [900], "keys": []},
+        {"field": True, "work_packages": [900, 901], "keys": [[900, "APP-10"], [901, "APP-10"]]},
+        {"field": True, "work_packages": [900], "keys": [[900, "APP-10"], [900, "APP-11"]]},
+        {"field": True, "work_packages": [900], "keys": [[900, "APP-99"]]},
+        {"field": True, "work_packages": [900]},
+        {"field": True, "work_packages": [900, 901], "keys": [[901, "APP-10"], [901, "APP-11"]]},
+    ],
+)
+def test_a_sub_project_with_unclear_work_packages_gets_nothing(setup, existing):
+    outcome = skeleton(setup, levels=level_issues(), existing=existing)
+    assert not outcome.result.success
+    assert not outcome.op.payloads
+    assert outcome.result.details["security_level"]["refused"] == 2
+
+
+def test_adopted_work_packages_are_saved_without_a_new_batch(setup):
+    existing = {"field": True, "work_packages": [900, 901], "keys": [[900, "APP-10"], [901, "APP-11"]]}
+    outcome = skeleton(setup, levels=level_issues(), existing=existing)
+    assert not outcome.op.payloads
+    saved = outcome.mappings.data["security_level_work_package"]
+    assert {key: entry["openproject_id"] for key, entry in saved.items()} == {"10": 900, "11": 901}
+
+
+def test_a_failed_level_batch_makes_the_component_unsuccessful(setup):
+    outcome = skeleton(setup, levels=level_issues(), fail=True)
+    assert not outcome.result.success
+    assert outcome.result.details["security_level"]["failed"] == 2
+
+
+def test_level_path_runs_when_the_parent_has_no_project_mapping(setup):
+    outcome = skeleton(setup, mapping={"project": {}}, unrestricted=[issue(1)], levels=level_issues())
+    assert outcome.created == {("Issue 10", 100), ("Issue 11", 100)}
+
+
+@pytest.mark.parametrize(
+    ("report_levels", "archived"),
+    [
+        ([row(), row(), row("10001", ("APP-20",), 0, 0)], None),
+        ([row(), row("10001", ("APP-10", "APP-20"), 0, 0)], None),
+        (None, [*ARCHIVED, {"key": "APP-30", "level_id": "10009", "class": "per_issue"}]),
+    ],
+)
+def test_a_report_with_a_key_or_level_listed_twice_stops_before_any_write(setup, report_levels, archived):
+    outcome = skeleton(setup, levels=level_issues(), report_levels=report_levels, archived=archived)
+    assert not outcome.result.success
+    assert not outcome.op.payloads
+    assert "inventory report" in repr(outcome.result)

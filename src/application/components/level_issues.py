@@ -26,10 +26,12 @@ from src.application.components.security_level_projects_migration import (
     _EDITIONS,
     MAPPING,
     LevelProjectError,
+    _script,
     level_identifier,
     load_reports,
     migratable_levels,
 )
+from src.domain import provenance_fields
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 
 SWITCH = "security_level_work_packages"
@@ -137,7 +139,15 @@ class LevelScope:
             msg = "Duplicate archived issue in the inventory report"
             raise LevelProjectError(msg)
         self.levels = report["levels"]
-        self.expected = {f"{row['project']}:{row['level_id']}": _expected_keys(row, archived) for row in self.levels}
+        labels = [f"{row['project']}:{row['level_id']}" for row in self.levels]
+        if len(set(labels)) != len(labels):
+            msg = "Duplicate level in the inventory report"
+            raise LevelProjectError(msg)
+        self.expected = {label: _expected_keys(row, archived) for label, row in zip(labels, self.levels, strict=True)}
+        listed = [key for keys in self.expected.values() for key in keys]
+        if len(set(listed)) != len(listed) or not set(self.archived) <= set(listed):
+            msg = "An issue key belongs to more than one level in the inventory report"
+            raise LevelProjectError(msg)
         self.kinds = _EDITIONS[edition]
         self.projects = projects
 
@@ -211,6 +221,48 @@ def _expected_keys(row: Mapping[str, Any], archived: list[dict[str, Any]]) -> di
         msg = f"Malformed issue keys for level {row['project']}:{row['level_id']} in the inventory report"
         raise LevelProjectError(msg)
     return dict.fromkeys(static, "static") | mine
+
+
+# Every work package of a sub-project with its J2O Origin Key values; read before the first write
+# into the sub-project, so that a lost mapping or batch answer never yields a second work package.
+_EXISTING = (
+    'field = WorkPackageCustomField.find_by(name: input.fetch("field"))\n'
+    'ids = WorkPackage.where(project_id: input.fetch("project_id")).order(:id).pluck(:id)\n'
+    'keys = field ? CustomValue.where(customized_type: "WorkPackage", custom_field_id: field.id, '
+    "customized_id: ids).order(:customized_id).pluck(:customized_id, :value) : []\n"
+    '{"field" => !field.nil?, "work_packages" => ids, "keys" => keys}'
+)
+
+
+def existing_work_packages(op_client: Any, project_id: int) -> dict[str, int]:
+    """Issue key to work package ID of every work package in the sub-project; anything unclear raises."""
+    state = op_client.execute_query_to_json_file(
+        _script(_EXISTING, {"project_id": project_id, "field": provenance_fields.ORIGIN_KEY})
+    )
+    ok = (
+        isinstance(state, dict)
+        and type(state.get("field")) is bool
+        and isinstance(state.get("work_packages"), list)
+        and all(type(wp) is int for wp in state["work_packages"])
+        and isinstance(state.get("keys"), list)
+        and all(
+            isinstance(pair, list) and len(pair) == 2 and type(pair[0]) is int and isinstance(pair[1], str)
+            for pair in state["keys"]
+        )
+    )
+    if not ok:
+        msg = "malformed answer for the work packages of the sub-project"
+        raise LevelProjectError(msg)
+    ids = state["work_packages"]
+    keyed = [wp for wp, _ in state["keys"]]
+    if sorted(keyed) != sorted(ids):
+        msg = "holds a work package without exactly one J2O Origin Key"
+        raise LevelProjectError(msg)
+    found = {key: wp for wp, key in state["keys"]}
+    if len(found) != len(ids):
+        msg = "holds two work packages for one issue"
+        raise LevelProjectError(msg)
+    return found
 
 
 def _target(project_key: str, level_id: str, entry: object) -> LevelTarget:

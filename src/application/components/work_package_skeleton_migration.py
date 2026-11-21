@@ -83,7 +83,7 @@ if TYPE_CHECKING:
     from jira.resources import Issue
 
 _FIELDS = "summary,issuetype,status,project,priority,assignee,reporter,created,updated,security"
-_LEVEL_COUNTS = ("processed", "created", "skipped", "failed", "unmapped", "withheld", "refused")
+_LEVEL_COUNTS = ("processed", "created", "skipped", "adopted", "failed", "unmapped", "withheld", "refused")
 
 
 def _stringify_optional_timestamp(value: Any) -> str | None:
@@ -224,6 +224,8 @@ class WorkPackageSkeletonMigration(BaseMigration):
         self.work_package_mapping: dict[str, dict[str, Any]] = {}
         # Level work packages (ADR-009): read and written only with the level switch on.
         self.level_work_packages: dict[str, dict[str, Any]] = {}
+        # Per sub-project label: issue key to the work package OpenProject already holds there.
+        self._level_existing: dict[str, dict[str, int]] = {}
 
         # Tracks whether the most recent ``_save_mapping`` call
         # succeeded. ``None`` until the first save attempt — the
@@ -903,6 +905,11 @@ class WorkPackageSkeletonMigration(BaseMigration):
                     "No OpenProject mapping for project %s, skipping",
                     project_key,
                 )
+                # The level path writes into the mapped sub-projects only, not into the parent.
+                if scope is not None:
+                    results["projects"][project_key] = self._add_level_results(
+                        results, {}, self._create_level_skeletons(project_key, j2o_cf_id, scope)
+                    )
                 continue
 
             project_results = self._create_project_skeletons(project_key, project_id, j2o_cf_id)
@@ -914,11 +921,9 @@ class WorkPackageSkeletonMigration(BaseMigration):
             results["total_skipped"] += project_results["skipped"]
             results["total_failed"] += project_results["failed"]
             if scope is not None:
-                level_results = self._create_level_skeletons(project_key, j2o_cf_id, scope)
-                project_results["security_level"] = level_results
-                for name in _LEVEL_COUNTS:
-                    results["security_level"][name] += level_results[name]
-                results["total_failed"] += level_results["failed"] + level_results["refused"]
+                self._add_level_results(
+                    results, project_results, self._create_level_skeletons(project_key, j2o_cf_id, scope)
+                )
 
             self.logger.info(
                 "Project %s: %d processed, %d created, %d skipped, %d failed",
@@ -1198,13 +1203,24 @@ class WorkPackageSkeletonMigration(BaseMigration):
             config.mappings.set_mapping(level_issues.WORK_PACKAGE_MAPPING, mapping)
 
     @staticmethod
+    def _add_level_results(results: dict, project_results: dict, level_results: dict) -> dict:
+        """Count one project's level results into the run totals; return the project's results."""
+        project_results["security_level"] = level_results
+        for name in _LEVEL_COUNTS:
+            results["security_level"][name] += level_results[name]
+        results["total_failed"] += level_results["failed"] + level_results["refused"]
+        return project_results
+
+    @staticmethod
     def _level_verdict(results: dict, details: dict) -> tuple[str, str | None]:
-        """Add the level counts to the details; an error when level issues were refused."""
+        """Add the level counts to the details; an error when level issues were refused or failed."""
         level = results.get("security_level")
         if level is None:
             return "success", None
         details["security_level"] = level
-        return ("error", f"{level['refused']} level issues refused") if level["refused"] else ("success", None)
+        if level["refused"] or level["failed"]:
+            return "error", f"{level['refused']} level issues refused, {level['failed']} failed"
+        return "success", None
 
     def _create_level_skeletons(self, project_key: str, j2o_cf_id: int | None, scope: level_issues.LevelScope) -> dict:
         """Create the selected level issues of one project in their sub-projects (ADR-009, step 4)."""
@@ -1213,18 +1229,26 @@ class WorkPackageSkeletonMigration(BaseMigration):
         selection = scope.select(project_key, found)
         refused = list(selection.refused)
         counters["unmapped"], counters["withheld"] = selection.unmapped, selection.withheld
+        wanted: dict[str, set[str]] = {}
+        for issue, target in selection.selected:
+            wanted.setdefault(target.label, set()).add(issue.key)
         checked: dict[str, str | None] = {}
         payloads: list[dict[str, Any]] = []
         issues: list[Issue] = []
         targets: dict[str, level_issues.LevelTarget] = {}
         for issue, target in selection.selected:
             counters["processed"] += 1
-            reason = self._level_refusal(issue, target, checked)
+            reason = self._level_refusal(issue, target, checked, wanted[target.label])
             if reason is not None:
                 refused.append(f"{issue.key}: {reason}")
                 continue
             if str(issue.id) in self.level_work_packages:
                 counters["skipped"] += 1
+                continue
+            existing = self._level_existing[target.label].get(issue.key)
+            if existing is not None:
+                self._adopt_level_work_package(issue, target, existing, project_key)
+                counters["adopted"] += 1
                 continue
             payload = self._build_skeleton_payload(issue, target.project_id, j2o_cf_id)
             if not payload:
@@ -1243,8 +1267,20 @@ class WorkPackageSkeletonMigration(BaseMigration):
         counters["refused"] = len(refused)
         return counters
 
+    def _adopt_level_work_package(
+        self, issue: Issue, target: level_issues.LevelTarget, wp_id: int, project_key: str
+    ) -> None:
+        """Record a work package the sub-project already holds for the issue (lost mapping or batch answer)."""
+        self.logger.warning("%s already has work package %d in %s; mapping restored", issue.key, wp_id, target.label)
+        self.level_work_packages[str(issue.id)] = {
+            "jira_key": issue.key,
+            "openproject_id": wp_id,
+            "project_key": project_key,
+        } | target.mapping_fields()
+        config.mappings.set_mapping(level_issues.WORK_PACKAGE_MAPPING, self.level_work_packages)
+
     def _level_refusal(
-        self, issue: Issue, target: level_issues.LevelTarget, checked: dict[str, str | None]
+        self, issue: Issue, target: level_issues.LevelTarget, checked: dict[str, str | None], wanted: set[str]
     ) -> str | None:
         """Why the issue must not be created in its sub-project, or None; an existing matching entry passes."""
         jira_id = str(issue.id)
@@ -1253,13 +1289,18 @@ class WorkPackageSkeletonMigration(BaseMigration):
         if jira_id in self.level_work_packages:
             return None if target.matches(self.level_work_packages[jira_id]) else "mapped to another level sub-project"
         if target.label not in checked:
-            checked[target.label] = self._level_project_problem(target)
+            checked[target.label] = self._level_project_problem(target, wanted)
         return checked[target.label]
 
-    def _level_project_problem(self, target: level_issues.LevelTarget) -> str | None:
-        """Why work packages must not go into the sub-project now, or None."""
+    def _level_project_problem(self, target: level_issues.LevelTarget, wanted: set[str]) -> str | None:
+        """Why work packages must not go into the sub-project now, or None; reads what it already holds."""
         try:
             verify_level_project(self.op_client, target.identifier, target.project_id, target.parent_id)
+            existing = level_issues.existing_work_packages(self.op_client, target.project_id)
         except (LevelProjectError, QueryExecutionError, RubyError) as exc:
             return f"{target.label} {exc}"
+        stray = set(existing) - wanted
+        if stray:
+            return f"{target.label} holds {len(stray)} work packages of issues not selected for it"
+        self._level_existing[target.label] = existing
         return None
