@@ -34,7 +34,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src import config
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.application.components.work_package_skeleton_migration import (
     _build_provenance_custom_field_entries,
 )
@@ -44,7 +45,7 @@ from src.models import ComponentResult
 
 
 @register_entity_types("wp_metadata_backfill")
-class WpMetadataBackfillMigration(BaseMigration):
+class WpMetadataBackfillMigration(LevelFieldsMigration):
     """Phase: backfill assignee + provenance CFs on existing WPs."""
 
     BATCH_SIZE = 50
@@ -232,9 +233,13 @@ class WpMetadataBackfillMigration(BaseMigration):
         }
 
     def run(self) -> ComponentResult:  # type: ignore[override]
+        """Backfill assignee and provenance fields, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(self._backfill)
+
+    def _backfill(self) -> ComponentResult:
         self.logger.info("Starting WP metadata backfill (assignee + provenance CFs)")
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         if not wp_map:
             msg = (
                 "No work_package mapping available — backfill cannot run."
@@ -355,12 +360,22 @@ class WpMetadataBackfillMigration(BaseMigration):
             if issue is None:
                 skip_reasons["jira_issue_missing"] += 1
                 continue
-            record = self._build_record(wp_id, issue, cf_ids, jira_base_url, today_iso)
+            record = self._without_level_assignee(self._build_record(wp_id, issue, cf_ids, jira_base_url, today_iso))
             if record is None:
                 skip_reasons["nothing_to_update"] += 1
                 continue
             payload.append(record)
         return payload
+
+    def _without_level_assignee(self, record: dict[str, Any] | None) -> dict[str, Any] | None:
+        """A level work package gets its provenance fields only.
+
+        Its assignee is set by ``work_packages_skeleton`` from the same Jira field; the backfill
+        never names a user on a level work package (ADR-009).
+        """
+        if record is None or record["work_package_id"] not in self._level_work_package_ids():
+            return record
+        return {**record, "assigned_to_id": None} if record["custom_fields"] else None
 
     def _apply_backfill_batch(
         self, payload: list[dict[str, Any]], number: int, totals: Counter[str], skip_reasons: Counter[str]

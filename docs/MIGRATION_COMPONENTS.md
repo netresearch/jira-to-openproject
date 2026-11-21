@@ -356,6 +356,8 @@ Migrates Jira priorities to OpenProject priorities.
 
 **Dependencies**: None
 
+With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 **Example Usage**:
 ```bash
 uv run python -m src.main migrate --components priority --no-confirm
@@ -428,6 +430,8 @@ Migrates custom field values for work packages.
 - Type-specific formatting
 
 **Dependencies**: CustomFieldMigration, WorkPackageMigration
+
+With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and a field with a level value is enabled in the level sub-project, never in the parent. A field that only level issues use is still created as a global field definition (its name, not its values). See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -859,6 +863,8 @@ Migrates Jira estimates to OpenProject estimated hours.
 
 **Dependencies**: WorkPackageMigration
 
+With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### StoryPointsMigration
@@ -873,6 +879,8 @@ Migrates Jira story points to OpenProject custom field.
 - Agile planning support
 
 **Dependencies**: WorkPackageMigration, CustomFieldMigration
+
+With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and the field is enabled in the level sub-project, never in the parent. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 

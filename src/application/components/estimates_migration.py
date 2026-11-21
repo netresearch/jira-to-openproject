@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -27,13 +28,13 @@ DAYS_PER_WEEK = 5
 
 
 @register_entity_types("estimates")
-class EstimatesMigration(BaseMigration):  # noqa: D101
+class EstimatesMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     def _extract(self) -> ComponentResult:
         """Extract issues for which we have work package mappings."""
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         jira_keys = self._jira_keys_from_wp_map(wp_map)
         if not jira_keys:
             return ComponentResult(success=True, extracted=0, data={"issues": {}})
@@ -78,7 +79,7 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         issues = (extracted.data or {}).get("issues", {})
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         updates = []
         for outer_key, raw in wp_map.items():
             key = self._inner_jira_key(outer_key, raw)
@@ -116,5 +117,5 @@ class EstimatesMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run Estimates migration."""
-        return self._run_etl_pipeline("Estimates")
+        """Run Estimates migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Estimates"))

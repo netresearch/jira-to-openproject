@@ -31,7 +31,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -52,7 +53,7 @@ puts $j2o_end_marker
 
 
 @register_entity_types("customfields_generic")
-class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
+class CustomFieldsGenericMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
@@ -85,7 +86,7 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
 
     def _extract(self) -> ComponentResult:
         """Extract unmapped customfield_* values per issue mapped to a WP."""
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         keys = self._jira_keys_from_wp_map(wp_map)
         issues = self._merge_batch_issues(keys)
 
@@ -208,5 +209,5 @@ class CustomFieldsGenericMigration(BaseMigration):  # noqa: D101
             raise ValueError(msg)
 
     def run(self) -> ComponentResult:
-        """Run Custom fields (generic) migration."""
-        return self._run_etl_pipeline("Custom fields (generic)")
+        """Run Custom fields (generic) migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Custom fields (generic)"))

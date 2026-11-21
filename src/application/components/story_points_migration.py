@@ -29,7 +29,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -39,7 +40,7 @@ STORY_POINTS_CF_NAME = "Story Points"
 
 
 @register_entity_types("story_points")
-class StoryPointsMigration(BaseMigration):  # noqa: D101
+class StoryPointsMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
@@ -96,7 +97,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
 
     def _extract(self) -> ComponentResult:
         """Extract Jira story points per issue mapped to a WP."""
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         # Production wp_map is keyed by str(jira_id) (numeric) outer with
         # the human-readable ``jira_key`` stored inside. Prefer the inner
         # ``jira_key`` so we feed _merge_batch_issues the human-readable
@@ -134,7 +135,7 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         if not cf_id:
             return ComponentResult(success=False, failed=1)
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         text_by_key: dict[str, str] = mapped.data.get("sp_text", {}) if isinstance(mapped.data, dict) else {}
 
         updated = 0
@@ -171,8 +172,8 @@ class StoryPointsMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run Story points migration."""
-        return self._run_etl_pipeline("Story points")
+        """Run Story points migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Story points"))
 
     def _entries_by_jira_key(self, wp_map: dict) -> dict[str, WorkPackageMappingEntry]:
         entries_by_jira_key: dict[str, WorkPackageMappingEntry] = {}
