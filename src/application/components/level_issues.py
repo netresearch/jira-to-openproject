@@ -330,6 +330,7 @@ class LevelWorkPackages:
     work_packages: dict[str, int] = field(default_factory=dict)
     refused: list[str] = field(default_factory=list)
     level_keys: set[str] = field(default_factory=set)
+    level_ids: dict[str, str] = field(default_factory=dict)
 
     def without_level_issues(self, lookup: Mapping[str, int]) -> dict[str, int]:
         """The ordinary key lookup without any issue of a level search or of the archive.
@@ -370,6 +371,7 @@ class LevelWorkPackages:
             wp_id, reason = live.held(issue.key, target, level_map.get(str(issue.id)))
             if reason is None:
                 self.work_packages[issue.key] = wp_id
+                self.level_ids[issue.key] = target.level_id
             else:
                 self.refused.append(f"{issue.key}: {reason}")
         for issue in found:

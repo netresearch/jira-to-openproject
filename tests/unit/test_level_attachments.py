@@ -48,7 +48,12 @@ def url(number):
     return f"https://jira.local/secure/attachment/{number}/file-{number}.txt"
 
 
-def attachment_issue(number):
+LEVEL_OF = {10: "10000", 11: "10000", 12: "10000", 13: "10000", 20: "10001"}
+
+
+def attachment_issue(number, level=None):
+    level = LEVEL_OF.get(number) if level is None else level
+    raw = {"fields": {"security": {"id": level}} if level else {}}
     att = SimpleNamespace(
         id=str(number),
         filename=f"file-{number}.txt",
@@ -57,14 +62,16 @@ def attachment_issue(number):
         created="2026-01-01T00:00:00.000+0000",
         author={"name": "alice"},
     )
-    return SimpleNamespace(id=str(number), key=f"APP-{number}", fields=SimpleNamespace(attachment=[att]))
+    return SimpleNamespace(id=str(number), key=f"APP-{number}", fields=SimpleNamespace(attachment=[att]), raw=raw)
 
 
 class FakeJira:
     """Answer the level search, ``key in`` searches, the project search and downloads; record each."""
 
-    def __init__(self):
-        self.searches, self.downloads, self.batches = [], [], []
+    def __init__(self, moved=()):
+        self.searches, self.downloads, self.batches, self.fields = [], [], [], []
+        # Issues that have another level in the attachment search than in the selection search.
+        self.moved = set(moved)
         self.jira = Mock()
         self.jira.search_issues.side_effect = self.search
         self.jira._session.get.side_effect = self.download
@@ -75,8 +82,10 @@ class FakeJira:
         if "level IS NOT EMPTY" in jql:
             rows = level_issues()
         elif jql.startswith("key in ("):
+            self.fields.append(kwargs.get("fields"))
             keys = jql.removeprefix("key in (").split(")")[0].split(",")
-            rows = [attachment_issue(int(key.split("-")[1])) for key in keys]
+            numbers = [int(key.split("-")[1]) for key in keys]
+            rows = [attachment_issue(n, "10001" if n in self.moved else None) for n in numbers]
         elif jql == 'project = "APP"':
             rows = [attachment_issue(n) for n in NUMBERS]
         else:
@@ -141,9 +150,9 @@ def prepare(setup, *, level_map=None, wp_map=None, **kwargs):
     return mappings, data
 
 
-def attachments(setup, *, live=None, **kwargs):
+def attachments(setup, *, live=None, moved=(), **kwargs):
     mappings, data = prepare(setup, **kwargs)
-    jira, op = FakeJira(), FakeOpenProject(live)
+    jira, op = FakeJira(moved), FakeOpenProject(live)
     result = AttachmentsMigration(jira_client=jira, op_client=op).run()
     return SimpleNamespace(result=result, jira=jira, op=op, mappings=mappings, data=data)
 
@@ -156,6 +165,7 @@ def test_switch_off_attaches_exactly_as_before(setup):
     outcome = attachments(setup, on=False, reports=False)
     assert outcome.result.success, outcome.result
     assert outcome.jira.searches == ["key in (APP-1) ORDER BY key ASC"]
+    assert outcome.jira.fields == ["attachment"]
     assert outcome.jira.downloads == [url(1)]
     assert targets(outcome.op) == {("APP-1", 500)}
     assert len(outcome.op.transfers) == 1
@@ -199,6 +209,24 @@ def test_a_level_issue_whose_work_package_is_not_where_its_entry_says_gets_nothi
     assert url(10) not in outcome.jira.downloads
     assert outcome.result.details["security_level"]["refused"] == refused
     assert outcome.result.failed == refused
+
+
+@pytest.mark.parametrize(
+    ("moved", "wp_map", "attached"),
+    [
+        ({10}, None, {("APP-1", 500), ("APP-11", 901)}),
+        # Every issue of the batch changed its level: nothing is attached at all.
+        ({10, 11}, {}, set()),
+    ],
+)
+def test_an_issue_whose_level_changed_after_the_selection_gets_nothing(setup, moved, wp_map, attached):
+    outcome = attachments(setup, moved=moved, wp_map=wp_map)
+    assert not outcome.result.success
+    assert outcome.jira.fields == ["attachment,security"]
+    assert targets(outcome.op) == attached
+    assert not {url(n) for n in moved} & set(outcome.jira.downloads)
+    assert outcome.result.details["loss_counters"]["extract_level_changed"] == len(moved)
+    assert outcome.result.failed == len(moved)
 
 
 def test_a_moved_work_package_without_a_mapping_entry_is_refused(setup):
@@ -342,6 +370,16 @@ def test_recovery_with_an_unreadable_sub_project_fails_and_downloads_nothing_of_
     assert result.details["security_level"] == {"work_packages": 0, "refused": 2}
     assert not jira.downloads
     assert op.inventories == [[500]]
+
+
+def test_recovery_refuses_an_issue_whose_level_changed_after_the_selection(setup):
+    prepare(setup)
+    jira, op = FakeJira(moved={10}), FakeOpenProject()
+    result = AttachmentRecoveryMigration(jira_client=jira, op_client=op).run()
+    assert not result.success
+    assert targets(op) == {("APP-1", 500), ("APP-11", 901)}
+    assert url(10) not in jira.downloads
+    assert result.failed >= 1
 
 
 def test_recovery_restores_level_attachments_and_never_downloads_archived_ones(setup):

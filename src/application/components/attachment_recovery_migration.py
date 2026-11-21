@@ -409,9 +409,7 @@ puts end_marker
         # is safe AND simpler than re-implementing per-filename
         # filtering. Rails-side dedup keeps the cost proportional to
         # the actually-missing count.
-        merged_mapping, recovered, failed = self._recover_missing_batches(
-            recovery_keys, {} if level is None else level.work_packages
-        )
+        merged_mapping, recovered, failed = self._recover_missing_batches(recovery_keys, level)
 
         # Persist the recovered attachment mapping. Merge with any
         # existing ``attachment_mapping.json`` so the original run's
@@ -526,13 +524,14 @@ puts end_marker
             per_issue_missing, clean, extra_total, fidelity_false_positives, missing_total, per_issue_extra
         )
 
-    def _recover_missing_batches(self, recovery_keys, level_work_packages=None):
+    def _recover_missing_batches(self, recovery_keys, level=None):
         att_migration = AttachmentsMigration(
             jira_client=self.jira_client,
             op_client=self.op_client,
         )
-        if level_work_packages:
-            att_migration._level_work_packages = dict(level_work_packages)
+        if level is not None:
+            att_migration._level_work_packages = dict(level.work_packages)
+            att_migration._level_ids = dict(level.level_ids)
         recovered = 0
         failed = 0
         merged_mapping: dict[str, dict[str, int]] = {}
