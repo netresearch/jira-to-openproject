@@ -309,8 +309,13 @@ def main(argv: list[str] | None = None) -> int:
             from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
             value = admins(args, identity, OpenProjectClient())
-            listed = {"unmapped": len(value["unmapped_admins"])}
-            listed |= {f"{row['project']}:{row['level_id']}": row["admins_not_readers"] for row in value["levels"]}
+            listed: dict[str, int | str] = {"unmapped": len(value["unmapped_admins"])}
+            listed |= {
+                f"{row['project']}:{row['level_id']}": row["admins_not_readers"]
+                if row["readers_computed"]
+                else "not computed"
+                for row in value["levels"]
+            }
             sys.stderr.write(f"Administrators who are not static readers, per level: {json.dumps(listed)}\n")
             sys.stdout.write(
                 json.dumps({"edition": value["edition"], "administrators": value["administrators"]}) + "\n"

@@ -231,6 +231,8 @@ def test_admins_subcommand_warns_and_stops_only_on_an_unverified_answer(tmp_path
     assert json.loads(out.out.splitlines()[-1]) == {"edition": "community", "administrators": 3}
     assert '"unmapped": 1' in out.err
     assert '"ABC:1": 1' in out.err
+    # An unsupported level reports that its readers were not compared, not a zero.
+    assert '"XYZ:3": "not computed"' in out.err
     rails.answers["EnterpriseToken"] = {"result": "NameError"}
     assert main([*argv, "https://" + _HOST, "--report", "again.json"]) == 1
     assert "Malformed Enterprise token answer" in capsys.readouterr().err
