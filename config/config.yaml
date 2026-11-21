@@ -64,9 +64,10 @@ migration:
   # Name an existing private, memberless root project; unset skips the stage.
   # native_board_archive_project: "board-archive"
 
-  # Private, memberless sub-projects per Jira project and security level
-  # (security_level_projects; not in a profile yet, see docs/operator-restricted-issues.md).
-  # Both files must belong to the same restricted-issue archive.
+  # Private sub-projects per Jira project and security level (security_level_projects, after projects)
+  # and their late access grant (security_level_access, after admin_schemes; ADR-012), both in the
+  # full profile; see docs/operator-restricted-issues.md. They skip while no report is configured.
+  # All three files must belong to the same restricted-issue inventory.
   # security_level_report: "restricted-report.json"
   # security_level_admin_report: "restricted-admins.json"
   # The operator-only readers file of the same inventory (mode 600, keep it next to the archive).
@@ -77,11 +78,12 @@ migration:
   # agile_boards, native_boards and sprint_epic keep them out of the boards and sprints of the parent.
   # Fix, affected and sprint versions are copies in the sub-project (ADR-010); relations stay inside one
   # sub-project.
-  # Off until the dependent components and the late access grant exist; only the boolean true enables it.
-  # security_level_work_packages: false
+  # On: the level path runs once security_level_report is set; without a report, issues with a level
+  # stay out of the migration as with the switch off. Only the boolean true enables it.
   # With it, customfields_generic, priorities, story_points, estimates, wp_metadata_backfill (without
   # the assignee), labels, votes, remote_links, resolution and security_levels write the level work
-  # packages too; native_tags gives them no tags.
+  # packages too; native_tags gives them no tags, and watchers adds only watchers who are readers.
+  security_level_work_packages: true
 
   # Jira keys as native semantic work package identifiers (semantic_identifiers, after
   # work_packages_skeleton; ADR-011): identifier, sequence number, aliases from the Key changelog,

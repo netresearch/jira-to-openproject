@@ -24,13 +24,20 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from src import config
 from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.level_readers import READERS_SETTING
 from src.application.components.security_level_projects_migration import LevelProjectError
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, JiraWatcher, WorkPackageMappingEntry
+
+
+def _readers_configured() -> bool:
+    """Whether the readers file of the inventory names who may watch a level work package."""
+    return bool(config.migration_config.get(READERS_SETTING))
 
 
 @register_entity_types("watchers")
@@ -114,10 +121,12 @@ class WatcherMigration(BaseMigration):
         """Add the Jira watchers of the mapped work packages.
 
         With the level switch on, the level work packages of this run are resolved before any
-        write (ADR-009). They get no watchers: a watcher must be a reader of the level, and the
-        readers of a level are only in the operator archive, not in the shared report the
-        importer reads. An ordinary entry of an issue of a level search or of the archive is
-        refused; the refusals are counted into the result on every return.
+        write (ADR-009). A watcher must be a reader of the level: with the readers file of the
+        inventory, a level work package gets the watchers whose OpenProject user is a static reader
+        of its level, or on Enterprise an extra reader of its issue (ADR-012); the others are
+        counted in ``watchers_not_readers``. Without a readers file it gets none. An ordinary
+        entry of an issue of a level search or of the archive is refused; the refusals are counted
+        into the result on every return.
         """
         self._level: level_issues.LevelWorkPackages | None = None
         if level_issues.enabled():
@@ -133,6 +142,9 @@ class WatcherMigration(BaseMigration):
         level = getattr(self, "_level", None)
         if level is None:
             return result
+        if _readers_configured():
+            result.details["watchers_not_readers"] = getattr(self, "_not_readers", 0)
+            return level.report(result, logger)
         if level.work_packages:
             logger.warning(
                 "Watchers of %d level work packages are not migrated: the importer has no readers of the level",
@@ -221,6 +233,7 @@ class WatcherMigration(BaseMigration):
             watchers = self._read_watchers(key, issue)
 
             self._collect_watchers(watchers, wp_id, watchers_to_create, skip_reasons, unmapped_users)
+        watchers_to_create.extend(self._level_watchers(skip_reasons))
 
         skipped = sum(skip_reasons.values())
         if skipped:
@@ -290,6 +303,29 @@ class WatcherMigration(BaseMigration):
         result.message = f"Watchers created={created}, skipped={skipped + bulk_skipped}, errors={errors}"
         logger.info(result.message)
         return result
+
+    def _level_watchers(self, skip_reasons: Counter[str]) -> list[dict[str, Any]]:
+        """The watchers of the level work packages who are readers of their level (ADR-012).
+
+        Read from the watchers endpoint only, never from the cached snapshot. A watcher whose
+        OpenProject user is no reader is counted, not added; unmapped level watchers are counted
+        without their names.
+        """
+        level = getattr(self, "_level", None)
+        self._not_readers = 0
+        if level is None or not _readers_configured():
+            return []
+        kept: list[dict[str, Any]] = []
+        for key, wp_id in sorted(level.work_packages.items()):
+            rows: list[dict[str, Any]] = []
+            self._collect_watchers(self._read_watchers(key, None), wp_id, rows, skip_reasons, set())
+            audience = level.targets[key].audience
+            readers = set(audience["members"]) | set(audience["shares"].get(key, []))
+            kept.extend(row for row in rows if row["user_id"] in readers)
+            self._not_readers += sum(1 for row in rows if row["user_id"] not in readers)
+        if self._not_readers:
+            logger.warning("%d watchers of level work packages are not readers of the level", self._not_readers)
+        return kept
 
     def _mapped_issue_keys(self) -> list[str]:
         """Read the Jira keys that can be correlated with target work packages."""

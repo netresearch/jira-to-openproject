@@ -263,7 +263,7 @@ Creates minimal work packages to establish complete Jira-to-OpenProject ID mappi
 - Project assignment
 - J2O Origin Key custom field (for traceability)
 - Outputs `work_package_mapping.json` with all Jira→OP ID mappings
-- With `migration.security_level_work_packages: true` (off by default): the work packages of issues with a security level, in their level sub-project, recorded in `security_level_work_package_mapping.json` ([Level work packages](operator-restricted-issues.md#level-work-packages))
+- With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set): the work packages of issues with a security level, in their level sub-project, recorded in `security_level_work_package_mapping.json` ([Level work packages](operator-restricted-issues.md#level-work-packages))
 
 **Does NOT migrate**:
 - Descriptions (requires link resolution)
@@ -357,7 +357,7 @@ Migrates Jira priorities to OpenProject priorities.
 
 **Dependencies**: None
 
-With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Example Usage**:
 ```bash
@@ -434,7 +434,7 @@ Migrates custom field values for work packages.
 
 **Dependencies**: CustomFieldMigration, WorkPackageMigration
 
-With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and a field with a level value is enabled in the level sub-project, never in the parent. A field that only level issues use is still created as a global field definition (its name, not its values). See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and a field with a level value is enabled in the level sub-project, never in the parent. A field that only level issues use is still created as a global field definition (its name, not its values). See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -494,7 +494,7 @@ Migrates Jira issue links to OpenProject work package relations.
 
 **Dependencies**: WorkPackageMigration, LinkTypeMigration
 
-With `migration.security_level_work_packages: true` (off by default), a relation between two level work packages is written only when both lie in the same level sub-project and neither is shared with extra readers (`per_issue`). Every other link of a level issue, and every link of an ordinary issue to one, is withheld (`details.level_relations_withheld`): OpenProject 17.9.7 shows a relation whose other end the user cannot see as a placeholder row with its type and dates. The links of level issues are read through the level search, never from `jira_issues_cache.json`; refusals count in `details.security_level`. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), a relation between two level work packages is written only when both lie in the same level sub-project and neither is shared with extra readers (`per_issue`). Every other link of a level issue, and every link of an ordinary issue to one, is withheld (`details.level_relations_withheld`): OpenProject 17.9.7 shows a relation whose other end the user cannot see as a placeholder row with its type and dates. The links of level issues are read through the level search, never from `jira_issues_cache.json`; refusals count in `details.security_level`. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -531,7 +531,7 @@ The sprint versions themselves are created by `AgileBoardMigration`.
 **Dependencies**: ProjectMigration, WorkPackageMigration, AgileBoardMigration
 (provides the `sprint` mapping)
 
-With `migration.security_level_work_packages: true` (off by default), an issue of a level search or of the archive gets no sprint field and no parent link, also when the origin scan of the parent finds a work package of it. Its ordinary entry is refused and counted in `details.security_level`. An ordinary work package whose epic or parent is a level issue gets no link to it. A selected level work package without fix versions gets the copy of its parent sprint version in its own sub-project ([ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)), read through one level search per Jira project and assigned like a fix version; an issue whose sprint has no mapped version of the parent is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), an issue of a level search or of the archive gets no sprint field and no parent link, also when the origin scan of the parent finds a work package of it. Its ordinary entry is refused and counted in `details.security_level`. An ordinary work package whose epic or parent is a level issue gets no link to it. A selected level work package without fix versions gets the copy of its parent sprint version in its own sub-project ([ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)), read through one level search per Jira project and assigned like a fix version; an issue whose sprint has no mapped version of the parent is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Related**: AgileBoardMigration, [Entity Mapping §11](ENTITY_MAPPING.md#11-agile-migration)
 
@@ -555,7 +555,7 @@ links on OpenProject 17.9. For native board snapshots see `NativeBoardsMigration
 
 **Dependencies**: ProjectMigration
 
-With `migration.security_level_work_packages: true` (off by default), no issue of a level search or of the archive goes on a board query, also when it has an entry in `work_package_mapping.json`; such an entry is refused. A level sub-project gets no board query. The level work packages are resolved and reported on every pass, without change detection. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), no issue of a level search or of the archive goes on a board query, also when it has an entry in `work_package_mapping.json`; such an entry is refused. A level sub-project gets no board query. The level work packages are resolved and reported on every pass, without change detection. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Example Usage**:
 ```bash
@@ -582,7 +582,7 @@ The component runs only when `migration.native_board_archive_project` in `config
 
 **Dependencies**: ProjectMigration, WorkPackageSkeletonMigration, WpMetadataBackfillMigration
 
-With `migration.security_level_work_packages: true` (off by default), the cards of every issue of a level search or of the archive are left out before the revision is hashed, so the archive never names a level card and a board with such a card no longer fails. A level sub-project gets no board. Refusals of level work packages are counted as failed items. The `j2o-boards` command has no switch and keeps failing on such a card. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the cards of every issue of a level search or of the archive are left out before the revision is hashed, so the archive never names a level card and a board with such a card no longer fails. A level sub-project gets no board. Refusals of level work packages are counted as failed items. The `j2o-boards` command has no switch and keeps failing on such a card. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Example Usage**:
 ```bash
@@ -609,7 +609,7 @@ Migrates Tempo worklogs to OpenProject time entries.
 
 **Dependencies**: WorkPackageMigration, UserMigration
 
-With `migration.security_level_work_packages: true` (off by default), a selected level issue's work logs become time entries of the work package its level sub-project holds for it, read live by `J2O Origin Key`. The work log read requires the selected level (`get_work_logs_for_issue(key, level_id=…)`) instead of an empty one; an issue whose level changed is unreadable, gets nothing and counts as refused in `details.security_level`. The expected project of each entry is the sub-project; the Rails writer takes the entry's project from the work package and refuses a mismatch. Work logs with their own visibility stay refused as on every issue. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), a selected level issue's work logs become time entries of the work package its level sub-project holds for it, read live by `J2O Origin Key`. The work log read requires the selected level (`get_work_logs_for_issue(key, level_id=…)`) instead of an empty one; an issue whose level changed is unreadable, gets nothing and counts as refused in `details.security_level`. The expected project of each entry is the sub-project; the Rails writer takes the entry's project from the work package and refuses a mismatch. Work logs with their own visibility stay refused as on every issue. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Example Usage**:
 ```bash
@@ -722,7 +722,7 @@ OpenProject supports one native category per work package. The first Jira compon
 
 Each batch of up to 100 work packages commits its category links and provenance together. A failed batch rolls back and earlier batches can be replayed. A Jira component rename updates the registered category with the same immutable source ID and URL while the target remains private and memberless. An independently renamed target category requires administrator review.
 
-With `migration.security_level_work_packages: true` (off by default), a selected level issue gets its category in its level sub-project. OpenProject categories belong to one project, and a work package may only use a category of its own project (`only_same_project_categories_allowed`, `app/contracts/work_packages/base_contract.rb` in OpenProject 17.9.7). The sub-project therefore gets its own categories and its own **Jira component membership origins** register, created while it has no membership row at all. A category of the parent is never assigned to a level work package, and no category is created in the parent for a level issue. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), a selected level issue gets its category in its level sub-project. OpenProject categories belong to one project, and a work package may only use a category of its own project (`only_same_project_categories_allowed`, `app/contracts/work_packages/base_contract.rb` in OpenProject 17.9.7). The sub-project therefore gets its own categories and its own **Jira component membership origins** register, created while it has no membership row at all. A category of the parent is never assigned to a level work package, and no category is created in the parent for a level issue. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 
 The component reuses earlier category IDs from the migration mapping and checks them against the project and name. A category name collision without a known origin, a locally edited native assignment, or a foreign target rolls back that project. Replaying an unchanged project writes zero assignments. A confirmed empty Jira component list clears the native category only when the previous assignment was recorded by this importer. This assignment import leaves category default assignees unchanged.
@@ -743,7 +743,7 @@ The native version custom field `Jira Version Origin` stores the Jira URL, immut
 
 The target project must have matching Jira key, ID and base URL provenance. Work package assignments require a positive unrestricted Jira search result and matching target issue ID, key, URL and project. Shared versions or conflicting origins stop the operation.
 
-With `migration.security_level_work_packages: true` (off by default), a selected level issue gets its fix versions as copies in its level sub-project, in the work package the sub-project holds for it, read live by `J2O Origin Key`. Each copy has sharing `none` and the catalogue's name, description, status and dates, carries the parent version's `Jira Version Origin` and is recorded in `security_level_version_mapping.json`; a repeat run adopts it. The sub-project transaction checks the parent's Jira origin and creates or changes a copy only while the sub-project has no membership row. The parent's versions are not changed and `version_mapping.json` holds no sub-project. See [ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md) and [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), a selected level issue gets its fix versions as copies in its level sub-project, in the work package the sub-project holds for it, read live by `J2O Origin Key`. Each copy has sharing `none` and the catalogue's name, description, status and dates, carries the parent version's `Jira Version Origin` and is recorded in `security_level_version_mapping.json`; a repeat run adopts it. The sub-project transaction checks the parent's Jira origin and creates or changes a copy only while the sub-project has no membership row. The parent's versions are not changed and `version_mapping.json` holds no sub-project. See [ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md) and [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -774,7 +774,7 @@ Migrates Jira watchers to OpenProject watchers.
 
 **Dependencies**: WorkPackageMigration, UserMigration
 
-With `migration.security_level_work_packages: true` (off by default), the level work packages get no watchers: a watcher must be a reader of the level, and the readers are only in the operator archive. Their count is `details.level_watchers_withheld`; an ordinary entry of a level issue is refused and counted in `details.security_level`. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set) and the readers file of the same inventory (`migration.security_level_readers`), a level work package gets only the watchers whose OpenProject user is a static reader of its level, or on Enterprise an extra reader of its issue; the others are counted in `details.watchers_not_readers`, and unmapped level watchers are counted without their names. Level watchers are read from the watchers endpoint, never from `jira_issues_cache.json`. Without a readers file the level work packages get no watchers (`details.level_watchers_withheld`). An ordinary entry of a level issue is refused and counted in `details.security_level`. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -861,7 +861,7 @@ Updates inline references in descriptions/comments.
 
 **Dependencies**: WorkPackageMigration, UserMigration
 
-With `migration.security_level_work_packages: true` (off by default), the attachment links of the level work packages are rewritten too, in the work package their sub-project holds; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the attachment links of the level work packages are rewritten too, in the work package their sub-project holds; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -880,7 +880,7 @@ Migrates Jira estimates to OpenProject estimated hours.
 
 **Dependencies**: WorkPackageMigration
 
-With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -897,7 +897,7 @@ Migrates Jira story points to OpenProject custom field.
 
 **Dependencies**: WorkPackageMigration, CustomFieldMigration
 
-With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and the field is enabled in the level sub-project, never in the parent. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused, and the field is enabled in the level sub-project, never in the parent. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
@@ -930,7 +930,7 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, `work_package_field_history` and `time_entries` their field history and time entries, `versions` and `affects_versions` their fix and affected versions as copies in the sub-project ([ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)), `relations` and `inline_refs` their relations inside one sub-project and their inline attachment references, and `agile_boards`, `native_boards` and `sprint_epic` keep them out of the boards and sprints of the parent, while `sprint_epic` gives them the copy of their sprint version in the sub-project. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, `work_package_field_history` and `time_entries` their field history and time entries, `versions` and `affects_versions` their fix and affected versions as copies in the sub-project ([ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)), `relations` and `inline_refs` their relations inside one sub-project and their inline attachment references, and `agile_boards`, `native_boards` and `sprint_epic` keep them out of the boards and sprints of the parent, while `sprint_epic` gives them the copy of their sprint version in the sub-project. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Features**:
 - On previously mapped issues, this component records the source level name in the “Security Level” custom field.
@@ -946,7 +946,7 @@ Each work package is found through the `jira_key` inside its mapping entry, so a
 
 **Location**: `src/application/components/security_level_projects_migration.py`
 
-Creates one private, memberless OpenProject sub-project per Jira project and security level that has an issue to migrate, from the shared `j2o-restricted` report, and records it in `security_level_project_mapping.json`. It needs the administrator report of the same archive and is in no profile yet; see [Level sub-projects](operator-restricted-issues.md#level-sub-projects).
+Creates one private OpenProject sub-project per Jira project and security level that has an issue to migrate, from the shared `j2o-restricted` report, and records it in `security_level_project_mapping.json`. It needs the administrator report of the same archive, runs in the default and `full` profiles directly after `projects`, and skips while `migration.security_level_report` is not set; see [Level sub-projects](operator-restricted-issues.md#level-sub-projects).
 
 **Dependencies**: ProjectMigration
 
@@ -995,7 +995,7 @@ A private project's work package description displays the ordered Markdown check
 
 The stage verifies the target project and each affected work package's origin inside the write transaction. Description edits require a private, memberless staging project. Each batch of up to 100 work packages commits its register and descriptions together. A retry keeps unmodified sections and unrelated work package text. A changed or missing previously registered section needs operator review.
 
-With `migration.security_level_work_packages: true` (off by default), the stage also writes the tasks of each selected level issue into the work package its level sub-project holds for it, read live by `J2O Origin Key`. The **Jira tasklist origins** register of such an issue lives in the sub-project. The sub-project has no Jira origin of its own, so the transaction checks the origin of its parent and that the parent is the sub-project's parent. A description edit there also stops on any membership row of the sub-project, including those of locked users. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the stage also writes the tasks of each selected level issue into the work package its level sub-project holds for it, read live by `J2O Origin Key`. The **Jira tasklist origins** register of such an issue lives in the sub-project. The sub-project has no Jira origin of its own, so the transaction checks the origin of its parent and that the parent is the sub-project's parent. A description edit there also stops on any membership row of the sub-project, including those of locked users. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Implementation:** `src/application/components/simpletasks_migration.py`
 
@@ -1019,7 +1019,7 @@ The result's `details` report `issues_seen`, `issues_written`, `cleared` (stored
 
 Standard Jira text and select custom fields (`com.atlassian.jira.plugin.system.customfieldtypes:*`) are withheld unless reviewed. List each reviewed field in `migration.history_approved_field_ids` in `config/config.yaml`, as a list of `customfield_<number>` IDs or one comma-separated string. The default is empty. It has the same effect as `j2o-history seal --field-id`. Review a free-text field before approving it.
 
-With `migration.security_level_work_packages: true` (off by default), the stage also writes the history of each selected level issue into the work package its level sub-project holds for it, read live by `J2O Origin Key`. It reads the issue's changelog through the level search and refuses an issue whose level changed since the selection, or that the search no longer returns. The readers of that work package are the members of the sub-project, the level's static readers, and on Enterprise, once the late access grant shares it, the issue's extra readers; Jira shows the History tab to everyone who can browse the issue, so the ADR-004 rule holds with the same selection (worklog events, comment changes and audience metadata withheld). A change of the security level itself is kept, as on every issue, also one that names another level: readers of the level work package can browse the issue in Jira and see the same entry there ([ADR-004](adr/ADR-004-audience-safe-field-history.md#update-2026-11-21-level-work-packages-adr-009)). An ordinary work package of an issue that now has a level still gets its value removed. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the stage also writes the history of each selected level issue into the work package its level sub-project holds for it, read live by `J2O Origin Key`. It reads the issue's changelog through the level search and refuses an issue whose level changed since the selection, or that the search no longer returns. The readers of that work package are the members of the sub-project, the level's static readers, and on Enterprise, once the late access grant shares it, the issue's extra readers; Jira shows the History tab to everyone who can browse the issue, so the ADR-004 rule holds with the same selection (worklog events, comment changes and audience metadata withheld). A change of the security level itself is kept, as on every issue, also one that names another level: readers of the level work package can browse the issue in Jira and see the same entry there ([ADR-004](adr/ADR-004-audience-safe-field-history.md#update-2026-11-21-level-work-packages-adr-009)). An ordinary work package of an issue that now has a level still gets its value removed. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Implementation:** `src/application/components/work_package_field_history_migration.py`
 
@@ -1059,6 +1059,9 @@ uv run python -m src.main migrate --profile full --no-confirm
 # the two-phase work_packages_skeleton -> attachments -> work_packages_content
 # flow, then metadata, field history, relations, watchers, time entries and
 # finalization. The legacy work_packages component is not part of it.
+# With a restricted-issue inventory configured, security_level_projects runs
+# after projects and security_level_access after admin_schemes; both skip
+# while migration.security_level_report is not set.
 ```
 
 ### Individual Components
@@ -1106,7 +1109,9 @@ UserMigration (foundation)
     │       ├── EstimatesMigration
     │       └── StoryPointsMigration
     ├── WorkflowMigration
+    ├── SecurityLevelProjectsMigration
     ├── AdminSchemeMigration
+    │   └── SecurityLevelAccessMigration
     └── ReportingMigration
 
 CompanyMigration (Tempo)
@@ -1118,12 +1123,12 @@ CompanyMigration (Tempo)
 
 1. **Foundation**: users
 2. **Configuration**: status, priority, issue_types, custom_fields
-3. **Structure**: projects, components, versions
+3. **Structure**: projects, security_level_projects, components, versions
 4. **Content**: work_packages, attachments
 5. **Relationships**: relations, watchers, links
 6. **Time Tracking**: time_entries
 7. **Agile**: sprints, boards
-8. **Workflow**: workflow, groups, admin_schemes
+8. **Workflow**: workflow, groups, admin_schemes, security_level_access
 9. **Reporting**: reporting
 
 ---

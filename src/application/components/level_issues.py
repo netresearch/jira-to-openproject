@@ -26,6 +26,7 @@ from src.application.components.level_access import Audience, staging_audience
 from src.application.components.security_level_projects_migration import (
     _EDITIONS,
     MAPPING,
+    REPORT_SETTING,
     LevelProjectError,
     _script,
     level_identifier,
@@ -44,8 +45,14 @@ _LEVEL_ID = re.compile(r"[1-9]\d*", re.ASCII)
 
 
 def enabled() -> bool:
-    """The level path runs only when the switch is the boolean ``true``."""
-    return config.migration_config.get(SWITCH) is True
+    """The level path runs only when the switch is the boolean ``true`` and an inventory is configured.
+
+    Without ``security_level_report`` there is no inventory and no sub-project, so nothing can go
+    into one, and issues with a level stay out of the migration as with the switch off; the
+    ordinary path never selects them. A configured report that is missing or does not match
+    still stops each level component before any write.
+    """
+    return config.migration_config.get(SWITCH) is True and bool(config.migration_config.get(REPORT_SETTING))
 
 
 def level_project_jql(project_key: str) -> str:

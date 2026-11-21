@@ -104,7 +104,10 @@ The compose `app` service bind-mounts the repository over `/app`, so source edit
 # Run specific migration components
 uv run python -m src.main migrate --components users,projects,workpackages --no-confirm
 
-# Run the predefined full profile (covers workflows, agile metadata, admin schemes, reporting)
+# Run the predefined full profile (covers workflows, agile metadata, admin schemes, reporting).
+# With a restricted-issue inventory configured (docs/operator-restricted-issues.md), it also runs
+# security_level_projects after projects, the level work packages in their sub-projects, and
+# security_level_access after admin_schemes, which grants each level's readers access last.
 uv run python -m src.main migrate --profile full --no-confirm
 
 # Run with custom configuration

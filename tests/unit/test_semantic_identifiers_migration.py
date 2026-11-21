@@ -231,6 +231,8 @@ def level(migration, monkeypatch):
     from src import config
 
     monkeypatch.setitem(config.migration_config, level_issues.SWITCH, True)
+    # The level path needs a configured inventory; the level work packages are stubbed below.
+    monkeypatch.setitem(config.migration_config, "security_level_report", "report.json")
     selected = level_issues.LevelWorkPackages(
         work_packages={"APP-10": 900}, level_keys={"APP-10"}, level_ids={"APP-10": "10000"}, targets={"APP-10": SUB}
     )
