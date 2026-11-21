@@ -380,6 +380,8 @@ def test_seals_non_static_issues_and_reports_counts_without_reader_names(tmp_pat
     board = report["levels"][0]
     assert (board["static_readers"], board["migration_account_not_counted"]) == (2, 1)
     assert [row["key"] for row in report["archived"]] == ["DEMO-3", "DEMO-4", "DEMO-5", "DEMO-6", "DEMO-7"]
+    assert sorted(key for level in report["levels"] for key in level["static_keys"]) == ["DEMO-1", "DEMO-2"]
+    assert all(len(level["static_keys"]) == level["static"] for level in report["levels"])
     names = {*_BROWSE, "dana", "ivan", "Dana Sample", "Migration Bot", "Alice", "Grace"}
     assert not [name for name in names if name in text]
     assert (tmp_path / "report.json").stat().st_mode & 0o777 == 0o600

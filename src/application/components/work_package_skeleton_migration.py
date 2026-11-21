@@ -59,6 +59,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.issue_security import (
     mapped_project_issues,
@@ -66,10 +67,13 @@ from src.application.components.issue_security import (
     unrestricted_project_jql,
     warn_if_restricted_mappings,
 )
+from src.application.components.security_level_projects_migration import LevelProjectError, verify_level_project
 from src.domain import provenance_fields
+from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.rails_console_client import RubyError
 from src.models import ComponentResult, JiraUser
 from src.models.migration_error import MigrationError
 
@@ -77,6 +81,9 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from jira.resources import Issue
+
+_FIELDS = "summary,issuetype,status,project,priority,assignee,reporter,created,updated,security"
+_LEVEL_COUNTS = ("processed", "created", "skipped", "adopted", "failed", "unmapped", "withheld", "refused")
 
 
 def _stringify_optional_timestamp(value: Any) -> str | None:
@@ -215,6 +222,10 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         # Data storage
         self.work_package_mapping: dict[str, dict[str, Any]] = {}
+        # Level work packages (ADR-009): read and written only with the level switch on.
+        self.level_work_packages: dict[str, dict[str, Any]] = {}
+        # Per sub-project label: issue key to the work package OpenProject already holds there.
+        self._level_existing: dict[str, dict[str, int]] = {}
 
         # Tracks whether the most recent ``_save_mapping`` call
         # succeeded. ``None`` until the first save attempt — the
@@ -369,7 +380,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 jql,
                 startAt=offset,
                 maxResults=size,
-                fields="summary,issuetype,status,project,priority,assignee,reporter,created,updated,security",
+                fields=_FIELDS,
             )
 
         for issue in iter_issue_pages(project_key, fetch_page, batch_size, limit):
@@ -868,6 +879,13 @@ class WorkPackageSkeletonMigration(BaseMigration):
             "projects": {},
         }
 
+        scope = None
+        if level_issues.enabled():
+            # A switched-on level path with missing or mismatched reports stops before any write.
+            scope = level_issues.LevelScope.load(config.mappings)
+            self.level_work_packages = dict(config.mappings.get_mapping(level_issues.WORK_PACKAGE_MAPPING) or {})
+            results["security_level"] = dict.fromkeys(_LEVEL_COUNTS, 0)
+
         # Get J2O Origin Key custom field ID once upfront
         j2o_cf_id = self._get_j2o_origin_key_cf_id()
 
@@ -887,6 +905,11 @@ class WorkPackageSkeletonMigration(BaseMigration):
                     "No OpenProject mapping for project %s, skipping",
                     project_key,
                 )
+                # The level path writes into the mapped sub-projects only, not into the parent.
+                if scope is not None:
+                    results["projects"][project_key] = self._add_level_results(
+                        results, {}, self._create_level_skeletons(project_key, j2o_cf_id, scope)
+                    )
                 continue
 
             project_results = self._create_project_skeletons(project_key, project_id, j2o_cf_id)
@@ -897,6 +920,10 @@ class WorkPackageSkeletonMigration(BaseMigration):
             results["total_created"] += project_results["created"]
             results["total_skipped"] += project_results["skipped"]
             results["total_failed"] += project_results["failed"]
+            if scope is not None:
+                self._add_level_results(
+                    results, project_results, self._create_level_skeletons(project_key, j2o_cf_id, scope)
+                )
 
             self.logger.info(
                 "Project %s: %d processed, %d created, %d skipped, %d failed",
@@ -1046,19 +1073,22 @@ class WorkPackageSkeletonMigration(BaseMigration):
                         duration_seconds=duration_seconds,
                     )
 
+            details = {
+                "total_created": migration_results["total_created"],
+                "total_skipped": migration_results["total_skipped"],
+                "total_failed": migration_results["total_failed"],
+                "mapping_file": str(self.work_package_mapping_file),
+            }
+            status, level_error = self._level_verdict(migration_results, details)
             return ComponentResult(
-                status="success",
-                success=True,
+                status=status,
+                success=level_error is None,
+                error=level_error,
                 timestamp=end_time.isoformat(),
                 start_time=start_time.isoformat(),
                 duration_seconds=duration_seconds,
                 data=migration_results,
-                details={
-                    "total_created": migration_results["total_created"],
-                    "total_skipped": migration_results["total_skipped"],
-                    "total_failed": migration_results["total_failed"],
-                    "mapping_file": str(self.work_package_mapping_file),
-                },
+                details=details,
             )
         except Exception as e:
             end_time = datetime.now(tz=UTC)
@@ -1113,6 +1143,11 @@ class WorkPackageSkeletonMigration(BaseMigration):
             if jira_id in self.work_package_mapping:
                 project_results["skipped"] += 1
                 continue
+            if jira_id in getattr(self, "level_work_packages", {}):
+                # The issue lost its level after it was created in its level sub-project.
+                self.logger.warning("%s is a work package of a level sub-project; not created again", issue.key)
+                project_results["skipped"] += 1
+                continue
 
             # Build payload for batch
             payload = self._build_skeleton_payload(issue, project_id, j2o_cf_id)
@@ -1136,7 +1171,15 @@ class WorkPackageSkeletonMigration(BaseMigration):
             self._flush_skeletons(batch_payloads, batch_issues, project_key, project_results)
         return project_results
 
-    def _flush_skeletons(self, payloads: list, issues: list, project_key: str, counters: dict) -> None:
+    def _flush_skeletons(
+        self,
+        payloads: list,
+        issues: list,
+        project_key: str,
+        counters: dict,
+        targets: dict[str, level_issues.LevelTarget] | None = None,
+    ) -> None:
+        """Create one batch; with ``targets`` the entries go to the level work-package mapping."""
         created, failed, mappings = self._create_skeletons_batch(payloads, project_key)
         counters["created"] += created
         counters["failed"] += failed
@@ -1144,10 +1187,120 @@ class WorkPackageSkeletonMigration(BaseMigration):
             str(issue.id): getattr(getattr(issue.fields, "project", None), "key", None) or project_key
             for issue in issues
         }
+        mapping = self.work_package_mapping if targets is None else self.level_work_packages
         for jira_id, jira_key, wp_id in mappings:
-            self.work_package_mapping[jira_id] = {
+            mapping[jira_id] = {
                 "jira_key": jira_key,
                 "openproject_id": wp_id,
                 "project_key": source_projects[jira_id],
             }
-        self._save_mapping()
+            if targets is not None:
+                mapping[jira_id] |= targets[jira_id].mapping_fields()
+        if targets is None:
+            self._save_mapping()
+        else:
+            # Raises on failure: without the entry a rerun would create the work package again.
+            config.mappings.set_mapping(level_issues.WORK_PACKAGE_MAPPING, mapping)
+
+    @staticmethod
+    def _add_level_results(results: dict, project_results: dict, level_results: dict) -> dict:
+        """Count one project's level results into the run totals; return the project's results."""
+        project_results["security_level"] = level_results
+        for name in _LEVEL_COUNTS:
+            results["security_level"][name] += level_results[name]
+        results["total_failed"] += level_results["failed"] + level_results["refused"]
+        return project_results
+
+    @staticmethod
+    def _level_verdict(results: dict, details: dict) -> tuple[str, str | None]:
+        """Add the level counts to the details; an error when level issues were refused or failed."""
+        level = results.get("security_level")
+        if level is None:
+            return "success", None
+        details["security_level"] = level
+        if level["refused"] or level["failed"]:
+            return "error", f"{level['refused']} level issues refused, {level['failed']} failed"
+        return "success", None
+
+    def _create_level_skeletons(self, project_key: str, j2o_cf_id: int | None, scope: level_issues.LevelScope) -> dict:
+        """Create the selected level issues of one project in their sub-projects (ADR-009, step 4)."""
+        counters = dict.fromkeys(_LEVEL_COUNTS, 0)
+        found = level_issues.iter_level_issues(self.jira_client, project_key, self.batch_size, _FIELDS)
+        selection = scope.select(project_key, found)
+        refused = list(selection.refused)
+        counters["unmapped"], counters["withheld"] = selection.unmapped, selection.withheld
+        wanted: dict[str, set[str]] = {}
+        for issue, target in selection.selected:
+            wanted.setdefault(target.label, set()).add(issue.key)
+        checked: dict[str, str | None] = {}
+        payloads: list[dict[str, Any]] = []
+        issues: list[Issue] = []
+        targets: dict[str, level_issues.LevelTarget] = {}
+        for issue, target in selection.selected:
+            counters["processed"] += 1
+            reason = self._level_refusal(issue, target, checked, wanted[target.label])
+            if reason is not None:
+                refused.append(f"{issue.key}: {reason}")
+                continue
+            if str(issue.id) in self.level_work_packages:
+                counters["skipped"] += 1
+                continue
+            existing = self._level_existing[target.label].get(issue.key)
+            if existing is not None:
+                self._adopt_level_work_package(issue, target, existing, project_key)
+                counters["adopted"] += 1
+                continue
+            payload = self._build_skeleton_payload(issue, target.project_id, j2o_cf_id)
+            if not payload:
+                counters["failed"] += 1
+                continue
+            payloads.append(payload)
+            issues.append(issue)
+            targets[str(issue.id)] = target
+            if len(payloads) >= self.batch_size:
+                self._flush_skeletons(payloads, issues, project_key, counters, targets)
+                payloads, issues = [], []
+        if payloads:
+            self._flush_skeletons(payloads, issues, project_key, counters, targets)
+        for reason in refused:
+            self.logger.error("Level work package refused: %s", reason)
+        counters["refused"] = len(refused)
+        return counters
+
+    def _adopt_level_work_package(
+        self, issue: Issue, target: level_issues.LevelTarget, wp_id: int, project_key: str
+    ) -> None:
+        """Record a work package the sub-project already holds for the issue (lost mapping or batch answer)."""
+        self.logger.warning("%s already has work package %d in %s; mapping restored", issue.key, wp_id, target.label)
+        self.level_work_packages[str(issue.id)] = {
+            "jira_key": issue.key,
+            "openproject_id": wp_id,
+            "project_key": project_key,
+        } | target.mapping_fields()
+        config.mappings.set_mapping(level_issues.WORK_PACKAGE_MAPPING, self.level_work_packages)
+
+    def _level_refusal(
+        self, issue: Issue, target: level_issues.LevelTarget, checked: dict[str, str | None], wanted: set[str]
+    ) -> str | None:
+        """Why the issue must not be created in its sub-project, or None; an existing matching entry passes."""
+        jira_id = str(issue.id)
+        if jira_id in self.work_package_mapping:
+            return "already a work package outside its level sub-project"
+        if jira_id in self.level_work_packages:
+            return None if target.matches(self.level_work_packages[jira_id]) else "mapped to another level sub-project"
+        if target.label not in checked:
+            checked[target.label] = self._level_project_problem(target, wanted)
+        return checked[target.label]
+
+    def _level_project_problem(self, target: level_issues.LevelTarget, wanted: set[str]) -> str | None:
+        """Why work packages must not go into the sub-project now, or None; reads what it already holds."""
+        try:
+            verify_level_project(self.op_client, target.identifier, target.project_id, target.parent_id)
+            existing = level_issues.existing_work_packages(self.op_client, target.project_id)
+        except (LevelProjectError, QueryExecutionError, RubyError) as exc:
+            return f"{target.label} {exc}"
+        stray = set(existing) - wanted
+        if stray:
+            return f"{target.label} holds {len(stray)} work packages of issues not selected for it"
+        self._level_existing[target.label] = existing
+        return None
