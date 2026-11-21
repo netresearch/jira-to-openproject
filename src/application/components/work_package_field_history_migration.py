@@ -6,10 +6,12 @@
 Native OpenProject journals cannot keep each change's reader audience (see
 ADR-001), so the selected changes are stored as canonical JSON in one text
 custom field per work package. The selection is shared with ``j2o-history``
-(:mod:`src.infrastructure.jira.field_history`). Only issues that Jira returns
+(:mod:`src.infrastructure.jira.field_history`). Issues that Jira returns
 for ``level IS EMPTY`` in software and business projects are written; the
 OpenProject target must carry the issue's ``J2O Origin ID`` and sit in the
-mapped project. A value is written only when it differs from the stored one.
+mapped project. With ``migration.security_level_work_packages`` on, a selected
+level issue is also written, into the work package its level sub-project holds
+for it (ADR-009). A value is written only when it differs from the stored one.
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ from itertools import batched
 from typing import Any
 
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.issue_security import permits_unrestricted_result, unrestricted_project_jql
 from src.application.components.project_named_records import project_id
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.infrastructure.jira.field_history import custom_fields, is_complete_page, kept_events
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
@@ -205,7 +209,54 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
             )
             if rows:
                 projects[key] = {"project_id": pid, "rows": rows}
+        projects.update(self._level_projects(fields, counts))
         return ComponentResult(success=True, data={"projects": projects}, details=dict(counts))
+
+    def _level_projects(self, fields: set, counts: Counter[str]) -> dict[str, dict]:
+        """Rows per level sub-project, for the selected issues resolved in it this run (ADR-009).
+
+        The ordinary targets are kept: an issue of a level search is not returned by the
+        empty-level search, so its ordinary work package still gets a clear row. Its level
+        work package is refused.
+        """
+        level = getattr(self, "_level", None)
+        if level is None:
+            return {}
+        level.without_level_issues(
+            {key: wp for targets in self._mapped_targets().values() for key, (wp, _) in targets.items()}
+        )
+        projects: dict[str, dict] = {}
+        for project, wps in sorted(level.by_project().items()):
+            targets = {level.targets[key].label: level.targets[key] for key in wps}
+            for label, rows in sorted(self._level_rows(level, project, wps, fields, counts).items()):
+                projects[label] = {"project_id": targets[label].project_id, "rows": rows}
+        return projects
+
+    def _level_rows(
+        self,
+        level: level_issues.LevelWorkPackages,
+        project: str,
+        wps: dict[str, int],
+        fields: set,
+        counts: Counter[str],
+    ) -> dict[str, list[dict]]:
+        """One level search for the project; an issue whose level changed or that it omits is refused."""
+        rows: dict[str, list[dict]] = {}
+        seen = set()
+        for issue in level_issues.iter_level_issues(self.jira_client, project, _BATCH, "project,security", "changelog"):
+            if issue.key not in wps or issue.key in seen:
+                continue
+            seen.add(issue.key)
+            target = level.targets[issue.key]
+            if level_issues.issue_level_id(issue) != target.level_id:
+                level.refused.append(f"{issue.key}: changed its level after the selection")
+                continue
+            counts["issues_seen"] += 1
+            row = self._issue_row(issue, wps[issue.key], None, fields, counts, level=True)
+            if row is not None:
+                rows.setdefault(target.label, []).append(row)
+        level.refused.extend(f"{key}: not returned by the level search" for key in sorted(set(wps) - seen))
+        return rows
 
     def _project_plan(
         self, key: str, pid: int, targets: dict, *, mapped_wps: set[int], fields: set, counts: Counter[str]
@@ -258,11 +309,15 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         return rows, len(seen)
 
     def _issue_row(
-        self, issue: Any, wp_id: int, expected: str | None, fields: set, counts: Counter[str]
+        self, issue: Any, wp_id: int, expected: str | None, fields: set, counts: Counter[str], *, level: bool = False
     ) -> dict | None:
-        """Return the issue's write or clear row, or ``None`` when the issue is skipped and its value kept."""
+        """Return the issue's write or clear row, or ``None`` when the issue is skipped and its value kept.
+
+        ``level`` marks a selected level issue whose level the caller has checked; its readers are
+        the readers of its sub-project.
+        """
         raw = issue.raw
-        if not permits_unrestricted_result(issue):
+        if not level and not permits_unrestricted_result(issue):
             counts["restricted_skipped"] += 1
             return self._clear_row(wp_id, issue.id)
         if raw["fields"]["project"].get("projectTypeKey") not in _PROJECT_TYPES:
@@ -375,8 +430,22 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         return data
 
     def run(self) -> ComponentResult:
-        """Run the field history pass."""
-        return self._run_etl_pipeline("Work package field history")
+        """Run the field history pass.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009) and their refusals are counted into the result.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger
+                )
+            except LevelProjectError as exc:
+                self.logger.error("Level work package field history stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+        result = self._run_etl_pipeline("Work package field history")
+        return result if self._level is None else self._level.report(result, self.logger)
 
     def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
         """Recheck source visibility and stored values on every pass."""

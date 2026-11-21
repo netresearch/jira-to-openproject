@@ -29,7 +29,9 @@ from pathlib import Path
 from typing import Any
 
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.application.components.tempo_attribute_catalogue import SETTING, archive_catalogue
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient, http_status_from_error
@@ -139,9 +141,53 @@ class TimeEntryMigration(BaseMigration):
 
         return migrated
 
+    def _with_level_work_packages(self, migrated: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """With the level switch on, add this run's level work packages (ADR-009).
+
+        An issue of a level search or of the archive loses its ordinary entry. A selected level
+        issue gets the work package its sub-project holds for it now, that sub-project as the
+        expected project of its time entries, and the level its work logs must still have.
+        """
+        level = getattr(self, "_level", None)
+        if level is None:
+            return migrated
+        kept = level.without_level_issues({row["jira_key"]: row["work_package_id"] for row in migrated})
+        rows = [row for row in migrated if row["jira_key"] in kept]
+        rows.extend(
+            {
+                "jira_key": key,
+                "work_package_id": level.work_packages[key],
+                "project_id": target.project_id,
+                "level_id": target.level_id,
+            }
+            for key, target in sorted(level.targets.items())
+        )
+        return rows
+
+    def _with_level_report(self, result: ComponentResult) -> ComponentResult:
+        """Count this run's level refusals into the result, its counters and its status (ADR-009)."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return result
+        level.report(result, logger)
+        if level.refused:
+            # A refused level issue is a failed item of this component, as a catalogue failure is.
+            result.failed_count += len(level.refused)
+            result.total_count += len(level.refused)
+            result.details["status"] = "partial_success" if result.success_count else "failed"
+        return result
+
+    def _refuse_unread_level_issues(self) -> None:
+        """A level issue whose work logs were not read (its level changed, say) is a refusal."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return
+        unread = self.time_entry_migrator.unreadable_issues & set(level.targets)
+        level.refused.extend(f"{key}: work logs not read with the selected level" for key in sorted(unread))
+
     def run(self) -> ComponentResult:
         """Import time entries and an explicitly selected operator-only instance catalogue."""
-        result = self._run_time_entries()
+        result = self._with_level_report(self._run_time_entries())
         project = os.environ.get(SETTING)
         if not project:
             return result
@@ -174,6 +220,7 @@ class TimeEntryMigration(BaseMigration):
         """Run standalone time entry migration based on existing WP mapping."""
         logger.info("Starting time entry migration component")
         start_time = datetime.now(tz=UTC)
+        self._level: level_issues.LevelWorkPackages | None = None
 
         # Basic preflight: ensure Rails client is present (OpenProject operations)
         if not getattr(self.op_client, "rails_client", None):
@@ -188,7 +235,18 @@ class TimeEntryMigration(BaseMigration):
                 details={"status": "failed", "reason": "rails_client_missing"},
             )
 
-        migrated_wps = self._load_migrated_work_packages()
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, logger)
+            except LevelProjectError as exc:
+                logger.error("Level work package time entries stopped: %s", exc)
+                return ComponentResult(
+                    success=False,
+                    message=str(exc),
+                    details={"status": "failed", "reason": "security_level"},
+                    errors=["security_level"],
+                )
+        migrated_wps = self._with_level_work_packages(self._load_migrated_work_packages())
         if not migrated_wps:
             warn = "No migrated work packages found; skipping time entry migration"
             logger.warning(warn)
@@ -216,6 +274,7 @@ class TimeEntryMigration(BaseMigration):
             result = self.time_entry_migrator.migrate_time_entries_for_issues(
                 migrated_wps,
             )
+            self._refuse_unread_level_issues()
             success = result.get("status") == "success"
             errors: list[str] = []
             if result.get("status") == "failed":
