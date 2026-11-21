@@ -886,7 +886,7 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets.
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)).
 
 **Features**:
 - On previously mapped issues, this component records the source level name in the “Security Level” custom field.

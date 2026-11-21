@@ -83,6 +83,7 @@ dev = [
 j2o = "src.main:main"
 j2o-boards = "src.native_boards:main"
 j2o-history = "src.operator_history:main"
+j2o-restricted = "src.restricted_issues:main"
 j2o-comments = "src.comment_archive.cli:main"
 j2o-references = "src.deferred_references_cli:main"
 

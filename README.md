@@ -151,6 +151,8 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 
 [Operator-encrypted field history](docs/operator-field-history.md) describes how to retain Jira field changes for recovery after shutdown.
 
+[Operator archive of restricted Jira issues](docs/operator-restricted-issues.md) describes how to inventory issues with a security level and keep those that cannot be migrated with their level's static readers.
+
 ### Watch a migration
 
 From the configured checkout, start the dashboard in one terminal:
