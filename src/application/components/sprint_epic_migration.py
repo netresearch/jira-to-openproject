@@ -134,6 +134,9 @@ class SprintEpicMigration(BaseMigration):
         sprints = _sprint_references(fields.get(self._sprint_field))
         if not sprints or fields.get("fixVersions"):
             return
+        if level_versions.shared_with_extra_readers(level, issue.key):
+            self._sprints_withheld.append(issue.key)
+            return
         target = level.targets[issue.key]
         sprint = _parent_sprint(sprints, target.parent_id, versions)
         if sprint is None or not str(issue.id).isdecimal():
@@ -302,6 +305,7 @@ class SprintEpicMigration(BaseMigration):
         write (ADR-009) and their refusals are counted into the result.
         """
         self._level: level_issues.LevelWorkPackages | None = None
+        self._sprints_withheld: list[str] = []
         if level_issues.enabled():
             try:
                 self._level = level_issues.level_work_packages(
@@ -311,7 +315,10 @@ class SprintEpicMigration(BaseMigration):
                 self.logger.error("Level work package components stopped: %s", exc)
                 return ComponentResult(success=False, message=str(exc), errors=["security_level"])
         result = self._run_etl_pipeline("Sprint and epic")
-        return result if self._level is None else self._level.report(result, self.logger)
+        if self._level is None:
+            return result
+        level_versions.report_withheld(result, self._sprints_withheld, self.logger)
+        return self._level.report(result, self.logger)
 
     def _recover_project_issues(self, project: str, project_id: Any, restored: dict) -> None:
         """Collect unique issue origins for one project."""

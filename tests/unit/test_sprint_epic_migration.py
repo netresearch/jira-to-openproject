@@ -462,6 +462,22 @@ def level_assignments(op):
     }
 
 
+def test_level_sprint_versions_are_withheld_from_shared_work_packages(level_setup):
+    # On Enterprise the per_issue APP-12 is shared with its extra readers; the sprint copy would
+    # show them the other level issues of that sprint (ADR-010).
+    live = {
+        "field": True,
+        "work_packages": [900, 901, 902],
+        "keys": [[900, "APP-10"], [901, "APP-11"], [902, "APP-12"]],
+    }
+    rows = [level_sprint_row(n, "10000") for n in (10, 11, 12)]
+    outcome = level_sprint_run(level_setup, rows=rows, live=live, edition="enterprise")
+    copy = outcome.op.copies[100, "42"]
+    assert level_assignments(outcome.op) == {(100, 900, (copy,)), (100, 901, (copy,))}
+    assert outcome.result.details["level_versions_withheld"] == 1
+    assert outcome.result.details["security_level"]["refused"] == 0
+
+
 def test_level_switch_off_writes_no_sprint_copy(level_setup):
     outcome = level_sprint_run(level_setup, on=False, reports=False)
     assert [c.args[0] for c in outcome.op.batch_update_work_packages.call_args_list] == [[{"id": 500, "version_id": 9}]]
