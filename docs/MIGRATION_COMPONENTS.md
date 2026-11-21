@@ -765,6 +765,8 @@ Migrates Jira watchers to OpenProject watchers.
 
 **Dependencies**: WorkPackageMigration, UserMigration
 
+With `migration.security_level_work_packages: true` (off by default), the level work packages get no watchers: a watcher must be a reader of the level, and the readers are only in the operator archive. Their count is `details.level_watchers_withheld`; an ordinary entry of a level issue is refused and counted in `details.security_level`. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### VotesMigration
