@@ -466,6 +466,10 @@ def test_level_issue_that_cannot_be_confirmed_gets_no_time_entries(level_setup, 
     assert [key for key, _ in outcome.jira.reads] == ["APP-1", "APP-11"]
     assert [_targets(rows) for rows in outcome.rows] == [{(500, 7), (901, 100)}]
     assert outcome.result.details["security_level"]["refused"] == 1
+    # The refusal shows in the component's own counters and status, beside its written entries.
+    assert outcome.result.details["status"] == "partial_success"
+    assert outcome.result.failed_count == 1
+    assert outcome.result.total_count == outcome.result.success_count + 1
 
 
 def test_level_issue_whose_level_changed_gets_no_time_entries(level_setup, monkeypatch):

@@ -178,6 +178,11 @@ class TimeEntryMigration(BaseMigration):
         level = getattr(self, "_level", None)
         if level is not None:
             level.report(result, logger)
+            if level.refused:
+                # A refused level issue is a failed item of this component, as a catalogue failure is.
+                result.failed_count += len(level.refused)
+                result.total_count += len(level.refused)
+                result.details["status"] = "partial_success" if result.success_count else "failed"
         project = os.environ.get(SETTING)
         if not project:
             return result
