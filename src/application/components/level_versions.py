@@ -42,6 +42,25 @@ def selected_level_issues(
     return found
 
 
+def shared_with_extra_readers(level: level_issues.LevelWorkPackages, key: str) -> bool:
+    """Whether the level work package of ``key`` is to be shared with readers beyond its sub-project.
+
+    On Enterprise a ``per_issue`` issue is shared with its own extra readers (ADR-009). A user who
+    sees a work package through a share sees every version it targets (``Version.visible`` via
+    ``shared_via_work_packages``), and a version counts all its targeted work packages, so a
+    shared copy would show such a reader the other level issues of that version. Such an issue
+    gets no target version (ADR-010).
+    """
+    return level.targets[key].kind == "per_issue"
+
+
+def report_withheld(result: Any, keys: list[str], logger: Any) -> None:
+    """Record the target versions withheld from shared level work packages; they are no failure."""
+    if keys:
+        logger.warning("Target versions withheld from %d shared level work packages: %s", len(keys), ", ".join(keys))
+    result.details["level_versions_withheld"] = len(keys)
+
+
 def version_ids(refs: object) -> list[str] | None:
     """The Jira version IDs of an issue field in their order, or None when they are malformed."""
     if not isinstance(refs, list) or not all(isinstance(ref, Mapping) for ref in refs):

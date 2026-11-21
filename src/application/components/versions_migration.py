@@ -91,7 +91,9 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 level, self.jira_client, project, wps, fields
             ).items():
                 refs = level_versions.version_ids(issue.raw["fields"].get("fixVersions", []))
-                if refs is None or not str(issue.id).isdecimal():
+                if refs and level_versions.shared_with_extra_readers(level, key):
+                    self._versions_withheld.append(key)
+                elif refs is None or not str(issue.id).isdecimal():
                     level.refused.append(f"{key}: malformed fix versions or issue ID")
                 elif refs:
                     target = level.targets[key]
@@ -221,6 +223,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         (ADR-010), and the refusals are counted into the result on every return.
         """
         self._level: level_issues.LevelWorkPackages | None = None
+        self._versions_withheld: list[str] = []
         if level_issues.enabled():
             try:
                 self._level = level_issues.level_work_packages(
@@ -230,7 +233,10 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 self.logger.error("Level work package versions stopped: %s", exc)
                 return ComponentResult(success=False, message=str(exc), errors=["security_level"])
         result = self._run_versions()
-        return result if self._level is None else self._level.report(result, self.logger)
+        if self._level is None:
+            return result
+        level_versions.report_withheld(result, self._versions_withheld, self.logger)
+        return self._level.report(result, self.logger)
 
     def _run_versions(self) -> ComponentResult:
         self.logger.info("Starting versions migration")

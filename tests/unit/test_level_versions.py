@@ -185,6 +185,32 @@ BOTH = pytest.mark.parametrize("component", ["versions", "affects"])
 APP_10, APP_11 = (100, 900, ("41",)), (100, 901, ("41", "42"))
 
 
+ENTERPRISE_LIVE = {
+    "field": True,
+    "work_packages": [900, 901, 902],
+    "keys": [[900, "APP-10"], [901, "APP-11"], [902, "APP-12"]],
+}
+
+
+def test_level_versions_withhold_target_versions_of_shared_work_packages(level_setup):
+    # On Enterprise the per_issue APP-12 is migrated and later shared with its extra readers; a
+    # target version would show them the other level issues of that version (ADR-010).
+    outcome = _run(level_setup, "versions", edition="enterprise", live=ENTERPRISE_LIVE)
+    copies = outcome.op.copies
+    assert _level_writes(outcome, "versions") == _expected("versions", copies, APP_10, APP_11)
+    assert all(u["id"] != 902 for u in outcome.op.updates)
+    assert outcome.result.details["level_versions_withheld"] == 1
+    assert outcome.result.success, outcome.result
+    assert outcome.result.details["security_level"]["refused"] == 0
+
+
+def test_level_affected_versions_still_link_shared_work_packages(level_setup):
+    # Observed-in links neither make a version visible nor count towards it, so APP-12 keeps them.
+    outcome = _run(level_setup, "affects", edition="enterprise", live=ENTERPRISE_LIVE)
+    assert (100, 902, ("41",)) in _level_writes(outcome, "affects")
+    assert "level_versions_withheld" not in outcome.result.details
+
+
 @BOTH
 def test_level_switch_off_issues_exactly_the_calls_of_the_ordinary_path(level_setup, component):
     outcome = _run(level_setup, component, on=False, reports=False)
