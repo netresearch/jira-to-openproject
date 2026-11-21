@@ -167,7 +167,8 @@ def test_switch_off_writes_the_ordinary_work_packages_with_the_ordinary_calls(le
     assert outcome.result.success, outcome.result.message
     assert outcome.written == [{500, 501}]
     assert outcome.jira.searches == []
-    assert outcome.jira.batches and all(keys == ["APP-1", "APP-2"] for keys in outcome.jira.batches)
+    assert outcome.jira.batches
+    assert all(keys == ["APP-1", "APP-2"] for keys in outcome.jira.batches)
     outcome.op.execute_query_to_json_file.assert_not_called()
     assert _enabled(outcome) == set()
     assert "security_level" not in outcome.result.details
