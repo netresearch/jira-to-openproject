@@ -77,6 +77,13 @@ migration:
   # Off until the dependent components and the late access grant exist; only the boolean true enables it.
   # security_level_work_packages: false
 
+  # Jira keys as native semantic work package identifiers (semantic_identifiers, after
+  # work_packages_skeleton; ADR-011): identifier, sequence number, aliases from the Key changelog,
+  # the Jira key as project slug and raised sequence counters. The instance setting is not changed;
+  # the operator switches to semantic identifiers after the last run (README, Post-Migration Cleanup).
+  # Off by default; only the boolean true enables it.
+  # semantic_identifiers: false
+
   # Behavior settings
   skip_existing: true
   enable_rails_meta_writes: true

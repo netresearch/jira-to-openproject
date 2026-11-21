@@ -9,6 +9,13 @@ from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PRED
 
 
 @pytest.mark.parametrize("sequence", [DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES["full"]])
+def test_semantic_identifiers_run_after_the_skeleton_and_before_attachments(sequence) -> None:
+    # The identifiers need every work package of the run, level work packages included.
+    assert sequence.index("work_packages_skeleton") < sequence.index("semantic_identifiers")
+    assert sequence.index("semantic_identifiers") < sequence.index("attachments")
+
+
+@pytest.mark.parametrize("sequence", [DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES["full"]])
 def test_groups_run_after_projects_and_before_admin_schemes(sequence) -> None:
     # GroupMigration._collect_project_role_groups reads the project mapping;
     # AdminSchemeMigration reads the group mapping.

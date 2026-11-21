@@ -62,6 +62,7 @@ from src.application.components.reporting_migration import ReportingMigration
 from src.application.components.resolution_migration import ResolutionMigration
 from src.application.components.security_level_projects_migration import SecurityLevelProjectsMigration
 from src.application.components.security_levels_migration import SecurityLevelsMigration
+from src.application.components.semantic_identifiers_migration import SemanticIdentifiersMigration
 from src.application.components.simpletasks_migration import SimpleTasksMigration
 from src.application.components.sprint_epic_migration import SprintEpicMigration
 from src.application.components.status_migration import StatusMigration
@@ -443,6 +444,7 @@ def _build_component_factories(
         "status_types": lambda: StatusMigration(jira_client=jira_client, op_client=op_client),
         "work_packages": lambda: WorkPackageMigration(jira_client=jira_client, op_client=op_client),
         "work_packages_skeleton": lambda: WorkPackageSkeletonMigration(jira_client=jira_client, op_client=op_client),
+        "semantic_identifiers": lambda: SemanticIdentifiersMigration(jira_client=jira_client, op_client=op_client),
         "work_packages_content": lambda: WorkPackageContentMigration(jira_client=jira_client, op_client=op_client),
         "time_entries": lambda: TimeEntryMigration(jira_client=jira_client, op_client=op_client),
         "watchers": lambda: WatcherMigration(jira_client=jira_client, op_client=op_client),

@@ -164,6 +164,7 @@ type ComponentName = Literal[
     "native_boards",
     "work_packages",
     "work_packages_skeleton",
+    "semantic_identifiers",
     "work_packages_content",
     "relations",
     "priorities",

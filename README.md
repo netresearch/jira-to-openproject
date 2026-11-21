@@ -187,10 +187,14 @@ A pilot that separately verifies the target can publish its own aggregate counts
 
 After the final cutover:
 
-1. Rotate/revoke Jira and OpenProject API tokens that were used during the migration.
-2. Archive `var/logs`, `var/data`, and `var/results` if you need an audit trail, then purge local copies.
-3. Remove temporary rehearsal snapshots and any encrypted configuration backups you created.
-4. Tear down the local `.venv` or containers, and archive this repository if no further migrations are planned.
+1. Switch OpenProject to semantic work package identifiers when the migration ran with `migration.semantic_identifiers: true` ([ADR-011](docs/adr/ADR-011-jira-keys-as-semantic-identifiers.md)). j2o never changes this setting.
+   - Before: the last run's `semantic_identifiers` result is successful with `refused` and `failed` at 0 (a refused work package gets a new number from the switch, not its key); no j2o run is in progress; a database backup exists.
+   - Switch: in the administration, under work package identifiers (`/admin/settings/work_packages_identifier`), choose semantic. OpenProject converts every project in a background job and sets the setting afterwards; if the conversion fails, it reverts to classic and keeps the written data.
+   - After: the setting shows semantic; each migrated project has its Jira key as identifier; a migrated work package opens by its Jira key and by a key it had before a move; a new work package in a migrated project gets a number above every migrated key; a level work package opens by its Jira key for a member of its sub-project (it displays the sub-project's own identifier), and a member of the parent project only gets "not found".
+2. Rotate/revoke Jira and OpenProject API tokens that were used during the migration.
+3. Archive `var/logs`, `var/data`, and `var/results` if you need an audit trail, then purge local copies.
+4. Remove temporary rehearsal snapshots and any encrypted configuration backups you created.
+5. Tear down the local `.venv` or containers, and archive this repository if no further migrations are planned.
 
 ## Architecture
 

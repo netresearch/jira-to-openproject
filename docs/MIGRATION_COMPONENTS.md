@@ -26,6 +26,7 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 | ProjectMigration | `projects` | Stable | Yes | Hierarchical structure |
 | WorkPackageMigration | `work_packages` | Stable | Yes | Legacy single-phase |
 | WorkPackageSkeletonMigration | `work_packages_skeleton` | Stable | Yes | Phase 1 - mapping |
+| SemanticIdentifiersMigration | `semantic_identifiers` | New | Unit, pilot | Jira keys as semantic identifiers; off by default |
 | WorkPackageContentMigration | `work_packages_content` | Stable | Yes | Phase 2 - content |
 | **Configuration** |
 | StatusMigration | `status_types` | Stable | Yes | Workflow states |
@@ -986,6 +987,24 @@ With `migration.security_level_work_packages: true` (off by default), the stage 
 **Implementation:** `src/application/components/work_package_field_history_migration.py`
 
 **Depends on:** work package mappings and the `J2O Origin ID` provenance field (`work_packages_skeleton`, `wp_metadata_backfill`)
+
+---
+
+### SemanticIdentifiersMigration
+
+The default and `full` profiles run `semantic_identifiers` directly after `work_packages_skeleton`. It writes only when `migration.semantic_identifiers` is the boolean `true` (off by default); otherwise it reads and writes nothing. It writes the data the official OpenProject Jira importer writes, so that the instance can switch to semantic work package identifiers after the last run and show the Jira keys ([ADR-011](adr/ADR-011-jira-keys-as-semantic-identifiers.md)). It never changes the instance setting.
+
+For every mapped issue that the empty-security-level search returns (`expand=changelog`), the work package gets the Jira key as `identifier` and the key's number as `sequence_number`, plus aliases for the project's slugs with that number, every key of the issue's `Key` changelog (a moved issue) and the key itself. Each migrated project gets its Jira key as a project slug, which the switch restores as the project identifier. Afterwards each project's `wp_sequence_counter` is raised to the highest number any identifier or alias with its key already uses; it is never lowered.
+
+Rails checks each work package's project and `J2O Origin ID` inside the write transaction. A work package with another identifier or sequence number, and a key, alias or sequence number that another work package owns, is refused and never overwritten. A project is refused before any write when its key is no valid semantic project identifier (`[A-Z][A-Z0-9_]*`, at most 10 characters), when another project holds the key as identifier or slug, or when the switch would not restore it. Refusals and failed batches make the result unsuccessful. A repeat run counts work packages that already have their identifier and aliases as `unchanged` and writes nothing for them. Nothing is stored in a mapping file.
+
+The result's `details` report `projects`, `projects_refused`, `written`, `unchanged`, `refused`, `failed` and the resulting `counters` per OpenProject project ID.
+
+With `migration.security_level_work_packages: true`, the level work packages get the Jira key as identifier and alias in their sub-project, read live as in the other level stages. The switch renames the sub-project and renumbers its work packages, so after the switch they display the sub-project's identifier and resolve by their Jira key through the alias; users who cannot see the sub-project get "not found". See [ADR-011](adr/ADR-011-jira-keys-as-semantic-identifiers.md#5-level-work-packages).
+
+**Implementation:** `src/application/components/semantic_identifiers_migration.py`
+
+**Depends on:** project and work package mappings and the `J2O Origin ID` provenance field (`work_packages_skeleton`)
 
 ---
 
