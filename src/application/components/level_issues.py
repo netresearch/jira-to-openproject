@@ -331,6 +331,15 @@ class LevelWorkPackages:
     refused: list[str] = field(default_factory=list)
     level_keys: set[str] = field(default_factory=set)
     level_ids: dict[str, str] = field(default_factory=dict)
+    # Jira key to the sub-project its work package was resolved in (ID and parent from the mapping).
+    targets: dict[str, LevelTarget] = field(default_factory=dict)
+
+    def by_project(self) -> dict[str, dict[str, int]]:
+        """Jira project key to the work packages of its selected issues, for one level search per project."""
+        projects: dict[str, dict[str, int]] = {}
+        for key, target in self.targets.items():
+            projects.setdefault(target.label.rpartition(":")[0], {})[key] = self.work_packages[key]
+        return projects
 
     def without_level_issues(self, lookup: Mapping[str, int]) -> dict[str, int]:
         """The ordinary key lookup without any issue of a level search or of the archive.
@@ -341,6 +350,7 @@ class LevelWorkPackages:
         for key, wp_id in lookup.items():
             if key in self.level_keys:
                 self.work_packages.pop(key, None)
+                self.targets.pop(key, None)
                 self.refused.append(f"{key}: already a work package outside its level sub-project")
             else:
                 kept[key] = wp_id
@@ -372,6 +382,7 @@ class LevelWorkPackages:
             if reason is None:
                 self.work_packages[issue.key] = wp_id
                 self.level_ids[issue.key] = target.level_id
+                self.targets[issue.key] = target
             else:
                 self.refused.append(f"{issue.key}: {reason}")
         for issue in found:
