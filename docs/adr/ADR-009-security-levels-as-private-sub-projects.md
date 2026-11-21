@@ -6,14 +6,14 @@ Accepted (2026-11-20)
 
 ## Context
 
-Jira hides an issue with an issue security level from everyone whom the level does not grant. A user reads such an issue only when he has Browse Projects in the project **and** one of the level's grants matches him. Until now j2o does not migrate these issues at all: every work-package component selects `level IS EMPTY` (`src/application/components/issue_security.py`), and [MIGRATION_COMPONENTS.md](../MIGRATION_COMPONENTS.md) documents the exclusion. No archive keeps them.
+Jira hides an issue with an issue security level from everyone whom the level does not grant. A user reads such an issue only when he has Browse Projects in the project **and** one of the level's grants matches him. Until now j2o does not migrate these issues at all: the work-package components select `level IS EMPTY` (`src/application/components/issue_security.py`) or exclude restricted issues through the work-package mapping, and [MIGRATION_COMPONENTS.md](../MIGRATION_COMPONENTS.md) documents the exclusion. No archive keeps them.
 
 Jira grants a level to two kinds of principals:
 
 - **Static grants** name a fixed set of users: group, project role, project lead, single user.
 - **Per-issue grants** depend on the issue: current assignee, reporter, and a user custom field (in this Jira a multi-user picker for extra readers).
 
-A measurement against the production Jira (Server 9.12.3, read-only) found three facts the design rests on:
+A measurement against the production Jira (Server 9.12.3, read-only) found these facts the design rests on:
 
 - Jira 9.12.3 has no REST endpoint for the grants of a level. The project-config page `/plugins/servlet/project-config/{KEY}/issuesecurity` lists them, single users by display name.
 - `/rest/api/2/user/viewissue/search` ignores the level: for one restricted issue it returned the whole project Browse set (23 users) instead of the two readers. `/rest/api/2/user/permission/search?permissions=BROWSE&issueKey=…` honours it.
@@ -25,8 +25,8 @@ Jira admin rights do not bypass issue security, so a search returns only the res
 OpenProject 17.9.7 (the target version named in the README) offers these mechanisms. Source references are to the opf/openproject tag v17.9.7:
 
 - A non-admin sees the work packages of projects he is a member of, and work packages shared with him (`app/models/work_packages/scopes/allowed_to.rb:64-83`). Project visibility has no inheritance from the parent project; non-members see only public projects (`app/models/projects/scopes/allowed_to.rb:104`). A private sub-project is visible only to its own members.
-- Administrators see every project and work package (`allowed_to.rb:45-46`; ["Administrators have full access to all settings and all projects"](https://www.openproject.org/docs/system-admin-guide/users-permissions/roles-permissions/)).
-- Sharing a work package is an Enterprise add-on. The user gets the role "Work Package Viewer" and "is not automatically a member of the whole project" ([Share work packages](https://www.openproject.org/docs/user-guide/work-packages/share-work-packages/)). In code the Enterprise token gates the UI; the share contracts and the visibility scope do not check it (`app/contracts/shares/base_contract.rb:35-80`, `allowed_to.rb:64-83`).
+- Administrators see every project and work package (`app/models/work_packages/scopes/allowed_to.rb:45-46`; ["Administrators have full access to all settings and all projects"](https://www.openproject.org/docs/system-admin-guide/users-permissions/roles-permissions/)).
+- Sharing a work package is an Enterprise add-on. The user gets the role "Work Package Viewer" and "is not automatically a member of the whole project" ([Share work packages](https://www.openproject.org/docs/user-guide/work-packages/share-work-packages/)). In code the Enterprise token gates the UI; the share contracts and the visibility scope do not check it (`app/contracts/shares/base_contract.rb:35-80`, `app/models/work_packages/scopes/allowed_to.rb:64-83`).
 - Internal comments are an Enterprise add-on, visible per role permission and by default only to the Project admin role ([Activity: internal comments](https://www.openproject.org/docs/user-guide/activity/); `app/contracts/work_packages/create_note_contract.rb:45`).
 - `EnterpriseToken.allows_to?(feature)` decides availability in Rails (`app/models/enterprise_token.rb:56-58`); `GET /api/v3/configuration` exposes the same token set as `availableFeatures` (`lib/api/v3/configuration/configuration_representer.rb:106-109`).
 
@@ -56,7 +56,7 @@ The reader computation does not count this grant. The migration account counts a
 - A single-user grant that resolves to the migration account is never a static grant.
 - Where only that grant explains the account, the account is removed from the issue's effective readers.
 
-A level holds at most one single-user grant per user, so a single-user grant to the migration account that existed **before** the migration cannot be told apart from the temporary one and is not counted either. Such a grant narrows the readers by one account; it never widens them. The run report counts, per level, the single-user grants that named the migration account, so a pre-existing grant is visible before the owner adds the temporary ones. The account name is configurable (`j2o-restricted inventory --migration-account`); the default is the configured Jira user (`jira.username`).
+A level holds at most one single-user grant per user, so a single-user grant to the migration account that existed **before** the migration cannot be told apart from the temporary one and is not counted either. Such a grant narrows the readers by one account; it never widens them. The run report counts, per level, the single-user grants that named the migration account, so a pre-existing grant is visible before the owner adds the temporary ones. The account name is configurable (`j2o-restricted inventory --migration-account`); the default is the configured Jira user (`J2O_JIRA_USERNAME`, the source of `jira.username`). The account must exist in Jira.
 
 ### 4. OpenProject administrators do not stop the import
 
@@ -68,7 +68,7 @@ Issues with per-issue readers on Community, and issues with unexplained readers 
 
 The shared run report carries counts per project and level and the keys of archived issues, never reader names.
 
-### 6. Decided by the implementer, not the owner
+### 6. Decided by Claude, not by the owner
 
 - **Internal comments are not used** to imitate Jira visibility. They are visible per role permission, not per user or Jira group, so they are no exact mapping of a level or of a restricted comment. The comments of a restricted issue are protected by the work package's project.
 - **Version sharing for sprints** used by work packages in a sub-project is decided in a later pull request.
