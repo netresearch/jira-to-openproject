@@ -17,8 +17,8 @@ import pytest
 
 from src.application.components.agile_board_migration import AgileBoardMigration
 from src.utils.change_detector import ChangeDetector
-from tests.unit.test_level_attachments import LEVEL_MAP, LIVE
-from tests.unit.test_level_work_packages import issue, level_issues
+from tests.unit.test_level_attachments import LEVEL_MAP, LEVEL_REFUSALS, LIVE
+from tests.unit.test_level_work_packages import level_issues
 from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 
@@ -477,24 +477,7 @@ def test_level_issue_with_an_ordinary_entry_is_refused_and_stays_off_the_board(l
     assert outcome.result.failed_count == 1
 
 
-@pytest.mark.parametrize(
-    "options",
-    [
-        {"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}},
-        {"live": {"field": True}},
-        {"level_map": {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}},
-        {
-            "level_rows": [
-                issue(10, "10001"),
-                issue(11, "10000"),
-                issue(12, "10000"),
-                issue(13, "10000"),
-                issue(20, "10001"),
-            ]
-        },
-    ],
-    ids=["moved-work-package", "unreadable-sub-project", "unselected-issue", "level-changed"],
-)
+@pytest.mark.parametrize("options", LEVEL_REFUSALS)
 def test_level_refusals_fail_the_component_and_no_level_card_reaches_a_board(level_setup, monkeypatch, options):
     outcome = level_board(level_setup, monkeypatch, **options)
     assert not outcome.result.success

@@ -14,7 +14,7 @@ import pytest
 from src.application.components.attachment_provenance_migration import AttachmentProvenanceMigration
 from src.application.components.attachment_recovery_migration import AttachmentRecoveryMigration
 from src.application.components.attachments_migration import AttachmentsMigration
-from tests.unit.test_level_work_packages import level_issues
+from tests.unit.test_level_work_packages import issue, level_issues
 from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 
@@ -39,6 +39,21 @@ LEVEL_MAP = {
     }
     for n, wp in ((10, 900), (11, 901))
 }
+# The options of a component's level run under which a selected issue is refused: its work
+# package moved away, its sub-project cannot be read, an entry names an issue the selection does
+# not keep, and APP-10 has another level in the search than in the inventory.
+LEVEL_REFUSALS = [
+    pytest.param({"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}}, id="moved-work-package"),
+    pytest.param({"live": {"field": True}}, id="unreadable-sub-project"),
+    pytest.param(
+        {"level_map": {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}},
+        id="unselected-issue",
+    ),
+    pytest.param(
+        {"level_rows": [issue(n, "10001" if n in (10, 20) else "10000") for n in (10, 11, 12, 13, 20)]},
+        id="level-changed",
+    ),
+]
 # Every issue of the project has one attachment; APP-12 (per_issue), APP-13 (unexplained) stay in
 # the operator archive on Community, APP-20 belongs to a level without a sub-project.
 NUMBERS = (1, 10, 11, 12, 13, 20)

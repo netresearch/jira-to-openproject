@@ -14,8 +14,8 @@ from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PRED
 from src.config_loader import ConfigLoader
 from src.migration import _build_component_factories, _component_status, _run_component
 from src.migration_progress import _reported_counts
-from tests.unit.test_level_attachments import LEVEL_MAP, LIVE
-from tests.unit.test_level_work_packages import issue, level_issues
+from tests.unit.test_level_attachments import LEVEL_MAP, LEVEL_REFUSALS, LIVE
+from tests.unit.test_level_work_packages import level_issues
 from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 COLUMNS = [{"name": "Open", "statuses": [{"id": "1"}]}, {"name": "Done", "statuses": [{"id": "2"}]}]
@@ -310,24 +310,7 @@ def test_level_switch_on_leaves_every_level_card_out_of_the_parent_snapshot(leve
     assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
 
 
-@pytest.mark.parametrize(
-    "options",
-    [
-        {"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}},
-        {"live": {"field": True}},
-        {"level_map": {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}},
-        {
-            "level_rows": [
-                issue(10, "10001"),
-                issue(11, "10000"),
-                issue(12, "10000"),
-                issue(13, "10000"),
-                issue(20, "10001"),
-            ]
-        },
-    ],
-    ids=["moved-work-package", "unreadable-sub-project", "unselected-issue", "level-changed"],
-)
+@pytest.mark.parametrize("options", LEVEL_REFUSALS)
 def test_level_refusals_fail_the_component_and_no_level_card_reaches_a_board(level_setup, options):
     outcome = level_boards(level_setup, **options)
     assert not outcome.result.success
