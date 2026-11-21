@@ -9,10 +9,17 @@ project-mapping skip, and the closed-sprint state mapping branch.
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
 from src.application.components.agile_board_migration import AgileBoardMigration
 from src.utils.change_detector import ChangeDetector
+from tests.unit.test_level_attachments import LEVEL_MAP, LEVEL_REFUSALS, LIVE
+from tests.unit.test_level_work_packages import level_issues
+from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 
 class DummyJira:
@@ -347,3 +354,193 @@ def test_cli_project_filter_limits_the_boards(_mock_mappings, monkeypatch):
     op = DummyOp()
     assert AgileBoardMigration(jira, op).run().success
     assert [q["project_id"] for q in op.created_queries] == [11]
+
+
+# --- Level work packages (ADR-009, step 5c) ---------------------------------------------------
+
+LEVELS = 'project = "APP" AND level IS NOT EMPTY ORDER BY created ASC, key ASC'
+BOARD_KEYS = ["APP-1", "APP-10", "APP-11", "APP-12", "APP-13", "APP-20"]
+
+
+@pytest.fixture
+def level_setup(level_work_package_setup):  # noqa: F811 (the imported fixture, requested by name)
+    """The level reports and mappings with one ordinary work package (APP-1)."""
+
+    def _setup(*, level_map=None, ordinary=None, **kwargs):
+        mappings, _ = level_work_package_setup(**kwargs)
+        mappings.data["work_package"] = {"1": {"jira_key": "APP-1", "openproject_id": 500, "project_key": "APP"}}
+        mappings.data["work_package"].update(ordinary or {})
+        mappings.data["security_level_work_package"] = dict(LEVEL_MAP if level_map is None else level_map)
+        return mappings
+
+    return _setup
+
+
+class LevelJira(DummyJira):
+    """One kanban board of APP holding every issue; answer and record the level search."""
+
+    def __init__(self, level_rows=None):
+        super().__init__(boards=[{"id": 23, "name": "Team", "type": "kanban", "location": {"projectKey": "APP"}}])
+        self.get_projects = Mock(return_value=[{"key": "APP"}])
+        self.searches = []
+        rows = level_issues() if level_rows is None else level_rows
+
+        def search(jql, startAt, maxResults, **kwargs):
+            self.searches.append((jql, kwargs.get("fields")))
+            assert jql == LEVELS
+            return rows[startAt : startAt + maxResults]
+
+        self.jira = Mock()
+        self.jira.search_issues.side_effect = search
+
+    def get_board_issue_keys(self, board_id, project_key):
+        return list(BOARD_KEYS)
+
+
+class LevelOp(DummyOp):
+    def __init__(self, live=None):
+        super().__init__()
+        self.live = LIVE if live is None else live
+        self.live_reads = []
+
+    def execute_query_to_json_file(self, script):
+        self.live_reads.append(json.loads(script.split("\n")[1]))
+        return json.loads(json.dumps(self.live))
+
+
+def level_board(
+    level_setup, monkeypatch, *, live=None, level_rows=None, runs=1, detect=False, unrestricted=(), **kwargs
+):
+    level_setup(**kwargs)
+    withheld_queries = []
+
+    def search(_client, *, jql, start_at, **_kwargs):
+        # Jira reports every listed board issue except APP-1 with a security level.
+        withheld_queries.append(jql)
+        keys = jql.split("key in (")[1].split(")")[0].replace('"', "").split(", ")
+        rows = [
+            SimpleNamespace(key=key, raw={"fields": {"security": {"id": "10000"}}})
+            for key in keys
+            if key not in unrestricted
+        ]
+        return rows if start_at == 0 else []
+
+    monkeypatch.setattr("src.application.components.agile_board_migration.fetch_issue_page_with_retry", search)
+    jira, op = LevelJira(level_rows), LevelOp(live)
+    migration = AgileBoardMigration(jira, op)
+    run = migration.run
+    if detect:
+        migration.change_detector = ChangeDetector(detect)
+        run = lambda: migration.run_with_change_detection("agile_boards")  # noqa: E731
+    results = [run() for _ in range(runs)]
+    return SimpleNamespace(result=results[-1], results=results, jira=jira, op=op, withheld=withheld_queries)
+
+
+def board_ids(op):
+    return [q["options"]["board_work_package_ids"] for q in op.created_queries]
+
+
+def withheld_query(*keys):
+    listed = ", ".join(f'"{key}"' for key in keys)
+    return f'project = "APP" AND key in ({listed}) AND level IS NOT EMPTY ORDER BY id'
+
+
+def test_level_switch_off_builds_the_board_query_as_before(level_setup, monkeypatch):
+    outcome = level_board(level_setup, monkeypatch, on=False, reports=False)
+    assert outcome.result.success, outcome.result
+    assert board_ids(outcome.op) == [[500]]
+    # The first page and the empty page that ends the search.
+    assert outcome.withheld == [withheld_query(*BOARD_KEYS[1:])] * 2
+    # No level search, no project listing, no sub-project read.
+    assert outcome.jira.searches == []
+    outcome.jira.get_projects.assert_not_called()
+    assert outcome.op.live_reads == []
+    assert "security_level" not in outcome.result.details
+
+
+def test_level_switch_on_keeps_level_cards_out_of_the_parent_board(level_setup, monkeypatch):
+    outcome = level_board(level_setup, monkeypatch)
+    assert outcome.result.success, outcome.result
+    # One private query in the parent; the level sub-project gets none.
+    assert [(q["project_id"], q["is_public"]) for q in outcome.op.created_queries] == [(7, False)]
+    assert board_ids(outcome.op) == [[500]]
+    assert outcome.jira.searches == [(LEVELS, "security"), (LEVELS, "security")]
+    assert outcome.op.live_reads == [{"project_id": 100, "field": "J2O Origin Key"}]
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
+
+
+def test_level_issue_with_an_ordinary_entry_is_refused_and_stays_off_the_board(level_setup, monkeypatch):
+    ordinary = {"11": {"jira_key": "APP-11", "openproject_id": 510, "project_key": "APP"}}
+    off = level_board(level_setup, monkeypatch, on=False, reports=False, ordinary=ordinary)
+    # Before the switch, the ordinary entry put the card on the parent board.
+    assert board_ids(off.op) == [[500, 510]]
+    outcome = level_board(level_setup, monkeypatch, ordinary=ordinary)
+    assert not outcome.result.success
+    assert board_ids(outcome.op) == [[500]]
+    # Every other card is an issue of a level search or of the archive: none is searched for.
+    assert outcome.withheld == []
+    assert outcome.result.details["security_level"] == {"work_packages": 1, "refused": 1}
+    assert outcome.result.failed_count == 1
+
+
+def test_level_archived_card_that_lost_its_level_stays_off_the_board(level_setup, monkeypatch):
+    # The archived APP-12 has an ordinary entry, and Jira now reports it without a level.
+    ordinary = {"12": {"jira_key": "APP-12", "openproject_id": 512, "project_key": "APP"}}
+    outcome = level_board(level_setup, monkeypatch, ordinary=ordinary, unrestricted={"APP-12"})
+    assert board_ids(outcome.op) == [[500]]
+    assert not outcome.result.details.get("board_errors")
+    assert outcome.result.details["security_level"]["refused"] == 1
+
+
+@pytest.mark.parametrize("options", LEVEL_REFUSALS)
+def test_level_refusals_fail_the_component_and_no_level_card_reaches_a_board(level_setup, monkeypatch, options):
+    outcome = level_board(level_setup, monkeypatch, **options)
+    assert not outcome.result.success
+    assert board_ids(outcome.op) == [[500]]
+    refused = outcome.result.details["security_level"]["refused"]
+    assert refused >= 1
+    assert outcome.result.failed_count == refused
+
+
+def test_level_repeated_runs_with_change_detection_resolve_and_report_each_time(level_setup, monkeypatch, tmp_path):
+    # An unchanged board would let change detection skip the second pass without any report.
+    outcome = level_board(level_setup, monkeypatch, runs=2, detect=tmp_path)
+    first, second = outcome.results
+    assert first.success, first
+    assert first.details["security_level"] == second.details["security_level"] == {"work_packages": 2, "refused": 0}
+    assert board_ids(outcome.op) == [[500], [500]]
+    assert len(outcome.op.live_reads) == 2
+
+
+def test_level_ordinary_entries_of_unselected_projects_are_not_refused(level_setup, monkeypatch):
+    # The archived APP-12 has an ordinary entry, but only OTHER is selected for this run.
+    ordinary = {"12": {"jira_key": "APP-12", "openproject_id": 512, "project_key": "APP"}}
+    level_setup(ordinary=ordinary)
+    monkeypatch.setattr("src.config.selected_jira_projects", lambda: ["OTHER"])
+    jira, op = LevelJira(), LevelOp()
+    jira.get_boards_for_project = Mock(return_value=[])
+    result = AgileBoardMigration(jira, op).run()
+    assert result.success, result
+    assert jira.searches == []
+    assert result.details["security_level"] == {"work_packages": 0, "refused": 0}
+
+
+def test_level_refusals_are_reported_when_the_board_read_fails(level_setup, monkeypatch):
+    ordinary = {"11": {"jira_key": "APP-11", "openproject_id": 510, "project_key": "APP"}}
+    level_setup(ordinary=ordinary)
+    jira, op = LevelJira(), LevelOp()
+    jira.get_boards = Mock(side_effect=RuntimeError("jira down"))
+    result = AgileBoardMigration(jira, op).run()
+    assert not result.success
+    assert op.created_queries == []
+    assert result.details["security_level"] == {"work_packages": 1, "refused": 1}
+
+
+def test_level_switch_on_without_reports_stops_before_any_board_read(level_setup, monkeypatch):
+    level_setup(reports=False)
+    jira, op = LevelJira(), LevelOp()
+    jira.get_boards = Mock(side_effect=AssertionError("board read"))
+    result = AgileBoardMigration(jira, op).run()
+    assert not result.success
+    assert result.errors == ["security_level"]
+    assert op.created_queries == []

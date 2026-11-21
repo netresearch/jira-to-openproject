@@ -521,6 +521,8 @@ The sprint versions themselves are created by `AgileBoardMigration`.
 **Dependencies**: ProjectMigration, WorkPackageMigration, AgileBoardMigration
 (provides the `sprint` mapping)
 
+With `migration.security_level_work_packages: true` (off by default), an issue of a level search or of the archive gets nothing: no sprint, no sprint field and no parent link, also when the origin scan of the parent finds a work package of it. Its ordinary entry is refused and counted in `details.security_level`. An ordinary work package whose epic or parent is a level issue gets no link to it. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 **Related**: AgileBoardMigration, [Entity Mapping §11](ENTITY_MAPPING.md#11-agile-migration)
 
 ---
@@ -542,6 +544,8 @@ creates planned, active and completed sprints, project-specific goals and work-p
 links on OpenProject 17.9. For native board snapshots see `NativeBoardsMigration` below.
 
 **Dependencies**: ProjectMigration
+
+With `migration.security_level_work_packages: true` (off by default), no issue of a level search or of the archive goes on a board query, also when it has an entry in `work_package_mapping.json`; such an entry is refused. A level sub-project gets no board query. The level work packages are resolved and reported on every pass, without change detection. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Example Usage**:
 ```bash
@@ -567,6 +571,8 @@ The component runs only when `migration.native_board_archive_project` in `config
 **Sequence**: after `wp_metadata_backfill`. The writer matches each card by the J2O Origin ID, key, URL and system of its work package. `work_packages_skeleton` writes these fields and `wp_metadata_backfill` completes them on existing work packages.
 
 **Dependencies**: ProjectMigration, WorkPackageSkeletonMigration, WpMetadataBackfillMigration
+
+With `migration.security_level_work_packages: true` (off by default), the cards of every issue of a level search or of the archive are left out before the revision is hashed, so the archive never names a level card and a board with such a card no longer fails. A level sub-project gets no board. Refusals of level work packages are counted as failed items. The `j2o-boards` command has no switch and keeps failing on such a card. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Example Usage**:
 ```bash
@@ -894,7 +900,7 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, and `work_package_field_history` and `time_entries` their field history and time entries; see [Level work packages](operator-restricted-issues.md#level-work-packages).
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, `work_package_field_history` and `time_entries` their field history and time entries, and `agile_boards`, `native_boards` and `sprint_epic` keep them out of the boards and sprints of the parent; level work packages get no versions or sprints yet. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Features**:
 - On previously mapped issues, this component records the source level name in the “Security Level” custom field.

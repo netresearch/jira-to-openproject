@@ -13,11 +13,17 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from src.infrastructure.jira.jira_client import JiraClient
 
 
-def layout(jira: JiraClient, board: dict, project: str) -> dict:
-    """Assign each visible card to its Jira column in the source board's rank order."""
+def layout(jira: JiraClient, board: dict, project: str, withheld: Collection[str] = ()) -> dict:
+    """Assign each visible card to its Jira column in the source board's rank order.
+
+    A card whose key is in ``withheld`` (an issue of a level search, ADR-009) is left out
+    before the revision is hashed, so the snapshot never names it.
+    """
     board_id = int(board["id"])
     configuration = jira.get_board_configuration(board_id)
     columns = configuration["columnConfig"]["columns"]
@@ -30,6 +36,8 @@ def layout(jira: JiraClient, board: dict, project: str) -> dict:
             positions[status["id"]] = index
     cards: dict[int, list] = defaultdict(list)
     for issue in jira.agile.ranked_board_issues(board_id, project):
+        if issue["key"] in withheld:
+            continue
         position = positions[issue["fields"]["status"]["id"]]
         cards[position].append({"id": str(issue["id"]), "key": issue["key"]})
     data = {
@@ -44,10 +52,10 @@ def layout(jira: JiraClient, board: dict, project: str) -> dict:
     return {**data, "revision": revision}
 
 
-def capture(jira: JiraClient, board: dict, project: str) -> dict:
+def capture(jira: JiraClient, board: dict, project: str, withheld: Collection[str] = ()) -> dict:
     """Read a board layout twice and refuse a snapshot that moved between the reads."""
-    data = layout(jira, board, project)
-    if data != layout(jira, board, project):
+    data = layout(jira, board, project, withheld)
+    if data != layout(jira, board, project, withheld):
         msg = "Board changed during capture"
         raise RuntimeError(msg)
     return data

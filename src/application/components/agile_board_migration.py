@@ -9,8 +9,10 @@ import json
 from typing import Any
 
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.issue_security import permits_unrestricted_result
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
@@ -21,7 +23,12 @@ from src.utils.change_aware_runner import ChangeAwareRunner
 
 @register_entity_types("agile_boards", "sprints")
 class AgileBoardMigration(BaseMigration):
-    """Create OpenProject queries for Jira boards and map sprints to versions."""
+    """Create OpenProject queries for Jira boards and map sprints to versions.
+
+    With ``migration.security_level_work_packages`` on, no issue of a level search or of the
+    archive is put on a board query, also when it has an entry in the ``work_package`` mapping
+    (ADR-009); such an entry is refused. A level sub-project gets no board query.
+    """
 
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
@@ -108,6 +115,9 @@ class AgileBoardMigration(BaseMigration):
         }
 
     def run_with_change_detection(self, entity_type: str | None = None) -> ComponentResult:
+        if level_issues.enabled():
+            # The level work packages are resolved and reported on every pass.
+            return self.run()
         # After writing versions, refresh their target IDs on the exact source
         # inventory passed to _map. A fresh Jira read can include unapplied edits.
         return ChangeAwareRunner(self).run(entity_type, snapshot_entities=lambda: [self._with_targets(self._inventory)])
@@ -252,7 +262,41 @@ class AgileBoardMigration(BaseMigration):
         )
 
     def run(self) -> ComponentResult:
-        """Execute the agile board migration pipeline."""
+        """Execute the agile board migration pipeline.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009) and their refusals are counted into the result.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger
+                )
+            except LevelProjectError as exc:
+                self.logger.error("Level work package components stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+            self._refuse_ordinary_level_entries(self._level)
+        result = self._run_pipeline()
+        if self._level is None:
+            return result
+        self._level.report(result, self.logger)
+        # A refused level issue is a failed item of this component, as a skipped board is.
+        result.failed_count += len(self._level.refused)
+        return result
+
+    def _refuse_ordinary_level_entries(self, level: level_issues.LevelWorkPackages) -> None:
+        """Refuse, once per run, every ordinary entry of an issue of a level search or of the archive."""
+        try:
+            ordinary = self._ordinary_targets()
+        except ValueError:
+            return  # the extract reads the same mapping and reports it
+        selected = set(config.selected_jira_projects())
+        level.without_level_issues(
+            {key: wp for key, wp in ordinary.items() if not selected or self._issue_project_key(key) in selected}
+        )
+
+    def _run_pipeline(self) -> ComponentResult:
         self.logger.info("Starting agile board and sprint migration")
 
         extracted = self._extract()
@@ -286,6 +330,14 @@ class AgileBoardMigration(BaseMigration):
         return result
 
     def _board_work_package_mapping(self) -> dict[str, int]:
+        """The ordinary targets; with the level switch on, without any issue of a level search."""
+        targets = self._ordinary_targets()
+        level = getattr(self, "_level", None)
+        if level is None:
+            return targets
+        return {key: wp for key, wp in targets.items() if key not in level.level_keys}
+
+    def _ordinary_targets(self) -> dict[str, int]:
         work_packages = self.mappings.get_mapping("work_package") or {}
         targets = {}
         for outer_key, value in work_packages.items():
@@ -300,6 +352,11 @@ class AgileBoardMigration(BaseMigration):
 
     def _board_work_package_ids(self, board_id: int, key: str, targets: dict[str, int]) -> list[int]:
         issue_keys = self.jira_client.get_board_issue_keys(board_id, key)
+        level = getattr(self, "_level", None)
+        if level is not None:
+            # An issue of a level search or of the archive never reaches a board, whatever its
+            # level is now (ADR-009); the security search below covers the other unmapped cards.
+            issue_keys = [issue for issue in issue_keys if issue not in level.level_keys]
         unmapped = [issue for issue in issue_keys if issue not in targets]
         # The skeleton imports only issues Jira confirms have no security level.
         withheld = self._security_withheld(key, unmapped) if unmapped else set()
