@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.application.components.level_issues import LevelScope, issue_level_id
+from src.application.components.work_package_content_migration import WorkPackageContentMigration
 from src.application.components.work_package_skeleton_migration import WorkPackageSkeletonMigration
 from src.restricted_issues import ADMIN_REPORT_FORMAT, REPORT_FORMAT
 
@@ -496,3 +497,97 @@ def test_a_report_with_a_key_or_level_listed_twice_stops_before_any_write(setup,
     assert not outcome.result.success
     assert not outcome.op.payloads
     assert "inventory report" in repr(outcome.result)
+
+
+def content(setup, *, unrestricted=(), levels=(), level_map=None, wp_map=None, **kwargs):
+    setup(**kwargs)
+    import src.config as cfg
+
+    if level_map is not None:
+        cfg.mappings.data["security_level_work_package"] = level_map
+    jira, op = fake_jira(list(unrestricted), list(levels)), Mock()
+    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows)}
+    migration = WorkPackageContentMigration(jira_client=jira, op_client=op)
+    migration.work_package_mapping = wp_map or {"1": {"jira_key": "APP-1", "openproject_id": 500}}
+    results = migration._migrate_content()
+    written = [row for call in op.batch_update_work_packages.call_args_list for row in call.args[0]]
+    return SimpleNamespace(results=results, jira=jira, op=op, written=written)
+
+
+LEVEL_MAP = {
+    "10": {
+        "jira_key": "APP-10",
+        "openproject_id": 900,
+        "openproject_project_id": 100,
+        "security_level_id": "10000",
+        "security_level_project": "APP:10000",
+    }
+}
+
+
+def test_content_switch_off_reads_only_unrestricted_issues(setup):
+    outcome = content(
+        setup, on=False, reports=False, unrestricted=[issue(1)], levels=level_issues(), level_map=LEVEL_MAP
+    )
+    assert set(searches(outcome.jira)) == {UNRESTRICTED, 'project = "APP" AND level IS EMPTY ORDER BY id'}
+    assert outcome.written == [{"id": 500, "description": "Text 1"}]
+
+
+def test_content_of_a_level_issue_goes_to_its_work_package_without_watchers(setup):
+    outcome = content(setup, unrestricted=[issue(1)], levels=level_issues(), level_map=LEVEL_MAP)
+    assert {"id": 900, "description": "Text 10"} in outcome.written
+    assert {"id": 500, "description": "Text 1"} in outcome.written
+    assert len(outcome.written) == 2
+    level_calls = [call for call in outcome.jira.jira.search_issues.call_args_list if call.args[0] == LEVELS]
+    fields = [(call.kwargs["fields"], call.kwargs.get("expand")) for call in level_calls]
+    assert list(dict.fromkeys(fields)) == [("security", None), ("*all", "renderedFields,changelog")]
+    assert [call.args[0] for call in outcome.jira.get_issue_watchers.call_args_list] == ["APP-1"]
+    commented = [call.args[0] for call in outcome.jira.select_comments_for_migration.call_args_list]
+    assert commented == ["APP-1", "APP-10"]
+    assert outcome.results["security_level"] == {"processed": 1, "updated": 1, "skipped": 4, "refused": 0}
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"security_level_id": "10001"},
+        {"openproject_project_id": 101},
+        {"security_level_project": "APP:10001"},
+        {"openproject_id": "900"},
+    ],
+)
+def test_content_refuses_an_entry_that_does_not_match_the_current_level(setup, entry):
+    level_map = {"10": {**LEVEL_MAP["10"], **entry}}
+    outcome = content(setup, levels=level_issues(), level_map=level_map)
+    assert not [row for row in outcome.written if row["id"] == 900]
+    assert outcome.results["security_level"]["refused"] == 1
+    assert outcome.results["total_failed"] == 1
+
+
+def test_content_refuses_an_issue_the_selection_no_longer_keeps(setup):
+    # On Community a per_issue issue is not selected, even if a mapping entry exists.
+    level_map = {"12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 901}}
+    outcome = content(setup, levels=level_issues(), level_map=level_map)
+    assert not outcome.written or all(row["id"] != 901 for row in outcome.written)
+    assert outcome.results["security_level"]["refused"] == 1
+
+
+def test_content_refuses_an_issue_whose_level_changed_between_the_two_searches(setup):
+    setup()
+    import src.config as cfg
+
+    cfg.mappings.data["security_level_work_package"] = LEVEL_MAP
+    light, full = level_issues(), level_issues()
+    full[0].raw["fields"]["security"] = {"id": "10001"}
+    jira, op = fake_jira([], []), Mock()
+
+    def search(jql, startAt, maxResults, **kwargs):
+        rows = (light if kwargs["fields"] == "security" else full) if "level IS NOT EMPTY" in jql else []
+        return rows[startAt : startAt + maxResults]
+
+    jira.jira.search_issues.side_effect = search
+    migration = WorkPackageContentMigration(jira_client=jira, op_client=op)
+    migration.work_package_mapping = {"1": {"jira_key": "APP-1", "openproject_id": 500}}
+    results = migration._migrate_content()
+    assert not op.batch_update_work_packages.called
+    assert results["security_level"]["refused"] == 1
