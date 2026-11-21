@@ -1,6 +1,6 @@
 # Operator archive of restricted Jira issues
 
-`j2o-restricted` records who can read each Jira issue that has an issue security level, and keeps every issue that cannot become an ordinary work package of its level in an age-encrypted archive for the operator. It only reads Jira; it makes no OpenProject request. Issues with a level stay out of the standard migration as before. The decisions behind it are in [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md).
+`j2o-restricted` records who can read each Jira issue that has an issue security level, and keeps every issue that cannot become an ordinary work package of its level in an age-encrypted archive for the operator. `inventory` only reads Jira; it makes no OpenProject request. `admins` reads the archive and OpenProject and changes nothing. Issues with a level stay out of the standard migration as before. The decisions behind it are in [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md).
 
 ## What it computes
 
@@ -48,6 +48,20 @@ Restore the archive on a trusted machine into a new private file:
 uv run --project /path/to/j2o j2o-restricted restore --identity operator.agekey \
   --archive restricted-issues.age --output restricted-issues.json
 ```
+
+## Edition and administrator report
+
+OpenProject administrators see every work package, so they will see the work packages of every level sub-project. The import does not stop for that (ADR-009, decision 4); `admins` lists them before any level sub-project is created. Run it from the j2o working directory of the migration: the Rails console connection comes from its `config/config.yaml`, and `--user-mapping` names the migration's `var/data/user_mapping.json`. Set `J2O_OPENPROJECT_API_KEY` through your secret store. The report is written to the working directory and must not exist yet; the checkout ignores `restricted-admins*.json`, so keep that name.
+
+```sh
+cd /path/to/j2o
+uv run j2o-restricted admins --identity ~/restricted-inventory/operator.agekey \
+  --archive ~/restricted-inventory/restricted-issues.age --user-mapping var/data/user_mapping.json \
+  --openproject https://openproject.example.org --report restricted-admins.json
+```
+
+- **Edition.** Rails answers `EnterpriseToken.allows_to?` for `work_package_sharing` and `internal_comments`; `GET /api/v3/configuration` answers `availableFeatures`. The edition is `enterprise` only when both allow `work_package_sharing`; a disagreement is logged and means `community`. A failed or malformed answer, or a Rails console and API URL that report different host names, stops the command; so does a user mapping without a single usable entry. The report keeps both answers (feature names only).
+- **Administrators.** Every non-deleted administrator, with its status (`active`, `locked`, `registered`, `invited`). An administrator maps to the Jira users whose user-mapping entry names its OpenProject ID; user names are compared case-insensitively. Per level, `restricted-admins.json` (mode 600) lists the logins of the administrators none of whose Jira users is a static reader of the level. `unmapped_admins` lists administrators without a Jira user; an entry restored from OpenProject (`restored_from_op`) guesses the Jira name from the login and does not count as a mapping. A level with an unsupported grant has no computed readers (`readers_computed: false`) and lists nobody; its issues are archived anyway. The report names administrators only, never Jira readers.
 
 ## Repeat runs and known limits
 

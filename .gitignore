@@ -227,8 +227,10 @@ auth_keys
 # tasks/
 
 # Serena MCP memories (session-specific)
-.serena/ 
+.serena/
 
 # Personal keys and private state for Jira comment cutover
 *.agekey
 /private/
+# j2o-restricted admins writes its report to the checkout root
+/restricted-admins*.json
