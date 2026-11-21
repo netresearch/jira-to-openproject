@@ -175,6 +175,19 @@ def test_a_locked_reader_gets_no_membership_and_is_counted(grant):
     assert outcome.result.details["locked_readers"] == 1
 
 
+def test_a_reader_locked_after_the_grant_keeps_the_sub_project_verified(grant):
+    # The users component locks newly inactive users before the grant runs again (ADR-006).
+    granted = [["User", 41, None, None, [MEMBER]], ["User", 42, None, None, [READER]]]
+    outcome = grant(FakeRails(members=granted, locked=[42]))
+    assert outcome.result.success, outcome.result.errors
+    assert outcome.op.writes == []
+    assert outcome.result.details["verified"] == 1
+    assert outcome.result.details["locked_readers"] == 1
+    # A locked reader's row with other roles is still foreign.
+    other = grant(FakeRails(members=[granted[0], ["User", 42, None, None, [5]]], locked=[42]))
+    assert not other.result.success
+
+
 def test_a_read_back_that_differs_fails(grant):
     outcome = grant(FakeRails(drop=True))
     assert not outcome.result.success

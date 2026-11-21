@@ -78,8 +78,18 @@ class Grant:
     """The membership rows one sub-project must hold, and why some readers get none."""
 
     expected: dict[Row, tuple[int, ...]] = field(default_factory=dict)
+    # Rows of locked readers: never created, but an existing one with these roles is a grant too.
+    optional: dict[Row, tuple[int, ...]] = field(default_factory=dict)
     locked: int = 0
     missing: int = 0
+
+    def allows(self, row: Row, roles: tuple[int, ...]) -> bool:
+        """Whether an existing row is one of the readers' grants with its roles."""
+        return (self.expected.get(row) or self.optional.get(row)) == roles
+
+    def holds(self, actual: Mapping[Row, tuple[int, ...]]) -> bool:
+        """Every expected row exists and every row is a grant: the read-back check."""
+        return set(self.expected) <= set(actual) and all(self.allows(row, roles) for row, roles in actual.items())
 
 
 def _members(rows: object) -> dict[Row, tuple[int, ...]]:
@@ -110,14 +120,17 @@ def plan(state: Mapping[str, Any], members: frozenset[int], shares: Mapping[int,
     for user, wp in sorted(wanted, key=lambda row: (row[0], row[1] or 0)):
         if user not in found:
             grant.missing += 1
-        elif user in locked:
-            grant.locked += 1
-        elif wp is None:
+            continue
+        if wp is None:
             roles = parent.get(str(user)) or [state.get("reader_role")]
-            grant.expected[(user, None)] = tuple(sorted(roles))
         else:
-            grant.expected[(user, wp)] = (state.get("viewer_role"),)
-    if any(None in roles for roles in grant.expected.values()):
+            roles = [state.get("viewer_role")]
+        target = grant.expected
+        if user in locked:
+            grant.locked += 1
+            target = grant.optional
+        target[(user, wp)] = tuple(sorted(roles, key=lambda role: role or 0))
+    if any(None in roles for roles in [*grant.expected.values(), *grant.optional.values()]):
         msg = "OpenProject has no Reader or Work package viewer role"
         raise LevelProjectError(msg)
     return grant
@@ -198,7 +211,7 @@ class SecurityLevelAccessMigration(BaseMigration):
             state = self._query(_STATE, values | {"users": users, "reader": READER_ROLE})
             grant = plan(state, members, shares)
             actual = _members(state.get("members"))
-            foreign = [row for row, roles in actual.items() if grant.expected.get(row) != roles]
+            foreign = [row for row, roles in actual.items() if not grant.allows(row, roles)]
             if foreign:
                 msg = f"holds {len(foreign)} membership rows that are not its readers' grants; nothing changed"
                 raise LevelProjectError(msg)
@@ -212,7 +225,7 @@ class SecurityLevelAccessMigration(BaseMigration):
             return
         totals.locked_readers += grant.locked
         totals.readers_without_user += grant.missing
-        if actual != grant.expected:
+        if not grant.holds(actual):
             totals.refused.append(f"{target.label}: the memberships read back differ from the readers")
             return
         totals.memberships_created += sum(1 for _, wp in create if wp is None)
