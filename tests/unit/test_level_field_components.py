@@ -347,7 +347,8 @@ def test_switch_off_writes_each_value_with_a_mapping_keyed_by_jira_issue_id(leve
 
 @ALL
 def test_switch_off_issues_the_same_calls_for_both_mapping_shapes(level_setup, component):
-    by_key = {entry["jira_key"]: entry for entry in ORDINARY.values()}
+    # The key-shaped mapping of legacy and test data: keyed by issue key, without an inner jira_key.
+    by_key = {entry["jira_key"]: {k: v for k, v in entry.items() if k != "jira_key"} for entry in ORDINARY.values()}
     by_id = _run(level_setup, component, on=False)
     keyed = _run(level_setup, component, on=False, ordinary=by_key)
     assert keyed.written == [{500, 501}]
