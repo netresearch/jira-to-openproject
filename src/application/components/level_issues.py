@@ -32,7 +32,9 @@ from src.application.components.security_level_projects_migration import (
     migratable_levels,
 )
 from src.domain import provenance_fields
+from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
+from src.infrastructure.openproject.rails_console_client import RubyError
 
 SWITCH = "security_level_work_packages"
 WORK_PACKAGE_MAPPING = "security_level_work_package"
@@ -289,3 +291,111 @@ def _target(project_key: str, level_id: str, entry: object) -> LevelTarget:
         entry["openproject_identifier"],
         "static",
     )
+
+
+class LiveSubProjects:
+    """The work packages each level sub-project holds right now, read once per sub-project."""
+
+    def __init__(self, op_client: Any, logger: Any) -> None:
+        """Read through ``op_client``; log an unreadable sub-project on ``logger``."""
+        self.op_client = op_client
+        self.logger = logger
+        self.live: dict[str, dict[str, int] | None] = {}
+
+    def held(self, key: str, target: LevelTarget, entry: object) -> tuple[int, str | None]:
+        """The work package the sub-project of ``target`` holds for ``key``, or why there is none.
+
+        An unreadable sub-project refuses every issue. A mapping entry, when there is one, must
+        name the same work package, level and sub-project.
+        """
+        if target.label not in self.live:
+            try:
+                self.live[target.label] = existing_work_packages(self.op_client, target.project_id)
+            except (LevelProjectError, QueryExecutionError, RubyError) as exc:
+                self.logger.error("Level sub-project %s not readable: %s", target.label, exc)
+                self.live[target.label] = None
+        held = self.live[target.label]
+        wp_id = None if held is None else held.get(key)
+        if wp_id is None:
+            return 0, f"no work package in {target.label}; run work_packages_skeleton"
+        if entry is not None and (not target.matches(entry) or entry["openproject_id"] != wp_id):
+            return 0, f"the mapping entry does not name the work package {target.label} holds"
+        return wp_id, None
+
+
+@dataclass
+class LevelWorkPackages:
+    """The level work packages a dependent component may write to, and what it must leave alone."""
+
+    work_packages: dict[str, int] = field(default_factory=dict)
+    refused: list[str] = field(default_factory=list)
+    level_keys: set[str] = field(default_factory=set)
+    level_ids: dict[str, str] = field(default_factory=dict)
+
+    def without_level_issues(self, lookup: Mapping[str, int]) -> dict[str, int]:
+        """The ordinary key lookup without any issue of a level search or of the archive.
+
+        Such an issue has a work package outside its sub-project; it is refused on both sides.
+        """
+        kept = {}
+        for key, wp_id in lookup.items():
+            if key in self.level_keys:
+                self.work_packages.pop(key, None)
+                self.refused.append(f"{key}: already a work package outside its level sub-project")
+            else:
+                kept[key] = wp_id
+        return kept
+
+    def report(self, result: Any, logger: Any) -> Any:
+        """Count the refusals as failures of ``result`` and add the level counts to its details."""
+        for reason in self.refused:
+            logger.error("Level work package refused: %s", reason)
+        result.details["security_level"] = {"work_packages": len(self.work_packages), "refused": len(self.refused)}
+        result.failed += len(self.refused)
+        if self.refused:
+            result.success = False
+        return result
+
+    def add_project(
+        self, jira_client: Any, scope: LevelScope, level_map: Mapping[str, Any], live: LiveSubProjects, project_key: str
+    ) -> None:
+        """Repeat the selection of one Jira project and resolve each selected issue live."""
+        found = list(
+            iter_level_issues(jira_client, project_key, config.migration_config.get("batch_size", 100), "security")
+        )
+        selection = scope.select(project_key, found)
+        self.refused.extend(selection.refused)
+        selected = set()
+        for issue, target in selection.selected:
+            selected.add(str(issue.id))
+            wp_id, reason = live.held(issue.key, target, level_map.get(str(issue.id)))
+            if reason is None:
+                self.work_packages[issue.key] = wp_id
+                self.level_ids[issue.key] = target.level_id
+            else:
+                self.refused.append(f"{issue.key}: {reason}")
+        for issue in found:
+            key, jira_id = _issue_key(issue), str(getattr(issue, "id", ""))
+            self.level_keys.add(key)
+            if jira_id in level_map and jira_id not in selected:
+                self.refused.append(f"{key}: not selected for the level sub-project of its work package")
+
+
+def level_work_packages(jira_client: Any, op_client: Any, mappings: Any, logger: Any) -> LevelWorkPackages:
+    """Repeat the selection for every Jira project in scope and read each sub-project once.
+
+    A selected issue resolves to the work package its sub-project holds for it right now; a lost
+    mapping entry is recovered from that read and not written back. A selected issue without such
+    a work package, an entry that names another one, and an entry of an issue the selection no
+    longer keeps are refused. Unselected issues get nothing. A missing or malformed report raises.
+    """
+    scope = LevelScope.load(mappings)
+    level_map = mappings.get_mapping(WORK_PACKAGE_MAPPING) or {}
+    result = LevelWorkPackages(level_keys=set(scope.archived))
+    live = LiveSubProjects(op_client, logger)
+    wanted = config.selected_jira_projects()
+    for project in jira_client.get_projects():
+        project_key = str(project.get("key", ""))
+        if not wanted or project_key.upper() in wanted:
+            result.add_project(jira_client, scope, level_map, live, project_key)
+    return result

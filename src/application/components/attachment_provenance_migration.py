@@ -22,7 +22,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.application.components import level_issues
+from src.application.components.attachments_migration import compute_wp_lookup_by_jira_key
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -34,6 +37,24 @@ from src.models.jira import JiraIssueFields
 class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
+        self._level: level_issues.LevelWorkPackages | None = None
+
+    def _work_package_map(self) -> dict[str, Any]:
+        """The work_package mapping; with the level switch on, level issues resolve live (ADR-009).
+
+        Entries of issues of a level search or of the archive are dropped; each selected level issue
+        gets an in-memory entry for the work package its sub-project holds now.
+        """
+        wp_map = self.mappings.get_mapping("work_package") or {}
+        level = getattr(self, "_level", None)
+        if level is None:
+            return wp_map
+        kept = {
+            outer: raw
+            for outer, raw in wp_map.items()
+            if not (isinstance(raw, dict) and str(raw.get("jira_key") or outer) in level.level_keys)
+        }
+        return kept | {key: {"jira_key": key, "openproject_id": wp} for key, wp in level.work_packages.items()}
 
     @staticmethod
     def _author_identifiers(author: Any) -> list[str]:
@@ -125,7 +146,7 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
         items = data.get("items", []) if isinstance(data, dict) else []
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
 
         # Build a lookup from jira_key to typed mapping entry. The
         # outer wp_map key is ``str(jira_id)`` (numeric id), while the
@@ -198,7 +219,17 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
         """Execute attachment provenance migration - memory efficient per-project."""
         self.logger.info("Starting attachment provenance migration (memory-efficient mode)")
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        self._level = None
+        if level_issues.enabled():
+            try:
+                level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+            except LevelProjectError as exc:
+                self.logger.error("Level work package attachment provenance stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+            # Refuses, on both sides, a level issue that also has an ordinary work package.
+            level.without_level_issues(compute_wp_lookup_by_jira_key(self.mappings))
+            self._level = level
+        wp_map = self._work_package_map()
         if not wp_map:
             # FAIL LOUD. ``success=True`` here masks an upstream
             # broken precondition (skeleton mapping never persisted).
@@ -208,12 +239,13 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                 " its mapping persisted) and re-run this component."
             )
             self.logger.error(msg)
-            return ComponentResult(
+            missing = ComponentResult(
                 success=False,
                 updated=0,
                 message=msg,
                 errors=["missing_work_package_mapping"],
             )
+            return missing if self._level is None else self._level.report(missing, self.logger)
 
         # Group jira keys by project for efficient processing. Each entry
         # is normalised through :class:`WorkPackageMappingEntry.from_legacy`
@@ -240,12 +272,13 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
                 " the mapping shape."
             )
             self.logger.error(msg)
-            return ComponentResult(
+            missing = ComponentResult(
                 success=False,
                 updated=0,
                 message=msg,
                 errors=["missing_work_package_mapping"],
             )
+            return missing if self._level is None else self._level.report(missing, self.logger)
         self.logger.info(
             "Processing provenance for %d projects (%d issues total)",
             len(by_project),
@@ -270,12 +303,13 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             total_updated,
             total_failed,
         )
-        return ComponentResult(
+        result = ComponentResult(
             success=success,
             updated=total_updated,
             failed=total_failed,
             message=f"Processed {total_updated} provenances, {total_failed} failures",
         )
+        return result if self._level is None else self._level.report(result, self.logger)
 
     def _group_work_packages_by_project(self, wp_map):
         by_project: dict[str, list[str]] = {}

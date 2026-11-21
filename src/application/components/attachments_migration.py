@@ -40,7 +40,9 @@ from typing import Any
 
 from jira import Issue
 from src import config
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.config import logger
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
@@ -105,6 +107,11 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         self.attachment_dir: Path = Path(ap or (Path(self.data_dir) / "attachments"))
         self.attachment_dir.mkdir(parents=True, exist_ok=True)
         self._wp_lookup_cache = None
+        # Level work packages (ADR-009) this run may attach to: Jira key to the work package its
+        # sub-project holds now. Empty unless the level switch is on.
+        self._level_work_packages: dict[str, int] = {}
+        self._level_ids: dict[str, str] = {}
+        self._level: level_issues.LevelWorkPackages | None = None
         # Per-stage loss counters. Each silent skip in
         # ``_extract_batch`` / ``_map`` / ``_load`` increments a
         # bucket; ``run()`` surfaces them under
@@ -129,7 +136,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         """
         if self._wp_lookup_cache is None:
             self._wp_lookup_cache = compute_wp_lookup_by_jira_key(self.mappings)
-        return dict(self._wp_lookup_cache)
+        return dict(self._wp_lookup_cache) | getattr(self, "_level_work_packages", {})
 
     def _get_current_entities_for_type(self, entity_type: str) -> list[dict[str, Any]]:
         """Get current entities for transformation.
@@ -168,9 +175,13 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             return {}
 
         jql = f"key in ({','.join(jira_keys)}) ORDER BY key ASC"
+        # A level issue is checked again: its level must still be the one it was selected for.
+        level_ids = getattr(self, "_level_ids", {})
+        levels = {key: level_ids[key] for key in jira_keys if key in level_ids}
+        fields = "attachment,security" if levels else "attachment"
 
         def fetch_page(offset: int, size: int) -> list[Issue]:
-            return self.jira_client.jira.search_issues(jql, startAt=offset, maxResults=size, fields="attachment")
+            return self.jira_client.jira.search_issues(jql, startAt=offset, maxResults=size, fields=fields)
 
         project_key = self._issue_project_key(jira_keys[0])
         requested = set(jira_keys)
@@ -183,7 +194,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
             logger.error("Jira omitted issues during attachment extraction: %s", ", ".join(sorted(missing)))
 
         by_key: dict[str, list[dict[str, Any]]] = {}
-        for key, issue in issues.items():
+        for key, issue in self._with_unchanged_levels(issues, levels).items():
             try:
                 fields = getattr(issue, "fields", None)
                 atts = getattr(fields, "attachment", None)
@@ -199,6 +210,17 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
                 continue
 
         return by_key
+
+    def _with_unchanged_levels(self, issues: dict[str, Any], levels: dict[str, str]) -> dict[str, Any]:
+        """Drop each level issue whose level is no longer the one it was selected for; count it."""
+        kept = {}
+        for key, issue in issues.items():
+            if key in levels and level_issues.issue_level_id(issue) != levels[key]:
+                self._loss_counters["extract_level_changed"] += 1
+                logger.error("Level work package attachments refused: %s changed its level after the selection", key)
+            else:
+                kept[key] = issue
+        return kept
 
     def _attachment_records(self, attachments: list) -> list[dict[str, Any]]:
         """Keep attachments with a download URL and a recoverable filename."""
@@ -898,10 +920,13 @@ puts end_marker
         """
         # Extract attachment metadata for this batch
         logger.info("_process_batch_end_to_end: starting extract for %d keys", len(jira_keys))
+        before = self._loss_counters["extract_level_changed"]
         att_by_key = self._extract_batch(jira_keys)
+        # A level issue whose level changed since the selection is a failure of this batch.
+        changed = self._loss_counters["extract_level_changed"] - before
         logger.info("_process_batch_end_to_end: extracted %d issues with attachments", len(att_by_key))
         if not att_by_key:
-            return 0, 0, {}
+            return 0, changed, {}
 
         # Single normalisation source — see ``_wp_lookup_by_jira_key``.
         key_to_wp = self._wp_lookup_by_jira_key()
@@ -910,7 +935,7 @@ puts end_marker
 
         if not ops:
             logger.info("_process_batch_end_to_end: no ops to load, returning early")
-            return 0, 0, {}
+            return 0, changed, {}
 
         # Upload to container and load via Rails
         logger.info("_process_batch_end_to_end: starting _load with %d ops", len(ops))
@@ -929,7 +954,7 @@ puts end_marker
 
         return (
             loaded.updated or 0,
-            loaded.failed or 0,
+            (loaded.failed or 0) + changed,
             (loaded.data or {}).get("attachment_mapping", {}),
         )
 
@@ -944,21 +969,26 @@ puts end_marker
         # ``attachment_recovery_migration`` constructs its own
         # ``AttachmentsMigration`` and delegates).
         self._loss_counters.clear()
+        self._level_work_packages = {}
+        self._level_ids = {}
+        # The previous run may have left a lookup without its level issues; rebuild it.
+        self._wp_lookup_cache = None
 
         # Build the canonical Jira-key → wp-id lookup once, then group
         # the resolved Jira keys by project for batch-friendly processing.
         # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
-        key_to_wp_id = self._wp_lookup_by_jira_key()
-        self._receipts = ScopedReceipts(key_to_wp_id)
-        if not key_to_wp_id:
-            return self._missing_work_package_mapping()
+        # Before the size cap is raised: a missing level report stops the component here.
+        stopped = self._prepare_level_work_packages(self._wp_lookup_by_jira_key())
+        if stopped is not None:
+            return stopped
+        # Receipts compare ordinary issues only; level keys only form batches below, and each
+        # one's target is the work package its sub-project holds.
+        self._receipts = ScopedReceipts(dict(self._wp_lookup_cache or {}))
+        lookup = self._wp_lookup_by_jira_key()
+        if not lookup:
+            return self._with_level_report(self._missing_work_package_mapping())
 
-        by_project: dict[str, list[str]] = {}
-        for jira_key in key_to_wp_id:
-            project_key = self._issue_project_key(jira_key)
-            if project_key not in by_project:
-                by_project[project_key] = []
-            by_project[project_key].append(jira_key)
+        by_project = self._keys_by_project(lookup)
 
         total_issues = sum(len(keys) for keys in by_project.values())
         self.logger.info(
@@ -999,13 +1029,14 @@ puts end_marker
                 )
 
         try:
-            return self._run_per_project_loop(
+            result = self._run_per_project_loop(
                 by_project=by_project,
                 batch_size=batch_size,
                 total_updated=total_updated,
                 total_failed=total_failed,
                 all_mappings=all_mappings,
             )
+            return self._with_level_report(result)
         finally:
             if cap_was_raised and original_max_kb is not None:
                 if self._set_op_attachment_max_kb(original_max_kb):
@@ -1020,6 +1051,38 @@ puts end_marker
                         original_max_kb,
                         target_max_kb,
                     )
+
+    def _keys_by_project(self, lookup: dict[str, int]) -> dict[str, list[str]]:
+        """Group the Jira keys by their key prefix, for batching only."""
+        by_project: dict[str, list[str]] = {}
+        for jira_key in lookup:
+            by_project.setdefault(self._issue_project_key(jira_key), []).append(jira_key)
+        return by_project
+
+    def _prepare_level_work_packages(self, key_to_wp_id: dict[str, int]) -> ComponentResult | None:
+        """With the level switch on, resolve this run's level work packages (ADR-009).
+
+        The ordinary lookup loses every issue of a level search or of the archive. Returns the
+        failed result when the level reports are missing or malformed, else None.
+        """
+        self._level = None
+        if not level_issues.enabled():
+            return None
+        try:
+            level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+        except LevelProjectError as exc:
+            self.logger.error("Level work package attachments stopped: %s", exc)
+            return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+        self._wp_lookup_cache = level.without_level_issues(key_to_wp_id)
+        self._level_work_packages = dict(level.work_packages)
+        self._level_ids = dict(level.level_ids)
+        self._level = level
+        return None
+
+    def _with_level_report(self, result: ComponentResult) -> ComponentResult:
+        """Count the level refusals of this run into the result."""
+        level = getattr(self, "_level", None)
+        return result if level is None else level.report(result, self.logger)
 
     def _missing_work_package_mapping(self) -> ComponentResult:
         """Distinguish an absent mapping from one containing only unusable rows."""

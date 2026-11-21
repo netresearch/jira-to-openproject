@@ -48,6 +48,7 @@ import unicodedata
 from collections import Counter
 from typing import Any, NamedTuple
 
+from src.application.components import level_issues
 from src.application.components.attachments_migration import (
     AttachmentsMigration,
     compute_wp_lookup_by_jira_key,
@@ -278,12 +279,16 @@ puts end_marker
 
     def run(self) -> ComponentResult:
         try:
-            return self._recover_from_inventories()
+            level = None
+            if level_issues.enabled():
+                level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+            result = self._recover_from_inventories(level)
+            return result if level is None else level.report(result, self.logger)
         except Exception:
             self.logger.exception("Attachment recovery stopped before it could verify both inventories")
             return ComponentResult(success=False, failed=1, message="Attachment inventory could not be verified")
 
-    def _recover_from_inventories(self) -> ComponentResult:
+    def _recover_from_inventories(self, level: level_issues.LevelWorkPackages | None = None) -> ComponentResult:
         self.logger.info("Starting attachment recovery (per-issue diff + targeted re-attach)")
 
         # Use the shared ``compute_wp_lookup_by_jira_key`` helper so we
@@ -293,6 +298,10 @@ puts end_marker
         # an :class:`AttachmentsMigration` once we actually have keys
         # to delegate — keeps the empty/no-recovery paths fast.
         wp_map = compute_wp_lookup_by_jira_key(self.mappings)
+        if level is not None:
+            # Level issues resolve to the work package their sub-project holds now (ADR-009); every
+            # other issue of a level search or of the archive stays unmapped and is never downloaded.
+            wp_map = level.without_level_issues(wp_map) | level.work_packages
         if not wp_map:
             # Same fail-loud pattern as siblings (#194/#197/#198/#199).
             msg = (
@@ -400,7 +409,7 @@ puts end_marker
         # is safe AND simpler than re-implementing per-filename
         # filtering. Rails-side dedup keeps the cost proportional to
         # the actually-missing count.
-        merged_mapping, recovered, failed = self._recover_missing_batches(recovery_keys)
+        merged_mapping, recovered, failed = self._recover_missing_batches(recovery_keys, level)
 
         # Persist the recovered attachment mapping. Merge with any
         # existing ``attachment_mapping.json`` so the original run's
@@ -515,11 +524,14 @@ puts end_marker
             per_issue_missing, clean, extra_total, fidelity_false_positives, missing_total, per_issue_extra
         )
 
-    def _recover_missing_batches(self, recovery_keys):
+    def _recover_missing_batches(self, recovery_keys, level=None):
         att_migration = AttachmentsMigration(
             jira_client=self.jira_client,
             op_client=self.op_client,
         )
+        if level is not None:
+            att_migration._level_work_packages = dict(level.work_packages)
+            att_migration._level_ids = dict(level.level_ids)
         recovered = 0
         failed = 0
         merged_mapping: dict[str, dict[str, int]] = {}
