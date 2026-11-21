@@ -6,7 +6,7 @@ Accepted (2026-11-20)
 
 ## Context
 
-Jira hides an issue with an issue security level from everyone whom the level does not grant. A user reads such an issue only when he has Browse Projects in the project **and** one of the level's grants matches him. Until now j2o does not migrate these issues at all: the work-package components select `level IS EMPTY` (`src/application/components/issue_security.py`) or exclude restricted issues through the work-package mapping, and [MIGRATION_COMPONENTS.md](../MIGRATION_COMPONENTS.md) documents the exclusion. No archive keeps them.
+Jira hides an issue with an issue security level from everyone whom the level does not grant. A user reads such an issue only when they have Browse Projects in the project **and** one of the level's grants matches them. Until now j2o does not migrate these issues at all: the work-package components select `level IS EMPTY` (`src/application/components/issue_security.py`) or exclude restricted issues through the work-package mapping, and [MIGRATION_COMPONENTS.md](../MIGRATION_COMPONENTS.md) documents the exclusion. No archive keeps them.
 
 Jira grants a level to two kinds of principals:
 
@@ -24,7 +24,7 @@ Jira admin rights do not bypass issue security, so a search returns only the res
 
 OpenProject 17.9.7 (the target version named in the README) offers these mechanisms. Source references are to the opf/openproject tag v17.9.7:
 
-- A non-admin sees the work packages of projects he is a member of, and work packages shared with him (`app/models/work_packages/scopes/allowed_to.rb:64-83`). Project visibility has no inheritance from the parent project; non-members see only public projects (`app/models/projects/scopes/allowed_to.rb:104`). A private sub-project is visible only to its own members.
+- A non-admin sees the work packages of projects they are a member of, and work packages shared with them (`app/models/work_packages/scopes/allowed_to.rb:64-83`). Project visibility has no inheritance from the parent project; non-members see only public projects (`app/models/projects/scopes/allowed_to.rb:104`). A private sub-project is visible only to its own members.
 - Administrators see every project and work package (`app/models/work_packages/scopes/allowed_to.rb:45-46`; ["Administrators have full access to all settings and all projects"](https://www.openproject.org/docs/system-admin-guide/users-permissions/roles-permissions/)).
 - Sharing a work package is an Enterprise add-on. The user gets the role "Work Package Viewer" and "is not automatically a member of the whole project" ([Share work packages](https://www.openproject.org/docs/user-guide/work-packages/share-work-packages/)). In code the Enterprise token gates the UI; the share contracts and the visibility scope do not check it (`app/contracts/shares/base_contract.rb:35-80`, `app/models/work_packages/scopes/allowed_to.rb:64-83`).
 - Internal comments are an Enterprise add-on, visible per role permission and by default only to the Project admin role ([Activity: internal comments](https://www.openproject.org/docs/user-guide/activity/); `app/contracts/work_packages/create_note_contract.rb:45`).
@@ -60,7 +60,7 @@ A level holds at most one single-user grant per user, so a single-user grant to 
 
 ### 4. OpenProject administrators do not stop the import
 
-OpenProject administrators see every work package. The import does not stop for that. The run report lists, per level, the OpenProject administrators who are not Jira readers of the level (implemented with the edition detection). Rationale: a Jira administrator can reach these issues too if he wants, by adding himself to a grant, impersonating or scripting; the difference is only that OpenProject shows them without a deliberate action.
+OpenProject administrators see every work package. The import does not stop for that. The run report lists, per level, the OpenProject administrators who are not Jira readers of the level (implemented with the edition detection). Rationale: a Jira administrator can reach these issues too if they want, by adding themselves to a grant, impersonating or scripting; the difference is only that OpenProject shows them without a deliberate action.
 
 ### 5. Operator archive for issues that do not go to OpenProject
 
