@@ -565,3 +565,23 @@ def test_level_sprint_writer_copies_the_parent_version():
         sync_level_sprints(client, (100, 7), ("https://jira.local", "APP", "10"), {"42": 9})
     with pytest.raises(ValueError, match="Invalid"):
         sync_level_sprints(client, (100, 7), ("https://jira.local", "APP", "10"), {"x": 9})
+
+
+def test_level_unreadable_sub_project_refuses_its_sprint_issues(level_setup):
+    outcome = level_sprint_run(level_setup, live={"field": True})
+    assert not outcome.op.copy_syncs
+    assert not level_assignments(outcome.op)
+    assert outcome.result.details["security_level"] == {"work_packages": 0, "refused": 2}
+
+
+def test_level_unselected_issues_get_no_sprint_copy(level_setup):
+    # APP-12 (per_issue on Community) and APP-13 (unexplained) are in sprint 42 too; APP-12 also
+    # has a stray level work-package entry.
+    from tests.unit.test_level_attachments import LEVEL_MAP
+
+    level_map = {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}
+    rows = [level_sprint_row(n, "10000") for n in (10, 11, 12, 13)]
+    outcome = level_sprint_run(level_setup, rows=rows, level_map=level_map)
+    copy = outcome.op.copies[100, "42"]
+    assert level_assignments(outcome.op) == {(100, 900, (copy,)), (100, 901, (copy,))}
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 1}
