@@ -51,12 +51,13 @@ An issue whose readers the grants do not explain (a reader outside every grant, 
 
 So that the inventory sees every restricted issue, the owner adds the migration account (the Jira token user) as a "Single user" grant to every security level for the duration of the migration and removes it afterwards.
 
-The reader computation does not count this grant. The migration account counts as a reader of an issue only when another grant explains it: group, project role, project lead, another single-user grant of the level, assignee, reporter or the extra-reader field. Concretely:
+The reader computation does not count this grant. On a level that carries it, the migration account counts as a reader of an issue only when another grant explains it: group, project role, project lead, another single-user grant of the level, assignee, reporter or the extra-reader field. Concretely:
 
 - A single-user grant that resolves to the migration account is never a static grant.
-- Where only that grant explains the account, the account is removed from the issue's effective readers.
+- The account is removed from the issue's effective readers only when the level has at least one single-user grant naming it and no other grant explains it.
+- On a level without such a grant the account stays in the effective readers. Unless another grant explains it, it is an extra reader and the issue is unexplained.
 
-A level holds at most one single-user grant per user, so a single-user grant to the migration account that existed **before** the migration cannot be told apart from the temporary one and is not counted either. Such a grant narrows the readers by one account; it never widens them. The run report counts, per level, the single-user grants that named the migration account, so a pre-existing grant is visible before the owner adds the temporary ones. The account name is configurable (`j2o-restricted inventory --migration-account`); the default is the configured Jira user (`J2O_JIRA_USERNAME`, the source of `jira.username`). The account must exist in Jira.
+A level holds at most one single-user grant per user, so a single-user grant to the migration account that existed **before** the migration cannot be told apart from the temporary one and is not counted either. Such a grant narrows the readers by one account; it never widens them. The run report counts, per level, the single-user grants that named the migration account, so a pre-existing grant is visible before the owner adds the temporary ones. The account name is configurable (`j2o-restricted inventory --migration-account`); the default is the configured Jira user (`J2O_JIRA_USERNAME`, the source of `jira.username`). The account must exist in Jira and must own the inventory token (`/rest/api/2/myself`).
 
 ### 4. OpenProject administrators do not stop the import
 
@@ -64,13 +65,14 @@ OpenProject administrators see every work package. The import does not stop for 
 
 ### 5. Operator archive for issues that do not go to OpenProject
 
-Issues with per-issue readers on Community, and issues with unexplained readers on any edition, go to a new age-encrypted operator archive for restricted issues, readable with the operator key: `j2o-restricted` (`src/restricted_issues.py`, [docs/operator-restricted-issues.md](../operator-restricted-issues.md)). `j2o-history` is not extended. Each archived issue holds the full Jira issue (all fields, the complete changelog, all comments and worklogs, attachment metadata), its level, its effective readers and its extra and missing readers. Attachment contents are not in the archive. With an Enterprise licence later, the migration can import the per-issue issues from the archive.
+Issues with per-issue readers on Community, and issues with unexplained readers on any edition, go to a new age-encrypted operator archive for restricted issues, readable with the operator key: `j2o-restricted` (`src/restricted_issues.py`, [docs/operator-restricted-issues.md](../operator-restricted-issues.md)). `j2o-history` is not extended. Each archived issue holds the full Jira issue (all fields, the complete changelog, all comments and worklogs, attachment metadata), its level, its effective readers and its extra and missing readers. Attachment contents are not in the archive. The archive holds the comments visible to the migration account; with the temporary grant and the account's admin roles this is expected to be all comments, which has not been measured. With an Enterprise licence later, the migration can import the per-issue issues from the archive.
 
 The shared run report carries counts per project and level and the keys of archived issues, never reader names.
 
 ### 6. Decided by Claude, not by the owner
 
-- **Internal comments are not used** to imitate Jira visibility. They are visible per role permission, not per user or Jira group, so they are no exact mapping of a level or of a restricted comment. The comments of a restricted issue are protected by the work package's project.
+- **Internal comments are not used** to imitate Jira visibility. They are visible per role permission, not per user or Jira group, so they are no exact mapping of a level or of a restricted comment.
+- **Comments with their own visibility restriction** (a group or project role on the comment, narrower than the issue) keep the treatment of [ADR-007](ADR-007-protected-comments-and-local-acceptance.md) on level issues: `select_comments` (`src/infrastructure/jira/comment_audience.py`) never writes them as OpenProject journals, and they reach readers only through the reader-encrypted `jira-protected-comments.j2o` attachment of `j2o-comments`, where each reader decrypts the view captured with their own Jira account. Membership of the private sub-project alone never widens a comment's audience.
 - **Version sharing for sprints** used by work packages in a sub-project is decided in a later pull request.
 
 ### Order of work

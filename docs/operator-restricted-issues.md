@@ -12,9 +12,19 @@ For each project with an issue security scheme:
 4. Each issue gets one class:
    - `static`: the effective readers equal the static readers.
    - `per_issue`: additional readers, each named by the issue's assignee, reporter or user-field grant.
-   - `unexplained`: a reader no grant explains, a static reader missing from the effective readers, or a level with a grant label the command does not know (for example "Current user", or a label in another language). Such issues are archived and the run continues.
+   - `unexplained`: a reader no grant explains, a static reader missing from the effective readers, or a level with a grant label the command does not know (for example "Current user", or a label in another language). The grants of such a level are not resolved, so the report shows 0 static readers for it. Such issues are archived and the run continues.
 
-The migration account's temporary "Single user" grant (ADR-009, decision 3) is not counted. The account counts as a reader only when another grant explains it. Pass its Jira user name with `--migration-account`; the default is `J2O_JIRA_USERNAME`, the configured Jira user. The account must exist in Jira.
+The migration account's temporary "Single user" grant (ADR-009, decision 3) is not counted. The account is removed from an issue's effective readers only when the level has a "Single user" grant naming it and no other grant explains it. On a level without such a grant the account stays a reader, and the issue is `unexplained` unless another grant explains the account. Pass its Jira user name with `--migration-account`; the default is `J2O_JIRA_USERNAME`, the configured Jira user. The account must exist in Jira and must own the inventory token: the command compares it with `/rest/api/2/myself` and stops on a mismatch.
+
+## Prerequisites
+
+Jira returns only the issues the token user can read. Before each run:
+
+- The migration account has Browse Projects on every project in scope.
+- The temporary "Single user" grant for the migration account is on every security level of every project in scope.
+- Without `--project`, the instance total of `level IS NOT EMPTY` checks coverage only for issues visible to the token; an issue the token cannot read is missing from both the total and the scan.
+
+Remove the temporary grants after the final scan.
 
 ## Run
 
@@ -39,4 +49,9 @@ uv run --project /path/to/j2o j2o-restricted restore --identity operator.agekey 
   --archive restricted-issues.age --output restricted-issues.json
 ```
 
-Grants and memberships can change until cutover. Repeat the inventory at cutover.
+## Repeat runs and known limits
+
+Grants and memberships can change until cutover. Repeat the inventory at cutover, in a new directory or with new file names: archive and report are never overwritten. A failed run is repeated the same way, in a new directory, even when it already wrote the archive.
+
+- An issue whose assignee, reporter, reader field or grants change during the scan can be misclassified, because its fields are read before its readers. Run the final inventory during the cutover freeze.
+- The archive holds the comments visible to the migration account. With the temporary grant and the account's admin roles this is expected to be all comments; it has not been measured.
