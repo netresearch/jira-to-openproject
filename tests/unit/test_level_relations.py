@@ -133,7 +133,9 @@ def _run(level_setup, *, live=None, moved=(), omitted=(), ordinary=None, level_m
     op = FakeOpenProject(live, SECOND_LIVE if second_level else None)
     migration = RelationMigration(jira_client=jira, op_client=op)
     results = [migration.run() for _ in range(runs)]
-    return SimpleNamespace(result=results[-1], results=results, jira=jira, op=op, mappings=mappings)
+    return SimpleNamespace(
+        result=results[-1] if results else None, results=results, jira=jira, op=op, mappings=mappings
+    )
 
 
 def _refused(outcome):
@@ -240,6 +242,22 @@ def test_refusals_are_reported_on_the_early_return(level_setup):
     assert outcome.op.bulk_calls == []
     assert _refused(outcome) == 2
     assert outcome.result.details["failed_count"] == 2
+
+
+def test_the_component_runner_reaches_the_level_path(level_setup, monkeypatch):
+    # The migration runner calls run_with_change_detection, which ends in run().
+    from src.migration import _invoke_component
+
+    calls = []
+    original = RelationMigration.run
+    monkeypatch.setattr(RelationMigration, "run", lambda self: calls.append(1) or original(self))
+    outcome = _run(level_setup, runs=0)
+    migration = RelationMigration(jira_client=outcome.jira, op_client=outcome.op)
+    result = _invoke_component("relations", migration)
+    assert calls == [1]
+    assert result.success, result.message
+    assert outcome.op.bulk_calls == [[ORDINARY_RELATION, INSIDE]]
+    assert result.details["level_relations_withheld"] == 4
 
 
 def test_a_missing_report_stops_before_any_write(level_setup):
