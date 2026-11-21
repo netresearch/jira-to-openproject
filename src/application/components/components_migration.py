@@ -87,7 +87,7 @@ class ComponentsMigration(BaseMigration):
             pid = project_id(mapping)
             if not pid:
                 continue
-            targets = self._target_origins(key, pid, mapped.get(key, {}))
+            targets = self._without_recovered_level_issues(self._target_origins(key, pid, mapped.get(key, {})))
             if targets:
                 rows, source_pid = self._project_rows(key, targets, base)
                 skipped += len(targets) - len(rows)
@@ -110,6 +110,21 @@ class ComponentsMigration(BaseMigration):
         flat = {key: wp for targets in projects.values() for key, (wp, _) in targets.items()}
         kept = level.without_level_issues(flat)
         return {project: {k: v for k, v in targets.items() if k in kept} for project, targets in projects.items()}
+
+    def _without_recovered_level_issues(self, targets: dict) -> dict:
+        """Drop the level issues the parent snapshot added back; each is refused on both sides.
+
+        The mapped targets were filtered before, so a level key here has a work package in the
+        parent that only the snapshot names.
+        """
+        level = getattr(self, "_level", None)
+        if level is None:
+            return targets
+        recovered = {key: wp for key, (wp, _) in targets.items() if key in level.level_keys}
+        if not recovered:
+            return targets
+        level.without_level_issues(recovered)
+        return {key: value for key, value in targets.items() if key not in recovered}
 
     def _add_level_projects(self, projects: dict, base: str) -> int:
         """Add one payload per level sub-project of the issues resolved this run (ADR-009).

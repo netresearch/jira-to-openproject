@@ -178,9 +178,10 @@ class _LevelJira:
 class _LevelOpenProject:
     """Answer the live sub-project read and the parent snapshot; decode and record each payload."""
 
-    def __init__(self, live=None, by_project=None):
+    def __init__(self, live=None, by_project=None, snapshot=()):
         self.live = LEVEL_LIVE if live is None else live
         self.by_project = by_project or {}
+        self.snapshot = list(snapshot)
         self.live_reads, self.payloads, self.snapshots = [], [], []
 
     def execute_query_to_json_file(self, script):
@@ -190,7 +191,7 @@ class _LevelOpenProject:
 
     def get_project_wp_cf_snapshot(self, pid):
         self.snapshots.append(pid)
-        return []
+        return [dict(row) for row in self.snapshot]
 
     def execute_large_query_to_json_file(self, query, timeout):
         encoded = query.split('Base64.strict_decode64("')[1].split('"')[0]
@@ -211,6 +212,7 @@ def _level_run(
     catalogue=None,
     runs=1,
     second_level=False,
+    snapshot=(),
     **kw,
 ):
     if second_level:
@@ -223,7 +225,7 @@ def _level_run(
     writes = []
     original = mappings.set_mapping
     mappings.set_mapping = lambda name, value: (writes.append(name), original(name, value))
-    jira, op = _LevelJira(moved, omitted), _LevelOpenProject(live, SECOND_LIVE if second_level else None)
+    jira, op = _LevelJira(moved, omitted), _LevelOpenProject(live, SECOND_LIVE if second_level else None, snapshot)
     if catalogue is not None:
         jira.jira.project_components.return_value = catalogue
     migration = ComponentsMigration(jira_client=jira, op_client=op)
@@ -268,6 +270,14 @@ def test_level_switch_on_assigns_categories_of_the_sub_project_only(level_setup)
     # Categories are recorded per OpenProject project; no work-package mapping is written.
     assert outcome.writes == ["category", "category"]
     assert outcome.mappings.data["category"] == {"7": {"Backend": 57}, "100": {"Backend": 150}}
+
+
+def test_level_issue_with_a_parent_work_package_only_the_snapshot_names_is_refused(level_setup):
+    # APP-10 also has an unmapped work package in the parent project.
+    outcome = _level_run(level_setup, snapshot=[{"id": 510, "jira_issue_key": "APP-10", "jira_source_id": "10"}])
+    assert not outcome.result.success
+    assert _targets(outcome.op) == {(7, None, "APP-1", 500), (100, 7, "APP-11", 901)}
+    assert outcome.result.details["security_level"] == {"work_packages": 1, "refused": 1}
 
 
 def test_level_sub_projects_of_one_jira_project_share_one_level_search(level_setup):
