@@ -96,8 +96,9 @@ def test_failed_reads_propagate():
         def execute_json_query(self, query, timeout=None):
             raise RuntimeError("console gone")
 
+    rails, api = Broken(), _api()
     with pytest.raises(RuntimeError):
-        detect_edition(Broken(), _api())
+        detect_edition(rails, api)
 
 
 _ADMINS = [
@@ -111,11 +112,15 @@ def test_administrators_are_validated_and_exclude_builtin_users():
     rails = FakeRails(None, _ADMINS)
     assert administrators(rails) == _ADMINS
     assert 'type: "User", admin: true' in rails.queries[0]
-    for broken in ([{"id": "1", "login": "a", "status": "active"}], [{"id": 1, "login": "a", "status": "deleted"}]):
+    broken = [
+        [{"id": "1", "login": "a", "status": "active"}],
+        [{"id": 1, "login": "a", "status": "deleted"}],
+        [_ADMINS[0], _ADMINS[0]],
+    ]
+    for rows in broken:
+        reader = FakeRails(None, rows)
         with pytest.raises(EditionError):
-            administrators(FakeRails(None, broken))
-    with pytest.raises(EditionError):
-        administrators(FakeRails(None, [_ADMINS[0], _ADMINS[0]]))
+            administrators(reader)
 
 
 def _level(project, level_id, readers, grants=(("group", "leads"),)):
@@ -164,8 +169,10 @@ def test_admin_report_lists_non_readers_per_level_and_unmapped_admins():
         "admins": [],
     }
     text = json.dumps(value)
-    assert "carol" not in text and "Alice" not in text and "bob" not in text
-    assert value["edition"] == "community" and value["administrators"] == 3
+    for reader in ("carol", "Alice", "bob"):
+        assert reader not in text
+    assert value["edition"] == "community"
+    assert value["administrators"] == 3
     assert value["mapped_openproject_users"] == 3
 
 
@@ -180,8 +187,9 @@ def test_admin_report_lists_non_readers_per_level_and_unmapped_admins():
     ],
 )
 def test_admin_report_stops_without_a_usable_user_mapping(mapping):
+    edition = _edition()
     with pytest.raises(ArchiveError):
-        admin_report(_ARCHIVE, mapping, _ADMINS, _edition(), "sha")
+        admin_report(_ARCHIVE, mapping, _ADMINS, edition, "sha")
 
 
 def test_admins_command_reads_the_archive_and_writes_a_private_report(tmp_path, monkeypatch):
@@ -221,7 +229,8 @@ def test_admins_subcommand_warns_and_stops_only_on_an_unverified_answer(tmp_path
     out = capsys.readouterr()
     # The repository's log handler writes to standard output; the summary is the last line.
     assert json.loads(out.out.splitlines()[-1]) == {"edition": "community", "administrators": 3}
-    assert '"unmapped": 1' in out.err and '"ABC:1": 1' in out.err
+    assert '"unmapped": 1' in out.err
+    assert '"ABC:1": 1' in out.err
     rails.answers["EnterpriseToken"] = {"result": "NameError"}
     assert main([*argv, "https://" + _HOST, "--report", "again.json"]) == 1
     assert "Malformed Enterprise token answer" in capsys.readouterr().err
