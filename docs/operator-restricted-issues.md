@@ -112,6 +112,23 @@ migration:
 - **Watchers.** A level work package gets no watchers yet. Only a reader of the level may watch it, and the importer has no readers: `report.json` carries the number of static readers per level (`static_readers`) and of extra readers per archived issue, never their names, and the reader identities (each level's static readers, each `per_issue` issue's extra readers) are only in the age-encrypted archive, which the importer does not read. `watchers` resolves the level work packages before any write, reads no watcher of a level issue (also not from `jira_issues_cache.json`), counts the level work packages it leaves without watchers in `details.level_watchers_withheld`, and refuses an ordinary entry of a level issue; refusals count as failures in `details.security_level`. `work_packages_content` collects no watchers for level work packages either. The late access grant (step 6 of the order of work) needs the same reader identities.
 - **Limits.** `J2O_MAX_ISSUES` does not limit the level search, because the selection has to see every issue of a level. An issue created, deleted or moved since the inventory refuses its level, so repeat the inventory at cutover. With the switch on, an issue that loses its level after its work package was created is not created again in the parent project, and its work package stays in the sub-project; with the switch off it would get a second work package in the parent project.
 
+## Level access
+
+`security_level_access` is the late access grant (ADR-009, step 6; [ADR-012](adr/ADR-012-late-access-grant-of-level-sub-projects.md)). It runs after `admin_schemes` and before `reporting`, only with `migration.security_level_work_packages: true`, and needs the readers file of the same inventory:
+
+```yaml
+migration:
+  security_level_report: /home/me/restricted-inventory/report.json
+  security_level_admin_report: /path/to/j2o/restricted-admins.json
+  security_level_readers: /home/me/restricted-inventory/readers.json
+```
+
+- **Members.** Each mapped level sub-project gets one membership per static reader of its level whose Jira user name has exactly one OpenProject user in `user_mapping.json` (`jira_name`, case-insensitive; entries restored from OpenProject do not count). The membership carries the project roles the user holds in the parent project, including roles inherited from the `J2O Role` groups, or "Reader" when the user holds none. Memberships go through `Members::CreateService` without notifications. No group gets a membership.
+- **Shares.** On Enterprise (the edition of the administrator report), each `per_issue` work package of the sub-project, resolved live by `J2O Origin Key` like in the other level stages, is shared as "Work package viewer" with the users of its issue's extra readers. The share is saved without `Shares::CreateService`, which would mail every reader. Community gets no shares.
+- **Not granted.** A reader without exactly one OpenProject user (`readers_without_user`) and a locked user (`locked_readers`; `Members::CreateService` refuses locked users) get nothing; both are counted and logged without names. A repeat run after the user is mapped or unlocked grants the membership. A reader locked after the grant keeps the row it has, which is accepted with the expected roles.
+- **Read back.** Before and after writing, every membership row of the sub-project is read: user, shared work package and role set must equal the expected rows exactly. A row the grant would not have written (another user, a group, other roles, a share of another work package or with another user) refuses that sub-project before any write. Nothing is removed or changed; an administrator corrects such a row. A repeat run writes nothing.
+- **Administrators.** OpenProject administrators see every sub-project without a membership; the administrator report lists them (see above).
+
 ## Repeat runs and known limits
 
 Grants and memberships can change until cutover. Repeat the inventory at cutover, in a new directory or with new file names: archive and report are never overwritten. A failed run is repeated the same way, in a new directory, even when it already wrote the archive.

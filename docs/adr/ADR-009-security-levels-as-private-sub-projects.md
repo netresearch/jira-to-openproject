@@ -84,7 +84,7 @@ The shared run report carries counts per project and level and the keys of archi
 3. Memberless private sub-projects with a separate mapping.
 4. Work packages of level issues in their sub-project.
 5. Dependent components (attachments, versions, boards, relations, watchers, time entries).
-6. Late access grant: memberships, and shares on Enterprise, read back after writing.
+6. Late access grant: memberships, and shares on Enterprise, read back after writing. Update 2026-11-21: decided in [ADR-012](ADR-012-late-access-grant-of-level-sub-projects.md).
 
 ## Consequences
 

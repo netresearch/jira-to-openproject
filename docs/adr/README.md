@@ -17,6 +17,7 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [ADR-009](ADR-009-security-levels-as-private-sub-projects.md) | Issues with a Jira security level become private OpenProject sub-projects | Accepted | 2026-11-20 |
 | [ADR-010](ADR-010-level-versions-as-sub-project-copies.md) | Versions of level work packages are copies in their sub-project | Accepted | 2026-11-21 |
 | [ADR-011](ADR-011-jira-keys-as-semantic-identifiers.md) | Jira keys become native OpenProject semantic work package identifiers | Accepted | 2026-11-21 |
+| [ADR-012](ADR-012-late-access-grant-of-level-sub-projects.md) | Late access grant of the level sub-projects | Accepted | 2026-11-21 |
 
 ## What is an ADR?
 
