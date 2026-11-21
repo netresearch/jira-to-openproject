@@ -60,6 +60,7 @@ from src.application.components.relation_migration import RelationMigration
 from src.application.components.remote_links_migration import RemoteLinksMigration
 from src.application.components.reporting_migration import ReportingMigration
 from src.application.components.resolution_migration import ResolutionMigration
+from src.application.components.security_level_projects_migration import SecurityLevelProjectsMigration
 from src.application.components.security_levels_migration import SecurityLevelsMigration
 from src.application.components.simpletasks_migration import SimpleTasksMigration
 from src.application.components.sprint_epic_migration import SprintEpicMigration
@@ -456,6 +457,7 @@ def _build_component_factories(
         "estimates": lambda: EstimatesMigration(jira_client=jira_client, op_client=op_client),
         "affects_versions": lambda: AffectsVersionsMigration(jira_client=jira_client, op_client=op_client),
         "security_levels": lambda: SecurityLevelsMigration(jira_client=jira_client, op_client=op_client),
+        "security_level_projects": lambda: SecurityLevelProjectsMigration(jira_client=jira_client, op_client=op_client),
         "votes_reactions": lambda: VotesMigration(jira_client=jira_client, op_client=op_client),
         "customfields_generic": lambda: CustomFieldsGenericMigration(jira_client=jira_client, op_client=op_client),
         "work_package_field_history": lambda: WorkPackageFieldHistoryMigration(

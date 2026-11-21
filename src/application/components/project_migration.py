@@ -95,6 +95,17 @@ PROJECT_URL_CF_NAME = "Jira Project URL"
 PROJECT_AVATAR_CF_NAME = "Jira Project Avatar URL"
 
 
+def project_identifier(jira_key: str) -> str:
+    """The OpenProject identifier of a Jira project: lower case, ``-`` for every other character."""
+    identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
+    if not identifier:
+        msg = "Jira project has no key"
+        raise ValueError(msg)
+    if not identifier[0].isalpha():
+        identifier = "p-" + identifier
+    return identifier[:100]
+
+
 @register_entity_types("projects")
 class ProjectMigration(BaseMigration):
     """Handles the migration of projects from Jira to OpenProject.
@@ -1024,14 +1035,7 @@ class ProjectMigration(BaseMigration):
         if lead_display:
             jira_project["lead_display"] = lead_display
 
-        # Generate identifier
-        identifier = re.sub(r"[^a-zA-Z0-9]", "-", jira_key.lower())
-        if not identifier:
-            msg = "Jira project has no key"
-            raise ValueError(msg)
-        if not identifier[0].isalpha():
-            identifier = "p-" + identifier
-        identifier = identifier[:100]
+        identifier = project_identifier(jira_key)
         by_id = existing_by_identifier.get(identifier)
         by_name = existing_by_name.get(jira_name.lower())
         if by_id and by_name and by_id["id"] != by_name["id"]:

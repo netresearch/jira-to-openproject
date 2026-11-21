@@ -64,6 +64,12 @@ migration:
   # Name an existing private, memberless root project; unset skips the stage.
   # native_board_archive_project: "board-archive"
 
+  # Private, memberless sub-projects per Jira project and security level
+  # (security_level_projects; not in a profile yet, see docs/operator-restricted-issues.md).
+  # Both files must belong to the same restricted-issue archive.
+  # security_level_report: "restricted-report.json"
+  # security_level_admin_report: "restricted-admins.json"
+
   # Behavior settings
   skip_existing: true
   enable_rails_meta_writes: true

@@ -177,6 +177,7 @@ type ComponentName = Literal[
     "estimates",
     "affects_versions",
     "security_levels",
+    "security_level_projects",
     "votes_reactions",
     "customfields_generic",
     "work_package_field_history",
