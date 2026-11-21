@@ -12,6 +12,8 @@ import pytest
 from src.application.components import work_package_field_history_migration as module
 from src.application.components.work_package_field_history_migration import WorkPackageFieldHistoryMigration
 from src.migration import _invoke_component
+from tests.unit.test_level_work_packages import level_issues
+from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.unit
 
@@ -348,3 +350,219 @@ def test_failed_write_is_counted_once_and_outcomes_reconcile(migration):
     outcomes += ("unsupported_project_type", "target_unconfirmed", "failed")
     assert sum(details[name] for name in outcomes) == details["issues_seen"] == 5
     assert details["not_returned"] == 4
+
+
+# --- Level work packages (ADR-009, step 5b) ---------------------------------------------------
+
+LEVEL_LIGHT = 'project = "APP" AND level IS NOT EMPTY ORDER BY created ASC, key ASC'
+LEVEL_ORDINARY = 'project = "APP" AND level IS EMPTY ORDER BY id'
+LEVEL_LIVE = {"field": True, "work_packages": [900, 901], "keys": [[900, "APP-10"], [901, "APP-11"]]}
+LEVEL_MAP = {
+    str(n): {
+        "jira_key": f"APP-{n}",
+        "openproject_id": wp,
+        "project_key": "APP",
+        "openproject_project_id": 100,
+        "security_level_id": "10000",
+        "security_level_project": "APP:10000",
+        "security_class": "static",
+    }
+    for n, wp in ((10, 900), (11, 901))
+}
+LEVEL_OF = {10: "10000", 11: "10000", 12: "10000", 13: "10000", 20: "10001"}
+# The level was set on the issue; Jira shows this change to everyone who can browse the issue.
+SECURITY = {
+    "field": "security",
+    "fieldtype": "jira",
+    "from": None,
+    "fromString": None,
+    "to": "10000",
+    "toString": "Mgmt",
+}
+
+
+def _history_issue(number, level=None):
+    page = {"startAt": 0, "maxResults": 100, "total": 1, "histories": [history(number, _SAFE, SECURITY)]}
+    fields = {"project": {"key": "APP", "id": "10", "projectTypeKey": "software"}}
+    fields["security"] = {"id": level} if level else None
+    return SimpleNamespace(key=f"APP-{number}", id=str(number), raw={"fields": fields, "changelog": page})
+
+
+class _LevelJira:
+    """Answer the level and ordinary searches; record every search with its fields and expand."""
+
+    def __init__(self, moved=(), omitted=()):
+        self.searches = []
+        self.moved, self.omitted = set(moved), set(omitted)
+        self.base_url = "https://jira.local"
+        self.get_projects = Mock(return_value=[{"key": "APP"}])
+        self.get_custom_fields = Mock(return_value=[])
+        self.jira = Mock()
+        self.jira.search_issues.side_effect = self.search
+
+    def search(self, jql, startAt, maxResults, **kwargs):
+        self.searches.append((jql, kwargs.get("fields"), kwargs.get("expand")))
+        if jql == LEVEL_LIGHT and kwargs.get("fields") == "security":
+            rows = level_issues()
+        elif jql == LEVEL_LIGHT:
+            rows = [
+                _history_issue(n, "10001" if n in self.moved else level)
+                for n, level in LEVEL_OF.items()
+                if n not in self.omitted
+            ]
+        elif jql == LEVEL_ORDINARY:
+            rows = [_history_issue(1)]
+        else:
+            raise AssertionError(jql)
+        return rows[startAt : startAt + maxResults]
+
+
+class _LevelOpenProject(FakeOpenProject):
+    """The field history fake with an ordinary project 7, the level sub-project 100 and the live read."""
+
+    def __init__(self, live=None):
+        super().__init__()
+        self.live = LEVEL_LIVE if live is None else live
+        self.live_reads = []
+        self.origins = {500: "1", 510: "10", 900: "10", 901: "11"}
+        self.projects = {500: 7, 510: 7, 900: 100, 901: 100}
+        self.keys = {500: "APP-1", 510: "APP-10", 900: "APP-10", 901: "APP-11"}
+
+    def execute_query_to_json_file(self, script):
+        self.live_reads.append(json.loads(script.split("\n")[1]))
+        return json.loads(json.dumps(self.live))
+
+
+@pytest.fixture
+def level_setup(level_work_package_setup):  # noqa: F811 (the imported fixture, requested by name)
+    """The reports, mappings and switch of the level work package tests."""
+    return level_work_package_setup
+
+
+def _level_run(
+    level_setup,
+    *,
+    live=None,
+    moved=(),
+    omitted=(),
+    level_map=None,
+    ordinary=None,
+    stored=None,
+    approved=(),
+    runs=1,
+    **kw,
+):
+    mappings, _ = level_setup(**kw)
+    from src import config
+
+    config.migration_config["history_approved_field_ids"] = approved
+    mappings.data["work_package"] = {"1": {"jira_key": "APP-1", "openproject_id": 500, "project_key": "APP"}}
+    mappings.data["work_package"].update(ordinary or {})
+    mappings.data["security_level_work_package"] = dict(LEVEL_MAP if level_map is None else level_map)
+    writes = []
+    original = mappings.set_mapping
+    mappings.set_mapping = lambda name, value: (writes.append(name), original(name, value))
+    jira, op = _LevelJira(moved, omitted), _LevelOpenProject(live)
+    op.values.update(stored or {})
+    migration = WorkPackageFieldHistoryMigration(jira_client=jira, op_client=op)
+    results = [migration.run() for _ in range(runs)]
+    return SimpleNamespace(result=results[-1], results=results, jira=jira, op=op, writes=writes)
+
+
+def _written(op):
+    return {(row["project"], row["wp"]) for batch in op.writes for row in batch if row["value"] is not None}
+
+
+def test_level_switch_off_issues_exactly_the_calls_of_the_ordinary_path(level_setup):
+    outcome = _level_run(level_setup, on=False, reports=False)
+    assert outcome.result.success, outcome.result
+    # The first page and the empty page that ends the search.
+    assert outcome.jira.searches == [(LEVEL_ORDINARY, "project,security", "changelog")] * 2
+    assert _written(outcome.op) == {(7, 500)}
+    assert not outcome.op.live_reads
+    assert not outcome.jira.get_projects.called
+    assert outcome.writes == []
+    assert "security_level" not in outcome.result.details
+
+
+def test_level_switch_on_writes_history_into_the_work_package_its_sub_project_holds(level_setup):
+    outcome = _level_run(level_setup)
+    assert outcome.result.success, outcome.result
+    assert _written(outcome.op) == {(7, 500), (100, 900), (100, 901)}
+    assert (LEVEL_LIGHT, "project,security", "changelog") in outcome.jira.searches
+    assert outcome.op.live_reads == [{"project_id": 100, "field": "J2O Origin Key"}]
+    value = json.loads(outcome.op.values[900])
+    assert value["jiraIssueId"] == "10"
+    # The security change is kept: everyone who reads the sub-project can browse the issue in Jira.
+    assert [c["field"] for c in value["events"][0]["changes"]] == ["summary", "security"]
+    # Archived and unmapped issues get nothing.
+    assert set(outcome.op.values) == {500, 900, 901}
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
+    assert outcome.writes == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}},
+        {"moved": {10}},
+        {"omitted": {10}},
+    ],
+)
+def test_level_issue_that_cannot_be_confirmed_gets_no_history(level_setup, options):
+    outcome = _level_run(level_setup, **options)
+    assert not outcome.result.success
+    assert _written(outcome.op) == {(7, 500), (100, 901)}
+    assert outcome.result.details["security_level"]["refused"] == 1
+    assert outcome.result.failed == 1
+
+
+def test_level_issue_the_selection_does_not_keep_gets_nothing_even_with_an_entry(level_setup):
+    level_map = {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}
+    outcome = _level_run(level_setup, level_map=level_map)
+    assert not outcome.result.success
+    assert _written(outcome.op) == {(7, 500), (100, 900), (100, 901)}
+    assert outcome.result.details["security_level"]["refused"] == 1
+
+
+def test_level_unreadable_sub_project_refuses_all_its_issues(level_setup):
+    outcome = _level_run(level_setup, live={"field": True})
+    assert not outcome.result.success
+    assert _written(outcome.op) == {(7, 500)}
+    assert outcome.result.details["security_level"]["refused"] == 2
+
+
+def test_level_issue_with_an_ordinary_work_package_still_has_that_value_cleared(level_setup):
+    # APP-10 has an earlier ordinary work package with a stored value: it is cleared as before,
+    # and the level work package gets nothing.
+    ordinary = {"10": {"jira_key": "APP-10", "openproject_id": 510, "project_key": "APP"}}
+    outcome = _level_run(level_setup, ordinary=ordinary, stored={510: "old"})
+    assert not outcome.result.success
+    assert 510 not in outcome.op.values
+    assert outcome.result.details["cleared"] == 1
+    assert _written(outcome.op) == {(7, 500), (100, 901)}
+    assert outcome.result.details["security_level"]["refused"] == 1
+
+
+def test_level_repeated_run_on_one_instance_gives_the_same_result(level_setup):
+    outcome = _level_run(level_setup, moved={10}, runs=2)
+    first, second = outcome.results
+    assert first.details["security_level"] == second.details["security_level"] == {"work_packages": 2, "refused": 1}
+    assert first.failed == second.failed == 1
+    assert second.details["unchanged"] == 2
+    assert len(outcome.op.live_reads) == 2
+    assert 900 not in outcome.op.values
+
+
+def test_level_refusals_are_reported_when_the_extract_fails(level_setup):
+    outcome = _level_run(level_setup, live={"field": True}, approved="not-a-field-id")
+    assert not outcome.result.success
+    assert not outcome.op.writes
+    assert outcome.result.details["security_level"] == {"work_packages": 0, "refused": 2}
+
+
+def test_level_switch_on_without_reports_stops_before_any_search_or_write(level_setup):
+    outcome = _level_run(level_setup, reports=False)
+    assert not outcome.result.success
+    assert not outcome.jira.searches
+    assert not outcome.op.writes
