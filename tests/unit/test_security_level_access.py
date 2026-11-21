@@ -224,7 +224,9 @@ def test_community_audience_has_no_shares_and_counts_only_static_readers():
     from src.application.components.level_access import audience
     from src.application.components.level_readers import Readers
 
-    readers = Readers({"APP:10000": frozenset({"reader.one"})}, {"APP-12": frozenset({"nobody"})})
+    readers = Readers(
+        {"APP:10000": frozenset({"reader.one"})}, {"APP-12": frozenset({"nobody"})}, {"APP-12": "APP:10000"}
+    )
     community = audience(readers, USERS, shares=False)
     assert (community.members, community.shares) == ({"APP:10000": {41}}, {})
     assert sum(community.unmapped.values()) == 0

@@ -51,6 +51,12 @@ class FakeOpenProject:
         project = self.projects.get(values["identifier"])
         if "Project.new(" not in script:
             state = {"found": True, **project} if project else {"found": False}
+            if project:
+                # The Ruby check with the audience the component sent: who may already be a member.
+                allowed = set(values["audience"]["members"])
+                state["audience"] = set(project.get("member_ids", [])) <= allowed and project["members"] == len(
+                    project.get("member_ids", [])
+                )
             reads_parent = 'parent = Project.find_by(id: input.fetch("parent_id"))' in script
             if reads_parent and '.merge("parent_name" => parent&.name)' in script:
                 state["parent_name"] = self.parents.get(values.get("parent_id"))
@@ -60,7 +66,7 @@ class FakeOpenProject:
             project = {"id": 100 + len(self.projects), "identifier": values["identifier"], "public": public}
             project |= {"parent_id": values["parent_id"], "members": 0}
             self.projects[values["identifier"]] = project
-        return {"found": True, **project} if project else {"found": False}
+        return {"found": True, **project, "audience": True} if project else {"found": False}
 
     def creations(self):
         return [script for script in self.scripts if "Project.new(" in script]
@@ -142,6 +148,7 @@ def test_creates_a_private_sub_project_without_members(run):
         "identifier": "app_level_10000",
         "name": "App (Management)",
         "parent_id": 7,
+        "audience": {"members": [], "shares": {}},
         "description": "Issues of APP with the Jira security level Management (ID 10000).",
     }
     assert outcome.target.projects["app_level_10000"] == {
@@ -206,7 +213,9 @@ def test_name_of_a_migrated_jira_project_is_refused(run):
     )
     outcome = run([level()], mapping=mappings)
     assert "name is taken" in outcome.result.errors[0]
-    assert outcome.target.finds() == [{"identifier": "app_level_10000", "parent_id": 7}]
+    assert outcome.target.finds() == [
+        {"identifier": "app_level_10000", "parent_id": 7, "audience": {"members": [], "shares": {}}}
+    ]
     assert outcome.target.creations() == []
 
 
@@ -228,7 +237,9 @@ def test_restored_entry_without_a_name_uses_the_parents_live_name(run):
     target = FakeOpenProject(parents={7: "App Live"})
     outcome = run([level()], projects=target, mapping=FakeMappings({"APP": {**RESTORED, "restored_from_op": True}}))
     assert outcome.result.success, outcome.result.errors
-    assert target.finds() == [{"identifier": "app_level_10000", "parent_id": 7}]
+    assert target.finds() == [
+        {"identifier": "app_level_10000", "parent_id": 7, "audience": {"members": [], "shares": {}}}
+    ]
     assert (creation(outcome)["name"], creation(outcome)["parent_id"]) == ("App Live (Management)", 7)
     assert target.restores == []
     assert outcome.mapping["APP:10000"]["parent_openproject_id"] == 7

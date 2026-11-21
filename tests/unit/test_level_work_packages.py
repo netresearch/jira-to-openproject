@@ -82,11 +82,14 @@ def FakeOpenProject(state=None, existing=None, fail=False):
 
     def read(script):
         values = json.loads(script.split("\n")[1])
-        if "CustomValue" in script:
+        if '"work_packages" => ids' in script:
             op.existing_reads.append(values)
             return json.loads(json.dumps(NO_WORK_PACKAGES if existing is None else existing))
         op.reads.append(values)
-        return dict(STATE if state is None else state)
+        answer = dict(STATE if state is None else state)
+        # The Ruby check with the audience of the run: memberless sub-projects only, none configured.
+        answer.setdefault("audience", answer["members"] == 0)
+        return answer
 
     def create(payloads):
         if fail:
@@ -204,7 +207,9 @@ def test_switch_on_creates_static_issues_in_the_sub_project_only(setup):
     assert outcome.result.success, outcome.result.error
     assert searches(outcome.jira) == [UNRESTRICTED, UNRESTRICTED, LEVELS, LEVELS]
     assert outcome.created == {("Issue 1", 7), ("Issue 10", 100), ("Issue 11", 100)}
-    assert outcome.op.reads == [{"identifier": "app_level_10000", "parent_id": 7}]
+    assert outcome.op.reads == [
+        {"identifier": "app_level_10000", "parent_id": 7, "audience": {"members": [], "shares": {}}}
+    ]
     level_map = outcome.mappings.data["security_level_work_package"]
     assert level_map["10"] == {
         "jira_key": "APP-10",

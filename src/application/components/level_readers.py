@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from src import config
@@ -46,6 +46,8 @@ class Readers:
 
     static: dict[str, frozenset[str]]
     extra: dict[str, frozenset[str]]
+    # The level label of each ``per_issue`` issue key.
+    levels: dict[str, str] = field(default_factory=dict)
 
 
 def _read(path: object) -> dict[str, Any]:
@@ -89,6 +91,7 @@ def load_readers(report: dict[str, Any]) -> Readers:
     archived = _archived(report)
     static: dict[str, frozenset[str]] = {}
     extra: dict[str, frozenset[str]] = {}
+    levels: dict[str, str] = {}
     for row in rows:
         label = f"{row.get('project')}:{row.get('level_id')}"
         _require(label in expected and label not in static, f"Level {label} of the readers file is not in the report")
@@ -99,5 +102,6 @@ def load_readers(report: dict[str, Any]) -> Readers:
         counts = {key: len(_names(names, key)) for key, names in issues.items()}
         _require(counts == archived.get(label, {}), f"Extra readers of {label} differ from the report")
         extra |= {key: frozenset(names) for key, names in issues.items()}
+        levels |= dict.fromkeys(issues, label)
     _require(set(static) == set(expected), "The readers file lacks levels of the report")
-    return Readers(static, extra)
+    return Readers(static, extra, levels)

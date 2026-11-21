@@ -1295,7 +1295,9 @@ class WorkPackageSkeletonMigration(BaseMigration):
     def _level_project_problem(self, target: level_issues.LevelTarget, wanted: set[str]) -> str | None:
         """Why work packages must not go into the sub-project now, or None; reads what it already holds."""
         try:
-            verify_level_project(self.op_client, target.identifier, target.project_id, target.parent_id)
+            verify_level_project(
+                self.op_client, target.identifier, target.project_id, target.parent_id, target.audience
+            )
             existing = level_issues.existing_work_packages(self.op_client, target.project_id)
         except (LevelProjectError, QueryExecutionError, RubyError) as exc:
             return f"{target.label} {exc}"

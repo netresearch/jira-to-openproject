@@ -259,6 +259,7 @@ class SimpleTasksMigration(BaseMigration):
             {
                 "project": target.project_id,
                 "parent": target.parent_id,
+                "audience": target.audience,
                 "key": project,
                 "source_id": next(iter(source), None),
                 "base": self.jira_client.base_url,

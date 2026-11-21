@@ -11,6 +11,8 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from src.infrastructure.openproject.level_audience import LEVEL_AUDIENCE
+
 if TYPE_CHECKING:
     from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
@@ -59,10 +61,11 @@ _LEVEL_SPRINTS = """
 """
 
 # The sub-project's own copy of each row (ADR-010): sharing none, adopted by its origin on a
-# repeat run. A copy is created or changed only while the sub-project has no membership row,
-# locked users and work package shares included (ADR-005); the parent's versions are not changed.
+# repeat run. A copy is created or changed only while every membership row of the sub-project,
+# locked users and work package shares included, is a grant of its readers (ADR-012; none
+# before the grant, ADR-005); the parent's versions are not changed.
 _LEVEL_COPIES = """
-  staging = !project.members.exists? && !Member.where(project_id: project.id).exists?
+  staging = level_audience.call(project, data.fetch('audience'))
   field = VersionCustomField.find_or_create_by!(name: 'Jira Version Origin') { |f| f.field_format = 'text' }
   raise 'Unexpected version origin field' unless field.field_format == 'text' && !field.multi_value?
   origins = CustomValue.where(customized_type: 'Version', customized_id: project.versions.select(:id), custom_field: field)
@@ -211,23 +214,30 @@ def sync_project_versions(
 
 
 def sync_level_versions(
-    client: OpenProjectClient, sub_project: tuple[int, int], source: str, project_key: str, rows: list[dict[str, Any]]
+    client: OpenProjectClient,
+    sub_project: tuple[int, int, dict[str, Any]],
+    source: str,
+    project_key: str,
+    rows: list[dict[str, Any]],
 ) -> dict[str, int]:
     """Jira version ID to the sub-project's own copy, created or adopted (ADR-010).
 
-    ``sub_project`` is the level sub-project's ID and its parent's ID; ``rows`` are the Jira
-    catalogue rows of the versions its work packages use.
+    ``sub_project`` is the level sub-project's ID, its parent's ID and its staging audience
+    (ADR-012); ``rows`` are the Jira catalogue rows of the versions its work packages use.
     """
     if not rows:
         return {}
-    project, parent = sub_project
-    payload = _catalogue_payload(project, source, project_key, rows) | {"parent_id": parent}
+    project, parent, audience = sub_project
+    payload = _catalogue_payload(project, source, project_key, rows) | {"parent_id": parent, "audience": audience}
     result = level_version_project_query(client, payload, _LEVEL_RELEASES + _LEVEL_COPIES)
     return _level_copies(result, {row["id"] for row in payload["versions"]})
 
 
 def sync_level_sprints(
-    client: OpenProjectClient, sub_project: tuple[int, int], origin: tuple[str, str, str], sprints: dict[str, int]
+    client: OpenProjectClient,
+    sub_project: tuple[int, int, dict[str, Any]],
+    origin: tuple[str, str, str],
+    sprints: dict[str, int],
 ) -> dict[str, int]:
     """Jira sprint ID to the sub-project's copy of the parent's sprint version (ADR-010).
 
@@ -236,13 +246,14 @@ def sync_level_sprints(
     """
     if not sprints:
         return {}
-    (project, parent), (source, project_key, jira_project_id) = sub_project, origin
+    (project, parent, audience), (source, project_key, jira_project_id) = sub_project, origin
     if not jira_project_id.isdecimal() or not all(sid.isdecimal() and type(v) is int for sid, v in sprints.items()):
         msg = "Invalid Jira sprint or project identity"
         raise ValueError(msg)
     payload = {
         "project": project,
         "parent_id": parent,
+        "audience": audience,
         "source": source.rstrip("/"),
         "key": project_key,
         "jira_project_id": jira_project_id,
@@ -263,7 +274,7 @@ def _level_copies(result: object, ids: set[str]) -> dict[str, int]:
 
 def level_version_project_query(client: OpenProjectClient, payload: dict, operation: str) -> object:
     """Lock the level sub-project; verify its parent, its privacy and the parent's source identity."""
-    return client.execute_json_query(_script(payload, _LEVEL_PROJECT, operation))
+    return client.execute_json_query(_script(payload, LEVEL_AUDIENCE + _LEVEL_PROJECT, operation))
 
 
 def version_project_query(client: OpenProjectClient, payload: dict, operation: str) -> object:

@@ -20,6 +20,7 @@ from src import config
 from src.application.components.base_migration import BaseMigration
 from src.application.components.project_migration import project_identifier
 from src.infrastructure.exceptions import QueryExecutionError
+from src.infrastructure.openproject.level_audience import LEVEL_AUDIENCE
 from src.infrastructure.openproject.rails_console_client import RubyError
 from src.models import ComponentResult
 from src.restricted_issues import ADMIN_REPORT_FORMAT, REPORT_FORMAT
@@ -35,22 +36,24 @@ _MAX_NAME = 255
 
 # ``Member.where(project_id:)`` counts every membership row, locked users and work package
 # shares included (``Project#members`` is scoped to unlocked users, app/models/project.rb:59).
+# ``audience`` is true when every row is a grant of the level's readers (ADR-012), as when there is none.
 _STATE = (
     'if p then {"found" => true, "id" => p.id, "identifier" => p.identifier, "public" => p.public, '
-    '"parent_id" => p.parent_id, "members" => Member.where(project_id: p.id).count} '
+    '"parent_id" => p.parent_id, "members" => Member.where(project_id: p.id).count, '
+    '"audience" => level_audience.call(p, input.fetch("audience"))} '
     'else {"found" => false} end'
 )
 # The parent's name is read live: a mapping restored from provenance carries no
 # openproject_name, and a mapped name can be outdated.
 _FIND = (
-    'p = Project.find_by(identifier: input.fetch("identifier"))\n'
+    LEVEL_AUDIENCE + 'p = Project.find_by(identifier: input.fetch("identifier"))\n'
     'parent = Project.find_by(id: input.fetch("parent_id"))\n'
     "(" + _STATE + ').merge("parent_name" => parent&.name)'
 )
 # Project.new instead of Projects::CreateService: the service adds the creating user as a
 # member (app/services/projects/concerns/new_project_service.rb:44, 54-71).
 _CREATE = (
-    'parent = Project.find(input.fetch("parent_id"))\n'
+    LEVEL_AUDIENCE + 'parent = Project.find(input.fetch("parent_id"))\n'
     'p = Project.new(name: input.fetch("name"), identifier: input.fetch("identifier"), '
     'description: input.fetch("description"), public: false, parent: parent)\n'
     'p.workspace_type = "project" if p.respond_to?(:workspace_type=)\n'
@@ -66,6 +69,16 @@ _CREATE = (
     "end\n"
     "p.reload\n" + _STATE
 )
+
+
+def _staging_audience(mappings: Any) -> Any:
+    """Who may already be a member of a sub-project (ADR-012).
+
+    Imported here: ``level_access`` reads the reports through this module.
+    """
+    from src.application.components.level_access import staging_audience
+
+    return staging_audience(mappings)
 
 
 class LevelProjectError(ValueError):
@@ -130,6 +143,7 @@ def project_state(op_client: Any, script: str) -> dict[str, Any]:
         _require(
             type(state.get("id")) is int
             and type(state.get("members")) is int
+            and type(state.get("audience")) is bool
             and type(state.get("public")) is bool
             and (state.get("parent_id") is None or type(state.get("parent_id")) is int),
             "Malformed OpenProject answer",
@@ -137,12 +151,22 @@ def project_state(op_client: Any, script: str) -> dict[str, Any]:
     return state
 
 
-def verify_level_project(op_client: Any, identifier: str, project_id: int, parent_id: int) -> None:
-    """Re-read a mapped sub-project before work packages go into it: private, memberless, same parent."""
-    state = project_state(op_client, _script(_FIND, {"identifier": identifier, "parent_id": parent_id}))
+_NOBODY: dict[str, Any] = {"members": [], "shares": {}}
+
+
+def verify_level_project(
+    op_client: Any, identifier: str, project_id: int, parent_id: int, audience: dict[str, Any] | None = None
+) -> None:
+    """Re-read a mapped sub-project before work packages go into it: private, readers only, same parent.
+
+    "Readers only": no membership row other than a grant of ``audience`` (ADR-012); without an
+    audience the sub-project must be memberless.
+    """
+    values = {"identifier": identifier, "parent_id": parent_id, "audience": audience or _NOBODY}
+    state = project_state(op_client, _script(_FIND, values))
     _require(state["found"] and state["id"] == project_id, "sub-project is gone or has another ID")
     _require(state["public"] is False, "sub-project is public")
-    _require(state["members"] == 0, "sub-project has members")
+    _require(state["audience"] is True, "sub-project has members other than its readers")
     _require(state["parent_id"] == parent_id, "sub-project has another parent")
 
 
@@ -181,12 +205,13 @@ class SecurityLevelProjectsMigration(BaseMigration):
         try:
             report, edition = load_reports()
             levels = migratable_levels(report, edition)
+            audience = _staging_audience(self.mappings)
         except LevelProjectError as exc:
             self.logger.error("Security level sub-projects stopped: %s", exc)
             return ComponentResult(success=False, message=str(exc), errors=[str(exc)])
-        return self._create_all(levels, edition)
+        return self._create_all(levels, edition, audience)
 
-    def _create_all(self, levels: list[dict[str, Any]], edition: str) -> ComponentResult:
+    def _create_all(self, levels: list[dict[str, Any]], edition: str, audience: Any) -> ComponentResult:
         selected = set(config.selected_jira_projects())
         projects = self._projects({row["project"] for row in levels if not selected or row["project"] in selected})
         taken_ids = {project_identifier(key) for key in projects} | {
@@ -208,7 +233,8 @@ class SecurityLevelProjectsMigration(BaseMigration):
                 continue
             label = f"{key}:{row['level_id']}"
             try:
-                entry, created = self._ensure(row, _parent_id(projects.get(key)), taken_ids, taken_names)
+                parent = (_parent_id(projects.get(key)), audience.of_level(label))
+                entry, created = self._ensure(row, parent, taken_ids, taken_names)
             except (LevelProjectError, QueryExecutionError, RubyError) as exc:
                 self.logger.error("Security level sub-project %s refused: %s", label, exc)
                 errors.append(f"{label}: {exc}")
@@ -240,13 +266,15 @@ class SecurityLevelProjectsMigration(BaseMigration):
         return projects
 
     def _ensure(
-        self, row: dict[str, Any], parent_id: int | None, taken_ids: set[Any], taken_names: set[str]
+        self, row: dict[str, Any], parent: tuple[int | None, dict[str, Any]], taken_ids: set[Any], taken_names: set[str]
     ) -> tuple[dict[str, Any], bool]:
+        """``parent`` is the parent's OpenProject ID and the staging audience of the sub-project."""
         key, level_id = row["project"], row["level_id"]
+        parent_id, readers = parent
         _require(parent_id is not None, "Jira project is neither in the project mapping nor in the provenance registry")
         identifier = level_identifier(key, level_id)
         _require(identifier not in taken_ids, "identifier belongs to a migrated Jira project")
-        values: dict[str, Any] = {"identifier": identifier, "parent_id": parent_id}
+        values: dict[str, Any] = {"identifier": identifier, "parent_id": parent_id, "audience": readers}
         state = self._state(_script(_FIND, values))
         parent_name = state.get("parent_name")
         _require(isinstance(parent_name, str) and parent_name, "parent project is not in OpenProject")
@@ -260,7 +288,7 @@ class SecurityLevelProjectsMigration(BaseMigration):
             _require(state["found"], "OpenProject did not create the sub-project")
         _require(state["identifier"] == identifier, "OpenProject answered for another identifier")
         _require(state["public"] is False, "existing project is public")
-        _require(state["members"] == 0, "existing project has members")
+        _require(state["audience"] is True, "existing project has members other than its readers")
         _require(state["parent_id"] == parent_id, "existing project has another parent")
         entry = {
             "jira_project_key": key,

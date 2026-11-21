@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 from src.infrastructure.openproject.checklist_section import CHECKLIST_SECTION
+from src.infrastructure.openproject.level_audience import LEVEL_AUDIENCE
 
 _APPLY = r"""
 require "digest"
@@ -15,7 +16,8 @@ project = Project.find(data.fetch("project"))
 project.with_lock(requires_new: true) do
   raise "Private target required for tasklists" if project.public?
   # A level sub-project (ADR-009) has no origin of its own: its parent carries the Jira project's
-  # origin, and every membership row of the sub-project, locked users and shares included, is access.
+  # origin, and every membership row of the sub-project, locked users and shares included, is
+  # access; only the grants of its readers may exist (ADR-012).
   level = data.key?("parent")
   source = level ? Project.find(data.fetch("parent")) : project
   raise "Unexpected tasklist sub-project" if level && project.parent_id != source.id
@@ -54,8 +56,8 @@ project.with_lock(requires_new: true) do
     expected = checklist.call(wp.description.to_s, markdown, records.empty?, prior && prior.fetch("section_sha256"))
     changed = wp.description.to_s != expected
     if changed
-      raise "Stage checklist changes before granting project access" if project.members.exists?
-      raise "Stage checklist changes before granting project access" if level && Member.where(project_id: project.id).exists?
+      staging = level ? level_audience.call(project, data.fetch("audience")) : !project.members.exists?
+      raise "Stage checklist changes before granting project access" unless staging
       wp.update_columns(description: expected)
       raise "Native checklist readback failed" unless wp.reload.description == expected
     end
@@ -84,5 +86,5 @@ end
 def apply_tasklists(client: Any, project: dict) -> dict:
     """Validate project and issue origins inside the same transaction that persists all task records."""
     data = base64.b64encode(json.dumps(project, ensure_ascii=False).encode()).decode("ascii")
-    query = f'data = JSON.parse(Base64.strict_decode64("{data}"))\n' + CHECKLIST_SECTION + _APPLY
+    query = f'data = JSON.parse(Base64.strict_decode64("{data}"))\n' + CHECKLIST_SECTION + LEVEL_AUDIENCE + _APPLY
     return client.execute_large_query_to_json_file(query, timeout=180)

@@ -46,6 +46,6 @@ Each level sub-project gets its own copy of every parent version that a selected
 ### Negative
 
 - A version or sprint is split across the parent and each sub-project that uses it: the parent's version, its roadmap entry and its sprint board do not show level work packages, and each copy counts only the work packages of its own sub-project.
-- A change of a Jira version (renamed, released, new dates) reaches a copy only while its sub-project is memberless; after the access grant a changed copy stops that sub-project's transaction and its issues are refused.
+- A change of a Jira version (renamed, released, new dates) reaches a copy only while its sub-project is memberless; after the access grant a changed copy stops that sub-project's transaction and its issues are refused. Update 2026-11-21: with a readers file, the check accepts the grants of the level's readers ([ADR-012](ADR-012-late-access-grant-of-level-sub-projects.md), decision 9).
 - On Enterprise, a level work package shared with extra readers has no fix version or sprint version in OpenProject; its readers see them in the operator archive or the Jira data only.
 - Versions created in OpenProject later are not copied: only versions a selected level work package uses in Jira exist in the sub-project.

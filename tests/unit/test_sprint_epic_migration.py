@@ -10,6 +10,7 @@ import pytest
 from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES
 from src.application.components.sprint_epic_migration import SprintEpicMigration
 from tests.unit.test_level_attachments import LEVEL_MAP, LEVEL_REFUSALS, LIVE
+from tests.unit.test_level_versions import _payload
 from tests.unit.test_level_work_packages import level_issues
 from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
@@ -571,16 +572,18 @@ def test_level_sprint_writer_copies_the_parent_version():
 
     client = Mock()
     client.execute_json_query.return_value = {"versions": {"sprint:42": 2000}, "changed": 1}
-    assert sync_level_sprints(client, (100, 7), ("https://jira.local/", "APP", "10"), {"42": 9}) == {"42": 2000}
+    nobody = {"members": [], "shares": {}}
+    assert sync_level_sprints(client, (100, 7, nobody), ("https://jira.local/", "APP", "10"), {"42": 9}) == {"42": 2000}
     script = client.execute_json_query.call_args.args[0]
     assert "sprint = owner.versions.find(row.fetch('version'))" in script
     assert "owner.custom_values.where(custom_field: field).sole.value == value" in script
-    assert "!Member.where(project_id: project.id).exists?" in script
+    assert "staging = level_audience.call(project, data.fetch('audience'))" in script
+    assert _payload(script)["audience"] == nobody
     client.execute_json_query.return_value = {"versions": {"sprint:42": "2000"}}
     with pytest.raises(ValueError, match="Incomplete"):
-        sync_level_sprints(client, (100, 7), ("https://jira.local", "APP", "10"), {"42": 9})
+        sync_level_sprints(client, (100, 7, nobody), ("https://jira.local", "APP", "10"), {"42": 9})
     with pytest.raises(ValueError, match="Invalid"):
-        sync_level_sprints(client, (100, 7), ("https://jira.local", "APP", "10"), {"x": 9})
+        sync_level_sprints(client, (100, 7, nobody), ("https://jira.local", "APP", "10"), {"x": 9})
 
 
 def test_level_unreadable_sub_project_refuses_its_sprint_issues(level_setup):

@@ -12,11 +12,12 @@ OpenProject user is counted, never guessed.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.application.components.level_readers import Readers, load_readers
+from src import config
+from src.application.components.level_readers import READERS_SETTING, Readers, load_readers
 from src.application.components.security_level_projects_migration import load_reports
 
 
@@ -43,14 +44,18 @@ class Audience:
 
     members: dict[str, frozenset[int]] = field(default_factory=dict)
     shares: dict[str, frozenset[int]] = field(default_factory=dict)
+    # The level label of each issue key in ``shares``.
+    share_levels: dict[str, str] = field(default_factory=dict)
     # Reader names without exactly one OpenProject user, per level label and per issue key.
     unmapped: dict[str, int] = field(default_factory=dict)
 
-    def of_level(self, label: str, keys: Iterable[str] = ()) -> dict[str, Any]:
+    def of_level(self, label: str) -> dict[str, Any]:
         """The Ruby input of one sub-project: its static readers, and per issue key its extra readers."""
         return {
             "members": sorted(self.members.get(label, ())),
-            "shares": {key: sorted(self.shares[key]) for key in sorted(keys) if key in self.shares},
+            "shares": {
+                key: sorted(users) for key, users in sorted(self.shares.items()) if self.share_levels.get(key) == label
+            },
         }
 
 
@@ -69,6 +74,7 @@ def audience(readers: Readers, user_mapping: Mapping[str, Any], *, shares: bool)
     if shares:
         for key, names in readers.extra.items():
             result.shares[key], result.unmapped[key] = _resolve(names, users)
+            result.share_levels[key] = readers.levels[key]
     return result
 
 
@@ -77,3 +83,14 @@ def load_audience(mappings: Any) -> tuple[Audience, str]:
     report, edition = load_reports()
     readers = load_readers(report)
     return audience(readers, mappings.get_mapping("user") or {}, shares=edition == "enterprise"), edition
+
+
+def staging_audience(mappings: Any) -> Audience:
+    """Who may already be a member while a level stage writes (ADR-012).
+
+    Without a configured readers file nobody: the sub-projects must be memberless, as before the
+    late access grant existed. A configured file that does not match the reports raises.
+    """
+    if not config.migration_config.get(READERS_SETTING):
+        return Audience()
+    return load_audience(mappings)[0]
