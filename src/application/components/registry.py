@@ -110,6 +110,9 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "workflows",
     # === Phase 1: Work Package Skeletons (no content) ===
     "work_packages_skeleton",
+    # Jira keys as semantic work package identifiers (ADR-011); needs every work package of
+    # the run, level work packages included. Skips unless migration.semantic_identifiers is true.
+    "semantic_identifiers",
     # === Phase 2: Attachments (creates mapping for URL conversion) ===
     "attachments",
     "attachment_provenance",

@@ -16,6 +16,7 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [ADR-008](ADR-008-project-selection-and-fail-closed-anonymous-proofs.md) | One source for the project selection; fail-closed anonymous proofs | Accepted | 2026-11-20 |
 | [ADR-009](ADR-009-security-levels-as-private-sub-projects.md) | Issues with a Jira security level become private OpenProject sub-projects | Accepted | 2026-11-20 |
 | [ADR-010](ADR-010-level-versions-as-sub-project-copies.md) | Versions of level work packages are copies in their sub-project | Accepted | 2026-11-21 |
+| [ADR-011](ADR-011-jira-keys-as-semantic-identifiers.md) | Jira keys become native OpenProject semantic work package identifiers | Accepted | 2026-11-21 |
 
 ## What is an ADR?
 
