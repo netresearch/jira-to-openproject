@@ -60,7 +60,7 @@ def _with_assignees(level_setup, monkeypatch, *, readers_file):
     level_setup()
     if readers_file:
         audience = Audience(members={"APP:10000": frozenset({41, 42})})
-        monkeypatch.setattr(level_issues, "staging_audience", lambda mappings: audience)
+        monkeypatch.setattr(level_issues, "staging_audience", lambda mappings, report, edition: audience)
         cfg.migration_config["security_level_readers"] = "readers.json"
     assignees = {"APP-1": 99, "APP-10": 41, "APP-11": 99}
     jira, op = wp.fake_jira([issue(1)], level_search()), wp.FakeOpenProject()

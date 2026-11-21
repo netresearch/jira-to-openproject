@@ -161,7 +161,8 @@ def readers(monkeypatch):
     from src.application.components.level_access import Audience
 
     monkeypatch.setattr(
-        "src.application.components.level_issues.staging_audience", lambda mappings: Audience(members=READER_AUDIENCE)
+        "src.application.components.level_issues.staging_audience",
+        lambda mappings, report, edition: Audience(members=READER_AUDIENCE),
     )
 
     def configure():
