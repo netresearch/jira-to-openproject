@@ -13,6 +13,7 @@ import pytest
 from src.application.components.project_migration import project_identifier
 from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE
 from src.application.components.security_level_projects_migration import (
+    LevelProjectError,
     SecurityLevelProjectsMigration,
     level_identifier,
 )
@@ -177,6 +178,12 @@ def test_name_of_a_migrated_jira_project_is_refused(run):
 @pytest.mark.parametrize("key", ["APP_LEVEL_10000", "APP-LEVEL-10000"])
 def test_level_identifier_never_equals_a_key_derived_identifier(key):
     assert level_identifier("APP", "10000") != project_identifier(key)
+
+
+@pytest.mark.parametrize("level_id", ["", "0", "01", "1\u0663", "10000 "])
+def test_level_identifier_needs_an_ascii_level_number(level_id):
+    with pytest.raises(LevelProjectError):
+        level_identifier("APP", level_id)
 
 
 def test_levels_without_migratable_issues_get_no_sub_project(run):
