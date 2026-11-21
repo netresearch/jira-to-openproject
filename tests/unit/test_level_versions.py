@@ -257,7 +257,8 @@ def test_level_issues_get_the_copies_of_their_own_sub_project(level_setup, compo
 def test_level_repeat_run_adopts_the_copies(level_setup, component):
     outcome = _run(level_setup, component, runs=2)
     first, second = outcome.results
-    assert first.success and second.success
+    assert first.success
+    assert second.success
     assert len(outcome.op.copy_syncs) == 2
     assert sorted(outcome.op.copies) == [(100, "41"), (100, "42")]
     assert outcome.writes.count("security_level_version") == 1
@@ -392,15 +393,17 @@ def test_level_version_writer_checks_the_parent_and_the_memberless_sub_project()
     assert "project.parent_id == owner.id && !project.public?" in script
     assert "staging = !project.members.exists? && !Member.where(project_id: project.id).exists?" in script
     assert "merge('sharing' => 'none')" in script
-    assert "project.versions.new" in script and "Version.new" not in script
+    assert "project.versions.new" in script
+    assert "Version.new" not in script
 
 
 @pytest.mark.parametrize("answer", [None, {"versions": {}}, {"versions": {"41": "1000"}}])
 def test_level_version_writer_rejects_an_incomplete_answer(answer):
     from src.infrastructure.openproject.version_catalog import sync_level_versions
 
+    client = _Answer(answer)
     with pytest.raises(ValueError, match="Incomplete"):
-        sync_level_versions(_Answer(answer), (100, 7), "https://jira.local", "APP", [CATALOGUE[0]])
+        sync_level_versions(client, (100, 7), "https://jira.local", "APP", [CATALOGUE[0]])
 
 
 def test_level_affected_versions_check_the_parent_origin():
@@ -411,7 +414,8 @@ def test_level_affected_versions_check_the_parent_origin():
     write_observed_versions(client, {**payload, "field": 555, "issues": []}, level=True)
     write_observed_versions(client, {**payload, "field": 555, "issues": []})
     level, ordinary = client.scripts
-    assert "owner.custom_values" in level and "owner.custom_values" not in ordinary
+    assert "owner.custom_values" in level
+    assert "owner.custom_values" not in ordinary
 
 
 @BOTH
