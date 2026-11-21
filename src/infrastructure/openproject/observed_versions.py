@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.infrastructure.openproject.version_catalog import version_project_query
+from src.infrastructure.openproject.version_catalog import level_version_project_query, version_project_query
 
 if TYPE_CHECKING:
     from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -82,9 +82,14 @@ end
 """
 
 
-def write_observed_versions(client: OpenProjectClient, payload: dict) -> dict:
-    """Keep source text on earlier OpenProject versions and check native associations when supported."""
-    result = version_project_query(client, payload, _WRITE)
+def write_observed_versions(client: OpenProjectClient, payload: dict, *, level: bool = False) -> dict:
+    """Keep source text on earlier OpenProject versions and check native associations when supported.
+
+    With ``level``, ``payload`` names a level sub-project and its parent (ADR-010): the parent's
+    origin is checked, and the native links go to the sub-project's own version copies.
+    """
+    query = level_version_project_query if level else version_project_query
+    result = query(client, payload, _WRITE)
     if not isinstance(result, dict) or type(result.get("updated")) is not int or type(result.get("native")) is not bool:
         msg = "Invalid affected version readback"
         raise ValueError(msg)
