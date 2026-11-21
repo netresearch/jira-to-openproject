@@ -9,7 +9,8 @@ Jira `fields.votes.votes` count for mapped issues.
 
 from __future__ import annotations
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -20,7 +21,7 @@ VOTES_CF_NAME = "Votes"
 
 
 @register_entity_types("votes_reactions")
-class VotesMigration(BaseMigration):  # noqa: D101
+class VotesMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(self, jira_client: JiraClient, op_client: OpenProjectClient) -> None:
         super().__init__(jira_client=jira_client, op_client=op_client)
 
@@ -43,7 +44,7 @@ class VotesMigration(BaseMigration):  # noqa: D101
 
     def _extract(self) -> ComponentResult:
         """Extract Jira votes count per issue mapped to a WP."""
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         keys = self._jira_keys_from_wp_map(wp_map)
         issues = self._merge_batch_issues(keys)
 
@@ -63,7 +64,7 @@ class VotesMigration(BaseMigration):  # noqa: D101
         if not cf_id:
             return ComponentResult(success=False, failed=1)
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._index_by_jira_key(self._work_package_map())
         votes_by_key: dict[str, int] = (mapped.data or {}).get("votes", {})  # type: ignore[assignment]
 
         # Collect all CF values for bulk update
@@ -112,5 +113,5 @@ class VotesMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run Votes migration."""
-        return self._run_etl_pipeline("Votes")
+        """Run Votes migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Votes"))

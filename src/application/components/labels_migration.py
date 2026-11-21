@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.domain.repositories import MappingRepository
 from src.infrastructure.jira.jira_client import JiraClient
@@ -23,7 +24,7 @@ LABELS_CF_NAME = "Labels"
 
 
 @register_entity_types("labels")
-class LabelsMigration(BaseMigration):  # noqa: D101
+class LabelsMigration(LevelFieldsMigration):  # noqa: D101
     def __init__(
         self,
         jira_client: JiraClient,
@@ -62,7 +63,7 @@ class LabelsMigration(BaseMigration):  # noqa: D101
         the rest of the pipeline can read ``fields.labels`` as a typed
         ``list[str]``.
         """
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         keys = self._jira_keys_from_wp_map(wp_map)
         issues = self._merge_batch_issues(keys)
         labels_by_key: dict[str, list[str]] = {}
@@ -92,7 +93,7 @@ class LabelsMigration(BaseMigration):  # noqa: D101
         if not cf_id:
             return ComponentResult(success=False, failed=1)
 
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._index_by_jira_key(self._work_package_map())
         data = mapped.data or {}
         labels_text: dict[str, str] = data.get("labels_markdown", {}) if isinstance(data, dict) else {}
 
@@ -136,5 +137,5 @@ class LabelsMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run Labels migration."""
-        return self._run_etl_pipeline("Labels")
+        """Run Labels migration, also for the level work packages (ADR-009)."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Labels"))
