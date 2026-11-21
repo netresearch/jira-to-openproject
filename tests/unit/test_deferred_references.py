@@ -118,6 +118,18 @@ def test_partial_or_conflicting_source_continues_to_block_writes(tmp_path):
     client.execute_script_with_data.assert_not_called()
 
 
+def test_a_level_work_package_mapping_is_not_replayed(tmp_path):
+    # A level work package lies in a private sub-project; a replayed relation or parent to it
+    # would show readers of the other end a placeholder row (ADR-009).
+    ordinary, level = tmp_path / "ordinary", tmp_path / "level"
+    ordinary.write_text(json.dumps({"10": {"jira_key": "APP-1", "openproject_id": 31}}))
+    entry = {"jira_key": "APP-2", "openproject_id": 32, "security_level_project": "APP:10000"}
+    level.write_text(json.dumps({"11": entry}))
+    assert mappings([ordinary]) == {"APP-1": ("10", 31)}
+    with pytest.raises(ValueError, match="Level work package mappings are not replayed"):
+        mappings([ordinary, level])
+
+
 def test_applying_requires_exact_target_acknowledgement():
     data = sample()
     client = Mock()

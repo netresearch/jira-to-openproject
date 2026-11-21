@@ -43,6 +43,11 @@ def mappings(paths: list[Path]) -> dict[str, tuple[str, int]]:
     result: dict[str, tuple[str, int]] = {}
     for path in paths:
         for outer, value in load(path).items():
+            if "security_level_project" in value:
+                # A level work package lies in a private sub-project; OpenProject shows a relation
+                # or parent whose other end a user cannot see as a placeholder row (ADR-009).
+                msg = "Level work package mappings are not replayed"
+                raise ValueError(msg)
             key = _key(value["jira_key"])
             pair = (_id(value.get("jira_id", outer)), int(_id(value["openproject_id"])))
             if result.setdefault(key, pair) != pair:

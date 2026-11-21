@@ -22,14 +22,22 @@ surface and out of phase 7's scope.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from src.application.components import level_issues, level_versions
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
+
+# The level search of a relation run reads the links of the selected level issues and nothing else.
+_LEVEL_FIELDS = "project,security,issuelinks"
+_WITHHELD = "level_relation_withheld"
 
 
 @register_entity_types("relations", "issue_links")
@@ -170,8 +178,44 @@ class RelationMigration(BaseMigration):
         key = (jira_link_name.lower(), direction)
         return self.direction_map.get(key)
 
+    def _level_keys(self) -> set[str]:
+        level = getattr(self, "_level", None)
+        return set() if level is None else level.level_keys
+
     def run(self) -> ComponentResult:  # type: ignore[override]
-        """Execute relation creation based on persisted mapping and Jira links."""
+        """Execute relation creation based on persisted mapping and Jira links.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009). A relation between two level work packages is written only when both lie
+        in the same sub-project and neither is shared with extra readers (``per_issue``). Every
+        other link of a level issue, and every link of an ordinary issue to one, is withheld:
+        OpenProject 17.9.7 shows a relation whose other end the user cannot see as a placeholder
+        row with its type and, for follows and precedes, that end's dates, and counts it.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, logger)
+            except LevelProjectError as exc:
+                logger.error("Level work package relations stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"], details={})
+        return self._run_relations()
+
+    def _with_level_report(self, result: ComponentResult) -> ComponentResult:
+        """Count this run's level refusals into the result, its counters and its status (ADR-009)."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return result
+        result.details["level_relations_withheld"] = result.details.get("skip_reasons", {}).get(_WITHHELD, 0)
+        level.report(result, logger)
+        if level.refused:
+            # A refused level issue is a failed item of this component, as a failed relation is.
+            for count in ("failed_count", "total_count"):
+                result.details[count] = result.details.get(count, 0) + len(level.refused)
+            result.message += f", level refused={len(level.refused)}"
+        return result
+
+    def _run_relations(self) -> ComponentResult:
         logger.info("Starting relation migration...")
         result = ComponentResult(success=True, message="Relation migration completed", details={})
 
@@ -184,17 +228,19 @@ class RelationMigration(BaseMigration):
         # Fallback to mappings store
         work_package_map, jira_keys = self._mapped_issue_keys()
 
-        if not jira_keys:
+        level = getattr(self, "_level", None)
+        if not jira_keys and not (level and level.targets):
             logger.info("No work package mapping entries found; skipping relations")
-            return result
+            return self._with_level_report(result)
 
         # Fetch issues with changelog (issuelinks are in fields by default when expanded)
         # Build quick lookup from mapping file by Jira key → OP ID
         self._index_mapped_issues(work_package_map)
+        jira_keys = self._without_level_issues(jira_keys)
 
         # Batch get issues using jira_client
         # First check for cached issues from work_packages_content migration
-        issues = self._relation_issues(jira_keys)
+        issues = self._ordinary_issues(self._relation_issues(jira_keys) if jira_keys else {})
 
         # Collect all relations for bulk creation. Track *why* each
         # link was skipped so a post-run summary can distinguish
@@ -204,6 +250,7 @@ class RelationMigration(BaseMigration):
         # aggregate count delta and operators have to guess which
         # bucket dominates.
         relations_to_create, skip_reasons = self._collect_relations(issues)
+        relations_to_create.extend(self._level_relations(skip_reasons))
 
         if skip_reasons["target_wp_unmigrated"]:
             logger.info("Use j2o-references capture to retain links to work packages scheduled for a later cutover.")
@@ -257,10 +304,74 @@ class RelationMigration(BaseMigration):
         )
         result.success = errors == 0
         result.message = f"Relations created={created}, skipped={skipped + bulk_skipped}, errors={errors}"
+        result = self._with_level_report(result)
         logger.info(result.message)
         # Save simple summary
         self._save_to_json(result.details, Path("relation_migration_summary.json"))
         return result
+
+    def _without_level_issues(self, jira_keys: list[str]) -> list[str]:
+        """With the level switch on, an issue of a level search or of the archive loses its ordinary entry."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return jira_keys
+        self._wp_key_map = level.without_level_issues(self._wp_key_map)
+        return [key for key in jira_keys if key not in level.level_keys]
+
+    def _ordinary_issues(self, issues: dict[str, Any]) -> dict[str, Any]:
+        """Drop level issues from the ordinary issues, also those a cached snapshot holds."""
+        keys = self._level_keys()
+        return {key: issue for key, issue in issues.items() if key not in keys} if keys else issues
+
+    def _level_relations(self, skipped: Counter[str]) -> list[dict]:
+        """Relations between the level work packages of one sub-project, read only through the level search.
+
+        The search reads each Jira project once; an issue whose level changed or that the search
+        omits is refused and has no relations. Both ends must be in the result of that search.
+        """
+        level = getattr(self, "_level", None)
+        if level is None:
+            return []
+        found: dict[str, Any] = {}
+        for project, wps in sorted(level.by_project().items()):
+            try:
+                found.update(level_versions.selected_level_issues(level, self.jira_client, project, wps, _LEVEL_FIELDS))
+            except Exception:
+                logger.exception("Could not read the links of the level issues of %s", project)
+                level.refused.extend(f"{key}: the level search failed" for key in sorted(wps))
+        relations: list[dict] = []
+        for key, issue in sorted(found.items()):
+            resolve = partial(self._level_target, level, found, level.targets[key])
+            links = issue.raw["fields"].get("issuelinks") or []
+            relations.extend(self._relations_of(links, level.work_packages[key], skipped, resolve))
+        if skipped[_WITHHELD]:
+            logger.warning("Withheld %d links that cross a level sub-project", skipped[_WITHHELD])
+        return relations
+
+    @staticmethod
+    def _level_target(
+        level: level_issues.LevelWorkPackages,
+        found: dict[str, Any],
+        source: level_issues.LevelTarget,
+        target_key: str,
+        skipped: Counter[str],
+    ) -> int | None:
+        """The level work package of ``target_key`` when the relation stays inside one audience."""
+        target = level.targets.get(target_key) if target_key in found else None
+        if target is None or target.label != source.label or "per_issue" in (target.kind, source.kind):
+            skipped[_WITHHELD] += 1
+            return None
+        return level.work_packages[target_key]
+
+    def _ordinary_target(self, target_key: str, skipped: Counter[str]) -> int | None:
+        """The ordinary work package of a link target; a level issue is withheld, not unmigrated."""
+        if target_key in self._level_keys():
+            skipped[_WITHHELD] += 1
+            return None
+        to_id = self._resolve_wp_id(target_key)
+        if not to_id:
+            skipped["target_wp_unmigrated"] += 1
+        return to_id
 
     def _mapped_issue_keys(self) -> tuple[dict, list[str]]:
         """Read the persisted mapping and its source issue keys."""
@@ -372,7 +483,13 @@ class RelationMigration(BaseMigration):
             return link_type.get("name", "") or link_type.get("outward", "")
         return str(link_type)
 
-    def _relation_from_link(self, link: Any, from_id: int, skipped: Counter[str]) -> dict | None:
+    def _relation_from_link(
+        self,
+        link: Any,
+        from_id: int,
+        skipped: Counter[str],
+        resolve: Callable[[str, Counter[str]], int | None] | None = None,
+    ) -> dict | None:
         """Resolve a link's target and direction, accounting for each discarded row."""
         parts = self._link_parts(link)
         if parts is None:
@@ -390,9 +507,8 @@ class RelationMigration(BaseMigration):
         if not target_key:
             skipped["link_no_target_key"] += 1
             return None
-        to_id = self._resolve_wp_id(str(target_key))
+        to_id = (resolve or self._ordinary_target)(str(target_key), skipped)
         if not to_id:
-            skipped["target_wp_unmigrated"] += 1
             return None
         mapping = self._map_type_and_direction(self._link_type_name(link_type), direction)
         if not mapping:
@@ -424,13 +540,23 @@ class RelationMigration(BaseMigration):
                 continue
 
             # Handle both JIRA objects and raw dicts (from cache)
-            links = self._issue_links(issue)
-
-            for link in links:
-                try:
-                    relation = self._relation_from_link(link, from_id, skip_reasons)
-                    if relation is not None:
-                        relations_to_create.append(relation)
-                except Exception:
-                    skip_reasons["exception"] += 1
+            relations_to_create.extend(self._relations_of(self._issue_links(issue), from_id, skip_reasons))
         return relations_to_create, skip_reasons
+
+    def _relations_of(
+        self,
+        links: list,
+        from_id: int,
+        skipped: Counter[str],
+        resolve: Callable[[str, Counter[str]], int | None] | None = None,
+    ) -> list[dict]:
+        """The relations of one issue's links; a link that raises is counted, not fatal."""
+        relations = []
+        for link in links:
+            try:
+                relation = self._relation_from_link(link, from_id, skipped, resolve)
+                if relation is not None:
+                    relations.append(relation)
+            except Exception:
+                skipped["exception"] += 1
+        return relations
