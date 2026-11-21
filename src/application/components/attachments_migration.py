@@ -111,6 +111,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         # sub-project holds now. Empty unless the level switch is on.
         self._level_work_packages: dict[str, int] = {}
         self._level_ids: dict[str, str] = {}
+        self._level: level_issues.LevelWorkPackages | None = None
         # Per-stage loss counters. Each silent skip in
         # ``_extract_batch`` / ``_map`` / ``_load`` increments a
         # bucket; ``run()`` surfaces them under
@@ -974,22 +975,19 @@ puts end_marker
         # Build the canonical Jira-key → wp-id lookup once, then group
         # the resolved Jira keys by project for batch-friendly processing.
         # See :meth:`_wp_lookup_by_jira_key` for normalisation rules.
-        key_to_wp_id = self._wp_lookup_by_jira_key()
-        level = None
-        if level_issues.enabled():
-            # Before the size cap is raised: a missing report stops the component here.
-            try:
-                level, key_to_wp_id = self._resolve_level_work_packages(key_to_wp_id)
-            except LevelProjectError as exc:
-                self.logger.error("Level work package attachments stopped: %s", exc)
-                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
-        self._receipts = ScopedReceipts(key_to_wp_id)
-        if not key_to_wp_id and not self._level_work_packages:
+        # Before the size cap is raised: a missing level report stops the component here.
+        stopped = self._prepare_level_work_packages(self._wp_lookup_by_jira_key())
+        if stopped is not None:
+            return stopped
+        # Receipts compare ordinary issues only; level keys only form batches below, and each
+        # one's target is the work package its sub-project holds.
+        self._receipts = ScopedReceipts(dict(self._wp_lookup_cache or {}))
+        lookup = self._wp_lookup_by_jira_key()
+        if not lookup:
             return self._missing_work_package_mapping()
 
         by_project: dict[str, list[str]] = {}
-        # Level keys only form batches here; each one's target is the work package its sub-project holds.
-        for jira_key in [*key_to_wp_id, *self._level_work_packages]:
+        for jira_key in lookup:
             project_key = self._issue_project_key(jira_key)
             if project_key not in by_project:
                 by_project[project_key] = []
@@ -1041,7 +1039,7 @@ puts end_marker
                 total_failed=total_failed,
                 all_mappings=all_mappings,
             )
-            return result if level is None else level.report(result, self.logger)
+            return self._with_level_report(result)
         finally:
             if cap_was_raised and original_max_kb is not None:
                 if self._set_op_attachment_max_kb(original_max_kb):
@@ -1057,15 +1055,30 @@ puts end_marker
                         target_max_kb,
                     )
 
-    def _resolve_level_work_packages(
-        self, key_to_wp_id: dict[str, int]
-    ) -> tuple[level_issues.LevelWorkPackages, dict[str, int]]:
-        """Resolve the level work packages of this run; return them and the ordinary lookup without level issues."""
-        level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+    def _prepare_level_work_packages(self, key_to_wp_id: dict[str, int]) -> ComponentResult | None:
+        """With the level switch on, resolve this run's level work packages (ADR-009).
+
+        The ordinary lookup loses every issue of a level search or of the archive. Returns the
+        failed result when the level reports are missing or malformed, else None.
+        """
+        self._level = None
+        if not level_issues.enabled():
+            return None
+        try:
+            level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+        except LevelProjectError as exc:
+            self.logger.error("Level work package attachments stopped: %s", exc)
+            return ComponentResult(success=False, message=str(exc), errors=["security_level"])
         self._wp_lookup_cache = level.without_level_issues(key_to_wp_id)
         self._level_work_packages = dict(level.work_packages)
         self._level_ids = dict(level.level_ids)
-        return level, dict(self._wp_lookup_cache)
+        self._level = level
+        return None
+
+    def _with_level_report(self, result: ComponentResult) -> ComponentResult:
+        """Count the level refusals of this run into the result."""
+        level = getattr(self, "_level", None)
+        return result if level is None else level.report(result, self.logger)
 
     def _missing_work_package_mapping(self) -> ComponentResult:
         """Distinguish an absent mapping from one containing only unusable rows."""
