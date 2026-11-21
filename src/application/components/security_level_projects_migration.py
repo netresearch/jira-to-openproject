@@ -4,8 +4,9 @@
 """Create one private, memberless OpenProject sub-project per Jira project and security level (ADR-009).
 
 The input is the shared ``j2o-restricted inventory`` report (counts only, no reader names)
-and the ``j2o-restricted admins`` report of the same archive. Nothing is wired to work
-packages yet, and no member is added: access is granted in a later step.
+and the ``j2o-restricted admins`` report of the same archive. No member is added: access is
+granted in a later step. The work packages of a level are created by the skeleton component
+when ``migration.security_level_work_packages`` is on (see ``level_issues``).
 """
 
 from __future__ import annotations
@@ -108,6 +109,43 @@ def _load(path: object, fmt: str) -> dict[str, Any]:
     return value
 
 
+def load_reports() -> tuple[dict[str, Any], str]:
+    """The inventory report and the edition named by the administrator report of the same archive."""
+    report = _load(config.migration_config.get(REPORT_SETTING), REPORT_FORMAT)
+    admins = _load(config.migration_config.get(ADMIN_REPORT_SETTING), ADMIN_REPORT_FORMAT)
+    _require(
+        admins["archive_sha256"] == report["archive_sha256"],
+        "The administrator report belongs to another archive; run j2o-restricted admins first",
+    )
+    edition = admins.get("edition")
+    _require(edition in _EDITIONS, "The administrator report names no edition")
+    return report, str(edition)
+
+
+def project_state(op_client: Any, script: str) -> dict[str, Any]:
+    """Run a find or create script and check the shape of its answer."""
+    state = op_client.execute_query_to_json_file(script)
+    _require(isinstance(state, dict) and type(state.get("found")) is bool, "Malformed OpenProject answer")
+    if state["found"]:
+        _require(
+            type(state.get("id")) is int
+            and type(state.get("members")) is int
+            and type(state.get("public")) is bool
+            and (state.get("parent_id") is None or type(state.get("parent_id")) is int),
+            "Malformed OpenProject answer",
+        )
+    return state
+
+
+def verify_level_project(op_client: Any, identifier: str, project_id: int, parent_id: int) -> None:
+    """Re-read a mapped sub-project before work packages go into it: private, memberless, same parent."""
+    state = project_state(op_client, _script(_FIND, {"identifier": identifier, "parent_id": parent_id}))
+    _require(state["found"] and state["id"] == project_id, "sub-project is gone or has another ID")
+    _require(state["public"] is False, "sub-project is public")
+    _require(state["members"] == 0, "sub-project has members")
+    _require(state["parent_id"] == parent_id, "sub-project has another parent")
+
+
 def migratable_levels(report: dict[str, Any], edition: str) -> list[dict[str, Any]]:
     """Levels with at least one issue that goes to OpenProject on this edition; unexplained never."""
     kinds = _EDITIONS[edition]
@@ -141,19 +179,12 @@ class SecurityLevelProjectsMigration(BaseMigration):
                 details={"status": "skipped", "reason": "security_level_report_not_configured"},
             )
         try:
-            report = _load(paths[0], REPORT_FORMAT)
-            admins = _load(paths[1], ADMIN_REPORT_FORMAT)
-            _require(
-                admins["archive_sha256"] == report["archive_sha256"],
-                "The administrator report belongs to another archive; run j2o-restricted admins first",
-            )
-            edition = admins.get("edition")
-            _require(edition in _EDITIONS, "The administrator report names no edition")
-            levels = migratable_levels(report, str(edition))
+            report, edition = load_reports()
+            levels = migratable_levels(report, edition)
         except LevelProjectError as exc:
             self.logger.error("Security level sub-projects stopped: %s", exc)
             return ComponentResult(success=False, message=str(exc), errors=[str(exc)])
-        return self._create_all(levels, str(edition))
+        return self._create_all(levels, edition)
 
     def _create_all(self, levels: list[dict[str, Any]], edition: str) -> ComponentResult:
         selected = set(config.selected_jira_projects())
@@ -242,14 +273,4 @@ class SecurityLevelProjectsMigration(BaseMigration):
         return entry, created
 
     def _state(self, script: str) -> dict[str, Any]:
-        state = self.op_client.execute_query_to_json_file(script)
-        _require(isinstance(state, dict) and type(state.get("found")) is bool, "Malformed OpenProject answer")
-        if state["found"]:
-            _require(
-                type(state.get("id")) is int
-                and type(state.get("members")) is int
-                and type(state.get("public")) is bool
-                and (state.get("parent_id") is None or type(state.get("parent_id")) is int),
-                "Malformed OpenProject answer",
-            )
-        return state
+        return project_state(self.op_client, script)

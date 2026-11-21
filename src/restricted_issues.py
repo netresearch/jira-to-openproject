@@ -4,7 +4,7 @@
 """Inventory Jira issues with a security level and seal the non-static ones for the operator.
 
 ``inventory`` makes no OpenProject request. Issues with a level stay out of the migration
-as before; it only records who can read them and keeps every issue whose readers are
+unless ``migration.security_level_work_packages`` is on; it only records who can read them and keeps every issue whose readers are
 not the level's static readers in an age-encrypted archive (ADR-009). ``admins`` reads
 that archive, detects the OpenProject edition and reports the OpenProject administrators
 who are not static readers of a level; it warns and changes nothing (ADR-009, decision 4).

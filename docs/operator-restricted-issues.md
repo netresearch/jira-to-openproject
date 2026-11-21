@@ -1,6 +1,6 @@
 # Operator archive of restricted Jira issues
 
-`j2o-restricted` records who can read each Jira issue that has an issue security level, and keeps every issue that cannot become an ordinary work package of its level in an age-encrypted archive for the operator. `inventory` only reads Jira; it makes no OpenProject request. `admins` reads the archive and OpenProject and changes nothing. Issues with a level stay out of the standard migration as before. The decisions behind it are in [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md).
+`j2o-restricted` records who can read each Jira issue that has an issue security level, and keeps every issue that cannot become an ordinary work package of its level in an age-encrypted archive for the operator. `inventory` only reads Jira; it makes no OpenProject request. `admins` reads the archive and OpenProject and changes nothing. Issues with a level stay out of the standard migration unless `security_level_work_packages` is switched on (see [Level work packages](#level-work-packages)). The decisions behind it are in [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md).
 
 ## What it computes
 
@@ -82,7 +82,23 @@ uv run j2o migrate --components security_level_projects --no-confirm
 - **Parent.** The parent is the OpenProject project of the Jira project in `project_mapping.json`. When that file has no entry with an OpenProject ID for one of the Jira projects, the component reads the project entries of the J2O provenance registry once, as `ProjectMigration.restore_mapping_from_openproject()` does, without rewriting `project_mapping.json`; restored names count as known names. A level whose parent is found in neither, or whose parent no longer exists in OpenProject, is refused.
 - **Properties.** The sub-project is created with `public: false`, its parent's types (a variant the parent owns falls back to the type's base variant) and the modules `work_package_tracking` and `wiki`, through `Project.new` rather than `Projects::CreateService`, which would add the creating user as a member. No member is added; OpenProject 17.9.7 copies no memberships from a parent project. It carries no J2O Origin fields, so lookups by Jira project key keep finding only the parent.
 - **Mapping.** `security_level_project_mapping.json` holds one entry per `<Jira key>:<level ID>` with the OpenProject project ID and identifier. `project_mapping.json` stays one project per Jira project.
-- **Repeat runs.** An existing project with the identifier is accepted only when it is private, has no membership row (locked users and work package shares included) and has the expected parent. Otherwise that level is refused and reported, and the project is not changed. Restricted issues are still not migrated into the sub-projects.
+- **Repeat runs.** An existing project with the identifier is accepted only when it is private, has no membership row (locked users and work package shares included) and has the expected parent. Otherwise that level is refused and reported, and the project is not changed. Work packages go into the sub-projects only with the level switch on (see [Level work packages](#level-work-packages)).
+
+## Level work packages
+
+With `migration.security_level_work_packages: true`, `work_packages_skeleton` also creates the work packages of the issues of every level that has a sub-project (ADR-009, step 4 of the order of work). `work_packages_content` does not write their content yet. The switch is off by default, and only the boolean `true` turns it on. Leave it off until the dependent components (attachments, versions, boards, relations, watchers, time entries) and the late access grant are in place: until then a level work package has no attachments, watchers, relations or time entries, and no member can read it.
+
+```yaml
+migration:
+  security_level_report: /home/me/restricted-inventory/report.json
+  security_level_admin_report: /path/to/j2o/restricted-admins.json
+  security_level_work_packages: true
+```
+
+- **Selection.** Per Jira project, one search `project = KEY AND level IS NOT EMPTY`, split by the level ID each result carries (`fields.security.id`); a search per level fails with HTTP 400 for a level of which the migration account sees no issue. The report lists only archived issues, so the `static` issues of a level are the issues of the search that are not archived. `static` issues go on both editions, `per_issue` issues only when the administrator report says `enterprise`, `unexplained` issues never.
+- **Fail closed.** A search result without a level ID is refused. A level is refused as a whole when the search does not reproduce the report's count per class, when an archived issue has another level in the search than in the report, or when its sub-project entry names another project, level or identifier. An issue of a level without a sub-project entry is created nowhere (`unmapped`). Before the first work package goes into a sub-project, the skeleton reads it again: it must exist with the mapped ID, be private, have no membership row and have the mapped parent. An issue that already has a work package in `work_package_mapping.json`, or one in another sub-project, is refused. With the switch on, a missing or mismatched report stops the component before any write. Refusals make the component unsuccessful; `details.security_level` counts them.
+- **Mapping.** Level work packages are recorded in `security_level_work_package_mapping.json`, never in `work_package_mapping.json`, so the components that read the work-package mapping keep leaving them alone until they are adapted. An entry carries `jira_key`, `openproject_id` and `project_key` as usual, plus the sub-project's `openproject_project_id`, `security_level_id`, `security_level_project` (`<Jira key>:<level ID>`) and `security_class`.
+- **Limits.** `J2O_MAX_ISSUES` does not limit the level search, because the selection has to see every issue of a level. Equal counts do not prove the same issues: an issue removed and another added since the inventory pass the check, so repeat the inventory at cutover. The field history (ADR-004) still skips level issues. With the switch on, an issue that loses its level after its work package was created is not created again in the parent project, and its work package stays in the sub-project; with the switch off it would get a second work package in the parent project.
 
 ## Repeat runs and known limits
 
