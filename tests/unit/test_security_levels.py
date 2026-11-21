@@ -531,8 +531,8 @@ def test_archive_reads_worklogs_beyond_the_embedded_page(tmp_path, monkeypatch):
     code, value = _archive(tmp_path, monkeypatch, complete)
     assert code == 0
     assert value["issues"]["104"]["issue"]["fields"]["worklog"]["worklogs"] == work
-    (tmp_path / "restricted.age").unlink()
-    (tmp_path / "report.json").unlink()
+    for name in ("restricted.age", "report.json", "readers.json"):
+        (tmp_path / name).unlink()
     short = FakeJira(embedded=embedded, pages={path: [{"startAt": 0, "total": 2, "worklogs": work[:1]}]})
     assert _archive(tmp_path, monkeypatch, short) == (1, None)
 

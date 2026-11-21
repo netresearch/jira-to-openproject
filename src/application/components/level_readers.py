@@ -13,9 +13,9 @@ Reader names are never logged; messages name levels and issue keys only.
 from __future__ import annotations
 
 import json
+import os
 import stat
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from src import config
@@ -50,10 +50,13 @@ class Readers:
 
 def _read(path: object) -> dict[str, Any]:
     _require(isinstance(path, str) and path, "Readers file is not configured")
-    file = Path(str(path))
     try:
-        mode = file.stat().st_mode
-        value = json.loads(file.read_text(encoding="utf-8"))
+        # One descriptor for the mode check and the content: a file swapped between a stat and a
+        # read of the path cannot pass; a symbolic link at the path is refused.
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            mode = os.fstat(handle.fileno()).st_mode
+            value = json.loads(handle.read())
     except (OSError, ValueError) as exc:
         msg = f"Cannot read the readers file: {type(exc).__name__}"
         raise LevelProjectError(msg) from exc

@@ -61,6 +61,15 @@ def test_refuses_a_readers_file_other_users_can_read(readers_file):
         load_readers(REPORT)
 
 
+def test_refuses_a_symbolic_link_at_the_configured_path(readers_file, monkeypatch):
+    target = readers_file(READERS)
+    link = target.with_name("link.json")
+    link.symlink_to(target)
+    monkeypatch.setattr("src.config.migration_config", {"security_level_readers": str(link)})
+    with pytest.raises(LevelProjectError, match="Cannot read the readers file"):
+        load_readers(REPORT)
+
+
 def test_refuses_a_missing_setting(monkeypatch):
     monkeypatch.setattr("src.config.migration_config", {})
     with pytest.raises(LevelProjectError, match="not configured"):
