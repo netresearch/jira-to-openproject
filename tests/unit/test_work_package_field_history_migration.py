@@ -12,7 +12,10 @@ import pytest
 from src.application.components import work_package_field_history_migration as module
 from src.application.components.work_package_field_history_migration import WorkPackageFieldHistoryMigration
 from src.migration import _invoke_component
-from tests.unit.test_level_work_packages import level_issues
+from tests.unit.test_level_attachments import LEVEL_MAP, LEVEL_OF
+from tests.unit.test_level_attachments import LIGHT as LEVEL_LIGHT
+from tests.unit.test_level_attachments import LIVE as LEVEL_LIVE
+from tests.unit.test_level_work_packages import SUB_PROJECT, level_issues
 from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.unit
@@ -354,35 +357,33 @@ def test_failed_write_is_counted_once_and_outcomes_reconcile(migration):
 
 # --- Level work packages (ADR-009, step 5b) ---------------------------------------------------
 
-LEVEL_LIGHT = 'project = "APP" AND level IS NOT EMPTY ORDER BY created ASC, key ASC'
 LEVEL_ORDINARY = 'project = "APP" AND level IS EMPTY ORDER BY id'
-LEVEL_LIVE = {"field": True, "work_packages": [900, 901], "keys": [[900, "APP-10"], [901, "APP-11"]]}
-LEVEL_MAP = {
-    str(n): {
-        "jira_key": f"APP-{n}",
-        "openproject_id": wp,
-        "project_key": "APP",
-        "openproject_project_id": 100,
-        "security_level_id": "10000",
-        "security_level_project": "APP:10000",
-        "security_class": "static",
-    }
-    for n, wp in ((10, 900), (11, 901))
-}
-LEVEL_OF = {10: "10000", 11: "10000", 12: "10000", 13: "10000", 20: "10001"}
-# The level was set on the issue; Jira shows this change to everyone who can browse the issue.
+# A second sub-project of the same Jira project, for level 10001 (APP-20).
+SECOND_LEVEL = {**SUB_PROJECT, "level_id": "10001", "openproject_id": 101, "openproject_identifier": "app_level_10001"}
+SECOND_LIVE = {101: {"field": True, "work_packages": [920], "keys": [[920, "APP-20"]]}}
+# The level was set on the issue, then moved from another level; Jira shows both changes to everyone
+# who can browse the issue, so they are kept (ADR-004's History-tab premise, not measured here).
 SECURITY = {
     "field": "security",
     "fieldtype": "jira",
     "from": None,
     "fromString": None,
+    "to": "10001",
+    "toString": "Other",
+}
+MOVED = {
+    "field": "security",
+    "fieldtype": "jira",
+    "from": "10001",
+    "fromString": "Other",
     "to": "10000",
     "toString": "Mgmt",
 }
 
 
 def _history_issue(number, level=None):
-    page = {"startAt": 0, "maxResults": 100, "total": 1, "histories": [history(number, _SAFE, SECURITY)]}
+    histories = [history(number, _SAFE, SECURITY), history(number + 50, MOVED)]
+    page = {"startAt": 0, "maxResults": 100, "total": 2, "histories": histories}
     fields = {"project": {"key": "APP", "id": "10", "projectTypeKey": "software"}}
     fields["security"] = {"id": level} if level else None
     return SimpleNamespace(key=f"APP-{number}", id=str(number), raw={"fields": fields, "changelog": page})
@@ -420,17 +421,19 @@ class _LevelJira:
 class _LevelOpenProject(FakeOpenProject):
     """The field history fake with an ordinary project 7, the level sub-project 100 and the live read."""
 
-    def __init__(self, live=None):
+    def __init__(self, live=None, by_project=None):
         super().__init__()
         self.live = LEVEL_LIVE if live is None else live
+        self.by_project = by_project or {}
         self.live_reads = []
-        self.origins = {500: "1", 510: "10", 900: "10", 901: "11"}
-        self.projects = {500: 7, 510: 7, 900: 100, 901: 100}
-        self.keys = {500: "APP-1", 510: "APP-10", 900: "APP-10", 901: "APP-11"}
+        self.origins = {500: "1", 510: "10", 900: "10", 901: "11", 920: "20"}
+        self.projects = {500: 7, 510: 7, 900: 100, 901: 100, 920: 101}
+        self.keys = {500: "APP-1", 510: "APP-10", 900: "APP-10", 901: "APP-11", 920: "APP-20"}
 
     def execute_query_to_json_file(self, script):
-        self.live_reads.append(json.loads(script.split("\n")[1]))
-        return json.loads(json.dumps(self.live))
+        values = json.loads(script.split("\n")[1])
+        self.live_reads.append(values)
+        return json.loads(json.dumps(self.by_project.get(values["project_id"], self.live)))
 
 
 @pytest.fixture
@@ -450,8 +453,11 @@ def _level_run(
     stored=None,
     approved=(),
     runs=1,
+    second_level=False,
     **kw,
 ):
+    if second_level:
+        kw["mapping"] = {"security_level_project": {"APP:10000": SUB_PROJECT, "APP:10001": SECOND_LEVEL}}
     mappings, _ = level_setup(**kw)
     from src import config
 
@@ -462,7 +468,7 @@ def _level_run(
     writes = []
     original = mappings.set_mapping
     mappings.set_mapping = lambda name, value: (writes.append(name), original(name, value))
-    jira, op = _LevelJira(moved, omitted), _LevelOpenProject(live)
+    jira, op = _LevelJira(moved, omitted), _LevelOpenProject(live, SECOND_LIVE if second_level else None)
     op.values.update(stored or {})
     migration = WorkPackageFieldHistoryMigration(jira_client=jira, op_client=op)
     results = [migration.run() for _ in range(runs)]
@@ -495,10 +501,20 @@ def test_level_switch_on_writes_history_into_the_work_package_its_sub_project_ho
     assert value["jiraIssueId"] == "10"
     # The security change is kept: everyone who reads the sub-project can browse the issue in Jira.
     assert [c["field"] for c in value["events"][0]["changes"]] == ["summary", "security"]
+    # The change from another level names that level; it is kept as Jira shows it.
+    assert value["events"][1]["changes"] == [{"position": 0, **MOVED}]
     # Archived and unmapped issues get nothing.
     assert set(outcome.op.values) == {500, 900, 901}
     assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
     assert outcome.writes == []
+
+
+def test_level_sub_projects_of_one_jira_project_share_one_level_search(level_setup):
+    outcome = _level_run(level_setup, second_level=True)
+    assert outcome.result.success, outcome.result
+    assert _written(outcome.op) == {(7, 500), (100, 900), (100, 901), (101, 920)}
+    # One search per Jira project: the first page and the empty page that ends it.
+    assert outcome.jira.searches.count((LEVEL_LIGHT, "project,security", "changelog")) == 2
 
 
 @pytest.mark.parametrize(

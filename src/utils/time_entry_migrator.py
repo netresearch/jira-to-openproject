@@ -203,6 +203,11 @@ class TimeEntryMigrator:
         self._ff_cutoff: datetime | None = None
         self._upsert_enabled: bool = False
 
+    @property
+    def unreadable_issues(self) -> frozenset[str]:
+        """The issues whose work logs the last extraction could not read."""
+        return frozenset(self._failed_worklog_issues)
+
     # == Timestamp helpers ==
     @staticmethod
     def _parse_ts(ts: str | None) -> datetime | None:

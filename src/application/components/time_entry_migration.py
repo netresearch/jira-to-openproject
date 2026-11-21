@@ -164,6 +164,14 @@ class TimeEntryMigration(BaseMigration):
         )
         return rows
 
+    def _refuse_unread_level_issues(self) -> None:
+        """A level issue whose work logs were not read (its level changed, say) is a refusal."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return
+        unread = self.time_entry_migrator.unreadable_issues & set(level.targets)
+        level.refused.extend(f"{key}: work logs not read with the selected level" for key in sorted(unread))
+
     def run(self) -> ComponentResult:
         """Import time entries and an explicitly selected operator-only instance catalogue."""
         result = self._run_time_entries()
@@ -256,6 +264,7 @@ class TimeEntryMigration(BaseMigration):
             result = self.time_entry_migrator.migrate_time_entries_for_issues(
                 migrated_wps,
             )
+            self._refuse_unread_level_issues()
             success = result.get("status") == "success"
             errors: list[str] = []
             if result.get("status") == "failed":
