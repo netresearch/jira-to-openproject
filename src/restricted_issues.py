@@ -39,15 +39,16 @@ REPORT_FORMAT = "j2o-restricted-report/1"
 KINDS = ("static", "per_issue", "unexplained")
 
 
-def migration_account(explicit: str | None) -> str:
-    """The account whose temporary single-user grants are not counted (default: the configured Jira user)."""
-    if explicit:
-        return explicit
-    from src.config import jira_config
+def migration_account(jira: Endpoint, explicit: str | None) -> str:
+    """The account whose temporary single-user grants are not counted; it must exist in Jira.
 
-    configured = jira_config.get("username")
-    require(isinstance(configured, str) and configured, "Set --migration-account or jira.username")
-    return str(configured)
+    The default is the configured Jira user, ``J2O_JIRA_USERNAME`` (``jira.username``).
+    """
+    account = explicit or os.environ.get("J2O_JIRA_USERNAME") or ""
+    require(account, "Set --migration-account or J2O_JIRA_USERNAME")
+    found = jira.request("GET", "/rest/api/2/user", denial=True, params={"username": account})
+    require(found.status_code == 200 and found.json().get("name") == account, "Migration account not found in Jira")
+    return account
 
 
 def all_projects(jira: Endpoint) -> list[str]:
@@ -165,7 +166,7 @@ def inventory(args: argparse.Namespace, identity: x25519.Identity) -> dict:
         jira=True,
         ca=os.getenv("J2O_ARCHIVE_CA_BUNDLE") or True,
     )
-    account = migration_account(args.migration_account)
+    account = migration_account(jira, args.migration_account)
     projects = sorted({key.upper() for key in args.project}) if args.project else all_projects(jira)
     directory = Directory(jira)
     scans = []
@@ -188,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     scan = sub.add_parser("inventory", help="Read levels and readers from Jira and seal non-static issues")
     scan.add_argument("--jira", required=True)
     scan.add_argument("--project", action="append", default=[], help="Limit to this Jira project (default: all)")
-    scan.add_argument("--migration-account", help="Jira user name of the temporary grant (default: jira.username)")
+    scan.add_argument("--migration-account", help="Jira user name of the temporary grant (default: J2O_JIRA_USERNAME)")
     scan.add_argument("--report", type=Path, required=True)
     restore = sub.add_parser("restore", help="Decrypt the archive into a new private JSON file")
     restore.add_argument("--output", type=Path, required=True)

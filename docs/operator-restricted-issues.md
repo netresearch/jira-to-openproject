@@ -6,15 +6,15 @@
 
 For each project with an issue security scheme:
 
-1. The levels come from `/rest/api/2/project/{KEY}/issuesecuritylevelscheme`, their grants from the project-config page `/plugins/servlet/project-config/{KEY}/issuesecurity` (Jira 9 has no REST endpoint for them). The token user needs the Jira administrator right to read that page; a login or WebSudo page instead of the grant table stops the run.
+1. The levels come from `/rest/api/2/project/{KEY}/issuesecuritylevelscheme`, their grants from the project-config page `/plugins/servlet/project-config/{KEY}/issuesecurity` (Jira 9 has no REST endpoint for them). The page was read with a Jira administrator account; other accounts were not tried. A login or WebSudo page instead of the grant table stops the run.
 2. **Static readers** of a level: the members of its group and project-role grants, the project lead and its single users, intersected with the users who have Browse on the project.
 3. **Effective readers** of each issue: `/rest/api/2/user/permission/search?permissions=BROWSE&issueKey=…`.
 4. Each issue gets one class:
    - `static`: the effective readers equal the static readers.
    - `per_issue`: additional readers, each named by the issue's assignee, reporter or user-field grant.
-   - `unexplained`: a reader no grant explains, a static reader missing from the effective readers, or a level with a grant type that has no fixed membership.
+   - `unexplained`: a reader no grant explains, a static reader missing from the effective readers, or a level with a grant label the command does not know (for example "Current user", or a label in another language). Such issues are archived and the run continues.
 
-The migration account's temporary "Single user" grant (ADR-009, decision 3) is not counted. The account counts as a reader only when another grant explains it. Pass its Jira user name with `--migration-account`; the default is `jira.username` from the configuration.
+The migration account's temporary "Single user" grant (ADR-009, decision 3) is not counted. The account counts as a reader only when another grant explains it. Pass its Jira user name with `--migration-account`; the default is `J2O_JIRA_USERNAME`, the configured Jira user. The account must exist in Jira.
 
 ## Run
 

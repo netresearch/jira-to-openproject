@@ -100,8 +100,9 @@ class FakeJira:
 
     url = _JIRA
 
-    def __init__(self, issues=ISSUES, page=PAGE, levels=("Board", "Legacy"), browse=_BROWSE):
+    def __init__(self, issues=ISSUES, page=PAGE, levels=("Board", "Legacy"), browse=_BROWSE, elsewhere=0):
         self.issues = issues
+        self.elsewhere = elsewhere  # issues with a level outside the listed projects
         self.page = page
         self.levels = levels
         self.browse = browse
@@ -150,6 +151,11 @@ class FakeJira:
                     ]
                 },
             )
+        if path == "/rest/api/2/project":
+            return Response(200, [{"key": "NONE"}, {"key": "DEMO"}])
+        if path == "/rest/api/2/user":
+            assert denial
+            return Response(200, _user(p["username"])) if p["username"] == _ACCOUNT else Response(404, {})
         if path == "/rest/api/2/project/DEMO":
             return Response(200, {"key": "DEMO", "lead": _user("alice")})
         if path == "/rest/api/2/field":
@@ -167,7 +173,9 @@ class FakeJira:
     def _search(self, p):
         jql = p["jql"]
         if p.get("maxResults") == 0:
-            return {"startAt": 0, "total": len(self.issues) if '"DEMO"' in jql or "project" not in jql else 0}
+            if "project" not in jql:
+                return {"startAt": 0, "total": len(self.issues) + self.elsewhere}
+            return {"startAt": 0, "total": len(self.issues) if '"DEMO"' in jql else 0}
         assert jql == 'project = "DEMO" AND level IS NOT EMPTY ORDER BY id ASC'
         assert set(p["fields"].split(",")) == {"security", "assignee", "reporter", _FIELD}
         start = p["startAt"]
@@ -271,23 +279,44 @@ def test_never_uses_the_endpoint_that_ignores_the_level():
 
 
 def test_migration_account_defaults_to_the_configured_jira_user(monkeypatch):
-    monkeypatch.setattr("src.config.jira_config", {"username": "configured.user"})
-    assert migration_account(None) == "configured.user"
-    assert migration_account("explicit") == "explicit"
-    monkeypatch.setattr("src.config.jira_config", {})
-    with pytest.raises(ArchiveError):
-        migration_account(None)
+    jira = FakeJira()
+    monkeypatch.setenv("J2O_JIRA_USERNAME", _ACCOUNT)
+    assert migration_account(jira, None) == _ACCOUNT
+    monkeypatch.setenv("J2O_JIRA_USERNAME", "placeholder")
+    with pytest.raises(ArchiveError, match="not found"):
+        migration_account(jira, None)
+    monkeypatch.delenv("J2O_JIRA_USERNAME")
+    with pytest.raises(ArchiveError, match="J2O_JIRA_USERNAME"):
+        migration_account(jira, None)
+    assert migration_account(jira, _ACCOUNT) == _ACCOUNT
 
 
-def test_seals_non_static_issues_and_reports_counts_without_reader_names(tmp_path, monkeypatch):
+def _cli(tmp_path, monkeypatch, jira):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("J2O_ARCHIVE_INVENTORY_TOKEN", "test-token")
-    jira = FakeJira()
     monkeypatch.setattr("src.restricted_issues.Endpoint", lambda *a, **kw: jira)
     identity = x25519.Identity.generate()
     key = tmp_path / "operator.key"
     key.write_text(str(identity))
-    args = ["--identity", str(key), "--archive", "restricted.age"]
+    return identity, ["--identity", str(key), "--archive", "restricted.age"]
+
+
+def test_all_projects_must_account_for_every_restricted_issue(tmp_path, monkeypatch):
+    _, args = _cli(tmp_path, monkeypatch, FakeJira())
+    run = ["inventory", "--jira", _JIRA, "--report", "report.json", "--migration-account", _ACCOUNT, *args]
+    assert main(run) == 0
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert (report["projects"], report["projects_with_levels"], report["totals"]["issues"]) == (2, 1, 7)
+    for name in ("restricted.age", "report.json"):
+        (tmp_path / name).unlink()
+    _cli(tmp_path, monkeypatch, FakeJira(elsewhere=1))
+    assert main(run) == 1
+    assert not (tmp_path / "restricted.age").exists()
+
+
+def test_seals_non_static_issues_and_reports_counts_without_reader_names(tmp_path, monkeypatch):
+    identity, args = _cli(tmp_path, monkeypatch, FakeJira())
+    key = args[1]
     run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", *args]
     assert main([*run, "--migration-account", _ACCOUNT]) == 0
 
@@ -312,4 +341,4 @@ def test_seals_non_static_issues_and_reports_counts_without_reader_names(tmp_pat
     restore = ["restore", *args, "--output", "restored.json"]
     assert main(restore) == 0
     assert json.loads((tmp_path / "restored.json").read_text()) == value
-    assert main(["restore", "--identity", str(key), "--archive", str(tmp_path / "report.json"), "--output", "x.json"])
+    assert main(["restore", "--identity", key, "--archive", str(tmp_path / "report.json"), "--output", "x.json"])
