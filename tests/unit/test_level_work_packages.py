@@ -329,3 +329,34 @@ def test_scope_rejects_malformed_archived_rows():
     report = {"levels": [row()], "archived": [{"key": "APP-1", "level_id": "1", "class": "static"}]}
     with pytest.raises(ValueError, match="archived"):
         LevelScope(report, "community", {})
+
+
+def test_level_mapping_round_trips_through_the_real_mapping_facade(setup, monkeypatch):
+    import src.config as cfg
+    from src.mappings.mappings import Mappings
+
+    _, data = setup()
+    (data / "project_mapping.json").write_text(json.dumps({"APP": {"openproject_id": 7}}))
+    (data / "security_level_project_mapping.json").write_text(json.dumps({"APP:10000": SUB_PROJECT}))
+    monkeypatch.setattr(cfg, "mappings", Mappings(data_dir=data))
+    jira, op = fake_jira([issue(1)], level_issues()), FakeOpenProject()
+    migration = WorkPackageSkeletonMigration(jira_client=jira, op_client=op)
+    migration._get_j2o_origin_key_cf_id = lambda: 5
+    migration._build_skeleton_payload = lambda source, project_id, _cf: {
+        "subject": source.fields.summary,
+        "project_id": project_id,
+        "_jira_key": source.key,
+        "_jira_id": str(source.id),
+    }
+    assert migration.run().success
+    stored = json.loads((data / "security_level_work_package_mapping.json").read_text())
+    assert set(stored) == {"10", "11"}
+    assert Mappings(data_dir=data).get_mapping("security_level_work_package") == stored
+    assert set(json.loads((data / "work_package_mapping.json").read_text())) == {"1"}
+    # A second run in a new process reads the entries back and creates nothing.
+    monkeypatch.setattr(cfg, "mappings", Mappings(data_dir=data))
+    op = FakeOpenProject()
+    again = WorkPackageSkeletonMigration(jira_client=fake_jira([issue(1)], level_issues()), op_client=op)
+    again._get_j2o_origin_key_cf_id = lambda: 5
+    assert again.run().details["security_level"]["skipped"] == 2
+    assert not op.payloads
