@@ -168,6 +168,9 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "groups",
     "category_defaults",
     "admin_schemes",
+    # Late access grant of the level sub-projects (ADR-009 step 6, ADR-012): after the parent's
+    # memberships exist, whose roles it copies. Skips unless migration.security_level_work_packages is true.
+    "security_level_access",
     "reporting",
 ]
 

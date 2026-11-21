@@ -37,3 +37,11 @@ def test_groups_grant_project_access_after_memberless_staging(sequence) -> None:
     groups = sequence.index("groups")
     assert [stage for stage in MEMBERLESS_STAGING if sequence.index(stage) > groups] == []
     assert [stage for stage in NEEDS_MEMBERS if sequence.index(stage) < groups] == []
+
+
+@pytest.mark.parametrize("sequence", [DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES["full"]])
+def test_level_access_runs_after_the_parent_memberships_and_before_reporting(sequence) -> None:
+    # SecurityLevelAccessMigration copies each reader's roles in the parent project, which
+    # groups and admin_schemes grant; every level stage before it writes into the sub-projects.
+    assert sequence.index("admin_schemes") < sequence.index("security_level_access") < sequence.index("reporting")
+    assert sequence.index("groups") < sequence.index("security_level_access")

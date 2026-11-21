@@ -66,6 +66,7 @@ The j2o migration tool consists of 40+ specialized migration components, each ha
 | StoryPointsMigration | `story_points` | Stable | Yes | Agile estimation |
 | SecurityLevelsMigration | `security_levels` | Stable | Yes | Access levels |
 | SecurityLevelProjectsMigration | `security_level_projects` | New | Unit | Private, memberless sub-project per Jira project and security level |
+| SecurityLevelAccessMigration | `security_level_access` | New | Unit | Late access grant of the level sub-projects: memberships of the static readers, shares on Enterprise |
 | **Workflow & Admin** |
 | WorkflowMigration | `workflows` | Stable | Yes | Status transitions |
 | AdminSchemeMigration | `admin_schemes` | Stable | Yes | Role memberships |
@@ -948,6 +949,16 @@ Each work package is found through the `jira_key` inside its mapping entry, so a
 Creates one private, memberless OpenProject sub-project per Jira project and security level that has an issue to migrate, from the shared `j2o-restricted` report, and records it in `security_level_project_mapping.json`. It needs the administrator report of the same archive and is in no profile yet; see [Level sub-projects](operator-restricted-issues.md#level-sub-projects).
 
 **Dependencies**: ProjectMigration
+
+---
+
+### SecurityLevelAccessMigration
+
+**Location**: `src/application/components/security_level_access_migration.py`
+
+The late access grant of the level sub-projects ([ADR-012](adr/ADR-012-late-access-grant-of-level-sub-projects.md)). With `migration.security_level_work_packages: true` it gives each mapped level sub-project one membership per static reader from the operator-only readers file (`migration.security_level_readers`), with the reader's project roles in the parent project or "Reader", and on Enterprise shares each `per_issue` work package with its extra readers as "Work package viewer". Every membership row is read back and compared with the expected rows; a row it would not have written refuses the sub-project, and nothing is deleted. See [Level access](operator-restricted-issues.md#level-access).
+
+**Dependencies**: SecurityLevelProjectsMigration, WorkPackageSkeletonMigration, GroupMigration, AdminSchemeMigration
 
 ---
 
