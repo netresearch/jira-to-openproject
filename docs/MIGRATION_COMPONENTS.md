@@ -843,7 +843,7 @@ Migrates Jira remote links to OpenProject custom field.
 
 **Dependencies**: WorkPackageMigration, CustomFieldMigration
 
-Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused; the section goes into the description of the level work package. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (off by default), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused; the section goes into the description of the level work package. In production the component writes nothing yet: a Jira search does not return remote links, and nothing reads the remote-link endpoint ([#501](https://github.com/netresearch/jira-to-openproject/issues/501)); the tests supply the field directly. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
