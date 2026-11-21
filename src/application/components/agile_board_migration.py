@@ -291,7 +291,10 @@ class AgileBoardMigration(BaseMigration):
             ordinary = self._ordinary_targets()
         except ValueError:
             return  # the extract reads the same mapping and reports it
-        level.without_level_issues(ordinary)
+        selected = set(config.selected_jira_projects())
+        level.without_level_issues(
+            {key: wp for key, wp in ordinary.items() if not selected or self._issue_project_key(key) in selected}
+        )
 
     def _run_pipeline(self) -> ComponentResult:
         self.logger.info("Starting agile board and sprint migration")

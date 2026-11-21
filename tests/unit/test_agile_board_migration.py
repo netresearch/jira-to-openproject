@@ -497,6 +497,19 @@ def test_level_repeated_runs_with_change_detection_resolve_and_report_each_time(
     assert len(outcome.op.live_reads) == 2
 
 
+def test_level_ordinary_entries_of_unselected_projects_are_not_refused(level_setup, monkeypatch):
+    # The archived APP-12 has an ordinary entry, but only OTHER is selected for this run.
+    ordinary = {"12": {"jira_key": "APP-12", "openproject_id": 512, "project_key": "APP"}}
+    level_setup(ordinary=ordinary)
+    monkeypatch.setattr("src.config.selected_jira_projects", lambda: ["OTHER"])
+    jira, op = LevelJira(), LevelOp()
+    jira.get_boards_for_project = Mock(return_value=[])
+    result = AgileBoardMigration(jira, op).run()
+    assert result.success, result
+    assert jira.searches == []
+    assert result.details["security_level"] == {"work_packages": 0, "refused": 0}
+
+
 def test_level_refusals_are_reported_when_the_board_read_fails(level_setup, monkeypatch):
     ordinary = {"11": {"jira_key": "APP-11", "openproject_id": 510, "project_key": "APP"}}
     level_setup(ordinary=ordinary)
