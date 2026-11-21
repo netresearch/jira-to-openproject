@@ -167,6 +167,8 @@ class TimeEntryMigrator:
         self._written_attribute_origins: set[str] = set()
         self._requested_issues: set[str] | None = None
         self._target_projects: dict[str, int] = {}
+        # Jira key to the security level a selected level issue must still have (ADR-009).
+        self._level_ids: dict[str, str] = {}
         self.user_mapping: dict[str, int] = {}
         self.work_package_mapping: dict[str, int] = {}
         self.activity_mapping: dict[str, int] = {}
@@ -200,6 +202,11 @@ class TimeEntryMigrator:
         self._ff_field: str = "updated"  # or 'created'
         self._ff_cutoff: datetime | None = None
         self._upsert_enabled: bool = False
+
+    @property
+    def unreadable_issues(self) -> frozenset[str]:
+        """The issues whose work logs the last extraction could not read."""
+        return frozenset(self._failed_worklog_issues)
 
     # == Timestamp helpers ==
     @staticmethod
@@ -672,7 +679,11 @@ class TimeEntryMigrator:
 
         for issue_key in issue_keys:
             try:
-                work_logs = self.jira_client.get_work_logs_for_issue(issue_key)
+                level_id = getattr(self, "_level_ids", {}).get(issue_key)
+                if level_id is None:
+                    work_logs = self.jira_client.get_work_logs_for_issue(issue_key)
+                else:
+                    work_logs = self.jira_client.get_work_logs_for_issue(issue_key, level_id=level_id)
 
                 if work_logs:
                     filtered_logs = self._matching_work_logs(issue_key, work_logs)
@@ -1130,6 +1141,7 @@ class TimeEntryMigrator:
             issue_keys = [issue["jira_key"] for issue in migrated_issues]
 
             self._target_projects = {r["jira_key"]: r["project_id"] for r in migrated_issues if r.get("project_id")}
+            self._level_ids = {r["jira_key"]: r["level_id"] for r in migrated_issues if r.get("level_id")}
             # Update work package mapping from migrated issues
             for issue in migrated_issues:
                 if issue.get("jira_key") and issue.get("work_package_id"):

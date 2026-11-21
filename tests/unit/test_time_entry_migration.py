@@ -12,9 +12,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+from src.infrastructure.jira.jira_client import JiraApiError
+from tests.unit.test_level_attachments import LEVEL_MAP
+from tests.unit.test_level_attachments import LIVE as LEVEL_LIVE
+from tests.unit.test_level_work_packages import level_issues
+from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
 
 @pytest.fixture
@@ -312,3 +319,216 @@ def test_configured_catalogue_cannot_silently_skip_denied_source(tmp_path, monke
     assert result.details["status"] == "failed"
     assert result.failed_count == 1
     assert result.errors == ["The configured Tempo instance catalogue could not be verified (JiraAuthenticationError)."]
+
+
+# --- Level work packages (ADR-009, step 5b) ---------------------------------------------------
+
+ORDINARY = {"1": {"jira_key": "APP-1", "openproject_id": 500, "project_key": "APP", "openproject_project_id": 7}}
+
+
+@pytest.fixture
+def level_setup(level_work_package_setup):  # noqa: F811 (the imported fixture, requested by name)
+    """The reports, mappings and switch of the level work package tests."""
+    return level_work_package_setup
+
+
+def _worklog(key):
+    number = int(key.split("-")[1])
+    return {
+        "id": str(7000 + number),
+        "issue_key": key,
+        "started": "2026-01-01T10:00:00.000+0000",
+        "author": {"key": "worker", "time_zone": "UTC"},
+        "time_spent_seconds": 3600,
+        "comment": "",
+        "created": "2026-01-01T10:00:00.000+0000",
+        "updated": "2026-01-01T10:00:00.000+0000",
+    }
+
+
+def _level_jira(changed=()):
+    """Answer the level search and the work log reads; a key in ``changed`` fails the level check."""
+    jira = MagicMock(base_url="https://jira.local")
+    jira.get_projects.return_value = [{"key": "APP"}]
+    jira.jira.search_issues.side_effect = lambda jql, startAt, maxResults, **kw: level_issues()[
+        startAt : startAt + maxResults
+    ]
+    jira.reads = []
+
+    def read(key, **kwargs):
+        jira.reads.append((key, kwargs))
+        if key in changed:
+            msg = "Issue security cannot be represented on a native time entry."
+            raise JiraApiError(msg)
+        return [_worklog(key)]
+
+    jira.get_work_logs_for_issue.side_effect = read
+    jira.get_tempo_time_entries.return_value = []
+    return jira
+
+
+def _level_op(live=None):
+    op = MagicMock()
+    op.rails_client = MagicMock()
+    op.live_reads = []
+
+    def query(script):
+        op.live_reads.append(json.loads(script.split("\n")[1]))
+        return json.loads(json.dumps(LEVEL_LIVE if live is None else live))
+
+    op.execute_query_to_json_file.side_effect = query
+    op.get_time_entry_activities.return_value = [{"name": "Development", "id": 2}]
+    return op
+
+
+def _level_run(level_setup, monkeypatch, *, live=None, changed=(), level_map=None, ordinary=None, runs=1, **kw):
+    from src.infrastructure.openproject.openproject_time_entry_service import OpenProjectTimeEntryService
+    from src.utils.time_entry_migrator import TimeEntryMigrator
+
+    mappings, data = level_setup(**kw)
+    import src.config as cfg
+
+    monkeypatch.setitem(cfg.jira_config, "projects", [])
+    monkeypatch.delenv("J2O_TIME_ENTRY_FAST_FORWARD", raising=False)
+    mappings.data["security_level_work_package"] = dict(LEVEL_MAP if level_map is None else level_map)
+    wp_map = ORDINARY if ordinary is None else ordinary
+    if wp_map:
+        (data / "work_package_mapping.json").write_text(json.dumps(wp_map), encoding="utf-8")
+    (data / "user_mapping.json").write_text(
+        json.dumps({"worker": {"jira_key": "worker", "openproject_id": 3}}), encoding="utf-8"
+    )
+    writes = []
+    original = mappings.set_mapping
+    mappings.set_mapping = lambda name, value: (writes.append(name), original(name, value))
+    rows = []
+
+    def write(self, batch_size=200, *, dry_run=False):
+        # The rows the Rails writer receives, built by its own projection.
+        entries = list(self.transformed_time_entries)
+        rows.append([OpenProjectTimeEntryService._entry_row(entry, i) for i, entry in enumerate(entries)])
+        self.migration_results["successful_migrations"] += len(entries)
+        return {}
+
+    monkeypatch.setattr(TimeEntryMigrator, "migrate_time_entries_to_openproject", write)
+    from src.application.components.time_entry_migration import TimeEntryMigration
+
+    jira, op = _level_jira(changed), _level_op(live)
+    migration = TimeEntryMigration(jira_client=jira, op_client=op)
+    migration.data_dir = data
+    results = [migration.run() for _ in range(runs)]
+    return SimpleNamespace(
+        result=results[-1], results=results, jira=jira, op=op, rows=rows, writes=writes, migration=migration
+    )
+
+
+def _targets(rows):
+    return {(row["work_package_id"], row["target_project_id"]) for row in rows}
+
+
+def _enabled(op):
+    return [call.args[0] for call in op.enable_project_modules.call_args_list]
+
+
+def test_level_switch_off_issues_exactly_the_calls_of_the_ordinary_path(level_setup, monkeypatch):
+    outcome = _level_run(level_setup, monkeypatch, on=False, reports=False)
+    assert outcome.result.success, outcome.result
+    assert outcome.jira.reads == [("APP-1", {})]
+    assert [_targets(rows) for rows in outcome.rows] == [{(500, 7)}]
+    assert _enabled(outcome.op) == [7]
+    assert not outcome.op.live_reads
+    assert not outcome.jira.get_projects.called
+    assert "security_level" not in outcome.result.details
+
+
+def test_level_switch_on_logs_time_on_the_work_package_its_sub_project_holds(level_setup, monkeypatch):
+    outcome = _level_run(level_setup, monkeypatch)
+    assert outcome.result.success, outcome.result
+    # The level read requires the selected level; archived and unmapped issues are never read.
+    assert outcome.jira.reads == [("APP-1", {}), ("APP-10", {"level_id": "10000"}), ("APP-11", {"level_id": "10000"})]
+    # The time entry's expected project is the sub-project; OpenProject takes it from the work package.
+    assert [_targets(rows) for rows in outcome.rows] == [{(500, 7), (900, 100), (901, 100)}]
+    assert _enabled(outcome.op) == [7, 100]
+    assert outcome.op.live_reads == [{"project_id": 100, "field": "J2O Origin Key"}]
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
+    assert outcome.writes == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}},
+        {"ordinary": {**ORDINARY, "10": {"jira_key": "APP-10", "openproject_id": 510, "project_key": "APP"}}},
+    ],
+)
+def test_level_issue_that_cannot_be_confirmed_gets_no_time_entries(level_setup, monkeypatch, options):
+    outcome = _level_run(level_setup, monkeypatch, **options)
+    assert not outcome.result.success
+    assert [key for key, _ in outcome.jira.reads] == ["APP-1", "APP-11"]
+    assert [_targets(rows) for rows in outcome.rows] == [{(500, 7), (901, 100)}]
+    assert outcome.result.details["security_level"]["refused"] == 1
+
+
+def test_level_issue_whose_level_changed_gets_no_time_entries(level_setup, monkeypatch):
+    outcome = _level_run(level_setup, monkeypatch, changed={"APP-10"})
+    assert not outcome.result.success
+    assert ("APP-10", {"level_id": "10000"}) in outcome.jira.reads
+    assert [_targets(rows) for rows in outcome.rows] == [{(500, 7), (901, 100)}]
+    assert outcome.result.details["jira_work_logs"]["unreadable_issues"] == 1
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 1}
+    assert outcome.result.failed == 1
+
+
+def test_level_unselected_issue_with_an_entry_gets_nothing(level_setup, monkeypatch):
+    level_map = {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}
+    outcome = _level_run(level_setup, monkeypatch, level_map=level_map)
+    assert not outcome.result.success
+    assert "APP-12" not in [key for key, _ in outcome.jira.reads]
+    assert outcome.result.details["security_level"]["refused"] == 1
+
+
+def test_level_unreadable_sub_project_refuses_all_its_issues(level_setup, monkeypatch):
+    outcome = _level_run(level_setup, monkeypatch, live={"field": True})
+    assert not outcome.result.success
+    assert outcome.jira.reads == [("APP-1", {})]
+    assert outcome.result.details["security_level"]["refused"] == 2
+
+
+def test_level_repeated_run_on_one_instance_gives_the_same_result(level_setup, monkeypatch):
+    outcome = _level_run(
+        level_setup, monkeypatch, live={"field": True, "work_packages": [900], "keys": [[900, "APP-10"]]}, runs=2
+    )
+    first, second = outcome.results
+    assert first.details["security_level"] == second.details["security_level"] == {"work_packages": 1, "refused": 1}
+    assert [_targets(rows) for rows in outcome.rows] == [{(500, 7), (900, 100)}] * 2
+    assert len(outcome.op.live_reads) == 2
+
+
+def test_level_refusals_are_reported_without_ordinary_work_packages(level_setup, monkeypatch):
+    outcome = _level_run(level_setup, monkeypatch, live={"field": True}, ordinary={})
+    assert not outcome.result.success
+    assert outcome.result.details["reason"] == "no_migrated_work_packages"
+    assert outcome.result.details["security_level"] == {"work_packages": 0, "refused": 2}
+    assert not outcome.jira.reads
+
+
+def test_level_switch_on_without_reports_stops_before_any_read(level_setup, monkeypatch):
+    outcome = _level_run(level_setup, monkeypatch, reports=False)
+    assert not outcome.result.success
+    assert not outcome.jira.reads
+    assert not outcome.rows
+
+
+def test_level_state_of_an_earlier_run_is_not_reported_again(level_setup, monkeypatch):
+    outcome = _level_run(level_setup, monkeypatch, live={"field": True})
+    assert outcome.result.details["security_level"]["refused"] == 2
+    # The next run stops before the resolution: no refusal of the earlier run is counted again.
+    migration_op = outcome.op
+    migration_op.rails_client = None
+    from src.application.components.time_entry_migration import TimeEntryMigration
+
+    second = TimeEntryMigration(jira_client=outcome.jira, op_client=migration_op)
+    second._level = outcome.migration._level
+    result = second.run()
+    assert not result.success
+    assert result.details["reason"] == "rails_client_missing"
+    assert "security_level" not in result.details
