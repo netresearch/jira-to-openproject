@@ -24,7 +24,9 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -109,6 +111,45 @@ class WatcherMigration(BaseMigration):
         return None
 
     def run(self) -> ComponentResult:  # type: ignore[override]
+        """Add the Jira watchers of the mapped work packages.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009). They get no watchers: a watcher must be a reader of the level, and the
+        readers of a level are only in the operator archive, not in the shared report the
+        importer reads. An ordinary entry of an issue of a level search or of the archive is
+        refused; the refusals are counted into the result on every return.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, logger)
+            except LevelProjectError as exc:
+                logger.error("Level work package watchers stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"], details={})
+        return self._with_level_report(self._run_watchers())
+
+    def _with_level_report(self, result: ComponentResult) -> ComponentResult:
+        """Count the level work packages left without watchers and this run's level refusals."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return result
+        if level.work_packages:
+            logger.warning(
+                "Watchers of %d level work packages are not migrated: the importer has no readers of the level",
+                len(level.work_packages),
+            )
+        result.details["level_watchers_withheld"] = len(level.work_packages)
+        return level.report(result, logger)
+
+    def _without_level_issues(self, jira_keys: list[str]) -> list[str]:
+        """With the level switch on, an issue of a level search or of the archive loses its ordinary entry."""
+        level = getattr(self, "_level", None)
+        if level is None:
+            return jira_keys
+        kept = level.without_level_issues(dict.fromkeys(jira_keys, 0))
+        return [key for key in jira_keys if key in kept]
+
+    def _run_watchers(self) -> ComponentResult:
         logger.info("Starting watcher migration...")
         result = ComponentResult(success=True, message="Watcher migration completed", details={})
 
@@ -118,7 +159,7 @@ class WatcherMigration(BaseMigration):
         # human-readable PROJ-123 form. Read the inner ``jira_key`` for
         # the typed entry so downstream code uses the human-readable key
         # rather than the numeric id.
-        jira_keys = self._mapped_issue_keys()
+        jira_keys = self._without_level_issues(self._mapped_issue_keys())
         if not jira_keys:
             # FAIL LOUD. Same anti-pattern as pre-#194 attachments and
             # pre-#197 wp_skeleton — silent ``success=True`` here masks
@@ -285,6 +326,10 @@ class WatcherMigration(BaseMigration):
         if not issues:
             logger.info("No cached issues, will iterate through %d Jira keys", len(jira_keys))
             issues = {k: {} for k in jira_keys}
+        level = getattr(self, "_level", None)
+        if level is not None:
+            # A cached snapshot may hold level issues; their watchers are not read.
+            issues = {key: issue for key, issue in issues.items() if key not in level.level_keys}
         return issues
 
     def _read_watchers(self, key: str, issue: Any) -> list:
