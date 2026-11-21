@@ -32,9 +32,12 @@ def _require(condition: object, message: str) -> None:
 
 def _names(value: object, label: str) -> frozenset[str]:
     """A list of distinct, non-empty Jira user names."""
-    ok = isinstance(value, list) and all(isinstance(name, str) and name for name in value)
-    _require(ok and len(set(value)) == len(value), f"Malformed readers of {label} in the readers file")
-    return frozenset(value)
+    message = f"Malformed readers of {label} in the readers file"
+    if not isinstance(value, list) or not all(isinstance(name, str) and name for name in value):
+        raise LevelProjectError(message)
+    names = frozenset(value)
+    _require(len(names) == len(value), message)
+    return names
 
 
 @dataclass(frozen=True)
