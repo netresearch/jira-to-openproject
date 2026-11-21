@@ -288,6 +288,7 @@ Populates all content using the complete mapping for link resolution.
 - Custom field values
 - Journals/comments with link conversion
 - User mentions (`@accountId` → `@username`)
+- With `migration.security_level_work_packages: true`: description and custom fields of level work packages, without watchers ([Level work packages](operator-restricted-issues.md#level-work-packages))
 
 **Requires**: `work_package_mapping.json` from Phase 1
 
@@ -888,7 +889,7 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` also creates the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`; see [Level work packages](operator-restricted-issues.md#level-work-packages).
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`; see [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Features**:
 - On previously mapped issues, this component records the source level name in the “Security Level” custom field.
