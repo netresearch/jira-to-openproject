@@ -499,14 +499,30 @@ def test_a_report_with_a_key_or_level_listed_twice_stops_before_any_write(setup,
     assert "inventory report" in repr(outcome.result)
 
 
-def content(setup, *, unrestricted=(), levels=(), level_map=None, wp_map=None, **kwargs):
+LIVE = {"field": True, "work_packages": [900, 901], "keys": [[900, "APP-10"], [901, "APP-11"]]}
+
+
+def live_op(live=None):
+    """An OpenProject double whose sub-project read answers ``live`` and whose updates succeed."""
+    op = Mock()
+    op.live_reads = []
+
+    def read(script):
+        op.live_reads.append(json.loads(script.split("\n")[1]))
+        return json.loads(json.dumps(LIVE if live is None else live))
+
+    op.execute_query_to_json_file.side_effect = read
+    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows)}
+    return op
+
+
+def content(setup, *, unrestricted=(), levels=(), level_map=None, wp_map=None, live=None, **kwargs):
     setup(**kwargs)
     import src.config as cfg
 
     if level_map is not None:
         cfg.mappings.data["security_level_work_package"] = level_map
-    jira, op = fake_jira(list(unrestricted), list(levels)), Mock()
-    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows)}
+    jira, op = fake_jira(list(unrestricted), list(levels)), live_op(live)
     migration = WorkPackageContentMigration(jira_client=jira, op_client=op)
     migration.work_package_mapping = wp_map or {"1": {"jira_key": "APP-1", "openproject_id": 500}}
     results = migration._migrate_content()
@@ -521,7 +537,14 @@ LEVEL_MAP = {
         "openproject_project_id": 100,
         "security_level_id": "10000",
         "security_level_project": "APP:10000",
-    }
+    },
+    "11": {
+        "jira_key": "APP-11",
+        "openproject_id": 901,
+        "openproject_project_id": 100,
+        "security_level_id": "10000",
+        "security_level_project": "APP:10000",
+    },
 }
 
 
@@ -536,15 +559,18 @@ def test_content_switch_off_reads_only_unrestricted_issues(setup):
 def test_content_of_a_level_issue_goes_to_its_work_package_without_watchers(setup):
     outcome = content(setup, unrestricted=[issue(1)], levels=level_issues(), level_map=LEVEL_MAP)
     assert {"id": 900, "description": "Text 10"} in outcome.written
+    assert {"id": 901, "description": "Text 11"} in outcome.written
     assert {"id": 500, "description": "Text 1"} in outcome.written
-    assert len(outcome.written) == 2
+    assert len(outcome.written) == 3
     level_calls = [call for call in outcome.jira.jira.search_issues.call_args_list if call.args[0] == LEVELS]
     fields = [(call.kwargs["fields"], call.kwargs.get("expand")) for call in level_calls]
     assert list(dict.fromkeys(fields)) == [("security", None), ("*all", "renderedFields,changelog")]
     assert [call.args[0] for call in outcome.jira.get_issue_watchers.call_args_list] == ["APP-1"]
     commented = [call.args[0] for call in outcome.jira.select_comments_for_migration.call_args_list]
-    assert commented == ["APP-1", "APP-10"]
-    assert outcome.results["security_level"] == {"processed": 1, "updated": 1, "skipped": 4, "refused": 0}
+    assert commented == ["APP-1", "APP-10", "APP-11"]
+    assert outcome.results["security_level"] == {"processed": 2, "updated": 2, "skipped": 3, "refused": 0}
+    assert outcome.results["total_updated"] == 3
+    assert outcome.op.live_reads == [{"project_id": 100, "field": "J2O Origin Key"}]
 
 
 @pytest.mark.parametrize(
@@ -557,7 +583,7 @@ def test_content_of_a_level_issue_goes_to_its_work_package_without_watchers(setu
     ],
 )
 def test_content_refuses_an_entry_that_does_not_match_the_current_level(setup, entry):
-    level_map = {"10": {**LEVEL_MAP["10"], **entry}}
+    level_map = {**LEVEL_MAP, "10": {**LEVEL_MAP["10"], **entry}}
     outcome = content(setup, levels=level_issues(), level_map=level_map)
     assert not [row for row in outcome.written if row["id"] == 900]
     assert outcome.results["security_level"]["refused"] == 1
@@ -566,9 +592,9 @@ def test_content_refuses_an_entry_that_does_not_match_the_current_level(setup, e
 
 def test_content_refuses_an_issue_the_selection_no_longer_keeps(setup):
     # On Community a per_issue issue is not selected, even if a mapping entry exists.
-    level_map = {"12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 901}}
+    level_map = {**LEVEL_MAP, "12": {**LEVEL_MAP["10"], "jira_key": "APP-12", "openproject_id": 902}}
     outcome = content(setup, levels=level_issues(), level_map=level_map)
-    assert not outcome.written or all(row["id"] != 901 for row in outcome.written)
+    assert all(row["id"] != 902 for row in outcome.written)
     assert outcome.results["security_level"]["refused"] == 1
 
 
@@ -579,7 +605,7 @@ def test_content_refuses_an_issue_whose_level_changed_between_the_two_searches(s
     cfg.mappings.data["security_level_work_package"] = LEVEL_MAP
     light, full = level_issues(), level_issues()
     full[0].raw["fields"]["security"] = {"id": "10001"}
-    jira, op = fake_jira([], []), Mock()
+    jira, op = fake_jira([], []), live_op()
 
     def search(jql, startAt, maxResults, **kwargs):
         rows = (light if kwargs["fields"] == "security" else full) if "level IS NOT EMPTY" in jql else []
@@ -589,5 +615,41 @@ def test_content_refuses_an_issue_whose_level_changed_between_the_two_searches(s
     migration = WorkPackageContentMigration(jira_client=jira, op_client=op)
     migration.work_package_mapping = {"1": {"jira_key": "APP-1", "openproject_id": 500}}
     results = migration._migrate_content()
-    assert not op.batch_update_work_packages.called
+    written = [row for call in op.batch_update_work_packages.call_args_list for row in call.args[0]]
+    assert [row["id"] for row in written] == [901]
     assert results["security_level"]["refused"] == 1
+
+
+def test_content_recovers_a_lost_level_mapping_from_the_sub_project(setup):
+    outcome = content(setup, levels=level_issues(), level_map={})
+    assert sorted(row["id"] for row in outcome.written) == [900, 901]
+    assert outcome.results["security_level"]["refused"] == 0
+
+
+@pytest.mark.parametrize(
+    "live",
+    [
+        # APP-10's work package moved out of the sub-project.
+        {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]},
+        # The skeleton never created it.
+        {"field": True, "work_packages": [], "keys": []},
+    ],
+)
+def test_content_refuses_a_selected_issue_without_a_work_package_in_its_sub_project(setup, live):
+    outcome = content(setup, levels=level_issues(), level_map=LEVEL_MAP, live=live)
+    assert all(row["id"] != 900 for row in outcome.written)
+    assert outcome.results["security_level"]["refused"] >= 1
+    assert outcome.results["total_failed"] >= 1
+
+
+def test_content_refuses_an_entry_that_names_another_work_package(setup):
+    live = {"field": True, "work_packages": [901, 950], "keys": [[950, "APP-10"], [901, "APP-11"]]}
+    outcome = content(setup, levels=level_issues(), level_map=LEVEL_MAP, live=live)
+    assert {row["id"] for row in outcome.written} == {901}
+    assert outcome.results["security_level"]["refused"] == 1
+
+
+def test_content_refuses_every_issue_of_an_unreadable_sub_project(setup):
+    outcome = content(setup, levels=level_issues(), level_map=LEVEL_MAP, live={"field": True})
+    assert not outcome.written
+    assert outcome.results["security_level"]["refused"] == 2

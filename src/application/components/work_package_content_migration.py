@@ -69,11 +69,14 @@ from src.application.components.issue_security import (
     warn_if_restricted_mappings,
 )
 from src.application.components.jira_field_values import without_empty_values
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.domain.enums import JournalEntryType
+from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.rails_console_client import RubyError
 from src.models import ComponentResult, JiraUser, WorkPackageMappingEntry
 from src.utils.markdown_converter import MarkdownConverter
 
@@ -795,6 +798,9 @@ class WorkPackageContentMigration(BaseMigration):
                 project_results["security_level"] = level_results
                 for name, count in level_results.items():
                     results["security_level"][name] += count
+                # Refusals count once, as failures; the other level counts join the project totals.
+                for name in ("processed", "updated", "skipped"):
+                    project_results[name] += level_results[name]
                 results["total_failed"] += level_results["refused"]
 
             # Aggregate
@@ -1111,31 +1117,35 @@ class WorkPackageContentMigration(BaseMigration):
     ) -> dict:
         """Write the content of the level work packages of one project (ADR-009, step 4).
 
-        The selection is repeated on a light search; only issues it still selects and whose
-        mapping entry names their current level and sub-project are written. Watchers are not
-        collected (a watcher need not be a reader). Comments take the same path as for any
-        issue (ADR-007).
+        The selection is repeated on a light search. A selected issue is written only into the
+        work package its sub-project holds for it right now (read live by J2O Origin Key), and
+        only when its mapping entry, if any, names that work package, level and sub-project; a
+        lost mapping is recovered from the live read, a moved work package is refused. Watchers
+        are not collected (a watcher need not be a reader). Comments take the same path as for
+        any issue (ADR-007).
         """
         counters = dict.fromkeys(("processed", "updated", "skipped", "refused"), 0)
         light = level_issues.iter_level_issues(self.jira_client, project_key, batch_size, "security")
         selection = scope.select(project_key, light)
         allowed = {str(issue.id): target for issue, target in selection.selected}
         refused = list(selection.refused)
+        live: dict[str, dict[str, int] | None] = {}
         collected_batch: list[dict[str, Any]] = []
         full = level_issues.iter_level_issues(
             self.jira_client, project_key, batch_size, "*all", "renderedFields,changelog"
         )
         for issue in full:
             entry = level_map.get(str(issue.id))
-            if entry is None:
+            target = allowed.get(str(issue.id))
+            if target is None and entry is None:
                 counters["skipped"] += 1
                 continue
             counters["processed"] += 1
-            target = allowed.get(str(issue.id))
-            if target is None or not target.matches(entry) or level_issues.issue_level_id(issue) != target.level_id:
-                refused.append(f"{issue.key}: not selected for the level sub-project of its work package")
+            wp_id, reason = self._level_content_target(issue, target, entry, live)
+            if reason is not None:
+                refused.append(f"{issue.key}: {reason}")
                 continue
-            collected_batch.append(self._collect_content_for_issue(issue, entry["openproject_id"], watchers=False))
+            collected_batch.append(self._collect_content_for_issue(issue, wp_id, watchers=False))
             if len(collected_batch) >= batch_size:
                 self._write_level_batch(collected_batch, results, counters)
                 collected_batch = []
@@ -1145,6 +1155,30 @@ class WorkPackageContentMigration(BaseMigration):
             self.logger.error("Level work package content refused: %s", reason)
         counters["refused"] = len(refused)
         return counters
+
+    def _level_content_target(
+        self,
+        issue: Issue,
+        target: level_issues.LevelTarget | None,
+        entry: dict | None,
+        live: dict[str, dict[str, int] | None],
+    ) -> tuple[int, str | None]:
+        """The work package to write for a level issue, or the reason it is refused."""
+        if target is None or level_issues.issue_level_id(issue) != target.level_id:
+            return 0, "not selected for the level sub-project of its work package"
+        if target.label not in live:
+            try:
+                live[target.label] = level_issues.existing_work_packages(self.op_client, target.project_id)
+            except (LevelProjectError, QueryExecutionError, RubyError) as exc:
+                self.logger.error("Level sub-project %s not readable: %s", target.label, exc)
+                live[target.label] = None
+        held = live[target.label]
+        wp_id = None if held is None else held.get(issue.key)
+        if wp_id is None:
+            return 0, f"no work package in {target.label}; run work_packages_skeleton"
+        if entry is not None and (not target.matches(entry) or entry["openproject_id"] != wp_id):
+            return 0, f"the mapping entry does not name the work package {target.label} holds"
+        return wp_id, None
 
     def _write_level_batch(self, collected: list[dict[str, Any]], results: dict, counters: dict) -> None:
         for metric, count in self._bulk_process_collected_content(collected).items():
