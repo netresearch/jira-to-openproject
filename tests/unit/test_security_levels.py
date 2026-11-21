@@ -351,11 +351,12 @@ def _cli(tmp_path, monkeypatch, jira):
 
 def test_all_projects_must_account_for_every_restricted_issue(tmp_path, monkeypatch):
     _, args = _cli(tmp_path, monkeypatch, FakeJira())
-    run = ["inventory", "--jira", _JIRA, "--report", "report.json", "--migration-account", _ACCOUNT, *args]
+    run = ["inventory", "--jira", _JIRA, "--report", "report.json", "--readers", "readers.json"]
+    run += ["--migration-account", _ACCOUNT, *args]
     assert main(run) == 0
     report = json.loads((tmp_path / "report.json").read_text())
     assert (report["projects"], report["projects_with_levels"], report["totals"]["issues"]) == (2, 1, 7)
-    for name in ("restricted.age", "report.json"):
+    for name in ("restricted.age", "report.json", "readers.json"):
         (tmp_path / name).unlink()
     _cli(tmp_path, monkeypatch, FakeJira(elsewhere=1))
     assert main(run) == 1
@@ -365,7 +366,8 @@ def test_all_projects_must_account_for_every_restricted_issue(tmp_path, monkeypa
 def test_seals_non_static_issues_and_reports_counts_without_reader_names(tmp_path, monkeypatch):
     identity, args = _cli(tmp_path, monkeypatch, FakeJira())
     key = args[1]
-    run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", *args]
+    run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", "--readers", "readers.json"]
+    run += args
     assert main([*run, "--migration-account", _ACCOUNT]) == 0
 
     value = decrypt((tmp_path / "restricted.age").read_bytes(), identity)
@@ -392,6 +394,37 @@ def test_seals_non_static_issues_and_reports_counts_without_reader_names(tmp_pat
     assert main(restore) == 0
     assert json.loads((tmp_path / "restored.json").read_text()) == value
     assert main(["restore", "--identity", key, "--archive", str(tmp_path / "report.json"), "--output", "x.json"])
+
+
+def test_writes_the_readers_file_next_to_the_report_for_the_operator_only(tmp_path, monkeypatch):
+    _, args = _cli(tmp_path, monkeypatch, FakeJira())
+    run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", "--readers", "readers.json"]
+    assert main([*run, *args, "--migration-account", _ACCOUNT]) == 0
+    report = json.loads((tmp_path / "report.json").read_text())
+    readers = json.loads((tmp_path / "readers.json").read_text())
+    assert (tmp_path / "readers.json").stat().st_mode & 0o777 == 0o600
+    assert readers["format"] == "j2o-restricted-readers/1"
+    assert readers["archive_sha256"] == report["archive_sha256"]
+    # Users only: the grant groups (leads, devs) are expanded and intersected with Browse.
+    assert readers["levels"] == [
+        {
+            "project": "DEMO",
+            "level_id": "20001",
+            "static_readers": ["alice", "bob"],
+            "per_issue": {"DEMO-3": [_ACCOUNT], "DEMO-4": ["grace"]},
+        },
+        {"project": "DEMO", "level_id": "20003", "static_readers": [], "per_issue": {}},
+    ]
+
+
+def test_inventory_refuses_an_existing_or_shared_readers_file_name(tmp_path, monkeypatch):
+    _, args = _cli(tmp_path, monkeypatch, FakeJira())
+    run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", *args]
+    assert main([*run, "--readers", "report.json", "--migration-account", _ACCOUNT]) == 1
+    assert not (tmp_path / "restricted.age").exists()
+    (tmp_path / "readers.json").write_text("{}")
+    assert main([*run, "--readers", "readers.json", "--migration-account", _ACCOUNT]) == 1
+    assert not (tmp_path / "report.json").exists()
 
 
 def test_rejects_a_truncated_grant_page():
@@ -458,8 +491,8 @@ def test_unsupported_level_with_unresolvable_grants_reaches_classification():
 
 def _archive(tmp_path, monkeypatch, jira):
     identity, args = _cli(tmp_path, monkeypatch, jira)
-    run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", *args]
-    code = main([*run, "--migration-account", _ACCOUNT])
+    run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", "--readers", "readers.json"]
+    code = main([*run, *args, "--migration-account", _ACCOUNT])
     archive = tmp_path / "restricted.age"
     return code, decrypt(archive.read_bytes(), identity) if archive.exists() else None
 

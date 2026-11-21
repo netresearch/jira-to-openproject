@@ -34,12 +34,13 @@ The inventory token belongs to the migration account. Set `J2O_ARCHIVE_INVENTORY
 mkdir -m 700 ~/restricted-inventory && cd ~/restricted-inventory
 uv run --project /path/to/j2o j2o-comments keygen --identity operator.agekey
 uv run --project /path/to/j2o j2o-restricted inventory --jira https://jira.example.org \
-  --identity operator.agekey --archive restricted-issues.age --report report.json
+  --identity operator.agekey --archive restricted-issues.age --report report.json --readers readers.json
 ```
 
 Without `--project` every project is scanned, and the total of `level IS NOT EMPTY` must equal the issues found. Repeat `--project KEY` to limit the scan.
 
 - `report.json` (mode 600) is the shared run report: counts per project and level (issues, static readers, each class, single-user grants that name the migration account, issues where the account was not counted), the keys of each level's `static` issues (`static_keys`), and the keys of archived issues with their class and the number of extra and missing readers. It holds no reader names.
+- `readers.json` (mode 600) is the operator-only readers file for the late access grant ([Level access](#level-access)). Per level it holds the static readers, and per `per_issue` issue its extra readers, as Jira user names (the `name` of the Jira user, as in `user_mapping.json`'s `jira_name`), not display names. Group and project-role grants are already expanded into their users and intersected with Browse, so it names no group (ADR-009, decision 1), and the migration account's temporary grant is not in it (decision 3). It carries the `archive_sha256` of the report. Keep it next to the archive, never in a shared output directory; the importer reads it from `migration.security_level_readers` and refuses it when another user can read it or when it does not match the report: another `archive_sha256`, another set of levels, a static-reader count other than the report's `static_readers`, or `per_issue` keys and extra-reader counts other than the report's `archived` rows. Refusals name levels and issue keys, never readers.
 - `restricted-issues.age` is encrypted to the operator key. It holds every `per_issue` and `unexplained` issue in full (all fields, the complete changelog, the comments visible to the migration account, all worklogs, attachment metadata), with its readers, and each level's grants and static readers. Attachment contents are not included.
 
 Restore the archive on a trusted machine into a new private file:
