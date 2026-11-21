@@ -16,7 +16,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from src.application.components import level_issues
-from src.infrastructure.openproject.version_catalog import sync_level_versions
+from src.infrastructure.openproject.version_catalog import sync_level_sprints, sync_level_versions
 
 MAPPING = "security_level_version"
 
@@ -95,23 +95,49 @@ class LevelVersionCopies:
         except Exception:
             self.logger.exception("Could not create the version copies of %s", target.label)
             return None
-        self._record(target, project_key, copies, rows)
+        entries = {
+            str(row["id"]): {
+                "openproject_id": copies[str(row["id"])],
+                "jira_version_id": str(row["id"]),
+                "name": row["name"],
+            }
+            for row in rows
+        }
+        self._record(target, project_key, entries)
         return copies
 
-    def _record(
-        self, target: level_issues.LevelTarget, project_key: str, copies: dict[str, int], rows: list[dict[str, Any]]
-    ) -> None:
+    def ensure_sprints(
+        self, target: level_issues.LevelTarget, origin: tuple[str, str], sprints: dict[str, int]
+    ) -> dict[str, int] | None:
+        """Jira sprint ID to the copy of the parent's sprint version, or None when it failed.
+
+        ``origin`` is the Jira project key and ID; ``sprints`` maps each Jira sprint ID to the
+        parent's version of that sprint.
+        """
+        project_key = origin[0]
+        try:
+            copies = sync_level_sprints(
+                self.op_client, (target.project_id, target.parent_id), (self.source, *origin), sprints
+            )
+        except Exception:
+            self.logger.exception("Could not create the sprint copies of %s", target.label)
+            return None
+        entries = {
+            f"sprint:{sid}": {"openproject_id": copy, "jira_sprint_id": sid, "parent_version_id": sprints[sid]}
+            for sid, copy in copies.items()
+        }
+        self._record(target, project_key, entries)
+        return copies
+
+    def _record(self, target: level_issues.LevelTarget, project_key: str, entries: dict[str, dict[str, Any]]) -> None:
         current = self.mappings.get_mapping(MAPPING) or {}
         mapping = dict(current)
-        for row in rows:
-            source_id = str(row["id"])
-            mapping[f"{target.label}:{source_id}"] = {
-                "openproject_id": copies[source_id],
+        for suffix, entry in entries.items():
+            mapping[f"{target.label}:{suffix}"] = {
+                "openproject_id": entry["openproject_id"],
                 "openproject_project_id": target.project_id,
                 "security_level_project": target.label,
                 "jira_project_key": project_key,
-                "jira_version_id": source_id,
-                "name": row["name"],
-            }
+            } | {key: value for key, value in entry.items() if key != "openproject_id"}
         if mapping != current:
             self.mappings.set_mapping(MAPPING, mapping)

@@ -310,7 +310,8 @@ def test_level_switch_on_gives_level_issues_nothing_and_links_nothing_to_them(le
     # APP-1 gets its sprint; its epic is a level issue, so it gets no parent link.
     assert written(outcome.op) == {("wp", 500, None), ("field", 500, None)}
     assert outcome.result.details["unresolved_epics"] == {"APP-1": "APP-10"}
-    assert outcome.jira.searches == [(LEVELS, "security"), (LEVELS, "security")]
+    # The selection, then the sprint search of the level issues (here without sprints): both pages each.
+    assert outcome.jira.searches == [(LEVELS, "security")] * 2 + [(LEVELS, SPRINT_SEARCH)] * 2
     assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 0}
 
 
@@ -366,3 +367,201 @@ def test_level_switch_on_without_reports_stops_before_any_read_or_write(level_se
     assert outcome.result.errors == ["security_level"]
     outcome.jira.batch_get_issues.assert_not_called()
     assert written(outcome.op) == set()
+
+
+# --- Sprint versions of level work packages as sub-project copies (ADR-010) -------------------
+
+SPRINT_SEARCH = "project,security,fixVersions,customfield_123"
+SECOND_SUB = {
+    "jira_project_key": "APP",
+    "level_id": "10001",
+    "level": "Management",
+    "openproject_id": 101,
+    "openproject_identifier": "app_level_10001",
+    "parent_openproject_id": 7,
+}
+
+
+def level_sprint_row(number, level, sprints=("42",), fix=False):
+    fields = {
+        "project": {"id": "10", "key": "APP"},
+        "security": {"id": level},
+        "customfield_123": [{"id": int(sid), "name": f"Sprint {sid}"} for sid in sprints],
+        "fixVersions": [{"id": "41", "name": "R1"}] if fix else [],
+    }
+    return SimpleNamespace(key=f"APP-{number}", id=str(number), raw={"fields": fields})
+
+
+def copy_op(op, members=()):
+    """Answer the sprint copy writer of ``op`` with copies kept per sub-project; record each payload."""
+    import base64
+
+    op.copy_syncs, op.copies = [], {}
+
+    def sync(script):
+        payload = json.loads(base64.b64decode(script.split("strict_decode64('", 1)[1].split("')", 1)[0]))
+        op.copy_syncs.append(payload)
+        project = payload["project"]
+        if project in members and any((project, row["id"]) not in op.copies for row in payload["sprints"]):
+            raise RuntimeError("Create or change level versions before granting project access")
+        for row in payload["sprints"]:
+            op.copies.setdefault((project, row["id"]), 2000 + len(op.copies))
+        return {
+            "versions": {f"sprint:{r['id']}": op.copies[project, r["id"]] for r in payload["sprints"]},
+            "changed": 0,
+        }
+
+    op.execute_json_query.side_effect = sync
+    return op
+
+
+def level_sprint_run(level_setup, *, rows=None, live=None, members=(), runs=1, second=False, **kwargs):
+    if second:
+        from tests.unit.test_level_work_packages import SUB_PROJECT
+
+        kwargs["mapping"] = {"security_level_project": {"APP:10000": SUB_PROJECT, "APP:10001": SECOND_SUB}}
+    mappings = level_setup(**kwargs)
+    mappings.data["sprint"]["43"] = {"openproject_id": 19, "project_id": 8}  # a sprint version of another project
+    writes = []
+    original = mappings.set_mapping
+    mappings.set_mapping = lambda name, value: (writes.append(name), original(name, value))
+    jira = level_sprint_jira()
+    jira.base_url = "https://jira.local"
+    sprint_rows = [level_sprint_row(n, "10000") for n in (10, 11)] if rows is None else rows
+    selection = jira.jira.search_issues.side_effect
+
+    def search(jql, startAt, maxResults, **kw):
+        if kw.get("fields") == "security":
+            return selection(jql, startAt, maxResults, **kw)
+        jira.searches.append((jql, kw.get("fields")))
+        return sprint_rows[startAt : startAt + maxResults]
+
+    jira.jira.search_issues.side_effect = search
+    by_project = {101: {"field": True, "work_packages": [920], "keys": [[920, "APP-20"]]}} if second else {}
+    op = copy_op(level_op(live), members)
+    if by_project:
+        default = op.execute_query_to_json_file.side_effect
+
+        def read(script):
+            project = json.loads(script.split("\n")[1])["project_id"]
+            return dict(by_project[project]) if project in by_project else default(script)
+
+        op.execute_query_to_json_file.side_effect = read
+    migration = SprintEpicMigration(jira_client=jira, op_client=op)
+    results = [migration.run() for _ in range(runs)]
+    return SimpleNamespace(result=results[-1], results=results, jira=jira, op=op, writes=writes, mappings=mappings)
+
+
+def level_assignments(op):
+    """(sub-project, work package, version IDs) of every level version assignment."""
+    rows = [r for c in op.batch_update_work_packages.call_args_list for r in c.args[0]]
+    return {
+        (r["jira_version_issue_origin"]["project"], r["id"], tuple(r["target_version_ids"]))
+        for r in rows
+        if "jira_version_issue_origin" in r
+    }
+
+
+def test_level_switch_off_writes_no_sprint_copy(level_setup):
+    outcome = level_sprint_run(level_setup, on=False, reports=False)
+    assert [c.args[0] for c in outcome.op.batch_update_work_packages.call_args_list] == [[{"id": 500, "version_id": 9}]]
+    assert not outcome.jira.searches
+    outcome.op.execute_json_query.assert_not_called()
+    assert not level_assignments(outcome.op)
+    assert "security_level_version" not in outcome.writes
+
+
+def test_level_issues_get_the_sprint_copy_of_their_sub_project(level_setup):
+    outcome = level_sprint_run(level_setup)
+    # One copy of the parent's sprint version 9, shared by both issues of the sub-project.
+    assert [
+        (p["project"], p["parent_id"], p["key"], p["jira_project_id"], p["sprints"]) for p in outcome.op.copy_syncs
+    ] == [(100, 7, "APP", "10", [{"id": "42", "version": 9}])]
+    copy = outcome.op.copies[100, "42"]
+    assert level_assignments(outcome.op) == {(100, 900, (copy,)), (100, 901, (copy,))}
+    # The ordinary work package keeps the parent's sprint version; no level work package gets the
+    # sprint field or the parent version.
+    ordinary = [r for c in outcome.op.batch_update_work_packages.call_args_list for r in c.args[0] if "version_id" in r]
+    assert ordinary == [{"id": 500, "version_id": 9}]
+    fields = {
+        r["work_package_id"] for c in outcome.op.bulk_set_wp_custom_field_values.call_args_list for r in c.args[0]
+    }
+    assert fields == {500}
+    assert outcome.mappings.data["security_level_version"] == {
+        "APP:10000:sprint:42": {
+            "openproject_id": copy,
+            "openproject_project_id": 100,
+            "security_level_project": "APP:10000",
+            "jira_project_key": "APP",
+            "jira_sprint_id": "42",
+            "parent_version_id": 9,
+        }
+    }
+    assert outcome.jira.searches.count((LEVELS, SPRINT_SEARCH)) == 2
+
+
+def test_level_repeat_run_adopts_the_sprint_copy(level_setup):
+    outcome = level_sprint_run(level_setup, runs=2)
+    assert len(outcome.op.copy_syncs) == 2
+    assert list(outcome.op.copies) == [(100, "42")]
+    assert outcome.writes.count("security_level_version") == 1
+
+
+def test_level_two_sub_projects_get_two_sprint_copies(level_setup):
+    rows = [level_sprint_row(10, "10000"), level_sprint_row(11, "10000"), level_sprint_row(20, "10001")]
+    outcome = level_sprint_run(level_setup, rows=rows, second=True)
+    first, second = outcome.op.copies[100, "42"], outcome.op.copies[101, "42"]
+    assert first != second
+    assert level_assignments(outcome.op) == {(100, 900, (first,)), (100, 901, (first,)), (101, 920, (second,))}
+
+
+@pytest.mark.parametrize(
+    ("options", "refused"),
+    [
+        pytest.param(
+            {"rows": [level_sprint_row(10, "10000", fix=True), level_sprint_row(11, "10000")]}, 0, id="fix-version"
+        ),
+        pytest.param(
+            {"rows": [level_sprint_row(10, "10000", ("77",)), level_sprint_row(11, "10000")]}, 1, id="unmapped"
+        ),
+        pytest.param(
+            {"rows": [level_sprint_row(10, "10000", ("43",)), level_sprint_row(11, "10000")]}, 1, id="foreign-project"
+        ),
+        pytest.param({"rows": [level_sprint_row(10, "10001"), level_sprint_row(11, "10000")]}, 1, id="level-changed"),
+        pytest.param({"rows": [level_sprint_row(11, "10000")]}, 1, id="omitted"),
+        pytest.param({"live": {"field": True, "work_packages": [901], "keys": [[901, "APP-11"]]}}, 1, id="moved"),
+        pytest.param(
+            {"ordinary": {"10": {"jira_key": "APP-10", "openproject_id": 510, "project_key": "APP"}}}, 1, id="ordinary"
+        ),
+    ],
+)
+def test_level_issue_without_a_confirmed_sprint_gets_no_copy(level_setup, options, refused):
+    outcome = level_sprint_run(level_setup, **options)
+    copy = outcome.op.copies.get((100, "42"))
+    assert level_assignments(outcome.op) == {(100, 901, (copy,))}
+    assert outcome.result.details["security_level"]["refused"] == refused
+
+
+def test_level_sub_project_with_a_member_refuses_the_sprint_copy(level_setup):
+    outcome = level_sprint_run(level_setup, members={100})
+    assert not outcome.op.copies
+    assert not level_assignments(outcome.op)
+    assert "security_level_version" not in outcome.writes
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 2}
+
+
+def test_level_sprint_writer_copies_the_parent_version():
+    from src.infrastructure.openproject.version_catalog import sync_level_sprints
+
+    client = Mock()
+    client.execute_json_query.return_value = {"versions": {"sprint:42": 2000}, "changed": 1}
+    assert sync_level_sprints(client, (100, 7), ("https://jira.local/", "APP", "10"), {"42": 9}) == {"42": 2000}
+    script = client.execute_json_query.call_args.args[0]
+    assert "sprint = owner.versions.find(row.fetch('version'))" in script
+    assert "owner.custom_values.where(custom_field: field).sole.value == value" in script
+    assert "!Member.where(project_id: project.id).exists?" in script
+    client.execute_json_query.return_value = {"versions": {"sprint:42": "2000"}}
+    with pytest.raises(ValueError, match="Incomplete"):
+        sync_level_sprints(client, (100, 7), ("https://jira.local", "APP", "10"), {"42": 9})
+    with pytest.raises(ValueError, match="Invalid"):
+        sync_level_sprints(client, (100, 7), ("https://jira.local", "APP", "10"), {"x": 9})
