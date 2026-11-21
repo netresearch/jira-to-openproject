@@ -135,6 +135,37 @@ class TestJiraClientWorkLog:
                 mock_jira_client.get_work_logs_for_issue("TEST-1")
         sdk.search_issues.assert_called_once_with("id = 42 AND level IS EMPTY", fields="id", maxResults=1)
 
+    @pytest.mark.parametrize(
+        ("fields", "allowed"),
+        [
+            ({"security": {"id": "10000"}}, True),
+            ({"security": {"id": 10000}}, True),
+            ({"security": {"id": "10001"}}, False),
+            ({"security": None}, False),
+            ({}, False),
+        ],
+    )
+    def test_level_issue_needs_exactly_the_selected_level(self, mock_jira_client, fields, allowed) -> None:
+        sdk = mock_jira_client.jira
+        sdk._get_json.side_effect = [
+            {"id": "42", "key": "TEST-1", "fields": fields},
+            {"startAt": 0, "total": 0, "worklogs": []},
+        ]
+        if allowed:
+            assert mock_jira_client.get_work_logs_for_issue("TEST-1", level_id="10000") == []
+        else:
+            with pytest.raises(JiraApiError, match="Issue security"):
+                mock_jira_client.get_work_logs_for_issue("TEST-1", level_id="10000")
+        assert sdk._get_json.call_args_list[0].args[0] == "issue/TEST-1"
+        assert sdk._get_json.call_args_list[0].kwargs["params"] == {"fields": "project,security"}
+        # A level is never confirmed through the empty-level search.
+        sdk.search_issues.assert_not_called()
+
+    def test_issue_with_a_level_is_still_refused_without_a_selected_level(self, mock_jira_client) -> None:
+        mock_jira_client.jira._get_json.side_effect = [{"key": "TEST-1", "fields": {"security": {"id": "10000"}}}]
+        with pytest.raises(JiraApiError, match="Issue security"):
+            mock_jira_client.get_work_logs_for_issue("TEST-1")
+
     def test_get_work_logs_for_issue_not_found(self, mock_jira_client) -> None:
         mock_jira_client.jira._get_json.side_effect = Exception("Issue does not exist")
         with pytest.raises(JiraResourceNotFoundError, match="Issue TEST-404 not found"):

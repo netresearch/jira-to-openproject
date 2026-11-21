@@ -126,10 +126,21 @@ class JiraWorklogService:
         author["time_zone"] = self._author_zones[cache_key]
         return record
 
-    def _check_issue_audience(self, issue_key: str) -> None:
+    def _check_issue_audience(self, issue_key: str, level_id: str | None = None) -> None:
+        """Require an issue without a security level, or exactly the selected one.
+
+        A level is allowed only when the caller names it: the level work package of a selected
+        issue lies in that level's private sub-project (ADR-009), whose readers the time entries
+        then have. A missing or other level is refused.
+        """
         path = f"issue/{quote(issue_key, safe='')}"
         issue = self._client.jira._get_json(path, params={"fields": "project,security"})
-        allowed = issue.get("key") == issue_key and self._has_no_security_level(issue)
+        if level_id is None:
+            allowed = issue.get("key") == issue_key and self._has_no_security_level(issue)
+        else:
+            security = (issue.get("fields") or {}).get("security")
+            found = security.get("id") if isinstance(security, dict) else None
+            allowed = issue.get("key") == issue_key and type(found) in (str, int) and str(found) == level_id
         if not allowed:
             msg = "Issue security cannot be represented on a native time entry."
             raise JiraApiError(msg)
@@ -144,9 +155,9 @@ class JiraWorklogService:
         matches = self._client.jira.search_issues(f"id = {issue_id} AND level IS EMPTY", fields="id", maxResults=1)
         return len(matches) == 1 and str(matches[0].id) == str(issue_id)
 
-    def _worklog_pages(self, issue_key: str) -> list[dict[str, Any]]:
+    def _worklog_pages(self, issue_key: str, level_id: str | None = None) -> list[dict[str, Any]]:
         path = f"issue/{quote(issue_key, safe='')}/worklog"
-        self._check_issue_audience(issue_key)
+        self._check_issue_audience(issue_key, level_id)
         start = 0
         total = None
         seen = set()
@@ -177,11 +188,12 @@ class JiraWorklogService:
                 msg = "Jira returned an incomplete work log page."
                 raise JiraApiError(msg)
 
-    def get_work_logs_for_issue(self, issue_key: str) -> list[dict[str, Any]]:
+    def get_work_logs_for_issue(self, issue_key: str, level_id: str | None = None) -> list[dict[str, Any]]:
         """Get all work logs for a specific issue.
 
         Args:
             issue_key: The key of the issue to get work logs for
+            level_id: The security level the issue must have; None requires no level
 
         Returns:
             List of work log dictionaries with complete metadata
@@ -192,7 +204,7 @@ class JiraWorklogService:
 
         """
         try:
-            result = self._worklog_pages(issue_key)
+            result = self._worklog_pages(issue_key, level_id)
             self._logger.debug(
                 "Retrieved %s work logs for issue %s",
                 len(result),

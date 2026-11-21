@@ -696,9 +696,11 @@ class JiraClient:
         """Delegate to ``self.worklogs.get_issue_link_types``."""
         return self.worklogs.get_issue_link_types()
 
-    def get_work_logs_for_issue(self, issue_key: str) -> list[dict[str, Any]]:
-        """Delegate to ``self.worklogs.get_work_logs_for_issue``."""
-        return self.worklogs.get_work_logs_for_issue(issue_key)
+    def get_work_logs_for_issue(self, issue_key: str, level_id: str | None = None) -> list[dict[str, Any]]:
+        """Delegate to ``self.worklogs.get_work_logs_for_issue``; ``level_id`` names the required level."""
+        if level_id is None:
+            return self.worklogs.get_work_logs_for_issue(issue_key)
+        return self.worklogs.get_work_logs_for_issue(issue_key, level_id)
 
     def get_all_work_logs_for_project(
         self,
