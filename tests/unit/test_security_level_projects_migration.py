@@ -51,7 +51,10 @@ class FakeOpenProject:
         project = self.projects.get(values["identifier"])
         if "Project.new(" not in script:
             state = {"found": True, **project} if project else {"found": False}
-            return state | {"parent_name": self.parents.get(values.get("parent_id"))}
+            reads_parent = 'parent = Project.find_by(id: input.fetch("parent_id"))' in script
+            if reads_parent and '.merge("parent_name" => parent&.name)' in script:
+                state["parent_name"] = self.parents.get(values.get("parent_id"))
+            return state
         if "Project.new(" in script and project is None:
             public = re.search(r"public: (true|false)", script).group(1) == "true"
             project = {"id": 100 + len(self.projects), "identifier": values["identifier"], "public": public}
@@ -260,6 +263,7 @@ def test_parent_found_nowhere_is_refused_without_a_script(run):
 
 def test_parent_missing_in_openproject_is_refused(run):
     outcome = run([level()], projects=FakeOpenProject(parents={}))
+    assert not outcome.result.success
     assert "parent project is not in OpenProject" in outcome.result.errors[0]
     assert outcome.target.creations() == []
 
