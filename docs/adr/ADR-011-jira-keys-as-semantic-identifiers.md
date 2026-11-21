@@ -33,7 +33,7 @@ The project owner decided on 2026-11-21 that the target instance switches to `se
 
 Per work package the component writes `identifier` = Jira key and `sequence_number` = the key's number with `update_columns`, and adds the aliases `alias_rows_for_sequence_number` yields, every key of the issue's `Key` changelog, and the Jira key itself. The last one is redundant for an ordinary work package once its project carries the key; it is what keeps a level work package reachable (see 5). The Jira issue comes from the same unrestricted search as the other components, the work package from the work-package mapping; Rails confirms the work package's project and its `J2O Origin ID` before it writes.
 
-A work package is refused, never overwritten, when it has another identifier or sequence number, when its key, an alias or its sequence number in the project belongs to another work package, or when it is in another project or carries another `J2O Origin ID`. A refusal or a failed batch makes the component unsuccessful. A repeat run writes nothing for a work package that already has its identifier and aliases and counts it as unchanged. A mapped issue that the search no longer returns (moved, deleted, or given a security level) is counted as `not_returned` and keeps no key; the README check before the switch counts every such work package on OpenProject.
+A work package is refused, never overwritten, when it has another identifier or sequence number, when its key, an alias or its sequence number in the project belongs to another work package, or when it is in another project or carries another `J2O Origin ID`. A refusal or a failed batch makes the component unsuccessful. A repeat run writes nothing for a work package that already has its identifier and aliases and counts it as unchanged. A mapped issue that the search no longer returns (moved, deleted, or given a security level) is counted as `not_returned`; its work package is left unchanged, so it keeps an identifier and aliases an earlier run wrote and has none otherwise. An issue whose changelog the search returns incomplete (`is_complete_page`, as the field history requires) is refused, since its earlier keys would be missing from the aliases. The README check before the switch counts every such work package on OpenProject.
 
 ### 3. The Jira key as project slug
 
@@ -79,7 +79,7 @@ Read, not measured: the HTML route `/work_packages/<id>` answers "not found" thr
 ### Negative
 
 - Level work packages do not display their Jira key after the switch; the key only resolves.
-- A refused or not returned work package keeps no key and gets a new number from the switch; the run has to be clean before the switch.
+- A refused or not returned work package keeps only what an earlier run wrote; one without a key gets a new number from the switch, so the run has to be clean before the switch. A key written earlier is not removed when the issue later moves or gets a security level.
 - Runs after the switch are not supported: the conversion renumbered the level work packages, so a repeat run refuses each of them, and a work package created in semantic mode gets an allocated identifier, which the component then refuses.
 - Earlier keys of a Jira project (a renamed project key) are not added as slugs; only issue `Key` changes become aliases.
 - The switch derives the level sub-projects' semantic identifiers from their names.

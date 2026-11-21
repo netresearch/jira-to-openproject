@@ -23,10 +23,12 @@ def key_change(old, new):
     return {"id": "1", "items": [{"field": "Key", "fromString": old, "toString": new}]}
 
 
-def source(number, *histories, key=None, level=None):
+def source(number, *histories, key=None, level=None, complete=True):
+    pages = [{**history, "id": str(index)} for index, history in enumerate(histories, 1)]
+    total = len(pages) if complete else len(pages) + 1
     raw = {
         "fields": {"security": None if level is None else {"id": level}},
-        "changelog": {"histories": list(histories)},
+        "changelog": {"startAt": 0, "maxResults": total, "total": total, "histories": pages},
     }
     return SimpleNamespace(key=key or f"APP-{number}", id=str(100 + number), raw=raw)
 
@@ -180,9 +182,26 @@ def test_a_failed_batch_counts_every_row(migration):
     assert result.details["failed"] == 2
 
 
+def test_an_issue_with_an_incomplete_changelog_is_refused(migration):
+    result = run(migration, source(1, key_change("OLD-5", "APP-1"), complete=False), source(2))
+    assert not result.success
+    assert migration.op_client.payloads("write") == [{"project": 7, "rows": [row(2)]}]
+    assert result.details["refused"] == 1
+
+
+def test_an_empty_work_package_mapping_fails_before_any_read(migration):
+    migration.mappings.get_mapping.side_effect = {"project": {"APP": 7}, "work_package": {}}.get
+    result = run(migration, source(1))
+    assert not result.success
+    assert result.errors == ["missing_work_package_mapping"]
+    assert migration.op_client.calls == []
+    assert not migration.jira_client.jira.search_issues.called
+
+
 @pytest.mark.parametrize("key", ["APPLICATION1", "1APP", "AP-P", "APP_LONGKEY"])
 def test_a_key_that_is_no_semantic_project_identifier_refuses_the_project(migration, key):
-    migration.mappings.get_mapping.side_effect = {"project": {key: 7}, "work_package": {}}.get
+    work_packages = {"101": {"jira_key": f"{key}-1", "openproject_id": 11}}
+    migration.mappings.get_mapping.side_effect = {"project": {key: 7}, "work_package": work_packages}.get
     from src import config
 
     config.jira_config["projects"] = [key]

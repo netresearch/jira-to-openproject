@@ -27,6 +27,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.application.components.issue_security import unrestricted_project_jql
 from src.application.components.project_named_records import project_id
 from src.application.components.security_level_projects_migration import LevelProjectError
+from src.infrastructure.jira.field_history import is_complete_page
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -91,7 +92,7 @@ input_data.fetch('rows').each do |row|
       next
     end
     missing = names - wp.semantic_aliases.pluck(:identifier)
-    if wp.identifier == row.fetch('key') && missing.empty?
+    if wp.identifier == row.fetch('key') && wp.sequence_number == row.fetch('seq') && missing.empty?
       result['unchanged'] += 1
       next
     end
@@ -150,6 +151,16 @@ def key_aliases(changelog: object) -> list[str]:
     return sorted(key for key in keys if _ISSUE_KEY.fullmatch(key))
 
 
+def complete_changelog(issue: Any) -> bool:
+    """Whether the search returned the issue's whole changelog, so that no earlier key is missed."""
+    raw = issue.raw if isinstance(getattr(issue, "raw", None), Mapping) else {}
+    page = raw.get("changelog")
+    try:
+        return isinstance(page, dict) and is_complete_page(page)
+    except KeyError, TypeError:
+        return False
+
+
 def issue_row(issue: Any, wp_id: int, project_key: str) -> dict[str, Any] | None:
     """The payload row of one issue, or None when its key is no semantic key of the project."""
     match = _ISSUE_KEY.fullmatch(str(issue.key))
@@ -190,6 +201,12 @@ class SemanticIdentifiersMigration(BaseMigration):
         self._counts: Counter[str] = Counter()
         self._refused: list[str] = []
         self._counters: dict[str, int] = {}
+        if not (self.mappings.get_mapping("work_package") or {}):
+            # FAIL LOUD, as the sibling components do: an empty mapping is a missing precondition.
+            msg = "No work_package mapping available. Run work_packages_skeleton first."
+            self.logger.error(msg)
+            result = ComponentResult(success=False, failed=1, message=msg, errors=["missing_work_package_mapping"])
+            return result if self._level is None else self._level.report(result, self.logger)
         targets = self._targets()
         for key, pid in self._projects():
             self._project(key, pid, targets.get(key, {}))
@@ -266,6 +283,9 @@ class SemanticIdentifiersMigration(BaseMigration):
             if wp_id is None or str(issue.id) in seen:
                 continue
             seen.add(str(issue.id))
+            if not complete_changelog(issue):
+                self._refused.append(f"{issue.key}: incomplete changelog, earlier keys unknown")
+                continue
             row = issue_row(issue, wp_id, key)
             if row is None:
                 self._refused.append(f"{issue.key}: not a semantic key of {key}")
@@ -290,6 +310,8 @@ class SemanticIdentifiersMigration(BaseMigration):
             row = issue_row(issue, wps[issue.key], key)
             if level_issues.issue_level_id(issue) != target.level_id or row is None:
                 level.refused.append(f"{issue.key}: changed its level or key after the selection")
+            elif not complete_changelog(issue):
+                level.refused.append(f"{issue.key}: incomplete changelog, earlier keys unknown")
             else:
                 rows.setdefault(target.project_id, []).append(row)
         level.refused.extend(f"{k}: not returned by the level search" for k in sorted(set(wps) - seen))
@@ -322,7 +344,8 @@ class SemanticIdentifiersMigration(BaseMigration):
         for reason in self._refused:
             self.logger.error("Semantic identifier refused: %s", reason)
         if self._counts["not_returned"]:
-            # Moved, deleted or newly restricted issues: their work packages keep no Jira key (README check).
+            # Moved, deleted or newly restricted issues: their work packages keep what an earlier run wrote,
+            # and get no key if none was written yet (README check).
             self.logger.warning("%d mapped work packages not returned by Jira", self._counts["not_returned"])
         self._counts["refused"] = len(self._refused)
         result = ComponentResult(
