@@ -487,6 +487,8 @@ Migrates Jira issue links to OpenProject work package relations.
 
 **Dependencies**: WorkPackageMigration, LinkTypeMigration
 
+With `migration.security_level_work_packages: true` (off by default), a relation between two level work packages is written only when both lie in the same level sub-project and neither is shared with extra readers (`per_issue`). Every other link of a level issue, and every link of an ordinary issue to one, is withheld (`details.level_relations_withheld`): OpenProject 17.9.7 shows a relation whose other end the user cannot see as a placeholder row with its type and dates. The links of level issues are read through the level search, never from `jira_issues_cache.json`; refusals count in `details.security_level`. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ### LinkTypeMigration
@@ -842,6 +844,8 @@ Updates inline references in descriptions/comments.
 
 **Dependencies**: WorkPackageMigration, UserMigration
 
+With `migration.security_level_work_packages: true` (off by default), the attachment links of the level work packages are rewritten too, in the work package their sub-project holds; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+
 ---
 
 ## Estimation & Planning Migrations
@@ -905,7 +909,7 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, `work_package_field_history` and `time_entries` their field history and time entries, `versions` and `affects_versions` their fix and affected versions as copies in the sub-project ([ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)), and `agile_boards`, `native_boards` and `sprint_epic` keep them out of the boards and sprints of the parent, while `sprint_epic` gives them the copy of their sprint version in the sub-project. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments, `simpletasks` and `components` their tasks and categories, `work_package_field_history` and `time_entries` their field history and time entries, `versions` and `affects_versions` their fix and affected versions as copies in the sub-project ([ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)), `relations` and `inline_refs` their relations inside one sub-project and their inline attachment references, and `agile_boards`, `native_boards` and `sprint_epic` keep them out of the boards and sprints of the parent, while `sprint_epic` gives them the copy of their sprint version in the sub-project. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Features**:
 - On previously mapped issues, this component records the source level name in the “Security Level” custom field.

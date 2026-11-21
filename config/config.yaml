@@ -71,9 +71,10 @@ migration:
   # security_level_admin_report: "restricted-admins.json"
   # Work packages of issues with a security level in their level sub-project
   # (work_packages_skeleton, work_packages_content, the attachment components, simpletasks, components,
-  # work_package_field_history, time_entries, versions and affects_versions); agile_boards, native_boards
-  # and sprint_epic keep them out of the boards and sprints of the parent. Fix, affected and sprint
-  # versions are copies in the sub-project (ADR-010).
+  # work_package_field_history, time_entries, versions, affects_versions, relations and inline_refs);
+  # agile_boards, native_boards and sprint_epic keep them out of the boards and sprints of the parent.
+  # Fix, affected and sprint versions are copies in the sub-project (ADR-010); relations stay inside one
+  # sub-project.
   # Off until the dependent components and the late access grant exist; only the boolean true enables it.
   # security_level_work_packages: false
 

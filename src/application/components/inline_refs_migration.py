@@ -12,7 +12,9 @@ A minimal Rails script is used to, per work package:
 
 from __future__ import annotations
 
+from src.application.components import level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.security_level_projects_migration import LevelProjectError
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -26,6 +28,9 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
     def _extract(self) -> ComponentResult:
         wp_map = self.mappings.get_mapping("work_package") or {}
         wp_ids: list[int] = []
+        level = getattr(self, "_level", None)
+        if level is not None:
+            wp_map = self._without_level_issues(level, wp_map)
         for key, value in (wp_map or {}).items():
             try:
                 entry = WorkPackageMappingEntry.from_legacy(str(key), value)
@@ -36,7 +41,16 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             # ``entry.openproject_id`` is a branded int type (validated by
             # Pydantic on construction) — no further coercion needed.
             wp_ids.append(entry.openproject_id)
+        if level is not None:
+            # A level work package's references point at its own attachments, in its sub-project.
+            wp_ids.extend(level.work_packages[key] for key in sorted(level.work_packages))
         return ComponentResult(success=True, data={"work_package_ids": wp_ids})
+
+    def _without_level_issues(self, level: level_issues.LevelWorkPackages, wp_map: dict) -> dict:
+        """The ordinary entries without an issue of a level search or of the archive (ADR-009)."""
+        by_key = {self._inner_jira_key(str(outer), value) or str(outer): outer for outer, value in wp_map.items()}
+        kept = level.without_level_issues(dict.fromkeys(by_key, 0))
+        return {outer: wp_map[outer] for key, outer in by_key.items() if key in kept}
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
@@ -87,5 +101,20 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:
-        """Run Inline refs migration."""
-        return self._run_etl_pipeline("Inline refs")
+        """Run Inline refs migration.
+
+        With the level switch on, the level work packages of this run are resolved before any
+        write (ADR-009) and rewritten like every other one; an ordinary entry of an issue of a
+        level search or of the archive is refused. The refusals are counted on every return.
+        """
+        self._level: level_issues.LevelWorkPackages | None = None
+        if level_issues.enabled():
+            try:
+                self._level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger
+                )
+            except LevelProjectError as exc:
+                self.logger.error("Level work package inline references stopped: %s", exc)
+                return ComponentResult(success=False, message=str(exc), errors=["security_level"])
+        result = self._run_etl_pipeline("Inline refs")
+        return result if self._level is None else self._level.report(result, self.logger)
