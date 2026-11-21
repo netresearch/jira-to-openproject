@@ -46,7 +46,7 @@ from src.infrastructure.openproject.openproject_edition import (
 from src.operator_history import _output_file, _private_create
 
 ARCHIVE_FORMAT = "j2o-restricted-issues/1"
-REPORT_FORMAT = "j2o-restricted-report/1"
+REPORT_FORMAT = "j2o-restricted-report/2"
 ADMIN_REPORT_FORMAT = "j2o-restricted-admins/1"
 KINDS = ("static", "per_issue", "unexplained")
 _AGE = ".age"
@@ -81,7 +81,7 @@ def all_projects(jira: Endpoint) -> list[str]:
 
 
 def report(jira: str, scans: list[ProjectInventory], sha256: str) -> dict:
-    """Counts per project and level; issue keys of archived issues; never reader names."""
+    """Counts and static issue keys per project and level; keys of archived issues; never reader names."""
     levels: list[dict[str, Any]] = []
     archived: list[dict[str, Any]] = []
     for scan in scans:
@@ -98,6 +98,7 @@ def report(jira: str, scans: list[ProjectInventory], sha256: str) -> dict:
                     "migration_account_single_user_grants": readers.account_grants,
                     "issues": len(rows),
                     **counts,
+                    "static_keys": sorted(row.issue["key"] for row in rows if row.kind == "static"),
                     "migration_account_not_counted": sum(1 for row in rows if row.account_dropped),
                 }
             )

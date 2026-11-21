@@ -35,12 +35,13 @@ def issue(number, level=None):
     return SimpleNamespace(id=str(number), key=f"APP-{number}", fields=fields, raw={"fields": raw})
 
 
-def row(level_id="10000", static=2, per_issue=1, unexplained=1):
+def row(level_id="10000", static=("APP-10", "APP-11"), per_issue=1, unexplained=1):
     return {
         "project": "APP",
         "level_id": level_id,
         "level": "Management",
-        "static": static,
+        "static": len(static),
+        "static_keys": list(static),
         "per_issue": per_issue,
         "unexplained": unexplained,
     }
@@ -114,7 +115,7 @@ def setup(monkeypatch, tmp_path):
     """Configure reports, mappings and the switch; return a factory for the settings."""
     import src.config as cfg
 
-    def _setup(*, on=True, edition="community", levels=None, archived=None, mapping=None, reports=True):
+    def _setup(*, on=True, edition="community", report_levels=None, archived=None, mapping=None, reports=True):
         settings = {"security_level_work_packages": on, "batch_size": 100, "skeleton_batch_size": 50}
         if reports:
             report = tmp_path / "report.json"
@@ -122,7 +123,7 @@ def setup(monkeypatch, tmp_path):
                 json.dumps(
                     {
                         "format": REPORT_FORMAT,
-                        "levels": [row(), row("10001", 1, 0, 0)] if levels is None else levels,
+                        "levels": [row(), row("10001", ("APP-20",), 0, 0)] if report_levels is None else report_levels,
                         "archived": ARCHIVED if archived is None else archived,
                         "archive_sha256": SHA,
                     }
@@ -251,6 +252,32 @@ def test_a_search_that_does_not_match_the_inventory_refuses_the_level(setup):
     assert not outcome.result.success
     assert not outcome.op.payloads
     assert outcome.result.details["security_level"]["refused"] == 1
+
+
+def test_same_counts_with_another_static_issue_refuse_the_level(setup):
+    # APP-11 was deleted and APP-14 created after the inventory: the counts still match.
+    levels = [issue(10, "10000"), issue(14, "10000"), issue(12, "10000"), issue(13, "10000"), issue(20, "10001")]
+    outcome = skeleton(setup, levels=levels)
+    assert not outcome.result.success
+    assert outcome.result.details["security_level"]["refused"] == 1
+    assert not [pid for _, pid in outcome.created if pid == 100]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"static_keys": None},
+        {"static_keys": ["APP-10"]},
+        {"static_keys": ["APP-10", "APP-12"]},
+        {"per_issue": 2},
+    ],
+)
+def test_a_report_without_exact_static_keys_stops_before_any_write(setup, change):
+    other = row("10001", ("APP-20",), 0, 0)
+    outcome = skeleton(setup, levels=level_issues(), report_levels=[{**row(), **change}, other])
+    assert not outcome.result.success
+    assert not outcome.op.payloads
+    assert "Malformed issue keys for level APP:10000" in repr(outcome.result)
 
 
 def test_a_reported_level_missing_from_the_search_is_refused(setup):

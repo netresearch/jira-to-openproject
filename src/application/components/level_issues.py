@@ -6,9 +6,9 @@
 Off unless ``migration.security_level_work_packages`` is ``true``. One search per project,
 ``level IS NOT EMPTY``, partitioned by the issue's ``fields.security.id``: Jira 9.12 answers
 ``level = <id>`` with HTTP 400 for a level of which the searching user sees no issue. The
-shared inventory report lists only the archived (non-static) issues, so the static issues
-of a level are the rest of the search; a level whose search does not reproduce the report's
-per-class counts is refused as a whole. Level work packages are kept in their own mapping,
+shared inventory report lists the keys of every level's static issues and of every archived
+issue; a level whose search does not return exactly the keys the report lists for it is refused
+as a whole, so an issue created, deleted or moved since the inventory never goes anywhere. Level work packages are kept in their own mapping,
 ``security_level_work_package``, so that no component that reads the ``work_package``
 mapping picks them up before it is adapted.
 """
@@ -137,6 +137,7 @@ class LevelScope:
             msg = "Duplicate archived issue in the inventory report"
             raise LevelProjectError(msg)
         self.levels = report["levels"]
+        self.expected = {f"{row['project']}:{row['level_id']}": _expected_keys(row, archived) for row in self.levels}
         self.kinds = _EDITIONS[edition]
         self.projects = projects
 
@@ -165,15 +166,16 @@ class LevelScope:
         self, project_key: str, level_id: str, issues: list[Any], row: dict | None, result: Selection
     ) -> None:
         label = f"{project_key}:{level_id}"
-        archived = {_issue_key(i): self.archived.get(_issue_key(i)) for i in issues}
-        moved = [key for key, row in archived.items() if row is not None and row["level_id"] != level_id]
-        classes = {key: "static" if row is None else row["class"] for key, row in archived.items()}
+        keys = [_issue_key(i) for i in issues]
+        moved = [key for key in keys if key in self.archived and self.archived[key]["level_id"] != level_id]
         if moved:
             result.refused.append(f"{label}: {len(moved)} issues have another level than in the inventory")
             return
-        if row is None or any(list(classes.values()).count(kind) != row[kind] for kind in _KINDS):
+        expected = self.expected.get(label) if row is not None else None
+        if expected is None or len(set(keys)) != len(keys) or set(keys) != set(expected):
             result.refused.append(f"{label}: the search does not match the inventory; run the inventory again")
             return
+        classes = {key: expected[key] for key in keys}
         keep = [i for i in issues if classes[_issue_key(i)] in self.kinds]
         result.withheld += len(issues) - len(keep)
         if not keep:
@@ -188,6 +190,27 @@ class LevelScope:
             result.refused.append(f"{label}: {exc}")
             return
         result.selected.extend((issue, replace(target, kind=classes[_issue_key(issue)])) for issue in keep)
+
+
+def _expected_keys(row: Mapping[str, Any], archived: list[dict[str, Any]]) -> dict[str, str]:
+    """Key to class for every issue the report lists for one level; a malformed level raises."""
+    static = row.get("static_keys")
+    mine = {
+        r["key"]: r["class"]
+        for r in archived
+        if r["level_id"] == row["level_id"] and r["key"].startswith(f"{row['project']}-")
+    }
+    ok = (
+        isinstance(static, list)
+        and all(isinstance(key, str) for key in static)
+        and len(set(static)) == len(static) == row["static"]
+        and not set(static) & set(mine)
+        and all(list(mine.values()).count(kind) == row[kind] for kind in _KINDS[1:])
+    )
+    if not ok:
+        msg = f"Malformed issue keys for level {row['project']}:{row['level_id']} in the inventory report"
+        raise LevelProjectError(msg)
+    return dict.fromkeys(static, "static") | mine
 
 
 def _target(project_key: str, level_id: str, entry: object) -> LevelTarget:
