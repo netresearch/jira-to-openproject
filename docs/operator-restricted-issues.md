@@ -40,7 +40,7 @@ uv run --project /path/to/j2o j2o-restricted inventory --jira https://jira.examp
 Without `--project` every project is scanned, and the total of `level IS NOT EMPTY` must equal the issues found. Repeat `--project KEY` to limit the scan.
 
 - `report.json` (mode 600) is the shared run report: counts per project and level (issues, static readers, each class, single-user grants that name the migration account, issues where the account was not counted) and the keys of archived issues with their class and the number of extra and missing readers. It holds no reader names.
-- `restricted-issues.age` is encrypted to the operator key. It holds every `per_issue` and `unexplained` issue in full (all fields, the complete changelog, all comments and worklogs, attachment metadata), with its readers, and each level's grants and static readers. Attachment contents are not included.
+- `restricted-issues.age` is encrypted to the operator key. It holds every `per_issue` and `unexplained` issue in full (all fields, the complete changelog, the comments visible to the migration account, all worklogs, attachment metadata), with its readers, and each level's grants and static readers. Attachment contents are not included.
 
 Restore the archive on a trusted machine into a new private file:
 

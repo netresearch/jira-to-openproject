@@ -13,7 +13,7 @@ from pyrage import x25519
 
 from src.comment_archive.transport import ArchiveError
 from src.infrastructure.jira import security_levels as sl
-from src.restricted_issues import decrypt, main, migration_account
+from src.restricted_issues import all_projects, decrypt, main, migration_account
 
 pytestmark = pytest.mark.unit
 _JIRA = "https://jira.example.invalid"
@@ -517,3 +517,42 @@ def test_migration_account_must_own_the_token_and_answers_must_be_objects():
     scheme.answers["/rest/api/2/project/DEMO/issuesecuritylevelscheme"] = []
     with pytest.raises(sl.SecurityLevelError, match="Malformed issue security scheme"):
         scan(scheme)
+
+
+def test_rejects_an_unclosed_grant_inside_a_closed_table():
+    with pytest.raises(sl.SecurityLevelError, match="Truncated"):
+        sl.parse_grant_page(PAGE.replace("<li>Current user </li>", "<li>Current user "))
+
+
+@pytest.mark.parametrize(
+    ("path", "answer", "message"),
+    [
+        ("/rest/api/2/search", [], "Incomplete issue search"),
+        ("/rest/api/2/group/member", [], "Incomplete group page"),
+        ("/rest/api/2/field", ["x"], "Malformed field list"),
+        ("/rest/api/2/project/DEMO", [], "Malformed project"),
+        ("/rest/api/2/project/DEMO/role/10", [], "Malformed project role"),
+        ("/rest/api/2/user/permission/search", ["x"], "Malformed permission search result"),
+        ("/rest/api/2/user/search", ["x"], "Malformed user search result"),
+    ],
+)
+def test_scan_rejects_non_object_answers(path, answer, message):
+    jira = FakeJira()
+    jira.answers[path] = answer
+    with pytest.raises(sl.SecurityLevelError, match=message):
+        scan(jira)
+
+
+def test_other_readers_reject_non_object_answers():
+    jira = FakeJira()
+    jira.answers["/rest/api/2/search"] = []
+    with pytest.raises(sl.SecurityLevelError, match="Malformed search total"):
+        sl.restricted_total(jira)
+    jira.answers["/rest/api/2/issue/104"] = []
+    with pytest.raises(sl.SecurityLevelError, match="Malformed issue"):
+        sl.archived_issue(jira, "104")
+    jira.answers["/rest/api/2/project"] = ["x"]
+    with pytest.raises(ArchiveError, match="Malformed project list"):
+        all_projects(jira)
+    with pytest.raises(sl.SecurityLevelError, match="Malformed user field value"):
+        sl._user_names(["x"])
