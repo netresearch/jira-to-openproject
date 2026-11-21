@@ -63,7 +63,9 @@ def _run(level_setup, *, live=None, ordinary=None, level_map=None, cache=None, r
     op = FakeOpenProject(live)
     migration = WatcherMigration(jira_client=jira, op_client=op)
     results = [migration.run() for _ in range(runs)]
-    return SimpleNamespace(result=results[-1], results=results, jira=jira, op=op, mappings=mappings)
+    return SimpleNamespace(
+        result=results[-1] if results else None, results=results, jira=jira, op=op, mappings=mappings
+    )
 
 
 def _watched(outcome):
@@ -127,6 +129,18 @@ def test_refusals_are_reported_on_the_early_return(level_setup):
     assert _watched(outcome) == []
     assert outcome.op.bulk_calls == []
     assert outcome.result.details["security_level"] == {"work_packages": 0, "refused": 3}
+
+
+def test_the_component_runner_reaches_the_level_path(level_setup):
+    # The migration runner calls run_with_change_detection, which ends in run().
+    from src.migration import _invoke_component
+
+    outcome = _run(level_setup, runs=0)
+    result = _invoke_component("watchers", WatcherMigration(jira_client=outcome.jira, op_client=outcome.op))
+    assert result.success, result.message
+    assert outcome.op.bulk_calls == [ORDINARY_WATCHERS]
+    assert result.details["level_watchers_withheld"] == 2
+    assert result.details["security_level"] == {"work_packages": 2, "refused": 0}
 
 
 def test_a_missing_report_stops_before_any_read(level_setup):
