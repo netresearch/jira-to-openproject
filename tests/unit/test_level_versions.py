@@ -412,3 +412,29 @@ def test_level_affected_versions_check_the_parent_origin():
     write_observed_versions(client, {**payload, "field": 555, "issues": []})
     level, ordinary = client.scripts
     assert "owner.custom_values" in level and "owner.custom_values" not in ordinary
+
+
+@BOTH
+def test_level_copies_through_the_component_runner_reach_their_mapping_file(
+    level_setup, component, tmp_path, monkeypatch
+):
+    import src.config as cfg
+    from src.mappings.mappings import Mappings
+    from src.migration import _invoke_component
+
+    fake, _ = level_setup()
+    store = tmp_path / "mappings"
+    store.mkdir()
+    real = Mappings(store)
+    for name, value in {**fake.data, "work_package": ORDINARY, "security_level_work_package": LEVEL_MAP}.items():
+        real.set_mapping(name, value)
+    monkeypatch.setattr(cfg, "mappings", real)
+    jira, op = FakeJira(), FakeOpenProject()
+    result = _invoke_component(component, COMPONENTS[component](jira_client=jira, op_client=op))
+    assert result.success, result
+    assert result.details["security_level"] == {"work_packages": 2, "refused": 0}
+    saved = json.loads((store / "security_level_version_mapping.json").read_text())
+    assert {key: entry["openproject_id"] for key, entry in saved.items()} == {
+        "APP:10000:41": op.copies[100, "41"],
+        "APP:10000:42": op.copies[100, "42"],
+    }
