@@ -443,6 +443,7 @@ Migrates Jira issue attachments to OpenProject work package files.
 - Author/timestamp preservation via Rails metadata
 - MIME type mapping
 - Attachment provenance tracking
+- With `migration.security_level_work_packages: true`: `attachments`, `attachment_provenance` and `attachment_recovery` also handle the level work packages, in the work package their level sub-project holds for each selected issue, read live by `J2O Origin Key`; archived issues get nothing ([Level work packages](operator-restricted-issues.md#level-work-packages))
 
 **Dependencies**: WorkPackageMigration, UserMigration
 
@@ -889,7 +890,7 @@ uv run python -m src.main migrate --profile full --no-confirm
 
 **Location**: `src/migrations/security_levels_migration.py`
 
-The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`; see [Level work packages](operator-restricted-issues.md#level-work-packages).
+The standard work-package import asks Jira for issues with an empty security level. It excludes issues with a level from ordinary creation and content updates. Existing work-package mappings outside the confirmed scope require an access review before cutover. The migration preserves earlier targets. `j2o-restricted` inventories the issues with a level and their readers and archives those that cannot be migrated with the level's static readers ([Operator archive of restricted Jira issues](operator-restricted-issues.md), [ADR-009](adr/ADR-009-security-levels-as-private-sub-projects.md)). With `migration.security_level_work_packages: true` (off by default), `work_packages_skeleton` and `work_packages_content` also migrate the work packages of the levels that have a sub-project, in that sub-project and in their own mapping `security_level_work_package_mapping.json`, and `attachments`, `attachment_provenance` and `attachment_recovery` handle their attachments; see [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 **Features**:
 - On previously mapped issues, this component records the source level name in the “Security Level” custom field.

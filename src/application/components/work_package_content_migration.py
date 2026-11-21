@@ -69,14 +69,11 @@ from src.application.components.issue_security import (
     warn_if_restricted_mappings,
 )
 from src.application.components.jira_field_values import without_empty_values
-from src.application.components.security_level_projects_migration import LevelProjectError
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.domain.enums import JournalEntryType
-from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.infrastructure.openproject.rails_console_client import RubyError
 from src.models import ComponentResult, JiraUser, WorkPackageMappingEntry
 from src.utils.markdown_converter import MarkdownConverter
 
@@ -1129,7 +1126,7 @@ class WorkPackageContentMigration(BaseMigration):
         selection = scope.select(project_key, light)
         allowed = {str(issue.id): target for issue, target in selection.selected}
         refused = list(selection.refused)
-        live: dict[str, dict[str, int] | None] = {}
+        live = level_issues.LiveSubProjects(self.op_client, self.logger)
         collected_batch: list[dict[str, Any]] = []
         full = level_issues.iter_level_issues(
             self.jira_client, project_key, batch_size, "*all", "renderedFields,changelog"
@@ -1161,24 +1158,12 @@ class WorkPackageContentMigration(BaseMigration):
         issue: Issue,
         target: level_issues.LevelTarget | None,
         entry: dict | None,
-        live: dict[str, dict[str, int] | None],
+        live: level_issues.LiveSubProjects,
     ) -> tuple[int, str | None]:
         """The work package to write for a level issue, or the reason it is refused."""
         if target is None or level_issues.issue_level_id(issue) != target.level_id:
             return 0, "not selected for the level sub-project of its work package"
-        if target.label not in live:
-            try:
-                live[target.label] = level_issues.existing_work_packages(self.op_client, target.project_id)
-            except (LevelProjectError, QueryExecutionError, RubyError) as exc:
-                self.logger.error("Level sub-project %s not readable: %s", target.label, exc)
-                live[target.label] = None
-        held = live[target.label]
-        wp_id = None if held is None else held.get(issue.key)
-        if wp_id is None:
-            return 0, f"no work package in {target.label}; run work_packages_skeleton"
-        if entry is not None and (not target.matches(entry) or entry["openproject_id"] != wp_id):
-            return 0, f"the mapping entry does not name the work package {target.label} holds"
-        return wp_id, None
+        return live.held(issue.key, target, entry)
 
     def _write_level_batch(self, collected: list[dict[str, Any]], results: dict, counters: dict) -> None:
         for metric, count in self._bulk_process_collected_content(collected).items():
