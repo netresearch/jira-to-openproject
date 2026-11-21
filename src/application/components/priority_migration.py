@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.base_migration import register_entity_types
+from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.domain.repositories import MappingRepository
 from src.infrastructure.jira.jira_client import JiraClient
@@ -17,7 +18,7 @@ from src.models.jira import JiraIssueFields
 
 
 @register_entity_types("priorities")
-class PriorityMigration(BaseMigration):
+class PriorityMigration(LevelFieldsMigration):
     """Migrate priorities and set on work packages."""
 
     def __init__(
@@ -59,8 +60,8 @@ class PriorityMigration(BaseMigration):
         raise ValueError(msg)
 
     def run(self) -> ComponentResult:
-        """Execute the extract → map → load pipeline for priorities."""
-        return self._run_etl_pipeline("Priorities")
+        """Execute the extract → map → load pipeline for priorities, also for the level work packages."""
+        return self._with_level_fields(lambda: self._run_etl_pipeline("Priorities"))
 
     def _extract(self) -> ComponentResult:
         """Extract Jira priorities (names and order).
@@ -121,7 +122,7 @@ class PriorityMigration(BaseMigration):
             return ComponentResult(success=True, updated=0)
 
         # Load work package mapping and Jira issues with priorities
-        wp_map = self.mappings.get_mapping("work_package") or {}
+        wp_map = self._work_package_map()
         updated = 0
         failed = 0
 
