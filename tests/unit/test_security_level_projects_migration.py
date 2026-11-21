@@ -34,14 +34,24 @@ APP = {
 class FakeOpenProject:
     """Answer the component's Rails scripts from an in-memory project table and record them."""
 
-    def __init__(self, projects=()):
+    def __init__(self, projects=(), parents=None, provenance=None):
         self.projects = {row["identifier"]: dict(row) for row in projects}
+        self.parents = {7: "App", 8: "Ops"} if parents is None else parents
+        self.provenance = provenance or {}
+        self.restores = []
         self.scripts = []
+
+    def restore_entity_mappings_from_provenance(self, entity_type):
+        self.restores.append(entity_type)
+        return self.provenance
 
     def execute_query_to_json_file(self, script):
         self.scripts.append(script)
         values = json.loads(script.split("\n")[1])
         project = self.projects.get(values["identifier"])
+        if "Project.new(" not in script:
+            state = {"found": True, **project} if project else {"found": False}
+            return state | {"parent_name": self.parents.get(values.get("parent_id"))}
         if "Project.new(" in script and project is None:
             public = re.search(r"public: (true|false)", script).group(1) == "true"
             project = {"id": 100 + len(self.projects), "identifier": values["identifier"], "public": public}
@@ -51,6 +61,9 @@ class FakeOpenProject:
 
     def creations(self):
         return [script for script in self.scripts if "Project.new(" in script]
+
+    def finds(self):
+        return [json.loads(script.split("\n")[1]) for script in self.scripts if "Project.new(" not in script]
 
 
 class FailingOpenProject(FakeOpenProject):
@@ -190,7 +203,65 @@ def test_name_of_a_migrated_jira_project_is_refused(run):
     )
     outcome = run([level()], mapping=mappings)
     assert "name is taken" in outcome.result.errors[0]
-    assert outcome.target.scripts == []
+    assert outcome.target.finds() == [{"identifier": "app_level_10000", "parent_id": 7}]
+    assert outcome.target.creations() == []
+
+
+RESTORED = {"jira_key": "APP", "jira_name": "App", "openproject_id": 7, "matched_by": "j2o_provenance"}
+
+
+def creation(outcome):
+    [script] = outcome.target.creations()
+    return json.loads(script.split("\n")[1])
+
+
+def test_the_name_comes_from_the_parent_in_openproject(run):
+    outcome = run([level()], projects=FakeOpenProject(parents={7: "App Renamed"}))
+    assert outcome.result.success, outcome.result.errors
+    assert creation(outcome)["name"] == "App Renamed (Management)"
+
+
+def test_restored_entry_without_a_name_uses_the_parents_live_name(run):
+    target = FakeOpenProject(parents={7: "App Live"})
+    outcome = run([level()], projects=target, mapping=FakeMappings({"APP": {**RESTORED, "restored_from_op": True}}))
+    assert outcome.result.success, outcome.result.errors
+    assert target.finds() == [{"identifier": "app_level_10000", "parent_id": 7}]
+    assert (creation(outcome)["name"], creation(outcome)["parent_id"]) == ("App Live (Management)", 7)
+    assert target.restores == []
+    assert outcome.mapping["APP:10000"]["parent_openproject_id"] == 7
+
+
+def test_empty_mapping_resolves_the_parent_from_provenance_once(run):
+    target = FakeOpenProject(parents={7: "App Live"}, provenance={"APP": RESTORED})
+    outcome = run([level("10000"), level("10001")], projects=target, mapping=FakeMappings({}))
+    assert outcome.result.success, outcome.result.errors
+    assert target.restores == ["project"]
+    assert [json.loads(s.split("\n")[1])["parent_id"] for s in target.creations()] == [7, 7]
+    assert {json.loads(s.split("\n")[1])["name"] for s in target.creations()} == {"App Live (Management)"}
+
+
+def test_names_restored_from_provenance_are_known(run):
+    other = {**RESTORED, "jira_key": "MGT", "jira_name": "App Live (Management)", "openproject_id": 9}
+    target = FakeOpenProject(parents={7: "App Live"}, provenance={"APP": RESTORED, "MGT": other})
+    outcome = run([level()], projects=target, mapping=FakeMappings({}))
+    assert "name is taken" in outcome.result.errors[0]
+    assert target.creations() == []
+
+
+def test_parent_found_nowhere_is_refused_without_a_script(run):
+    target = FakeOpenProject()
+    outcome = run([level()], projects=target, mapping=FakeMappings({}))
+    assert not outcome.result.success
+    assert target.restores == ["project"]
+    assert "provenance registry" in outcome.result.errors[0]
+    assert target.scripts == []
+    assert outcome.mapping == {}
+
+
+def test_parent_missing_in_openproject_is_refused(run):
+    outcome = run([level()], projects=FakeOpenProject(parents={}))
+    assert "parent project is not in OpenProject" in outcome.result.errors[0]
+    assert outcome.target.creations() == []
 
 
 @pytest.mark.parametrize("key", ["APP_LEVEL_10000", "APP-LEVEL-10000"])

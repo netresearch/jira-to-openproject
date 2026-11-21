@@ -39,7 +39,13 @@ _STATE = (
     '"parent_id" => p.parent_id, "members" => Member.where(project_id: p.id).count} '
     'else {"found" => false} end'
 )
-_FIND = 'p = Project.find_by(identifier: input.fetch("identifier"))\n' + _STATE
+# The parent's name is read live: a mapping restored from provenance carries no
+# openproject_name, and a mapped name can be outdated.
+_FIND = (
+    'p = Project.find_by(identifier: input.fetch("identifier"))\n'
+    'parent = Project.find_by(id: input.fetch("parent_id"))\n'
+    "(" + _STATE + ').merge("parent_name" => parent&.name)'
+)
 # Project.new instead of Projects::CreateService: the service adds the creating user as a
 # member (app/services/projects/concerns/new_project_service.rb:44, 54-71).
 _CREATE = (
@@ -80,6 +86,11 @@ def level_identifier(jira_key: str, level_id: str) -> str:
 
 def _script(body: str, values: dict[str, Any]) -> str:
     return f"input = JSON.parse(<<'J2O_INPUT')\n{json.dumps(values)}\nJ2O_INPUT\n{body}"
+
+
+def _parent_id(entry: object) -> int | None:
+    value = entry.get("openproject_id") if isinstance(entry, dict) else None
+    return value if type(value) is int else None
 
 
 def _load(path: object, fmt: str) -> dict[str, Any]:
@@ -145,7 +156,8 @@ class SecurityLevelProjectsMigration(BaseMigration):
         return self._create_all(levels, str(edition))
 
     def _create_all(self, levels: list[dict[str, Any]], edition: str) -> ComponentResult:
-        projects = self.mappings.get_mapping("project") or {}
+        selected = set(config.selected_jira_projects())
+        projects = self._projects({row["project"] for row in levels if not selected or row["project"] in selected})
         taken_ids = {project_identifier(key) for key in projects} | {
             entry.get("openproject_identifier") for entry in projects.values() if isinstance(entry, dict)
         }
@@ -156,7 +168,6 @@ class SecurityLevelProjectsMigration(BaseMigration):
             for field in ("jira_name", "openproject_name")
             if entry.get(field)
         }
-        selected = set(config.selected_jira_projects())
         mapping = dict(self.mappings.get_mapping(MAPPING) or {})
         counts = {"created": 0, "verified": 0}
         errors: list[str] = []
@@ -166,7 +177,7 @@ class SecurityLevelProjectsMigration(BaseMigration):
                 continue
             label = f"{key}:{row['level_id']}"
             try:
-                entry, created = self._ensure(row, projects.get(key), taken_ids, taken_names)
+                entry, created = self._ensure(row, _parent_id(projects.get(key)), taken_ids, taken_names)
             except (LevelProjectError, QueryExecutionError, RubyError) as exc:
                 self.logger.error("Security level sub-project %s refused: %s", label, exc)
                 errors.append(f"{label}: {exc}")
@@ -186,37 +197,47 @@ class SecurityLevelProjectsMigration(BaseMigration):
             failed_count=len(errors),
         )
 
+    def _projects(self, keys: set[str]) -> dict[str, Any]:
+        """The project mapping; entries without an OpenProject ID come from the provenance registry."""
+        projects = dict(self.mappings.get_mapping("project") or {})
+        if all(_parent_id(projects.get(key)) is not None for key in keys):
+            return projects
+        restored = self.op_client.restore_entity_mappings_from_provenance("project") or {}
+        for key, entry in restored.items():
+            if _parent_id(projects.get(key)) is None and _parent_id(entry) is not None:
+                projects[key] = entry
+        return projects
+
     def _ensure(
-        self, row: dict[str, Any], parent: object, taken_ids: set[Any], taken_names: set[str]
+        self, row: dict[str, Any], parent_id: int | None, taken_ids: set[Any], taken_names: set[str]
     ) -> tuple[dict[str, Any], bool]:
         key, level_id = row["project"], row["level_id"]
-        _require(
-            isinstance(parent, dict) and type(parent.get("openproject_id")) is int and parent.get("openproject_name"),
-            "Jira project is not in the project mapping",
-        )
+        _require(parent_id is not None, "Jira project is neither in the project mapping nor in the provenance registry")
         identifier = level_identifier(key, level_id)
-        name = f"{parent['openproject_name']} ({row['level']})"
         _require(identifier not in taken_ids, "identifier belongs to a migrated Jira project")
-        _require(name.casefold() not in taken_names and len(name) <= _MAX_NAME, "name is taken or too long")
-        values = {"identifier": identifier}
+        values: dict[str, Any] = {"identifier": identifier, "parent_id": parent_id}
         state = self._state(_script(_FIND, values))
+        parent_name = state.get("parent_name")
+        _require(isinstance(parent_name, str) and parent_name, "parent project is not in OpenProject")
+        name = f"{parent_name} ({row['level']})"
+        _require(name.casefold() not in taken_names and len(name) <= _MAX_NAME, "name is taken or too long")
         created = not state["found"]
         if created:
             description = f"Issues of {key} with the Jira security level {row['level']} (ID {level_id})."
-            values |= {"name": name, "parent_id": parent["openproject_id"], "description": description}
+            values |= {"name": name, "description": description}
             state = self._state(_script(_CREATE, values))
             _require(state["found"], "OpenProject did not create the sub-project")
         _require(state["identifier"] == identifier, "OpenProject answered for another identifier")
         _require(state["public"] is False, "existing project is public")
         _require(state["members"] == 0, "existing project has members")
-        _require(state["parent_id"] == parent["openproject_id"], "existing project has another parent")
+        _require(state["parent_id"] == parent_id, "existing project has another parent")
         entry = {
             "jira_project_key": key,
             "level_id": level_id,
             "level": row["level"],
             "openproject_id": state["id"],
             "openproject_identifier": identifier,
-            "parent_openproject_id": parent["openproject_id"],
+            "parent_openproject_id": parent_id,
         }
         return entry, created
 
