@@ -75,7 +75,7 @@ The shared run report carries counts per project and level and the keys of archi
 
 - **Internal comments are not used** to imitate Jira visibility. They are visible per role permission, not per user or Jira group, so they are no exact mapping of a level or of a restricted comment.
 - **Comments with their own visibility restriction** (a group or project role on the comment, narrower than the issue) keep the treatment of [ADR-007](ADR-007-protected-comments-and-local-acceptance.md) on level issues: `select_comments` (`src/infrastructure/jira/comment_audience.py`) never writes them as OpenProject journals, and they reach readers only through the reader-encrypted `jira-protected-comments.j2o` attachment of `j2o-comments`, where each reader decrypts the view captured with their own Jira account. Membership of the private sub-project alone never widens a comment's audience.
-- **Version sharing for sprints** used by work packages in a sub-project is decided in a later pull request.
+- **Version sharing for sprints** used by work packages in a sub-project is decided in a later pull request. Update 2026-11-21: decided in [ADR-010](ADR-010-level-versions-as-sub-project-copies.md); each sub-project gets its own copies of the fix, affected and sprint versions its work packages use.
 
 ### Order of work
 
