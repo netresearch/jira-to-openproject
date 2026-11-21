@@ -493,7 +493,7 @@ def scan_project(jira: JiraReader, project: str, account: str, directory: Direct
 
 
 def archived_issue(jira: JiraReader, issue_id: str) -> dict:
-    """The full issue with its complete changelog, comments and worklogs."""
+    """The full issue with its complete changelog and worklogs and every comment visible to the reader."""
     _require(issue_id.isdecimal(), "Invalid issue ID")
     path = f"/rest/api/2/issue/{quote(issue_id, safe='')}"
     issue = _object(jira.get(path, params={"fields": "*all", "expand": "changelog,names"}), "Malformed issue")
