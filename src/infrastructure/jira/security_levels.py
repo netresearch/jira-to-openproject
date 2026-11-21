@@ -20,6 +20,8 @@ from html.parser import HTMLParser
 from typing import Any, Protocol
 from urllib.parse import quote
 
+from src.infrastructure.jira.comment_audience import _pages
+
 
 class SecurityLevelError(ValueError):
     """A grant, reader set or search result could not be verified."""
@@ -28,6 +30,13 @@ class SecurityLevelError(ValueError):
 def _require(condition: object, message: str) -> None:
     if not condition:
         raise SecurityLevelError(message)
+
+
+def _object(value: object, message: str) -> dict:
+    """A JSON object from Jira; any other value (a list, a string, null) raises."""
+    if not isinstance(value, dict):
+        raise SecurityLevelError(message)
+    return value
 
 
 class JiraReader(Protocol):
@@ -54,6 +63,8 @@ _NAMED = {
 }
 _ROLE_ACTORS = frozenset({"atlassian-user-role-actor", "atlassian-group-role-actor"})
 _LABEL = re.compile(r"(?P<kind>[A-Za-z ]+?) \((?P<value>.+)\)")
+# Jira caps a user search page at 1000 results; a shorter page is the last one.
+_USER_PAGE = 1000
 
 
 @dataclass(frozen=True)
@@ -115,8 +126,10 @@ class _GrantPage(HTMLParser):
         elif tag == "tr" and "project-config-issuesecurity" in classes:
             self.levels.append(("", []))
         elif tag == "span" and "project-config-issuesecurity-name" in classes:
+            _require(self._capture is None, "Unclosed security level name or grant")
             self._capture, self._text = "name", []
         elif tag == "li" and self.levels:
+            _require(self._capture is None, "Unclosed security level name or grant")
             self._capture, self._text = "grant", []
 
     def handle_endtag(self, tag: str) -> None:
@@ -142,6 +155,11 @@ class _GrantPage(HTMLParser):
         if self._capture:
             self._text.append(data)
 
+    @property
+    def open(self) -> bool:
+        """The table, a level name or a grant has not been closed."""
+        return self._in_table or self._capture is not None
+
 
 def parse_grant_page(html: str) -> dict[str, tuple[Grant, ...]]:
     """Return the grants per level name; a page without the table (login, WebSudo) raises."""
@@ -149,6 +167,7 @@ def parse_grant_page(html: str) -> dict[str, tuple[Grant, ...]]:
     page.feed(html)
     page.close()
     _require(page.found, "Issue security table not found; expected the project-config page")
+    _require(not page.open, "Truncated issue security table")
     names = [name for name, _ in page.levels]
     _require(all(names) and len(set(names)) == len(names), "Missing or duplicate security level names")
     return {name: tuple(parse_grant(label) for label in labels) for name, labels in page.levels}
@@ -156,11 +175,11 @@ def parse_grant_page(html: str) -> dict[str, tuple[Grant, ...]]:
 
 def project_levels(jira: JiraReader, project: str) -> list[Level]:
     """Join the REST levels of the project's scheme with the grants of its config page."""
-    _require(re.fullmatch(r"[A-Z][A-Z0-9_]*", project), "Invalid Jira project key")
+    _require(re.fullmatch(r"[A-Z0-9][A-Z0-9_]*", project), "Invalid Jira project key")
     response = jira.request("GET", f"/rest/api/2/project/{project}/issuesecuritylevelscheme", denial=True)
     if response.status_code == 404:
         return []
-    scheme = response.json()
+    scheme = _object(response.json(), "Malformed issue security scheme")
     rows = scheme.get("levels")
     _require(isinstance(rows, list), "Malformed issue security scheme")
     page = jira.request("GET", f"/plugins/servlet/project-config/{project}/issuesecurity")
@@ -187,7 +206,7 @@ def browse_users(jira: JiraReader, **scope: str) -> frozenset[str]:
         if not page:
             return frozenset(names)
         for user in page:
-            name = user.get("name")
+            name = _object(user, "Malformed permission search result").get("name")
             _require(isinstance(name, str) and name and name not in names, "Duplicate or missing user in search")
             names.add(name)
 
@@ -205,15 +224,25 @@ class Directory:
         if name not in self.groups:
             members: list[str] = []
             while True:
-                page = self.jira.get(
-                    "/rest/api/2/group/member",
-                    params={"groupname": name, "includeInactiveUsers": "true", "startAt": len(members)},
+                page = _object(
+                    self.jira.get(
+                        "/rest/api/2/group/member",
+                        params={"groupname": name, "includeInactiveUsers": "true", "startAt": len(members)},
+                    ),
+                    "Incomplete group page",
                 )
-                values = page["values"]
-                _require(isinstance(values, list) and page["startAt"] == len(members), "Incomplete group page")
-                members.extend(str(u["name"]) for u in values)
-                if page["isLast"] or not values:
+                values = page.get("values")
+                _require(
+                    isinstance(values, list)
+                    and page.get("startAt") == len(members)
+                    and type(page.get("isLast")) is bool,
+                    "Incomplete group page",
+                )
+                members.extend(str(_object(u, "Incomplete group page")["name"]) for u in values)
+                if page["isLast"]:
                     break
+                # A non-final page without members would end the group early.
+                _require(values, "Incomplete group page")
             _require(len(set(members)) == len(members), "Duplicate group member")
             self.groups[name] = frozenset(members)
         return self.groups[name]
@@ -221,12 +250,24 @@ class Directory:
     def single_user(self, display_name: str) -> str:
         """Resolve a page display name to exactly one Jira user name, inactive users included."""
         if display_name not in self.users:
-            found = self.jira.get(
-                "/rest/api/2/user/search",
-                params={"username": display_name, "includeInactive": "true", "maxResults": 1000},
-            )
-            _require(isinstance(found, list), "Malformed user search result")
-            names = {str(u["name"]) for u in found if u.get("displayName") == display_name}
+            names: set[str] = set()
+            seen = 0
+            while True:
+                found = self.jira.get(
+                    "/rest/api/2/user/search",
+                    params={
+                        "username": display_name,
+                        "includeInactive": "true",
+                        "startAt": seen,
+                        "maxResults": _USER_PAGE,
+                    },
+                )
+                _require(isinstance(found, list), "Malformed user search result")
+                users = [_object(u, "Malformed user search result") for u in found]
+                names |= {str(u["name"]) for u in users if u.get("displayName") == display_name}
+                seen += len(users)
+                if len(users) < _USER_PAGE:
+                    break
             _require(len(names) == 1, "A single-user grant does not resolve to exactly one Jira user")
             self.users[display_name] = names.pop()
         return self.users[display_name]
@@ -236,8 +277,11 @@ class Directory:
         if self.fields is None:
             self.fields = {}
             counts: dict[str, int] = {}
-            for row in self.jira.get("/rest/api/2/field"):
-                custom = str((row.get("schema") or {}).get("custom", ""))
+            rows = self.jira.get("/rest/api/2/field")
+            _require(isinstance(rows, list), "Malformed field list")
+            for row in rows:
+                schema = _object(row, "Malformed field list").get("schema") or {}
+                custom = str(_object(schema, "Malformed field list").get("custom", ""))
                 if custom.endswith((":userpicker", ":multiuserpicker")):
                     counts[row["name"]] = counts.get(row["name"], 0) + 1
                     self.fields[row["name"]] = str(row["id"])
@@ -271,7 +315,8 @@ def static_readers(
         if grant.kind == "group":
             users |= directory.group(str(grant.value))
         elif grant.kind == "lead":
-            users.add(str(jira.get(f"/rest/api/2/project/{project}")["lead"]["name"]))
+            lead = _object(jira.get(f"/rest/api/2/project/{project}"), "Malformed project").get("lead")
+            users.add(str(_object(lead, "Malformed project lead")["name"]))
         elif grant.kind == "role":
             users |= _role_users(directory, project, str(grant.value))
         elif grant.kind == "user":
@@ -290,8 +335,12 @@ def _role_users(directory: Directory, project: str, role: str) -> set[str]:
     url = roles.get(role) if isinstance(roles, dict) else None
     _require(isinstance(url, str) and url.startswith(jira.url + "/"), "Unknown project role in a grant")
     users: set[str] = set()
-    for actor in jira.get(url.removeprefix(jira.url))["actors"]:
-        _require(actor["type"] in _ROLE_ACTORS, "Unknown project role actor type")
+    actors = _object(jira.get(url.removeprefix(jira.url)), "Malformed project role").get("actors")
+    _require(isinstance(actors, list), "Malformed project role")
+    for actor in actors:
+        _require(
+            _object(actor, "Malformed project role").get("type") in _ROLE_ACTORS, "Unknown project role actor type"
+        )
         if actor["type"] == "atlassian-user-role-actor":
             users.add(str(actor["name"]))
         else:
@@ -310,9 +359,12 @@ def project_issues(jira: JiraReader, project: str, levels: list[Level], fields: 
     ids: set[str] = set()
     total = None
     while True:
-        page = jira.get(
-            "/rest/api/2/search",
-            params={"jql": jql, "fields": ",".join(["security", *fields]), "startAt": len(ids), "maxResults": 100},
+        page = _object(
+            jira.get(
+                "/rest/api/2/search",
+                params={"jql": jql, "fields": ",".join(["security", *fields]), "startAt": len(ids), "maxResults": 100},
+            ),
+            f"Incomplete issue search for {project}",
         )
         rows = page["issues"]
         _require(
@@ -321,7 +373,8 @@ def project_issues(jira: JiraReader, project: str, levels: list[Level], fields: 
         )
         total = page["total"]
         for row in rows:
-            security = str((row["fields"].get("security") or {}).get("id"))
+            fields_of = _object(_object(row, f"Incomplete issue search for {project}")["fields"], "Malformed issue")
+            security = str(_object(fields_of.get("security") or {}, "Malformed issue security").get("id"))
             _require(security in result, f"{project} has an issue with a level outside its scheme")
             _require(row["id"] not in ids, f"Duplicate issue in the search for {project}")
             ids.add(row["id"])
@@ -334,7 +387,8 @@ def project_issues(jira: JiraReader, project: str, levels: list[Level], fields: 
 def restricted_total(jira: JiraReader, project: str | None = None) -> int:
     """Count issues with any level, for one project or the whole instance."""
     jql = "level IS NOT EMPTY" if project is None else f"project = {json.dumps(project)} AND level IS NOT EMPTY"
-    total = jira.get("/rest/api/2/search", params={"jql": jql, "maxResults": 0, "fields": "key"})["total"]
+    page = jira.get("/rest/api/2/search", params={"jql": jql, "maxResults": 0, "fields": "key"})
+    total = _object(page, "Malformed search total").get("total")
     _require(type(total) is int, "Malformed search total")
     return total
 
@@ -353,7 +407,7 @@ class Classified:
 
 def per_issue_grantees(issue: dict, level: Level, field_ids: dict[str, str]) -> frozenset[str]:
     """Users the level's per-issue grants name on this issue."""
-    fields = issue["fields"]
+    fields = _object(issue["fields"], "Malformed issue")
     names: set[str] = set()
     for grant in level.grants:
         if grant.kind in ("assignee", "reporter"):
@@ -366,7 +420,7 @@ def per_issue_grantees(issue: dict, level: Level, field_ids: dict[str, str]) -> 
 def _user_names(value: object) -> set[str]:
     """User names of a single-user or multi-user field value."""
     users = value if isinstance(value, list) else [value]
-    return {str(user["name"]) for user in users if user}
+    return {str(_object(user, "Malformed user field value")["name"]) for user in users if user}
 
 
 def classify(
@@ -374,15 +428,18 @@ def classify(
 ) -> Classified:
     """Compare the effective readers with the static readers of the level.
 
-    The migration account is removed from the effective readers unless a grant
-    other than its temporary single-user grant explains it.
+    The migration account is removed from the effective readers only when the
+    level has a single-user grant naming it and no other grant explains it.
+    Without such a grant the account stays and counts as an extra reader. The
+    grants of an unsupported level are not resolved; its issues are unexplained.
     """
-    explained = per_issue_grantees(issue, readers.level, field_ids)
-    dropped = account in effective and account not in readers.readers | explained
+    supported = readers.level.supported
+    explained = per_issue_grantees(issue, readers.level, field_ids) if supported else frozenset()
+    dropped = readers.account_grants > 0 and account in effective and account not in readers.readers | explained
     actual = effective - {account} if dropped else effective
     extra = actual - readers.readers
     missing = readers.readers - actual
-    if not readers.level.supported or missing or extra - explained:
+    if not supported or missing or extra - explained:
         kind = "unexplained"
     elif extra:
         kind = "per_issue"
@@ -401,7 +458,11 @@ class ProjectInventory:
 
 
 def scan_project(jira: JiraReader, project: str, account: str, directory: Directory | None = None) -> ProjectInventory:
-    """Read levels, static readers and every restricted issue of one project."""
+    """Read levels, static readers and every restricted issue of one project.
+
+    Grants are resolved for supported levels only, so an unsupported level with an
+    unresolvable grant still reaches classification, where its issues become unexplained.
+    """
     directory = directory or Directory(jira)
     levels = project_levels(jira, project)
     result = ProjectInventory(project, [], {})
@@ -412,12 +473,17 @@ def scan_project(jira: JiraReader, project: str, account: str, directory: Direct
     field_ids = {
         str(g.value): directory.user_field(str(g.value))
         for level in levels
+        if level.supported
         for g in level.grants
         if g.kind == "user_field"
     }
     issues = project_issues(jira, project, levels, ["assignee", "reporter", *sorted(set(field_ids.values()))])
     for level in levels:
-        level_readers = static_readers(directory, project, level, browse, account)
+        level_readers = (
+            static_readers(directory, project, level, browse, account)
+            if level.supported
+            else LevelReaders(level, frozenset(), 0)
+        )
         result.levels.append(level_readers)
         result.issues[level.id] = [
             classify(issue, level_readers, browse_users(jira, issueKey=issue["key"]), field_ids, account)
@@ -430,14 +496,18 @@ def archived_issue(jira: JiraReader, issue_id: str) -> dict:
     """The full issue with its complete changelog, comments and worklogs."""
     _require(issue_id.isdecimal(), "Invalid issue ID")
     path = f"/rest/api/2/issue/{quote(issue_id, safe='')}"
-    issue = jira.get(path, params={"fields": "*all", "expand": "changelog,names"})
-    log = issue["changelog"]
+    issue = _object(jira.get(path, params={"fields": "*all", "expand": "changelog,names"}), "Malformed issue")
+    fields = _object(issue.get("fields"), "Malformed issue")
+    log = _object(issue.get("changelog"), "Incomplete issue changelog")
     _require(log["startAt"] == 0 and log["total"] == len(log["histories"]), "Incomplete issue changelog")
-    comments = issue["fields"].get("comment") or {"comments": [], "total": 0}
-    _require(comments["total"] == len(comments["comments"]), "Incomplete issue comments")
-    worklog = issue["fields"].get("worklog")
-    if worklog and worklog["total"] != len(worklog["worklogs"]):
-        worklog = jira.get(path + "/worklog")
+    comments = _object(fields.get("comment") or {"comments": [], "total": 0}, "Incomplete issue comments")
+    if comments["total"] != len(comments["comments"]):
+        # The comment endpoint pages and checks continuity, total and IDs.
+        rows = _pages(lambda params: jira.request("GET", path + "/comment", params=params))
+        fields["comment"] = {"startAt": 0, "maxResults": len(rows), "total": len(rows), "comments": rows}
+    worklog = fields.get("worklog")
+    if worklog and _object(worklog, "Incomplete issue worklogs")["total"] != len(worklog["worklogs"]):
+        worklog = _object(jira.get(path + "/worklog"), "Incomplete issue worklogs")
         _require(worklog["total"] == len(worklog["worklogs"]), "Incomplete issue worklogs")
-        issue["fields"]["worklog"] = worklog
+        fields["worklog"] = worklog
     return issue

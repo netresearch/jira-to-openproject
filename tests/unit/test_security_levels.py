@@ -6,6 +6,7 @@
 import copy
 import json
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 from pyrage import x25519
@@ -21,6 +22,7 @@ _FIELD = "customfield_100"
 # 23 users with Browse on the project; the level lets two of them read.
 _BROWSE = ["alice", "bob", "carol", "frank", "grace", _ACCOUNT] + [f"user{n:02d}" for n in range(17)]
 _PAGE_CAP = 10  # Jira caps each permission search page; the reader must page.
+_USER_CAP = 2  # the fake's cap per user search page
 
 
 def _li(labels):
@@ -91,8 +93,13 @@ class Response:
         self._value = value
         self.text = text
 
+    headers: ClassVar[dict] = {}
+
     def json(self):
         return copy.deepcopy(self._value)
+
+    def raise_for_status(self):
+        assert self.status_code == 200
 
 
 class FakeJira:
@@ -100,8 +107,24 @@ class FakeJira:
 
     url = _JIRA
 
-    def __init__(self, issues=ISSUES, page=PAGE, *, levels=("Board", "Legacy"), browse=_BROWSE, elsewhere=0, leads=()):
+    def __init__(
+        self,
+        issues=ISSUES,
+        page=PAGE,
+        *,
+        levels=("Board", "Legacy"),
+        browse=_BROWSE,
+        elsewhere=0,
+        leads=(),
+        myself=_ACCOUNT,
+        embedded=None,
+        pages=None,
+    ):
         self.issues = issues
+        self.myself = myself
+        self.embedded = embedded or {}  # issue id: extra fields of the full issue
+        self.pages = pages or {}  # paged sub-resource path: its pages by startAt
+        self.answers = {}  # path: a raw answer that replaces the recorded one
         self.leads = ["alice", "ivan", *leads]
         self.elsewhere = elsewhere  # issues with a level outside the listed projects
         self.page = page
@@ -116,6 +139,8 @@ class FakeJira:
         assert method == "GET"
         self.calls.append((path, params))
         p = params or {}
+        if path in self.answers:
+            return Response(200, self.answers[path])
         if path == "/rest/api/2/project/DEMO/issuesecuritylevelscheme":
             ids = {"Board": "20001", "Legacy": "20003"}
             return Response(200, {"id": 1, "levels": [{"id": ids.get(n, "20009"), "name": n} for n in self.levels]})
@@ -137,9 +162,17 @@ class FakeJira:
             members = {"leads": self.leads, "devs": ["ivan"]}[p["groupname"]]
             return Response(200, {"startAt": p["startAt"], "isLast": True, "values": [_user(n) for n in members]})
         if path == "/rest/api/2/user/search":
-            names = {"Dana Sample": ["dana"], "Migration Bot": [_ACCOUNT], "Twin Name": ["twin1", "twin2"]}
-            found = [{**_user(n), "displayName": p["username"]} for n in names[p["username"]]]
-            return Response(200, [*found, {**_user("other"), "displayName": "Someone Else"}])
+            other = ("other", "Someone Else")
+            names = {
+                "Dana Sample": [("dana", "Dana Sample"), other],
+                "Migration Bot": [(_ACCOUNT, "Migration Bot"), other],
+                "Twin Name": [("twin1", "Twin Name"), ("twin2", "Twin Name"), other],
+                # The second exact match is on the second page.
+                "Paged Twin": [("twin1", "Paged Twin"), other, ("twin2", "Paged Twin")],
+            }
+            found = [{**_user(n), "displayName": d} for n, d in names[p["username"]]]
+            start = p.get("startAt", 0)
+            return Response(200, found[start : start + min(p["maxResults"], _USER_CAP)])
         if path == "/rest/api/2/project/DEMO/role":
             return Response(200, {"Developers": _JIRA + "/rest/api/2/project/DEMO/role/10"})
         if path == "/rest/api/2/project/DEMO/role/10":
@@ -154,6 +187,10 @@ class FakeJira:
             )
         if path == "/rest/api/2/project":
             return Response(200, [{"key": "NONE"}, {"key": "DEMO"}])
+        if path == "/rest/api/2/myself":
+            return Response(200, _user(self.myself))
+        if path in self.pages:
+            return Response(200, next(page for page in self.pages[path] if page["startAt"] == p.get("startAt", 0)))
         if path == "/rest/api/2/user":
             assert denial
             return Response(200, _user(p["username"])) if p["username"] == _ACCOUNT else Response(404, {})
@@ -168,6 +205,7 @@ class FakeJira:
             issue = next(i for i in self.issues if i["id"] == path.rsplit("/", 1)[1])
             full = {k: v for k, v in issue.items() if k != "effective"}
             full["fields"] = {**full["fields"], "summary": "Text", "comment": {"comments": [], "total": 0}}
+            full["fields"].update(copy.deepcopy(self.embedded.get(issue["id"], {})))
             return Response(200, {**full, "changelog": {"startAt": 0, "total": 0, "histories": []}})
         raise AssertionError(path)
 
@@ -352,3 +390,130 @@ def test_seals_non_static_issues_and_reports_counts_without_reader_names(tmp_pat
     assert main(restore) == 0
     assert json.loads((tmp_path / "restored.json").read_text()) == value
     assert main(["restore", "--identity", key, "--archive", str(tmp_path / "report.json"), "--output", "x.json"])
+
+
+def test_rejects_a_truncated_grant_page():
+    end = PAGE.index("</table>")
+    unclosed_li = PAGE[: PAGE.rindex("Current user") + len("Current user")]
+    unclosed_name = PAGE[: PAGE.rindex(">Legacy") + len(">Legacy")]
+    nested = PAGE.replace("<li>Group (leads) </li><li>Current user", "<li>Group (leads) <li>Current user")
+    for page in (PAGE[:end], unclosed_li, unclosed_name):
+        with pytest.raises(sl.SecurityLevelError, match="Truncated"):
+            sl.parse_grant_page(page)
+    with pytest.raises(sl.SecurityLevelError, match="Unclosed"):
+        sl.parse_grant_page(nested)
+    # Control: a complete level without grants stays valid.
+    assert sl.parse_grant_page(PAGE.replace(_li(["Group (leads)", "Current user"]), ""))["Legacy"] == ()
+
+
+def test_project_keys_may_start_with_a_digit():
+    jira = SimpleNamespace(url=_JIRA, request=lambda *a, **kw: Response(404, {"errorMessages": ["none"]}))
+    assert sl.project_levels(jira, "1ABC") == []
+    for key in ("abc", "A-B", "_AB", "1A/B"):
+        with pytest.raises(sl.SecurityLevelError, match="project key"):
+            sl.project_levels(jira, key)
+
+
+def test_group_paging_stops_only_on_the_last_page():
+    pages = [
+        {"startAt": 0, "isLast": False, "values": [_user("alice")]},
+        {"startAt": 1, "isLast": False, "values": []},
+    ]
+    jira = SimpleNamespace(url=_JIRA, get=lambda path, params: pages[min(params["startAt"], 1)])
+    with pytest.raises(sl.SecurityLevelError, match="Incomplete group page"):
+        sl.Directory(jira).group("leads")
+    pages[1] = {"startAt": 1, "isLast": True, "values": [_user("bob")]}
+    assert sl.Directory(jira).group("leads") == {"alice", "bob"}
+
+
+def test_single_user_reads_every_search_page(monkeypatch):
+    monkeypatch.setattr(sl, "_USER_PAGE", _USER_CAP)
+    with pytest.raises(sl.SecurityLevelError, match="exactly one Jira user"):
+        sl.Directory(FakeJira()).single_user("Paged Twin")
+    jira = FakeJira()
+    assert sl.Directory(jira).single_user("Dana Sample") == "dana"
+    assert [p["startAt"] for path, p in jira.calls if path == "/rest/api/2/user/search"] == [0, 2]
+
+
+def test_migration_account_without_its_single_user_grant_stays_a_reader():
+    level = sl.Level("1", "L", (sl.Grant("group", "g"),))
+    readers = sl.LevelReaders(level, frozenset({"alice"}), 0)
+    row = sl.classify({"fields": {}}, readers, frozenset({"alice", _ACCOUNT}), {}, _ACCOUNT)
+    assert (row.kind, row.extra, row.account_dropped) == ("unexplained", {_ACCOUNT}, False)
+    # Control: with the temporary grant the account is not counted.
+    granted = sl.LevelReaders(level, frozenset({"alice"}), 1)
+    row = sl.classify({"fields": {}}, granted, frozenset({"alice", _ACCOUNT}), {}, _ACCOUNT)
+    assert (row.kind, row.readers, row.account_dropped) == ("static", {"alice"}, True)
+
+
+def test_unsupported_level_with_unresolvable_grants_reaches_classification():
+    legacy = _li(["Group (leads)", "Current user"])
+    labels = ["Group (leads)", "Current user", "Single user (Twin Name)", "User custom field value (Unknown Field)"]
+    inventory = scan(FakeJira(page=PAGE.replace(legacy, _li(labels))))
+    assert by_key(inventory)["DEMO-7"].kind == "unexplained"
+    assert inventory.levels[1].readers == frozenset()
+
+
+def _archive(tmp_path, monkeypatch, jira):
+    identity, args = _cli(tmp_path, monkeypatch, jira)
+    run = ["inventory", "--jira", _JIRA, "--project", "DEMO", "--report", "report.json", *args]
+    code = main([*run, "--migration-account", _ACCOUNT])
+    archive = tmp_path / "restricted.age"
+    return code, decrypt(archive.read_bytes(), identity) if archive.exists() else None
+
+
+def _comment(n):
+    return {"id": str(n), "body": f"Comment {n}"}
+
+
+def _comment_pages(total, rows):
+    return [
+        {"startAt": s, "maxResults": 2, "total": total, "comments": rows[s : s + 2]} for s in range(0, total + 1, 2)
+    ]
+
+
+def test_archive_reads_comments_beyond_the_embedded_page(tmp_path, monkeypatch):
+    embedded = {"104": {"comment": {"startAt": 0, "total": 3, "comments": [_comment(1)]}}}
+    path = "/rest/api/2/issue/104/comment"
+    jira = FakeJira(embedded=embedded, pages={path: _comment_pages(3, [_comment(n) for n in (1, 2, 3)])})
+    code, value = _archive(tmp_path, monkeypatch, jira)
+    assert code == 0
+    assert [c["id"] for c in value["issues"]["104"]["issue"]["fields"]["comment"]["comments"]] == ["1", "2", "3"]
+
+
+def test_archive_is_not_sealed_with_a_short_comment_list(tmp_path, monkeypatch):
+    embedded = {"104": {"comment": {"startAt": 0, "total": 3, "comments": [_comment(1)]}}}
+    path = "/rest/api/2/issue/104/comment"
+    jira = FakeJira(embedded=embedded, pages={path: _comment_pages(3, [_comment(1), _comment(2)])})
+    assert _archive(tmp_path, monkeypatch, jira) == (1, None)
+
+
+def test_archive_reads_worklogs_beyond_the_embedded_page(tmp_path, monkeypatch):
+    work = [{"id": str(n), "timeSpentSeconds": 60} for n in (1, 2)]
+    embedded = {"104": {"worklog": {"startAt": 0, "total": 2, "worklogs": work[:1]}}}
+    path = "/rest/api/2/issue/104/worklog"
+    complete = FakeJira(embedded=embedded, pages={path: [{"startAt": 0, "total": 2, "worklogs": work}]})
+    code, value = _archive(tmp_path, monkeypatch, complete)
+    assert code == 0
+    assert value["issues"]["104"]["issue"]["fields"]["worklog"]["worklogs"] == work
+    (tmp_path / "restricted.age").unlink()
+    (tmp_path / "report.json").unlink()
+    short = FakeJira(embedded=embedded, pages={path: [{"startAt": 0, "total": 2, "worklogs": work[:1]}]})
+    assert _archive(tmp_path, monkeypatch, short) == (1, None)
+
+
+def test_migration_account_must_own_the_token_and_answers_must_be_objects():
+    with pytest.raises(ArchiveError, match="does not belong"):
+        migration_account(FakeJira(myself="someone"), _ACCOUNT)
+    jira = FakeJira()
+    jira.answers["/rest/api/2/myself"] = [_ACCOUNT]
+    with pytest.raises(ArchiveError, match="does not belong"):
+        migration_account(jira, _ACCOUNT)
+    jira = FakeJira()
+    jira.answers["/rest/api/2/user"] = []
+    with pytest.raises(ArchiveError, match="not found"):
+        migration_account(jira, _ACCOUNT)
+    scheme = FakeJira()
+    scheme.answers["/rest/api/2/project/DEMO/issuesecuritylevelscheme"] = []
+    with pytest.raises(sl.SecurityLevelError, match="Malformed issue security scheme"):
+        scan(scheme)

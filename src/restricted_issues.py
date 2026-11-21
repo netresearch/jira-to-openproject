@@ -42,20 +42,28 @@ _JSON = ".json"
 
 
 def migration_account(jira: Endpoint, explicit: str | None) -> str:
-    """The account whose temporary single-user grants are not counted; it must exist in Jira.
+    """The account whose temporary single-user grants are not counted; it must own the token.
 
     The default is the configured Jira user, ``J2O_JIRA_USERNAME`` (``jira.username``).
     """
     account = explicit or os.environ.get("J2O_JIRA_USERNAME") or ""
     require(account, "Set --migration-account or J2O_JIRA_USERNAME")
     found = jira.request("GET", "/rest/api/2/user", denial=True, params={"username": account})
-    require(found.status_code == 200 and found.json().get("name") == account, "Migration account not found in Jira")
+    user = found.json() if found.status_code == 200 else None
+    require(isinstance(user, dict) and user.get("name") == account, "Migration account not found in Jira")
+    myself = jira.get("/rest/api/2/myself")
+    require(
+        isinstance(myself, dict) and myself.get("name") == account,
+        "The inventory token does not belong to the migration account",
+    )
     return account
 
 
 def all_projects(jira: Endpoint) -> list[str]:
     """Every project key visible to the inventory account."""
-    keys = [str(row["key"]) for row in jira.get("/rest/api/2/project")]
+    rows = jira.get("/rest/api/2/project")
+    require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows), "Malformed project list")
+    keys = [str(row["key"]) for row in rows]
     require(keys and len(set(keys)) == len(keys), "Empty or ambiguous project list")
     return sorted(keys)
 
