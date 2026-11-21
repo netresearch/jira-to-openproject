@@ -32,6 +32,10 @@ The `work_package_field_history` component ([PR #461](https://github.com/netrese
 
 On 2026-11-19 the project owner decided that native OpenProject activity entries are to follow for changes that every reader of the work package could see. This ADR does not implement them.
 
+### Update 2026-11-21: level work packages (ADR-009)
+
+With `migration.security_level_work_packages` on, the scope also covers each selected issue with a security level: its value goes into the work package its level sub-project holds for it ([ADR-009](ADR-009-security-levels-as-private-sub-projects.md)). The readers of that work package are the sub-project's members, who are the level's static readers, and on Enterprise the issue's extra readers once the late access grant shares it with them. All of them can browse the issue in Jira, and the History tab there shows every changelog entry to everyone who can browse the issue, so the same selection applies. A change of the security level itself is kept, also one that names another level: Jira shows it to the same readers. This rests on the History-tab premise above; it has not been measured against a level issue. Worklog events, comment changes and audience metadata stay withheld, and an ordinary work package of an issue that now has a level still gets its value removed.
+
 ## Consequences
 
 ### Positive
