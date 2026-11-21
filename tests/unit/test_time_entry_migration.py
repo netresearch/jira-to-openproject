@@ -18,6 +18,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.infrastructure.jira.jira_client import JiraApiError
+from tests.unit.test_level_attachments import LEVEL_MAP
+from tests.unit.test_level_attachments import LIVE as LEVEL_LIVE
 from tests.unit.test_level_work_packages import level_issues
 from tests.unit.test_level_work_packages import setup as level_work_package_setup  # noqa: F401  (fixture)
 
@@ -321,19 +323,6 @@ def test_configured_catalogue_cannot_silently_skip_denied_source(tmp_path, monke
 
 # --- Level work packages (ADR-009, step 5b) ---------------------------------------------------
 
-LEVEL_LIVE = {"field": True, "work_packages": [900, 901], "keys": [[900, "APP-10"], [901, "APP-11"]]}
-LEVEL_MAP = {
-    str(n): {
-        "jira_key": f"APP-{n}",
-        "openproject_id": wp,
-        "project_key": "APP",
-        "openproject_project_id": 100,
-        "security_level_id": "10000",
-        "security_level_project": "APP:10000",
-        "security_class": "static",
-    }
-    for n, wp in ((10, 900), (11, 901))
-}
 ORDINARY = {"1": {"jira_key": "APP-1", "openproject_id": 500, "project_key": "APP", "openproject_project_id": 7}}
 
 
@@ -485,6 +474,8 @@ def test_level_issue_whose_level_changed_gets_no_time_entries(level_setup, monke
     assert ("APP-10", {"level_id": "10000"}) in outcome.jira.reads
     assert [_targets(rows) for rows in outcome.rows] == [{(500, 7), (901, 100)}]
     assert outcome.result.details["jira_work_logs"]["unreadable_issues"] == 1
+    assert outcome.result.details["security_level"] == {"work_packages": 2, "refused": 1}
+    assert outcome.result.failed == 1
 
 
 def test_level_unselected_issue_with_an_entry_gets_nothing(level_setup, monkeypatch):

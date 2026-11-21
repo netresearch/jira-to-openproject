@@ -6,10 +6,12 @@
 Native OpenProject journals cannot keep each change's reader audience (see
 ADR-001), so the selected changes are stored as canonical JSON in one text
 custom field per work package. The selection is shared with ``j2o-history``
-(:mod:`src.infrastructure.jira.field_history`). Only issues that Jira returns
+(:mod:`src.infrastructure.jira.field_history`). Issues that Jira returns
 for ``level IS EMPTY`` in software and business projects are written; the
 OpenProject target must carry the issue's ``J2O Origin ID`` and sit in the
-mapped project. A value is written only when it differs from the stored one.
+mapped project. With ``migration.security_level_work_packages`` on, a selected
+level issue is also written, into the work package its level sub-project holds
+for it (ADR-009). A value is written only when it differs from the stored one.
 """
 
 from __future__ import annotations
@@ -223,39 +225,36 @@ class WorkPackageFieldHistoryMigration(BaseMigration):
         level.without_level_issues(
             {key: wp for targets in self._mapped_targets().values() for key, (wp, _) in targets.items()}
         )
-        by_label: dict[str, tuple[level_issues.LevelTarget, dict[str, int]]] = {}
-        for key, target in level.targets.items():
-            by_label.setdefault(target.label, (target, {}))[1][key] = level.work_packages[key]
-        projects = {}
-        for label, (target, wps) in sorted(by_label.items()):
-            rows = self._level_rows(level, target, wps, fields, counts)
-            if rows:
-                projects[label] = {"project_id": target.project_id, "rows": rows}
+        projects: dict[str, dict] = {}
+        for project, wps in sorted(level.by_project().items()):
+            targets = {level.targets[key].label: level.targets[key] for key in wps}
+            for label, rows in sorted(self._level_rows(level, project, wps, fields, counts).items()):
+                projects[label] = {"project_id": targets[label].project_id, "rows": rows}
         return projects
 
     def _level_rows(
         self,
         level: level_issues.LevelWorkPackages,
-        target: level_issues.LevelTarget,
+        project: str,
         wps: dict[str, int],
         fields: set,
         counts: Counter[str],
-    ) -> list[dict]:
-        """An issue whose level changed since the selection, or that the search omits, is refused."""
-        project = target.label.rpartition(":")[0]
-        rows = []
+    ) -> dict[str, list[dict]]:
+        """One level search for the project; an issue whose level changed or that it omits is refused."""
+        rows: dict[str, list[dict]] = {}
         seen = set()
         for issue in level_issues.iter_level_issues(self.jira_client, project, _BATCH, "project,security", "changelog"):
             if issue.key not in wps or issue.key in seen:
                 continue
             seen.add(issue.key)
+            target = level.targets[issue.key]
             if level_issues.issue_level_id(issue) != target.level_id:
                 level.refused.append(f"{issue.key}: changed its level after the selection")
                 continue
             counts["issues_seen"] += 1
             row = self._issue_row(issue, wps[issue.key], None, fields, counts, level=True)
             if row is not None:
-                rows.append(row)
+                rows.setdefault(target.label, []).append(row)
         level.refused.extend(f"{key}: not returned by the level search" for key in sorted(set(wps) - seen))
         return rows
 
