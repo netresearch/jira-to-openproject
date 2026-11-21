@@ -1074,14 +1074,11 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 "total_failed": migration_results["total_failed"],
                 "mapping_file": str(self.work_package_mapping_file),
             }
-            level_refused = 0
-            if "security_level" in migration_results:
-                details["security_level"] = migration_results["security_level"]
-                level_refused = migration_results["security_level"]["refused"]
+            status, level_error = self._level_verdict(migration_results, details)
             return ComponentResult(
-                status="error" if level_refused else "success",
-                success=not level_refused,
-                error=f"{level_refused} level issues refused" if level_refused else None,
+                status=status,
+                success=level_error is None,
+                error=level_error,
                 timestamp=end_time.isoformat(),
                 start_time=start_time.isoformat(),
                 duration_seconds=duration_seconds,
@@ -1200,6 +1197,15 @@ class WorkPackageSkeletonMigration(BaseMigration):
             # Raises on failure: without the entry a rerun would create the work package again.
             config.mappings.set_mapping(level_issues.WORK_PACKAGE_MAPPING, mapping)
 
+    @staticmethod
+    def _level_verdict(results: dict, details: dict) -> tuple[str, str | None]:
+        """Add the level counts to the details; an error when level issues were refused."""
+        level = results.get("security_level")
+        if level is None:
+            return "success", None
+        details["security_level"] = level
+        return ("error", f"{level['refused']} level issues refused") if level["refused"] else ("success", None)
+
     def _create_level_skeletons(self, project_key: str, j2o_cf_id: int | None, scope: level_issues.LevelScope) -> dict:
         """Create the selected level issues of one project in their sub-projects (ADR-009, step 4)."""
         counters = dict.fromkeys(_LEVEL_COUNTS, 0)
@@ -1213,20 +1219,12 @@ class WorkPackageSkeletonMigration(BaseMigration):
         targets: dict[str, level_issues.LevelTarget] = {}
         for issue, target in selection.selected:
             counters["processed"] += 1
-            jira_id = str(issue.id)
-            if jira_id in self.work_package_mapping:
-                refused.append(f"{issue.key}: already a work package outside its level sub-project")
+            reason = self._level_refusal(issue, target, checked)
+            if reason is not None:
+                refused.append(f"{issue.key}: {reason}")
                 continue
-            if jira_id in self.level_work_packages:
-                if target.matches(self.level_work_packages[jira_id]):
-                    counters["skipped"] += 1
-                else:
-                    refused.append(f"{issue.key}: mapped to another level sub-project")
-                continue
-            if target.label not in checked:
-                checked[target.label] = self._level_project_problem(target)
-            if checked[target.label]:
-                refused.append(f"{issue.key}: {checked[target.label]}")
+            if str(issue.id) in self.level_work_packages:
+                counters["skipped"] += 1
                 continue
             payload = self._build_skeleton_payload(issue, target.project_id, j2o_cf_id)
             if not payload:
@@ -1234,7 +1232,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 continue
             payloads.append(payload)
             issues.append(issue)
-            targets[jira_id] = target
+            targets[str(issue.id)] = target
             if len(payloads) >= self.batch_size:
                 self._flush_skeletons(payloads, issues, project_key, counters, targets)
                 payloads, issues = [], []
@@ -1244,6 +1242,19 @@ class WorkPackageSkeletonMigration(BaseMigration):
             self.logger.error("Level work package refused: %s", reason)
         counters["refused"] = len(refused)
         return counters
+
+    def _level_refusal(
+        self, issue: Issue, target: level_issues.LevelTarget, checked: dict[str, str | None]
+    ) -> str | None:
+        """Why the issue must not be created in its sub-project, or None; an existing matching entry passes."""
+        jira_id = str(issue.id)
+        if jira_id in self.work_package_mapping:
+            return "already a work package outside its level sub-project"
+        if jira_id in self.level_work_packages:
+            return None if target.matches(self.level_work_packages[jira_id]) else "mapped to another level sub-project"
+        if target.label not in checked:
+            checked[target.label] = self._level_project_problem(target)
+        return checked[target.label]
 
     def _level_project_problem(self, target: level_issues.LevelTarget) -> str | None:
         """Why work packages must not go into the sub-project now, or None."""

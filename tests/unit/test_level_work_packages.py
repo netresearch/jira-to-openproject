@@ -326,7 +326,6 @@ def test_level_id_is_read_from_the_raw_search_result():
 
 
 def test_scope_rejects_malformed_archived_rows():
+    report = {"levels": [row()], "archived": [{"key": "APP-1", "level_id": "1", "class": "static"}]}
     with pytest.raises(ValueError, match="archived"):
-        LevelScope(
-            {"levels": [row()], "archived": [{"key": "APP-1", "level_id": "1", "class": "static"}]}, "community", {}
-        )
+        LevelScope(report, "community", {})
