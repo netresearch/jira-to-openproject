@@ -484,7 +484,12 @@ class WorkPackageMigration(BaseMigration):
         return self._transformer.extract_final_workflow(jira_issue)
 
     def _load_start_date_fields(self) -> list[str]:
-        fields = list(self.START_DATE_FIELD_IDS_DEFAULT)
+        return self.start_date_field_ids()
+
+    @classmethod
+    def start_date_field_ids(cls) -> list[str]:
+        """The Jira fields that hold an issue's start date, the configured ones last."""
+        fields = list(cls.START_DATE_FIELD_IDS_DEFAULT)
         extra = config.migration_config.get("start_date_custom_fields")
         extras: list[str] = []
         if isinstance(extra, str):
