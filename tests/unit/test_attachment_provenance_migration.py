@@ -45,8 +45,8 @@ class DummyOp:
 
     def execute_script_with_data(self, script_content: str, data: object):
         self.last_payload = list(data) if isinstance(data, list) else []
-        # Pretend all updates succeed
-        return {"updated": len(self.last_payload), "failed": 0}
+        # Pretend all updates succeed, inside the runner's envelope.
+        return {"status": "success", "data": {"updated": len(self.last_payload), "failed": 0}}
 
 
 @pytest.fixture(autouse=True)
