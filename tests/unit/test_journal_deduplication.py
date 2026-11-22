@@ -18,6 +18,7 @@ import pytest
 
 from src.application.components.resolution_migration import ResolutionMigration
 from src.utils.enhanced_audit_trail_migrator import EnhancedAuditTrailMigrator
+from tests.helpers.rails_writes import answer, sent
 
 
 class TestPhantomJournalPrevention:
@@ -198,6 +199,8 @@ class TestDuplicateResolutionPrevention:
         # ADR-002 phase 1.3. The base helper now delegates to these.
         client.ensure_wp_custom_field_id = Mock(return_value=99)
         client.enable_custom_field_for_projects = Mock(return_value=None)
+        # Field values go through the guarded bulk writer (ADR-013).
+        client.bulk_set_wp_custom_field_values = Mock(side_effect=answer)
         return client
 
     @pytest.fixture
@@ -290,14 +293,14 @@ class TestDuplicateResolutionPrevention:
         mapped = migration._map(extracted)
         result = migration._load(mapped)
 
-        # Should have CF value setting queries
-        cf_queries = [q for q in mock_op_client.queries if "custom_value_for" in q or "custom_field_values" in q]
+        # Should set CF values through the bulk writer
+        cf_values = [row for rows in sent(mock_op_client.bulk_set_wp_custom_field_values) for row in rows]
 
         # Should NOT have journal creation queries
         journal_queries = [q for q in mock_op_client.queries if "Journal::WorkPackageJournal.create!" in q]
 
         # Verify: CF values are set but no journals created
-        assert len(cf_queries) >= 1, "Resolution migration should set CF values"
+        assert len(cf_values) >= 1, "Resolution migration should set CF values"
         assert len(journal_queries) == 0, (
             "Resolution migration should NOT create journals - "
             "audit trail migration handles resolution history from changelog"

@@ -9,6 +9,7 @@ Jira `fields.votes.votes` count for mapped issues.
 
 from __future__ import annotations
 
+from src.application.components import written_values
 from src.application.components.base_migration import register_entity_types
 from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
@@ -101,9 +102,10 @@ class VotesMigration(LevelFieldsMigration):  # noqa: D101
         failed = 0
         if cf_values_to_set:
             logger.info("Bulk setting %d votes values...", len(cf_values_to_set))
-            bulk_result = self.op_client.bulk_set_wp_custom_field_values(cf_values_to_set)
-            updated = bulk_result.get("updated", 0)
-            failed = bulk_result.get("failed", 0)
+            # A value changed in OpenProject since J2O wrote it is kept (ADR-013).
+            outcome = written_values.write_custom_values(self.op_client, cf_values_to_set, what="votes", logger=logger)
+            updated = outcome.updated + outcome.unchanged
+            failed = outcome.failed
             logger.info("Bulk votes: updated=%d, failed=%d", updated, failed)
 
         # Enable CF only for projects that have values

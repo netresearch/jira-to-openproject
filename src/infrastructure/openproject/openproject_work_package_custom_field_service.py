@@ -32,6 +32,7 @@ import json
 from typing import Any
 
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 
 
 class OpenProjectWorkPackageCustomFieldService:
@@ -75,6 +76,8 @@ class OpenProjectWorkPackageCustomFieldService:
                     "wp_id": int(cv["work_package_id"]),
                     "cf_id": int(cv["custom_field_id"]),
                     "value": str(cv["value"]),
+                    # Optional guard of ADR-013: write only while the target holds what J2O wrote last.
+                    **({"guard": cv["_j2o_guard"]} if cv.get("_j2o_guard") else {}),
                 }
                 for cv in cf_values
             ]
@@ -95,14 +98,16 @@ class OpenProjectWorkPackageCustomFieldService:
         # already wraps the script tail in ``.as_json`` on the Ruby
         # side, so an explicit ``.to_json`` would double-encode and
         # Python would receive a JSON string instead of a parsed dict.
-        script = f"""
+        script = (
+            WRITTEN_GUARD
+            + f"""
           require 'json'
           data = JSON.parse(<<-'J2O_DATA'
 {data_json}
 J2O_DATA
 )
 
-          results = {{ updated: 0, failed: 0, errors: [] }}
+          results = {{ updated: 0, unchanged: 0, target_changed: 0, failed: 0, errors: [], results: [] }}
 
           # Pre-fetch all referenced WPs and CFs to avoid N+1 queries
           wp_ids = data.map {{ |d| d['wp_id'] }}.compact.uniq
@@ -136,16 +141,33 @@ J2O_DATA
                   WorkPackage.preload_available_custom_fields([wp])
                   enabled.add(key)
                 end
+                guard = item['guard']
+                attr = "customField#{{cf.id}}"
+                status = 'updated'
                 wp.with_lock do
                   cv = wp.custom_value_for(cf)
                   raise 'Field unavailable for work package' unless cv
-                  unless cv.persisted? && cv.value == val
+                  if guard
+                    raise "Guard for another field than #{{attr}}" unless guard['attr'] == attr
+                    before = j2o_stored.call(wp, attr)
+                    wanted = [CustomValue.new(custom_field: cf, value: val).value].compact.reject(&:empty?).sort
+                    state = j2o_decide.call(guard, before, wanted, j2o_untouched.call(wp, attr))
+                    status = {{unchanged: 'unchanged', changed: 'target_changed'}}.fetch(state, status)
+                  end
+                  if status == 'updated' && !(cv.persisted? && cv.value == val)
                     wp.custom_field_values = {{ cf.id => val }}
                     wp.save!
                     raise 'Custom value was not persisted' unless CustomValue.exists?(customized: wp, custom_field: cf, value: val)
                   end
                 end
-                results[:updated] += 1
+                if guard
+                  row = {{ id: wp.id, attr: attr, status: status }}
+                  row[:digest] = j2o_digest.call(j2o_stored.call(wp, attr)) unless status == 'target_changed'
+                  results[:results] << row
+                  results[status.to_sym] += 1
+                else
+                  results[:updated] += 1
+                end
               else
                 results[:failed] += 1
                 results[:errors] << {{ wp_id: wp_id, cf_id: cf_id, error: 'WorkPackage or CustomField not found' }}
@@ -159,6 +181,7 @@ J2O_DATA
           results[:success] = (results[:failed] == 0)
           results
         """
+        )
         try:
             result = self._client.execute_query_to_json_file(script)
             if isinstance(result, dict):

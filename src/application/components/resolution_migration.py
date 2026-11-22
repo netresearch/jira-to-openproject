@@ -83,9 +83,7 @@ class ResolutionMigration(LevelFieldsMigration):  # noqa: D101
             if entry is None:
                 continue
             try:
-                result = self._write_work_package_custom_value(
-                    entry, cf_id, res_name, projects_with_values, return_project=True
-                )
+                result = self._write_work_package_custom_value(entry, cf_id, res_name, projects_with_values)
                 if result:
                     updated += 1
             except Exception:

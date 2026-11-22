@@ -7,6 +7,7 @@ from src.application.components.security_levels_migration import (
     SECURITY_LEVEL_CF_NAME,
     SecurityLevelsMigration,
 )
+from tests.helpers.rails_writes import answer, unguarded
 
 
 class DummySec:
@@ -49,6 +50,10 @@ class DummyOp:
         if "cf.id" in script:
             return 501
         return True
+
+    def bulk_set_wp_custom_field_values(self, values: list[dict]):
+        self.values = [*getattr(self, "values", []), *unguarded(values)]
+        return answer(values)
 
     def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
         return 501

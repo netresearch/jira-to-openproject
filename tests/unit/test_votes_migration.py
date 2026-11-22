@@ -4,6 +4,7 @@
 import pytest
 
 from src.application.components.votes_migration import VOTES_CF_NAME, VotesMigration
+from tests.helpers.rails_writes import answer, unguarded
 
 
 class DummyVotes:
@@ -49,8 +50,8 @@ class DummyOp:
         return True
 
     def bulk_set_wp_custom_field_values(self, values: list[dict]):
-        self.cf_values_set.extend(values)
-        return {"updated": len(values), "failed": 0}
+        self.cf_values_set.extend(unguarded(values))
+        return answer(values)
 
     def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
         return 702

@@ -12,7 +12,7 @@ from itertools import batched
 from typing import Any
 
 from src import config
-from src.application.components import level_issues, level_versions
+from src.application.components import level_issues, level_versions, written_values
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.security_level_projects_migration import LevelProjectError
 from src.models import ComponentResult, WorkPackageMappingEntry
@@ -238,21 +238,18 @@ class SprintEpicMigration(BaseMigration):
         )
 
     def _apply_batches(self, rows: list[dict], write: Callable, operation: str) -> tuple[int, int]:
-        """Count confirmed rows and treat every unacknowledged row as failed."""
-        updated = 0
+        """Count confirmed rows and treat every unacknowledged row as failed.
+
+        A row is confirmed when Rails wrote it, found it unchanged, or kept it because it was
+        changed in OpenProject since J2O wrote it (ADR-013).
+        """
+        confirmed = 0
         for batch in batched(rows, _BATCH_SIZE, strict=False):
-            try:
-                result = write(list(batch))
-                count = result["updated"]
-                if type(count) is not int or not 0 <= count <= len(batch):
-                    self.logger.error("Invalid %s update count: %r", operation, count)
-                    continue
-                updated += count
-                if count != len(batch):
-                    self.logger.error("Partial %s batch: %s", operation, result)
-            except Exception:
-                self.logger.exception("Failed %s batch of %d", operation, len(batch))
-        return updated, len(rows) - updated
+            outcome = write(self.op_client, list(batch), what=operation, logger=self.logger)
+            confirmed += outcome.acknowledged
+            if outcome.failed:
+                self.logger.error("Partial %s batch: %d of %d failed", operation, outcome.failed, len(batch))
+        return confirmed, len(rows) - confirmed
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
@@ -261,7 +258,7 @@ class SprintEpicMigration(BaseMigration):
         updated = 0
         assignments = data["assignments"] + self._level_sprint_assignments()
         for operation, rows in (("parent_links", data["parents"]), ("version_assignments", assignments)):
-            count, errors = self._apply_batches(rows, self.op_client.batch_update_work_packages, operation)
+            count, errors = self._apply_batches(rows, written_values.write_rows, operation)
             details[operation] = count
             updated += count
             failed += errors
@@ -295,7 +292,7 @@ class SprintEpicMigration(BaseMigration):
         if not field_id:
             return 0, 0
         values = [dict(row, custom_field_id=field_id) for row in rows]
-        count, _ = self._apply_batches(values, self.op_client.bulk_set_wp_custom_field_values, name)
+        count, _ = self._apply_batches(values, written_values.write_custom_values, name)
         return count, field_id
 
     def run(self) -> ComponentResult:

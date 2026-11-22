@@ -25,6 +25,7 @@ from src.application.components.security_levels_migration import SecurityLevelsM
 from src.application.components.story_points_migration import StoryPointsMigration
 from src.application.components.votes_migration import VotesMigration
 from src.application.components.wp_metadata_backfill_migration import WpMetadataBackfillMigration
+from tests.helpers.rails_writes import answer, plain_calls
 from tests.unit.test_level_attachments import LIGHT as LEVEL_SEARCH
 from tests.unit.test_level_attachments import LIVE
 from tests.unit.test_level_work_packages import level_issues
@@ -139,13 +140,15 @@ def _op(live):
     op.ensure_custom_field.return_value = {"id": 56}
     op.get_issue_priorities.return_value = [{"name": "High", "id": 9}]
     op.execute_query.return_value = True
-    op.batch_update_work_packages.side_effect = lambda updates: {"updated": len(updates), "failed": 0}
-    op.bulk_set_wp_custom_field_values.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
+    op.batch_update_work_packages.side_effect = answer
+    op.bulk_set_wp_custom_field_values.side_effect = answer
     op.bulk_upsert_wp_description_sections.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
 
     def script(_script, data):
         if isinstance(data, dict):
-            return {"data": True}
+            # customfields_generic: one guarded value (ADR-013)
+            row = {"id": data["wp_id"], "attr": data["guard"]["attr"], "status": "updated", "digest": "d" * 64}
+            return {"data": {"updated": 1, "results": [row]}}
         counters = {"updated_assignee": 0, "updated_cf": len(data), "failed": 0, "skipped": 0, "wp_missing": 0}
         return {"status": "success", "data": counters}
 
@@ -352,7 +355,7 @@ def test_switch_off_issues_the_same_calls_for_both_mapping_shapes(level_setup, c
     by_id = _run(level_setup, component, on=False)
     keyed = _run(level_setup, component, on=False, ordinary=by_key)
     assert keyed.written == [{500, 501}]
-    assert by_id.op.method_calls == keyed.op.method_calls
+    assert plain_calls(by_id.op.method_calls) == plain_calls(keyed.op.method_calls)
     assert by_id.jira.batches == keyed.jira.batches
 
 

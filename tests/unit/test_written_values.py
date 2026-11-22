@@ -211,3 +211,134 @@ def test_a_store_that_cannot_be_opened_names_its_path(tmp_path):
     blocker.write_text("")
     with pytest.raises(written_values.WrittenValuesError, match=str(blocker / "w.sqlite")):
         WrittenValues(blocker / "w.sqlite")
+
+
+def test_write_rows_sends_one_guarded_row_per_attribute_with_its_precondition(caplog):
+    op = MagicMock()
+    op.batch_update_work_packages.side_effect = lambda rows: {
+        "updated": len(rows),
+        "results": [_answer(row, "updated", DIGEST_A) for row in rows],
+    }
+    origin = {"project": 3, "id": "1", "key": "K-1", "url": "u"}
+    rows = [
+        {"id": 5, "estimated_hours": 2.0, "remaining_hours": 1.0},
+        {"id": 6, "target_version_ids": [9], "jira_version_issue_origin": origin},
+    ]
+    outcome = written_values.write_rows(op, rows, what="test", logger=MagicMock())
+    assert op.batch_update_work_packages.call_args.args[0] == [
+        {
+            "id": 5,
+            "estimated_hours": 2.0,
+            "_j2o_guard": {"attr": "estimated_hours", "expect": None, "overwrite": False},
+        },
+        {
+            "id": 5,
+            "remaining_hours": 1.0,
+            "_j2o_guard": {"attr": "remaining_hours", "expect": None, "overwrite": False},
+        },
+        {
+            "id": 6,
+            "jira_version_issue_origin": origin,
+            "target_version_ids": [9],
+            "_j2o_guard": {"attr": "target_version_ids", "expect": None, "overwrite": False},
+        },
+    ]
+    assert (outcome.updated, outcome.failed, outcome.written) == (3, 0, {5, 6})
+    assert written_values.store().expected([(5, "remaining_hours"), (6, "target_version_ids")]) == {
+        (5, "remaining_hours"): DIGEST_A,
+        (6, "target_version_ids"): DIGEST_A,
+    }
+
+
+def test_write_rows_counts_every_row_failed_when_rails_cannot_answer():
+    op = MagicMock()
+    op.batch_update_work_packages.side_effect = OSError("console gone")
+    outcome = written_values.write_rows(op, [{"id": 5, "priority_id": 2}], what="test", logger=MagicMock())
+    assert (outcome.updated, outcome.failed) == (0, 1)
+
+
+def test_write_rows_reports_a_changed_target_without_failing():
+    op = MagicMock()
+    op.batch_update_work_packages.side_effect = lambda rows: {
+        "updated": 0,
+        "results": [_answer(rows[0], "target_changed")],
+    }
+    logger = MagicMock()
+    outcome = written_values.write_rows(op, [{"id": 5, "priority_id": 2}], what="priorities", logger=logger)
+    assert (outcome.changed, outcome.failed) == (["5:priority_id"], 0)
+    assert "5:priority_id" in logger.warning.call_args.args[-1]
+
+
+def test_write_custom_values_guard_the_field_of_each_row():
+    written_values.store().record([(5, "customField7", DIGEST_A)])
+    op = MagicMock()
+    op.bulk_set_wp_custom_field_values.side_effect = lambda values: {
+        "updated": 1,
+        "unchanged": 1,
+        "results": [
+            {"id": 5, "attr": "customField7", "status": "updated", "digest": DIGEST_B},
+            {"id": 6, "attr": "customField7", "status": "unchanged", "digest": DIGEST_A},
+        ],
+    }
+    values = [
+        {"work_package_id": 5, "custom_field_id": 7, "value": "3"},
+        {"work_package_id": 6, "custom_field_id": 7, "value": "5"},
+    ]
+    outcome = written_values.write_custom_values(op, values, what="votes", logger=MagicMock())
+    assert [row["_j2o_guard"]["expect"] for row in op.bulk_set_wp_custom_field_values.call_args.args[0]] == [
+        DIGEST_A,
+        None,
+    ]
+    assert (outcome.updated, outcome.unchanged, outcome.failed) == (1, 1, 0)
+    assert written_values.store().expected([(5, "customField7"), (6, "customField7")]) == {
+        (5, "customField7"): DIGEST_B,
+        (6, "customField7"): DIGEST_A,
+    }
+
+
+def test_a_second_priority_run_sends_the_digest_of_the_first(monkeypatch):
+    op = MagicMock()
+    op.batch_update_work_packages.side_effect = lambda rows: {
+        "updated": len(rows),
+        "results": [_answer(row, "updated", DIGEST_B) for row in rows],
+    }
+    for _ in range(2):
+        written_values.write_rows(op, [{"id": 5, "priority_id": 2}], what="priorities", logger=MagicMock())
+    expects = [call.args[0][0]["_j2o_guard"]["expect"] for call in op.batch_update_work_packages.call_args_list]
+    assert expects == [None, DIGEST_B]
+
+
+def test_remote_link_sections_send_the_recorded_digest_and_record_the_new_one():
+    from src.application.components.remote_links_migration import RemoteLinksMigration
+
+    written_values.store().record([(5, "description", DIGEST_A)])
+    op = MagicMock()
+    op.bulk_upsert_wp_description_sections.return_value = {"updated": 1, "failed": 0, "digests": {"5": DIGEST_B}}
+    mig = RemoteLinksMigration.__new__(RemoteLinksMigration)
+    mig.op_client = op
+    mig.mappings = MagicMock()
+    mig.mappings.get_mapping.return_value = {"K-1": {"openproject_id": 5}}
+    mig._load(SimpleNamespace(data={"markdown": {"K-1": "- [a](https://x)"}}))
+    assert op.bulk_upsert_wp_description_sections.call_args.args[0][0]["expect"] == DIGEST_A
+    assert written_values.store().expected([(5, "description")]) == {(5, "description"): DIGEST_B}
+
+
+@pytest.mark.parametrize(("status", "raises"), [("updated", False), ("target_changed", False), ("failed", True)])
+def test_a_generic_field_value_is_confirmed_written_unchanged_or_kept(status, raises):
+    from src.application.components.customfields_generic_migration import CustomFieldsGenericMigration
+
+    op = MagicMock()
+    answer = {"id": 5, "attr": "customField7", "status": status} | ({"digest": DIGEST_A} if status == "updated" else {})
+    op.execute_script_with_data.return_value = {"data": {"updated": int(status == "updated"), "results": [answer]}}
+    mig = CustomFieldsGenericMigration.__new__(CustomFieldsGenericMigration)
+    mig.op_client = op
+    if raises:
+        with pytest.raises(ValueError, match="did not confirm"):
+            mig._set_value(5, 7, "x")
+    else:
+        mig._set_value(5, 7, "x")
+    assert op.execute_script_with_data.call_args.args[1]["guard"] == {
+        "attr": "customField7",
+        "expect": None,
+        "overwrite": False,
+    }

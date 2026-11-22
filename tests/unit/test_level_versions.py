@@ -12,6 +12,7 @@ import pytest
 
 from src.application.components.affects_versions_migration import AffectsVersionsMigration
 from src.application.components.versions_migration import VersionsMigration
+from tests.helpers.rails_writes import answer, unguarded
 from tests.unit.test_level_attachments import LEVEL_MAP, LIVE
 from tests.unit.test_level_attachments import LIGHT as LEVEL_SEARCH
 from tests.unit.test_level_work_packages import SUB_PROJECT, level_issues
@@ -126,8 +127,8 @@ class FakeOpenProject:
         return 555
 
     def batch_update_work_packages(self, updates):
-        self.updates.extend(updates)
-        return {"updated": len(updates), "failed": 0}
+        self.updates.extend(unguarded(updates))
+        return answer(updates)
 
 
 def _run(level_setup, component, *, live=None, moved=(), omitted=(), ordinary=None, level_map=None, runs=1, **kw):

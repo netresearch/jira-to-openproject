@@ -4,6 +4,7 @@
 import pytest
 
 from src.application.components.story_points_migration import STORY_POINTS_CF_NAME, StoryPointsMigration
+from tests.helpers.rails_writes import answer, unguarded
 
 
 class DummyFields:
@@ -43,6 +44,10 @@ class DummyOp:
         if "cf.id" in script:
             return 801
         return True
+
+    def bulk_set_wp_custom_field_values(self, values: list[dict]):
+        self.values = [*getattr(self, "values", []), *unguarded(values)]
+        return answer(values)
 
     def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
         return 801

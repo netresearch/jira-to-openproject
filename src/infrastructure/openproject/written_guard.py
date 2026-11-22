@@ -3,7 +3,9 @@
 
 """Rails helpers that keep J2O from replacing a value someone changed in OpenProject (ADR-013).
 
-J2O records, per work package and attribute, the SHA-256 of the value it last wrote. The
+J2O records, per work package and attribute (``description``, ``customField<id>``,
+``target_version_ids`` or a work package column such as ``priority_id``), the SHA-256 of the
+value it last wrote. The
 digest is computed here, from the stored value, so the normalisation OpenProject applies on
 save never looks like an edit. ``j2o_decide`` returns one of three states:
 
@@ -19,14 +21,23 @@ j2o_digest = ->(value) { Digest::SHA256.hexdigest(value.to_json) }
 j2o_stored = lambda do |wp, attr|
   if attr == "description"
     WorkPackage.where(id: wp.id).pick(:description).to_s
-  else
+  elsif attr.start_with?("customField")
     id = Integer(attr.delete_prefix("customField"), 10)
     CustomValue.where(customized_type: "WorkPackage", customized_id: wp.id, custom_field_id: id)
                .pluck(:value).compact.reject(&:empty?).sort
+  elsif attr == "target_version_ids"
+    fresh = WorkPackage.find(wp.id)
+    (fresh.respond_to?(:target_version_ids) ? fresh.target_version_ids : [fresh.version_id].compact).sort
+  else
+    raise "No guard for work package attribute #{attr}" unless WorkPackage.column_names.include?(attr)
+    WorkPackage.where(id: wp.id).pick(attr)
   end
 end
 j2o_untouched = lambda do |wp, attr|
   return [""] if attr == "description"
+  return [[]] if attr == "target_version_ids"
+  return [nil, IssuePriority.default&.id].uniq if attr == "priority_id"
+  return [nil] unless attr.start_with?("customField")
   cf = CustomField.find(Integer(attr.delete_prefix("customField"), 10))
   [[], Array(cf.default_value).map(&:to_s).reject(&:empty?).sort].uniq
 end

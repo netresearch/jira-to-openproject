@@ -166,7 +166,8 @@ J2O_UPDATES
               if guard
                 # A guarded row (ADR-013) writes exactly the one attribute its digest covers.
                 attr = guard.fetch('attr')
-                raise "Guarded row writes more than #{{attr}}" unless (attributes.keys + fields.keys) == [attr]
+                written = attributes.keys - ['jira_version_issue_origin'] + fields.keys
+                raise "Guarded row writes more than #{{attr}}" unless written == [attr]
                 before = j2o_stored.call(wp, attr)
               end
               origin = attributes.delete('jira_version_issue_origin')
@@ -213,7 +214,11 @@ J2O_UPDATES
                 [cf.id, cf.multi_value? ? normalized : normalized.first]
               end
               if guard
-                wanted = fields.empty? ? attributes.fetch(attr).to_s : expected.fetch(values.keys.sole)
+                wanted = if !fields.empty? then expected.fetch(values.keys.sole)
+                         elsif attr == 'description' then attributes.fetch(attr).to_s
+                         elsif attr == 'target_version_ids' then target_ids.sort
+                         else wp.public_send(attr)
+                         end
                 state = j2o_decide.call(guard, before, wanted, j2o_untouched.call(wp, attr))
                 status = {{unchanged: 'unchanged', changed: 'target_changed'}}.fetch(state, status)
               end

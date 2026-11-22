@@ -31,25 +31,44 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from src.application.components import written_values
 from src.application.components.base_migration import register_entity_types
 from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 from src.models import ComponentResult, WorkPackageMappingEntry
 
-_WRITE_VALUE = """
+# Written only while the target holds what J2O wrote last (ADR-013).
+_WRITE_VALUE = (
+    WRITTEN_GUARD
+    + """
 wp = WorkPackage.find(input_data.fetch('wp_id'))
 field = WorkPackageCustomField.find(input_data.fetch('field_id'))
+guard = input_data.fetch('guard')
+attr = "customField#{field.id}"
+raise "Guard for another field than #{attr}" unless guard.fetch('attr') == attr
+status = nil
 wp.with_lock do
-  cv = wp.custom_values.find_or_initialize_by(custom_field_id: field.id)
-  cv.value = input_data.fetch('value')
-  cv.save!
+  value = input_data.fetch('value')
+  before = j2o_stored.call(wp, attr)
+  wanted = [CustomValue.new(custom_field: field, value: value).value].compact.reject(&:empty?).sort
+  state = j2o_decide.call(guard, before, wanted, j2o_untouched.call(wp, attr))
+  status = {unchanged: 'unchanged', changed: 'target_changed'}.fetch(state, 'updated')
+  if status == 'updated'
+    cv = wp.custom_values.find_or_initialize_by(custom_field_id: field.id)
+    cv.value = value
+    cv.save!
+  end
 end
+row = {id: wp.id, attr: attr, status: status}
+row[:digest] = j2o_digest.call(j2o_stored.call(wp, attr)) unless status == 'target_changed'
 puts $j2o_start_marker
-puts JSON.generate(true)
+puts JSON.generate({updated: status == 'updated' ? 1 : 0, results: [row]})
 puts $j2o_end_marker
 """
+)
 
 
 @register_entity_types("customfields_generic")
@@ -192,13 +211,21 @@ class CustomFieldsGenericMigration(LevelFieldsMigration):  # noqa: D101
         return updated, failed
 
     def _set_value(self, work_package_id, field_id, value):
-        result = self.op_client.execute_script_with_data(
-            _WRITE_VALUE,
-            {"wp_id": work_package_id, "field_id": field_id, "value": value},
-        )
-        if result.get("data") is not True:
+        store = written_values.store()
+        row = {"id": int(work_package_id), f"customField{int(field_id)}": value}
+        guarded = written_values.guarded([row], store, overwrite=written_values.overwrite_allowed())
+        payload = {"wp_id": work_package_id, "field_id": field_id, "value": value, "guard": guarded[0]["_j2o_guard"]}
+        result = self.op_client.execute_script_with_data(_WRITE_VALUE, payload)
+        answer = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(answer, dict):
             msg = "OpenProject did not confirm the custom field value"
             raise ValueError(msg)
+        outcome = written_values.settle(store, guarded, answer)
+        if outcome.acknowledged != 1:
+            msg = "OpenProject did not confirm the custom field value"
+            raise ValueError(msg)
+        if outcome.changed:
+            logger.warning("Kept field value changed in OpenProject since J2O wrote it: %s", outcome.changed[0])
 
     def run(self) -> ComponentResult:
         """Run Custom fields (generic) migration, also for the level work packages (ADR-009)."""

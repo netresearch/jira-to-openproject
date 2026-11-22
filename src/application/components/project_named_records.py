@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
+from src.application.components import written_values
 from src.config import logger
 from src.models import ComponentResult
 
@@ -90,14 +91,12 @@ def map_project_records(migration: BaseMigration, extracted: ComponentResult, mo
 
 def apply_work_package_updates(migration: BaseMigration, updates: list[dict[str, Any]], failed: int) -> ComponentResult:
     """Apply an assignment batch, preserving failures from earlier parsing."""
-    updated = 0
-    if updates:
-        try:
-            response = migration.op_client.batch_update_work_packages(updates)
-            updated = int(response.get("updated", 0)) if isinstance(response, dict) else len(updates)
-            if isinstance(response, dict):
-                failed += int(response.get("failed", 0))
-        except Exception:
-            logger.exception("Failed to update work package assignments")
-            failed += len(updates)
-    return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+    # An assignment changed in OpenProject since J2O wrote it is kept (ADR-013).
+    outcome = written_values.write_rows(migration.op_client, updates, what="assignments", logger=logger)
+    failed += outcome.failed
+    return ComponentResult(
+        success=failed == 0,
+        updated=outcome.updated,
+        failed=failed,
+        details={"unchanged": outcome.unchanged, "target_changed": outcome.changed},
+    )

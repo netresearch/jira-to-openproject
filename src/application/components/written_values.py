@@ -23,6 +23,8 @@ from src import config
 SETTING = "overwrite_edited_targets"
 _FILE = "written_values.sqlite"
 _GUARD = "_j2o_guard"
+# A precondition Rails checks before it writes, not a written attribute.
+_CHECKS = {"id", _GUARD, "jira_version_issue_origin"}
 _STATUSES = ("updated", "unchanged", "target_changed")
 
 
@@ -107,6 +109,9 @@ class Outcome:
     updated: int = 0
     unchanged: int = 0
     changed: list[str] = field(default_factory=list)
+    failed: int = 0
+    # The work packages with at least one written row.
+    written: set[int] = field(default_factory=set)
 
     @property
     def acknowledged(self) -> int:
@@ -114,9 +119,62 @@ class Outcome:
         return self.updated + self.unchanged + len(self.changed)
 
 
+def _report(outcome: Outcome, what: str, logger: Any) -> Outcome:
+    if outcome.changed:
+        logger.warning(
+            "Skipped %d %s changed in OpenProject since J2O wrote them (work package:attribute): %s",
+            len(outcome.changed),
+            what,
+            ", ".join(outcome.changed),
+        )
+    return outcome
+
+
+def write_rows(op_client: Any, rows: list[dict[str, Any]], *, what: str, logger: Any) -> Outcome:
+    """Write work package attributes through the guard, one guarded row per attribute.
+
+    A failed or unreadable Rails call counts every row as failed.
+    """
+    single = []
+    for row in rows:
+        checks = {key: value for key, value in row.items() if key in _CHECKS}
+        single.extend({**checks, key: value} for key, value in row.items() if key not in _CHECKS)
+    if not single:
+        return Outcome()
+    written = store()
+    sent = guarded(single, written, overwrite=overwrite_allowed())
+    try:
+        outcome = settle(written, sent, op_client.batch_update_work_packages(sent))
+    except Exception:
+        logger.exception("Could not confirm %s writes", what)
+        return Outcome(failed=len(sent))
+    outcome.failed = len(sent) - outcome.acknowledged
+    return _report(outcome, what, logger)
+
+
+def write_custom_values(op_client: Any, values: list[dict[str, Any]], *, what: str, logger: Any) -> Outcome:
+    """Write ``bulk_set_wp_custom_field_values`` rows through the guard."""
+    if not values:
+        return Outcome()
+    written = store()
+    overwrite = overwrite_allowed()
+    keys = [(int(row["work_package_id"]), f"customField{int(row['custom_field_id'])}") for row in values]
+    expect = written.expected(keys)
+    guards = [{"attr": attr, "expect": expect.get((wp, attr)), "overwrite": overwrite} for wp, attr in keys]
+    sent = [{**row, _GUARD: guard} for row, guard in zip(values, guards, strict=True)]
+    rows = [{"id": wp, _GUARD: guard} for (wp, _), guard in zip(keys, guards, strict=True)]
+    try:
+        outcome = settle(written, rows, op_client.bulk_set_wp_custom_field_values(sent))
+    except Exception:
+        logger.exception("Could not confirm %s writes", what)
+        return Outcome(failed=len(sent))
+    outcome.failed = len(sent) - outcome.acknowledged
+    return _report(outcome, what, logger)
+
+
 def attribute_of(row: dict[str, Any]) -> str:
     """The one attribute a guarded row writes."""
-    keys = [key for key in row if key not in {"id", _GUARD}]
+    keys = [key for key in row if key not in _CHECKS]
     if len(keys) != 1:
         msg = f"A guarded row writes exactly one attribute, not {sorted(keys)}"
         raise ValueError(msg)
@@ -155,6 +213,8 @@ def settle(store: WrittenValues, rows: list[dict[str, Any]], result: dict[str, A
             raise ValueError(msg)
         digests.append((*key, digest))
         setattr(outcome, status, getattr(outcome, status) + 1)
+        if status == "updated":
+            outcome.written.add(key[0])
     if outcome.acknowledged > len(rows) or int(result.get("updated", outcome.updated)) != outcome.updated:
         msg = "Rails answered for more rows than it was sent, or its counts disagree"
         raise ValueError(msg)
