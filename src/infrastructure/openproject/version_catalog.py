@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+from collections.abc import Iterable, Mapping
 from datetime import date
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -44,10 +46,13 @@ Project.transaction do
 
 # The rows of the level copies: Jira releases from the catalogue (fix and affected versions), or
 # the parent's sprint versions, whose attributes the copy takes over.
+# An audience copy (ADR-010, update 2026-11-22) carries its readers' user IDs in its origin.
 _LEVEL_RELEASES = """
   rows = data.fetch('versions').map do |row|
     origin = {'source'=>source, 'id'=>row.fetch('id'), 'archived'=>row.fetch('archived'), 'released'=>row.fetch('released')}
-    {'id'=>row.fetch('id'), 'attributes'=>row.fetch('attributes'), 'origin'=>origin}
+    audience = row['audience']
+    origin['audience'] = audience if audience
+    {'id'=>row.fetch('id'), 'attributes'=>row.fetch('attributes'), 'origin'=>origin, 'audience'=>audience}
   end
 """
 
@@ -56,29 +61,43 @@ _LEVEL_SPRINTS = """
     sprint = owner.versions.find(row.fetch('version'))
     id = 'sprint:' + row.fetch('id')
     attrs = sprint.attributes.slice('name', 'description', 'status', 'start_date', 'effective_date')
-    {'id'=>id, 'attributes'=>attrs, 'origin'=>{'source'=>source, 'id'=>id, 'version'=>sprint.id}}
+    origin = {'source'=>source, 'id'=>id, 'version'=>sprint.id}
+    audience = row['audience']
+    if audience
+      attrs['name'] = attrs.fetch('name') + row.fetch('suffix')
+      origin['audience'] = audience
+    end
+    {'id'=>id, 'attributes'=>attrs, 'origin'=>origin, 'audience'=>audience}
   end
 """
 
 # The sub-project's own copy of each row (ADR-010): sharing none, adopted by its origin on a
 # repeat run. A copy is created or changed only while every membership row of the sub-project,
 # locked users and work package shares included, is a grant of its readers (ADR-012; none
-# before the grant, ADR-005); the parent's versions are not changed.
+# before the grant, ADR-005); the parent's versions are not changed. An audience copy is also
+# adopted unchanged only then: a share left over from earlier readers would otherwise see it.
+# An adopted copy must carry exactly the row's audience, none for a static copy.
 _LEVEL_COPIES = """
   staging = level_audience.call(project, data.fetch('audience'))
   field = VersionCustomField.find_or_create_by!(name: 'Jira Version Origin') { |f| f.field_format = 'text' }
   raise 'Unexpected version origin field' unless field.field_format == 'text' && !field.multi_value?
   origins = CustomValue.where(customized_type: 'Version', customized_id: project.versions.select(:id), custom_field: field)
   by_source = {}
+  audiences = {}
   origins.where.not(value: [nil, '']).each do |value|
-    key = JSON.parse(value.value).values_at('source', 'id')
+    parsed = JSON.parse(value.value)
+    key = parsed.values_at('source', 'id')
     raise 'Duplicate Jira version identity' if by_source.key?(key)
     by_source[key] = value.customized
+    audiences[key] = parsed['audience']
   end
   changes = 0
   versions = rows.to_h do |row|
     attrs = row.fetch('attributes').merge('sharing' => 'none')
+    audience = row.fetch('audience')
+    raise 'Use audience version copies only in a sub-project of its readers' if audience && !staging
     version = by_source[[source, row.fetch('id')]]
+    raise 'Level version copy of another audience' if version && audiences[[source, row.fetch('id')]] != audience
     if version.nil?
       raise 'Unregistered native version collision' if project.versions.where('lower(name) = lower(?)', attrs.fetch('name')).exists?
       version = project.versions.new
@@ -213,22 +232,74 @@ def sync_project_versions(
     return result["versions"], result["changed"]
 
 
+_AUDIENCE = ":audience:"
+
+
+def audience_token(users: Iterable[int]) -> str:
+    """The first 12 hex digits of the SHA-256 of the sorted OpenProject user IDs, joined by commas."""
+    ids = sorted(set(users))
+    if not ids or not all(type(user) is int and user > 0 for user in ids):
+        msg = "Invalid version audience"
+        raise ValueError(msg)
+    return hashlib.sha256(",".join(map(str, ids)).encode()).hexdigest()[:12]
+
+
+def level_copy_id(source_id: str, users: Iterable[int] = ()) -> str:
+    """The copy ID of a Jira version or sprint ID for an audience; the ID itself for static readers only.
+
+    It is the ID in ``Jira Version Origin`` (after ``sprint:`` for a sprint) and the suffix of
+    the mapping key (ADR-010).
+    """
+    ids = tuple(users)
+    return f"{source_id}{_AUDIENCE}{audience_token(ids)}" if ids else source_id
+
+
+def audience_suffix(users: Iterable[int]) -> str:
+    """What the name of an audience copy adds to the source name: `` [shared <token>]``."""
+    return f" [shared {audience_token(users)}]"
+
+
+def _audience_rows(versions: list[dict[str, Any]], audiences: Mapping[str, Iterable[tuple[int, ...]]]) -> list:
+    """Per catalogue row the copies its audiences need; the empty audience is the static copy."""
+    rows = []
+    for row in versions:
+        for users in sorted({tuple(sorted(users)) for users in audiences.get(row["id"], ())}):
+            if not users:
+                rows.append(row)
+                continue
+            name = row["attributes"]["name"] + audience_suffix(users)
+            copy = {"id": level_copy_id(row["id"], users), "attributes": row["attributes"] | {"name": name}}
+            rows.append(row | copy | {"audience": list(users)})
+    names = [row["attributes"]["name"].casefold() for row in rows]
+    if len(set(names)) != len(names):
+        msg = "Ambiguous level version copy names"
+        raise ValueError(msg)
+    return rows
+
+
 def sync_level_versions(
     client: OpenProjectClient,
     sub_project: tuple[int, int, dict[str, Any]],
     source: str,
     project_key: str,
     rows: list[dict[str, Any]],
+    *,
+    audiences: Mapping[str, Iterable[tuple[int, ...]]] | None = None,
 ) -> dict[str, int]:
-    """Jira version ID to the sub-project's own copy, created or adopted (ADR-010).
+    """Copy ID to the sub-project's own copy, created or adopted (ADR-010).
 
     ``sub_project`` is the level sub-project's ID, its parent's ID and its staging audience
     (ADR-012); ``rows`` are the Jira catalogue rows of the versions its work packages use.
+    ``audiences`` maps a Jira version ID to the user IDs of each audience that needs a copy,
+    the empty tuple for static readers only; without it every row gets its static copy, keyed
+    by its Jira version ID (see ``level_copy_id``).
     """
     if not rows:
         return {}
     project, parent, audience = sub_project
     payload = _catalogue_payload(project, source, project_key, rows) | {"parent_id": parent, "audience": audience}
+    if audiences is not None:
+        payload["versions"] = _audience_rows(payload["versions"], audiences)
     result = level_version_project_query(client, payload, _LEVEL_RELEASES + _LEVEL_COPIES)
     return _level_copies(result, {row["id"] for row in payload["versions"]})
 
@@ -238,16 +309,21 @@ def sync_level_sprints(
     sub_project: tuple[int, int, dict[str, Any]],
     origin: tuple[str, str, str],
     sprints: dict[str, int],
+    audiences: Mapping[str, tuple[int, ...]] | None = None,
 ) -> dict[str, int]:
-    """Jira sprint ID to the sub-project's copy of the parent's sprint version (ADR-010).
+    """Copy ID to the sub-project's copy of the parent's sprint version (ADR-010).
 
     ``origin`` is the Jira base URL, project key and project ID the parent must carry;
-    ``sprints`` maps each Jira sprint ID to the parent's version of that sprint.
+    ``sprints`` maps each copy ID (``level_copy_id`` of the Jira sprint ID) to the parent's
+    version of that sprint, and ``audiences`` an audience copy ID to its user IDs.
     """
     if not sprints:
         return {}
     (project, parent, audience), (source, project_key, jira_project_id) = sub_project, origin
-    if not jira_project_id.isdecimal() or not all(sid.isdecimal() and type(v) is int for sid, v in sprints.items()):
+    audiences = audiences or {}
+    if not jira_project_id.isdecimal() or not all(
+        _valid_sprint_copy(cid, version, audiences.get(cid, ())) for cid, version in sprints.items()
+    ):
         msg = "Invalid Jira sprint or project identity"
         raise ValueError(msg)
     payload = {
@@ -257,11 +333,21 @@ def sync_level_sprints(
         "source": source.rstrip("/"),
         "key": project_key,
         "jira_project_id": jira_project_id,
-        "sprints": [{"id": sid, "version": version} for sid, version in sorted(sprints.items())],
+        "sprints": [_sprint_row(cid, version, audiences.get(cid, ())) for cid, version in sorted(sprints.items())],
     }
     result = level_version_project_query(client, payload, _LEVEL_SPRINTS + _LEVEL_COPIES)
     copies = _level_copies(result, {f"sprint:{sid}" for sid in sprints})
     return {sid.removeprefix("sprint:"): copy for sid, copy in copies.items()}
+
+
+def _valid_sprint_copy(cid: str, version: object, users: tuple[int, ...]) -> bool:
+    sid = cid.partition(_AUDIENCE)[0]
+    return sid.isdecimal() and type(version) is int and level_copy_id(sid, users) == cid
+
+
+def _sprint_row(cid: str, version: int, users: tuple[int, ...]) -> dict[str, Any]:
+    row: dict[str, Any] = {"id": cid, "version": version}
+    return row | {"audience": list(users), "suffix": audience_suffix(users)} if users else row
 
 
 def _level_copies(result: object, ids: set[str]) -> dict[str, int]:

@@ -15,7 +15,7 @@ from src.application.components.security_level_projects_migration import LevelPr
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
-from src.infrastructure.openproject.version_catalog import sync_project_versions
+from src.infrastructure.openproject.version_catalog import level_copy_id, sync_project_versions
 from src.models import ComponentResult
 from src.models.jira import JiraIssueFields
 
@@ -91,7 +91,8 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 level, self.jira_client, project, wps, fields
             ).items():
                 refs = level_versions.version_ids(issue.raw["fields"].get("fixVersions", []))
-                if refs and level_versions.shared_with_extra_readers(level, key):
+                audience = level_versions.copy_audience(level, key)
+                if refs and audience is None:
                     self._versions_withheld.append(key)
                 elif refs is None or not str(issue.id).isdecimal():
                     level.refused.append(f"{key}: malformed fix versions or issue ID")
@@ -101,7 +102,9 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                         target.label,
                         {"target": target, "project": project, "catalogue": catalogues[project][1], "issues": []},
                     )
-                    entry["issues"].append({"key": key, "id": str(issue.id), "wp": wps[key], "versions": refs})
+                    entry["issues"].append(
+                        {"key": key, "id": str(issue.id), "wp": wps[key], "versions": refs, "audience": audience}
+                    )
         return plan
 
     def _level_copies(self, plan: dict[str, dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -111,8 +114,11 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             return copies
         copier = level_versions.LevelVersionCopies(self.op_client, self.mappings, self.jira_client.base_url, logger)
         for label, entry in plan.items():
-            ids = {sid for row in entry["issues"] for sid in row["versions"]}
-            made = copier.ensure(entry["target"], entry["project"], entry["catalogue"], ids)
+            wanted: dict[str, set[tuple[int, ...]]] = {}
+            for row in entry["issues"]:
+                for sid in row["versions"]:
+                    wanted.setdefault(sid, set()).add(row["audience"])
+            made = copier.ensure(entry["target"], entry["project"], entry["catalogue"], wanted)
             if made is None:
                 self._level.refused.extend(f"{row['key']}: no version copy in {label}" for row in entry["issues"])
             else:
@@ -132,7 +138,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                     "key": row["key"],
                     "url": f"{base}/browse/{row['key']}",
                 }
-                ids = [made[sid] for sid in row["versions"]]
+                ids = [made[level_copy_id(sid, row["audience"])] for sid in row["versions"]]
                 updates.append({"id": row["wp"], "target_version_ids": ids, "jira_version_issue_origin": origin})
         return updates
 

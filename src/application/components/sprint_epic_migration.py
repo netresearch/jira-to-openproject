@@ -134,7 +134,8 @@ class SprintEpicMigration(BaseMigration):
         sprints = _sprint_references(fields.get(self._sprint_field))
         if not sprints or fields.get("fixVersions"):
             return
-        if level_versions.shared_with_extra_readers(level, issue.key):
+        audience = level_versions.copy_audience(level, issue.key)
+        if audience is None:
             self._sprints_withheld.append(issue.key)
             return
         target = level.targets[issue.key]
@@ -150,8 +151,11 @@ class SprintEpicMigration(BaseMigration):
                 "sprints": {},
             },
         )
-        group["sprints"][sprint[0]] = sprint[1]
-        group.setdefault("issues", []).append({"key": issue.key, "id": str(issue.id), "wp": wp_id, "sprint": sprint[0]})
+        copy = level_versions.level_copy_id(sprint[0], audience)
+        group["sprints"][copy] = sprint[1]
+        if audience:
+            group.setdefault("audiences", {})[copy] = audience
+        group.setdefault("issues", []).append({"key": issue.key, "id": str(issue.id), "wp": wp_id, "sprint": copy})
 
     def _level_sprint_assignments(self) -> list[dict[str, Any]]:
         """Create or adopt the sprint copies of each sub-project; a failed one refuses its issues."""
@@ -164,7 +168,7 @@ class SprintEpicMigration(BaseMigration):
         base = self.jira_client.base_url.rstrip("/")
         rows = []
         for label, group in plan.items():
-            copies = copier.ensure_sprints(group["target"], group["origin"], group["sprints"])
+            copies = copier.ensure_sprints(group["target"], group["origin"], group["sprints"], group.get("audiences"))
             if copies is None:
                 self._level.refused.extend(f"{row['key']}: no sprint copy in {label}" for row in group["issues"])
                 continue
