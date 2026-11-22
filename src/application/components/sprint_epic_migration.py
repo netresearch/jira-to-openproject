@@ -134,7 +134,8 @@ class SprintEpicMigration(BaseMigration):
         sprints = _sprint_references(fields.get(self._sprint_field))
         if not sprints or fields.get("fixVersions"):
             return
-        if level_versions.shared_with_extra_readers(level, issue.key):
+        audience = level_versions.copy_audience(level, self._audience_key, issue.key)
+        if audience is None:
             self._sprints_withheld.append(issue.key)
             return
         target = level.targets[issue.key]
@@ -150,8 +151,15 @@ class SprintEpicMigration(BaseMigration):
                 "sprints": {},
             },
         )
-        group["sprints"][sprint[0]] = sprint[1]
-        group.setdefault("issues", []).append({"key": issue.key, "id": str(issue.id), "wp": wp_id, "sprint": sprint[0]})
+        copy = level_versions.level_copy_id(sprint[0], audience.token)
+        audiences = group.setdefault("audiences", {})
+        if audiences.get(copy, audience) != audience:
+            level.refused.append(f"{issue.key}: another audience has the same sprint copy in {target.label}")
+            return
+        group["sprints"][copy] = sprint[1]
+        if audience.token:
+            audiences[copy] = audience
+        group.setdefault("issues", []).append({"key": issue.key, "id": str(issue.id), "wp": wp_id, "sprint": copy})
 
     def _level_sprint_assignments(self) -> list[dict[str, Any]]:
         """Create or adopt the sprint copies of each sub-project; a failed one refuses its issues."""
@@ -164,7 +172,7 @@ class SprintEpicMigration(BaseMigration):
         base = self.jira_client.base_url.rstrip("/")
         rows = []
         for label, group in plan.items():
-            copies = copier.ensure_sprints(group["target"], group["origin"], group["sprints"])
+            copies = copier.ensure_sprints(group["target"], group["origin"], group["sprints"], group.get("audiences"))
             if copies is None:
                 self._level.refused.extend(f"{row['key']}: no sprint copy in {label}" for row in group["issues"])
                 continue
@@ -303,11 +311,13 @@ class SprintEpicMigration(BaseMigration):
         """
         self._level: level_issues.LevelWorkPackages | None = None
         self._sprints_withheld: list[str] = []
+        self._audience_key: bytes | None = None
         if level_issues.enabled():
             try:
                 self._level = level_issues.level_work_packages(
                     self.jira_client, self.op_client, self.mappings, self.logger
                 )
+                self._audience_key = level_versions.audience_key(self._level)
             except LevelProjectError as exc:
                 self.logger.error("Level work package components stopped: %s", exc)
                 return ComponentResult(success=False, message=str(exc), errors=["security_level"])

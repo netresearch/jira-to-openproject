@@ -465,8 +465,9 @@ def level_assignments(op):
 
 
 def test_level_sprint_versions_are_withheld_from_shared_work_packages(level_setup):
-    # On Enterprise the per_issue APP-12 is shared with its extra readers; the sprint copy would
-    # show them the other level issues of that sprint (ADR-010).
+    # On Enterprise the per_issue APP-12 is shared with its extra readers. Without a readers file
+    # its audience is unknown; the static sprint copy would show them the other level issues of
+    # that sprint (ADR-010).
     live = {
         "field": True,
         "work_packages": [900, 901, 902],

@@ -154,8 +154,9 @@ class AffectsVersionsMigration(BaseMigration):  # noqa: D101
         batches = []
         for label, group in groups.items():
             target, rows = group["target"], group["issues"]
-            ids = {ref["id"] for row in rows for ref in row["versions"]}
-            if ids and copier.ensure(target, group["key"], group["catalogue"], ids) is None:
+            # Observed-in links neither make a version visible nor count, so all link the static copy.
+            wanted = {ref["id"]: {level_versions.STATIC} for row in rows for ref in row["versions"]}
+            if wanted and copier.ensure(target, group["key"], group["catalogue"], wanted) is None:
                 self._level.refused.extend(f"{row['key']}: no version copy in {label}" for row in rows)
                 continue
             origin = {
