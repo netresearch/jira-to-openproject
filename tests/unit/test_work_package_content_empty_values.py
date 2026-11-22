@@ -20,6 +20,16 @@ NONE_OPTION = {
 }
 
 
+def _rails_writes(rows):
+    """Rails answering every guarded row as written (ADR-013)."""
+    answers = [{"id": r["id"], "status": "updated", "attr": r["_j2o_guard"]["attr"], "digest": "a" * 64} for r in rows]
+    return {"updated": len(rows), "failed": 0, "results": answers}
+
+
+def _first_write(attr):
+    return {"attr": attr, "expect": None, "overwrite": False}
+
+
 @pytest.fixture
 def _mock_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
     import src.config as cfg
@@ -77,14 +87,14 @@ def test_empty_placeholders_are_not_sent_and_not_counted(tmp_path, _mock_mapping
     )
     mig.jira_client.jira.search_issues.return_value = [issue]
     monkeypatch.setattr(mig, "iter_project_issues", lambda project: iter([issue]))
-    mig.op_client.batch_update_work_packages.return_value = {"updated": 2, "failed": 0, "results": []}
+    mig.op_client.batch_update_work_packages.side_effect = _rails_writes
 
     result = mig.run()
 
     mig.op_client.batch_update_work_packages.assert_called_once_with(
         [
-            {"id": 5001, "customField94": {"value": "Yes", "id": "10"}},
-            {"id": 5001, "customField96": [{"value": "Blue", "id": "11"}]},
+            {"id": 5001, "customField94": {"value": "Yes", "id": "10"}, "_j2o_guard": _first_write("customField94")},
+            {"id": 5001, "customField96": [{"value": "Blue", "id": "11"}], "_j2o_guard": _first_write("customField96")},
         ]
     )
     assert result.details["custom_fields_failed"] == 0

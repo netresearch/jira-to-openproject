@@ -40,7 +40,7 @@ class FakeOpenProject:
         return json.loads(json.dumps(self.live))
 
     def execute_script_with_data(self, script, data):
-        self.rewrites.append(list(data))
+        self.rewrites.append([item["id"] for item in data])
         return {"updated": len(data), "failed": 0}
 
 

@@ -9,6 +9,7 @@ from typing import Any
 
 from src.infrastructure.openproject.checklist_section import CHECKLIST_SECTION
 from src.infrastructure.openproject.level_audience import LEVEL_AUDIENCE
+from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 
 _APPLY = r"""
 require "digest"
@@ -44,6 +45,7 @@ project.with_lock(requires_new: true) do
   marked = project.work_packages.where("description LIKE ?", "%<!-- j2o:checklist:%").ids.to_set
   updated = tasks = 0
   seen = Set.new
+  digests = {}
   data.fetch("rows").each do |row|
     sid, key, wid, records, markdown = row.values_at("id","key","wp","tasks","markdown")
     raise "Duplicate tasklist work package" unless seen.add?(wid)
@@ -58,8 +60,12 @@ project.with_lock(requires_new: true) do
     if changed
       staging = level ? level_audience.call(project, data.fetch("audience")) : !project.members.exists?
       raise "Stage checklist changes before granting project access" unless staging
+      # Rewriting the text J2O wrote last keeps its digest current (ADR-013).
+      before = wp.description.to_s
+      kept = row["expect"] ? j2o_digest.call(before) == row["expect"] : before.empty?
       wp.update_columns(description: expected)
       raise "Native checklist readback failed" unless wp.reload.description == expected
+      digests[wid] = j2o_digest.call(expected) if kept
     end
     tasks += records.size
     if records.empty?
@@ -78,7 +84,7 @@ project.with_lock(requires_new: true) do
     value ||= project.custom_values.find_or_initialize_by(custom_field: field)
     value.update!(value: saved.to_json)
   end
-  {updated: updated, tasks: tasks}
+  {updated: updated, tasks: tasks, digests: digests}
 end
 """
 
@@ -86,5 +92,11 @@ end
 def apply_tasklists(client: Any, project: dict) -> dict:
     """Validate project and issue origins inside the same transaction that persists all task records."""
     data = base64.b64encode(json.dumps(project, ensure_ascii=False).encode()).decode("ascii")
-    query = f'data = JSON.parse(Base64.strict_decode64("{data}"))\n' + CHECKLIST_SECTION + LEVEL_AUDIENCE + _APPLY
+    query = (
+        f'data = JSON.parse(Base64.strict_decode64("{data}"))\n'
+        + WRITTEN_GUARD
+        + CHECKLIST_SECTION
+        + LEVEL_AUDIENCE
+        + _APPLY
+    )
     return client.execute_large_query_to_json_file(query, timeout=180)

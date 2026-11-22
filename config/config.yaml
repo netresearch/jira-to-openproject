@@ -92,6 +92,12 @@ migration:
   # Off by default; only the boolean true enables it.
   # semantic_identifiers: false
 
+  # Re-runs write a description or custom field value again only while it holds what J2O wrote
+  # last (ADR-013; digests in data/written_values.sqlite). A value changed in OpenProject is
+  # skipped and reported as target_changed. Only the boolean true overwrites such values; set it
+  # for one run, for example to record work packages migrated before the guard existed.
+  # overwrite_edited_targets: false
+
   # Behavior settings
   skip_existing: true
   enable_rails_meta_writes: true

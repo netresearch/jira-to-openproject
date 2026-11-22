@@ -59,7 +59,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from src import config
-from src.application.components import level_issues
+from src.application.components import level_issues, written_values
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.custom_field_migration import TEMPO_ACCOUNT_CUSTOM_TYPE
 from src.application.components.issue_security import (
@@ -685,6 +685,11 @@ class WorkPackageContentMigration(BaseMigration):
         results = {
             "descriptions_updated": 0,
             "descriptions_failed": 0,
+            "descriptions_unchanged": 0,
+            "descriptions_target_changed": 0,
+            "custom_fields_unchanged": 0,
+            "custom_fields_target_changed": 0,
+            "target_changed": [],
             "custom_fields_updated": 0,
             "custom_fields_failed": 0,
             "comments_migrated": 0,
@@ -766,6 +771,11 @@ class WorkPackageContentMigration(BaseMigration):
             "total_failed": 0,
             "descriptions_updated": 0,
             "descriptions_failed": 0,
+            "descriptions_unchanged": 0,
+            "descriptions_target_changed": 0,
+            "custom_fields_unchanged": 0,
+            "custom_fields_target_changed": 0,
+            "target_changed": [],
             "custom_fields_failed": 0,
             "comment_reads_failed": 0,
             "comments_held": 0,
@@ -896,6 +906,8 @@ class WorkPackageContentMigration(BaseMigration):
                     "descriptions_failed": migration_results.get("descriptions_failed", 0),
                     "custom_fields_failed": migration_results.get("custom_fields_failed", 0),
                     "custom_fields_updated": migration_results.get("custom_fields_updated", 0),
+                    # Targets changed in OpenProject since J2O wrote them; not written (ADR-013).
+                    "target_changed": migration_results.get("target_changed", []),
                 }
                 | (
                     {"security_level": migration_results["security_level"]}
@@ -963,21 +975,35 @@ class WorkPackageContentMigration(BaseMigration):
             for item in collected_items
             for key, value in item["custom_field_updates"].items()
         ]
+        # Each row is written only while its target holds what J2O wrote last (ADR-013).
+        store = written_values.store()
+        overwrite = written_values.overwrite_allowed()
         for kind, updates in (("descriptions", descriptions), ("custom_fields", fields)):
             if not updates:
                 continue
             try:
-                result = self.op_client.batch_update_work_packages(updates)
-                updated = int(result["updated"])
-                if not 0 <= updated <= len(updates):
-                    msg = "Invalid work package update count"
-                    raise ValueError(msg)
-                results[f"{kind}_updated"] = updated
-                results[f"{kind}_failed"] = len(updates) - updated
+                rows = written_values.guarded(updates, store, overwrite=overwrite)
+                result = self.op_client.batch_update_work_packages(rows)
+                outcome = written_values.settle(store, rows, result)
+                results[f"{kind}_updated"] = outcome.updated
+                results[f"{kind}_unchanged"] = outcome.unchanged
+                results[f"{kind}_target_changed"] = len(outcome.changed)
+                results["target_changed"] = [*results.get("target_changed", []), *outcome.changed]
+                results[f"{kind}_failed"] = len(updates) - outcome.acknowledged
+                if outcome.changed:
+                    self.logger.warning(
+                        "Skipped %d %s changed in OpenProject since J2O wrote them (work package:attribute): %s",
+                        len(outcome.changed),
+                        kind,
+                        ", ".join(outcome.changed),
+                    )
                 if results[f"{kind}_failed"]:
                     errors = [row for row in result.get("results", []) if row.get("status") == "failed"]
                     self.logger.warning(
-                        "Incomplete %s batch: %d failed. First failures: %s", kind, len(updates) - updated, errors[:3]
+                        "Incomplete %s batch: %d failed. First failures: %s",
+                        kind,
+                        results[f"{kind}_failed"],
+                        errors[:3],
                     )
             except Exception as exc:
                 results[f"{kind}_failed"] = len(updates)

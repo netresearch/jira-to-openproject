@@ -333,6 +333,14 @@ def _load_env_file_cached(file_path: str) -> dict:
     return _env_cache[file_path]
 
 
+@pytest.fixture(autouse=True)
+def _written_values_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the digest store of ADR-013 out of the repository's data directory."""
+    from src.application.components import written_values
+
+    monkeypatch.setattr(written_values, "store_path", lambda: tmp_path / "written_values.sqlite")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment() -> Generator[None]:
     """Set up the test environment at the start of the test session.
