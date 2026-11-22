@@ -319,7 +319,7 @@ def start_console(container: str, session: str, irbrc: Path) -> None:
     # j2o addresses window 0, pane 0, whatever base-index the operator's tmux configuration uses.
     subprocess.run(["tmux", "set-window-option", "-t", session, "pane-base-index", "0"], check=True)
     subprocess.run(["tmux", "move-window", "-s", session, "-t", f"{session}:0"], check=False)
-    subprocess.run(["tmux", "display-message", "-p", "-t", f"{session}:0.0", "ok"], check=True, capture_output=True)
+    subprocess.run(["tmux", "display-message", "-p", "-t", session, "ok"], check=True, capture_output=True)
     for _ in range(120):
         pane = subprocess.run(
             ["tmux", "capture-pane", "-p", "-t", session],

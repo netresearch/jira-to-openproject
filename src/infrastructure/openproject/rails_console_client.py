@@ -8,6 +8,7 @@ Uses exception-based error handling for all operations.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -90,8 +91,8 @@ class RailsConsoleClient:
     def __init__(
         self,
         tmux_session_name: str = "rails_console",
-        window: int = 0,
-        pane: int = 0,
+        window: int | None = None,
+        pane: int | None = None,
         command_timeout: int = 180,
         inactivity_timeout: int = 30,
     ) -> None:
@@ -99,8 +100,8 @@ class RailsConsoleClient:
 
         Args:
             tmux_session_name: tmux session name (default: "rails_console")
-            window: tmux window number (default: 0)
-            pane: tmux pane number (default: 0)
+            window: tmux window number (default: the session's current window)
+            pane: tmux pane number (default: the window's active pane)
             command_timeout: Command timeout in seconds (default: 180)
             inactivity_timeout: Inactivity timeout in seconds (default: 30)
 
@@ -111,6 +112,8 @@ class RailsConsoleClient:
         self.tmux_session_name = tmux_session_name
         self.window = window
         self.pane = pane
+        # The pane every command of this client goes to, resolved once (see _get_target).
+        self._pane_id: str | None = None
         self.command_timeout = command_timeout
         self.inactivity_timeout = inactivity_timeout
         self.file_manager = FileManager()
@@ -193,11 +196,34 @@ class RailsConsoleClient:
     def _get_target(self) -> str:
         """Get the tmux target string for the session, window, and pane.
 
+        Without an explicit window and pane the target is the ID of the active pane of the session's
+        current window (``<session>:``, so a window of that name never matches), resolved once and
+        reused, so every send and capture reaches the same pane. A fixed ``0.0`` does not exist
+        where tmux counts windows and panes from 1 (``base-index``, ``pane-base-index``).
+
         Returns:
             tmux target string
 
+        Raises:
+            subprocess.CalledProcessError: If tmux cannot resolve the session's pane
+
         """
-        return f"{self.tmux_session_name}:{self.window}.{self.pane}"
+        if self.window is None and self.pane is None:
+            if self._pane_id is None:
+                found = subprocess.run(
+                    [self._tmux_path, "display-message", "-p", "-t", f"{self.tmux_session_name}:", "#{pane_id}"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                pane_id = found.stdout.strip()
+                if not re.fullmatch(r"%\d+", pane_id):
+                    raise subprocess.CalledProcessError(1, found.args, output=found.stdout, stderr="no pane id")
+                self._pane_id = pane_id
+            return self._pane_id
+        if self.window is None:
+            return f"{self.tmux_session_name}:.{self.pane}"
+        return f"{self.tmux_session_name}:{self.window}" + ("" if self.pane is None else f".{self.pane}")
 
     def _configure_irb_settings(self) -> None:
         """Configure IRB settings for better output and interaction.
