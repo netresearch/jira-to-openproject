@@ -172,7 +172,8 @@ class WatcherMigration(BaseMigration):
         # the typed entry so downstream code uses the human-readable key
         # rather than the numeric id.
         jira_keys = self._without_level_issues(self._mapped_issue_keys())
-        if not jira_keys:
+        level = getattr(self, "_level", None)
+        if not jira_keys and not (level is not None and level.work_packages):
             # FAIL LOUD. Same anti-pattern as pre-#194 attachments and
             # pre-#197 wp_skeleton — silent ``success=True`` here masks
             # an upstream broken precondition (e.g. ``_save_mapping``

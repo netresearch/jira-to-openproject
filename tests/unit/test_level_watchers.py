@@ -222,6 +222,14 @@ def test_a_failed_level_watcher_read_refuses_the_work_package(level_setup, reade
     assert level_rows == [{"work_package_id": 901, "user_id": 5}]
 
 
+def test_level_watchers_are_migrated_without_ordinary_issues(level_setup, readers):
+    outcome = _run_with_readers(level_setup, readers, runs=0, ordinary={})
+    result = WatcherMigration(jira_client=outcome.jira, op_client=outcome.op).run()
+    assert result.success, result.message
+    level_rows = [row for row in outcome.op.bulk_calls[0] if row["work_package_id"] in (900, 901)]
+    assert level_rows == [{"work_package_id": 900, "user_id": 5}, {"work_package_id": 901, "user_id": 5}]
+
+
 def test_extra_readers_may_watch_their_shared_work_package_only(monkeypatch):
     from collections import Counter
 
