@@ -856,14 +856,16 @@ Each work package is found through the `jira_key` inside its mapping entry, so a
 
 **Location**: `src/migrations/inline_refs_migration.py`
 
-Updates inline references in descriptions/comments.
+Points the Markdown link and image targets in descriptions and comments at the work package's own attachments.
 
 **Features**:
-- Jira key → OpenProject ID replacement
-- Mention conversion (@user)
-- Link rewriting
+- A target whose URL or name ends with the file name of an attachment of the same work package, or that an earlier run wrote as `attachment:<file name>`, becomes `/api/v3/attachments/<id>/content`. OpenProject 17.9.7 renders that path for images and links; it renders neither `attachment:<file name>` as an image source or link target, nor a bare file name as a link.
+- File names match literally and case-insensitively; with two attachments of the same name, the newest wins, as in OpenProject's own lookup.
+- A file name in plain text outside a link target stays unchanged.
 
-**Dependencies**: WorkPackageMigration, UserMigration
+Jira keys and user mentions are converted by `work_packages_content`.
+
+**Dependencies**: WorkPackageSkeletonMigration, AttachmentsMigration (runs after it)
 
 With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the attachment links of the level work packages are rewritten too, in the work package their sub-project holds; an ordinary entry of a level issue is refused. See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
