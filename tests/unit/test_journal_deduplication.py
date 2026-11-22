@@ -300,7 +300,8 @@ class TestDuplicateResolutionPrevention:
         journal_queries = [q for q in mock_op_client.queries if "Journal::WorkPackageJournal.create!" in q]
 
         # Verify: CF values are set but no journals created
-        assert len(cf_values) >= 1, "Resolution migration should set CF values"
+        assert cf_values == [{"work_package_id": 1001, "custom_field_id": 99, "value": "Fixed"}]
+        assert result.success
         assert len(journal_queries) == 0, (
             "Resolution migration should NOT create journals - "
             "audit trail migration handles resolution history from changelog"
