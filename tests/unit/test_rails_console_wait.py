@@ -125,6 +125,9 @@ class FakePane:
             history = int(cmd[cmd.index("-S") + 1].lstrip("-"))
             window = self.lines()[-(history + SCREEN_LINES) :]
             return subprocess.CompletedProcess(cmd, 0, "\n".join(window) + "\n", "")
+        if cmd[1] == "display-message":
+            # The client resolves its pane once (RailsConsoleClient._get_target).
+            return subprocess.CompletedProcess(cmd, 0, "%0\n", "")
         if cmd[1] == "send-keys" and self.sent_at is None and any("--EXEC_START--" in part for part in cmd):
             self.sent_at = self.clock.now
         return subprocess.CompletedProcess(cmd, 0, "", "")

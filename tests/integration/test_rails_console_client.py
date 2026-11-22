@@ -118,7 +118,6 @@ class TestRailsConsoleClient(unittest.TestCase):
         # No fixed window or pane: tmux resolves the session to its active pane, also with base-index 1.
         assert self.rails_client.window is None
         assert self.rails_client.pane is None
-        assert self.rails_client._get_target() == "test_session"
         assert self.rails_client.command_timeout == 180
         assert self.rails_client.inactivity_timeout == 30
 
