@@ -46,8 +46,9 @@ def test_an_answer_without_a_pane_id_raises(monkeypatch):
     monkeypatch.setattr(
         subprocess, "run", lambda args, **kw: subprocess.CompletedProcess(args, 0, stdout="", stderr="")
     )
+    client = _client()
     with pytest.raises(subprocess.CalledProcessError):
-        _client()._get_target()
+        client._get_target()
 
 
 def test_the_default_target_exists_with_base_index_one(tmp_path, monkeypatch):
