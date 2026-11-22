@@ -117,3 +117,21 @@ def test_a_rewritten_text_stays_unchanged_on_the_next_run():
     _counts, once = _rewrite("![x](attachment:screen.png)", ["screen.png"])
     counts, twice = _rewrite(once, ["screen.png"])
     assert (counts["updated"], twice) == (0, once)
+
+
+def test_an_api_path_stays_even_for_an_attachment_named_content():
+    counts, text = _rewrite("![x](/api/v3/attachments/2/content)", ["content", "screen.png"])
+    assert (counts["updated"], text) == (0, "![x](/api/v3/attachments/2/content)")
+
+
+def test_a_name_matches_under_unicode_case_folding():
+    # /i folds ß to SS; the lookup folds the same way instead of failing the work package.
+    counts, text = _rewrite("![x](STRASSE.png)", ["straße.png"])
+    assert counts == {"updated": 1, "failed": 0, "digests": {}}
+    assert text == "![x](/api/v3/attachments/1/content)"
+
+
+def test_a_folded_name_in_the_text_finds_the_attachment():
+    counts, text = _rewrite("![x](straße.png)", ["STRASSE.png"])
+    assert counts == {"updated": 1, "failed": 0, "digests": {}}
+    assert text == "![x](/api/v3/attachments/1/content)"

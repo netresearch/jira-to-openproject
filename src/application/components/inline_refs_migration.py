@@ -28,11 +28,18 @@ from src.models import ComponentResult, WorkPackageMappingEntry
 _REWRITE = r"""    files = wp.attachments.order(created_at: :desc, id: :desc).pluck(:id, :filename)
     if files.any?
       ids = {}
-      files.each { |aid, name| ids[name.downcase] ||= aid }
+      # downcase(:fold): the same Unicode case folding as /i (ß matches SS).
+      files.each { |aid, name| ids[name.downcase(:fold)] ||= aid }
       union = Regexp.union(files.map(&:last).uniq)
       # union.source: an embedded Regexp keeps its own flags, so /i would not reach the names.
-      re = /\]\((?:attachment:|[^()\s]*\/)?(#{union.source})\)/i
-      swap = ->(text) { text.gsub(re) { "](#{API::V3::Utilities::PathHelper::ApiV3Path.attachment_content(ids.fetch($1.downcase))})" } }
+      # A target that already is an attachment's API path stays, even for an attachment named "content".
+      re = /\]\((?![^()\s]*\/api\/v3\/attachments\/\d+\/content\))(?:attachment:|[^()\s]*\/)?(#{union.source})\)/i
+      swap = lambda do |text|
+        text.gsub(re) do |match|
+          aid = ids[$1.downcase(:fold)]
+          aid ? "](#{API::V3::Utilities::PathHelper::ApiV3Path.attachment_content(aid)})" : match
+        end
+      end
 """
 
 
