@@ -547,6 +547,14 @@ class TimeEntryTransformer:
         description = tempo_log.get("description", tempo_log.get("comment")) or ""
         return self._detect_activity(description)
 
+    @staticmethod
+    def _tempo_approval_status(tempo_log: dict[str, Any]) -> str | None:
+        """Tempo's approval status as a string, or None when the work log has none (#490)."""
+        approval = tempo_log.get("approval_status", tempo_log.get("approvalStatus"))
+        if isinstance(approval, dict):
+            approval = approval.get("status") or approval.get("name")
+        return approval.strip() or None if isinstance(approval, str) else None
+
     def _handle_tempo_specific_fields(
         self,
         tempo_log: dict[str, Any],
@@ -568,11 +576,8 @@ class TimeEntryTransformer:
         if billable is not None:
             billable_hours = billable / 3600.0
             time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 4)
-        approval = tempo_log.get("approval_status", tempo_log.get("approvalStatus"))
-        if isinstance(approval, dict):
-            approval = approval.get("status") or approval.get("name")
-        if isinstance(approval, str) and approval.strip():
-            time_entry["_meta"]["tempo_approval_status"] = approval.strip()
+        if approval := self._tempo_approval_status(tempo_log):
+            time_entry["_meta"]["tempo_approval_status"] = approval
 
         # Handle work attributes
         work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))
