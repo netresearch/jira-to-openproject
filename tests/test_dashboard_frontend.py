@@ -69,17 +69,22 @@ def dump_page(profile: Path, url: str, ready: str) -> str:
                 if proc.poll() is not None or monotonic() >= deadline:
                     pytest.fail("Chromium did not open its local debugging port")
                 sleep(0.05)
-            pages = requests.get(f"http://127.0.0.1:{port}/json/list", timeout=5, allow_redirects=False)
+
+            # Every wait shares the deadline: a busy CI runner can take longer than a fixed few seconds.
+            def remaining() -> float:
+                return max(1.0, deadline - monotonic())
+
+            pages = requests.get(f"http://127.0.0.1:{port}/json/list", timeout=remaining(), allow_redirects=False)
             pages.raise_for_status()
             tab = next(p for p in pages.json() if p["type"] == "page")
-            with connect(tab["webSocketDebuggerUrl"], open_timeout=5, close_timeout=2) as socket:
+            with connect(tab["webSocketDebuggerUrl"], open_timeout=remaining(), close_timeout=2) as socket:
                 sequence = itertools.count(1)
 
                 def call(method, **params):
                     sequence_id = next(sequence)
                     socket.send(json.dumps({"id": sequence_id, "method": method, "params": params}))
                     while True:
-                        message = json.loads(socket.recv(timeout=5))
+                        message = json.loads(socket.recv(timeout=remaining()))
                         if message.get("id") == sequence_id:
                             assert "error" not in message, message
                             return message["result"]
