@@ -183,7 +183,9 @@ class SecurityLevelAccessMigration(BaseMigration):
             )
             level = None
             if edition == "enterprise":
-                level = level_issues.level_work_packages(self.jira_client, self.op_client, self.mappings, self.logger)
+                level = level_issues.level_work_packages(
+                    self.jira_client, self.op_client, self.mappings, self.logger, scope
+                )
         except LevelProjectError as exc:
             self.logger.error("Security level access stopped: %s", exc)
             return ComponentResult(success=False, message=str(exc), errors=["security_level"])

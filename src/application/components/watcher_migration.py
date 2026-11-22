@@ -318,7 +318,13 @@ class WatcherMigration(BaseMigration):
         kept: list[dict[str, Any]] = []
         for key, wp_id in sorted(level.work_packages.items()):
             rows: list[dict[str, Any]] = []
-            self._collect_watchers(self._read_watchers(key, None), wp_id, rows, skip_reasons, set())
+            try:
+                watchers = self.jira_client.get_issue_watchers(str(key))
+            except Exception as exc:
+                logger.warning("Could not read the watchers of level issue %s: %s", key, type(exc).__name__)
+                level.refused.append(f"{key}: the watchers could not be read")
+                continue
+            self._collect_watchers(watchers, wp_id, rows, skip_reasons, set())
             audience = level.targets[key].audience
             readers = set(audience["members"]) | set(audience["shares"].get(key, []))
             kept.extend(row for row in rows if row["user_id"] in readers)

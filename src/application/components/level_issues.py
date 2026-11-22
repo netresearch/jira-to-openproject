@@ -408,15 +408,18 @@ class LevelWorkPackages:
                 self.refused.append(f"{key}: not selected for the level sub-project of its work package")
 
 
-def level_work_packages(jira_client: Any, op_client: Any, mappings: Any, logger: Any) -> LevelWorkPackages:
+def level_work_packages(
+    jira_client: Any, op_client: Any, mappings: Any, logger: Any, scope: LevelScope | None = None
+) -> LevelWorkPackages:
     """Repeat the selection for every Jira project in scope and read each sub-project once.
 
     A selected issue resolves to the work package its sub-project holds for it right now; a lost
     mapping entry is recovered from that read and not written back. A selected issue without such
     a work package, an entry that names another one, and an entry of an issue the selection no
     longer keeps are refused. Unselected issues get nothing. A missing or malformed report raises.
+    A caller that already read the reports passes its ``scope``, so the run uses one inventory.
     """
-    scope = LevelScope.load(mappings)
+    scope = scope or LevelScope.load(mappings)
     level_map = mappings.get_mapping(WORK_PACKAGE_MAPPING) or {}
     result = LevelWorkPackages(level_keys=set(scope.archived))
     live = LiveSubProjects(op_client, logger)

@@ -284,3 +284,22 @@ def test_the_grant_reads_the_reports_once(grant, monkeypatch):
     outcome = grant()
     assert outcome.result.success, outcome.result.errors
     assert len(calls) == 1
+
+
+def test_the_enterprise_grant_reads_the_reports_once(grant, monkeypatch):
+    # The Enterprise share selection uses the scope of the run, not a second inventory read.
+    from src.application.components import level_issues
+    from src.application.components import security_level_access_migration as module
+
+    calls = []
+    real = module.load_reports
+
+    def counted():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(module, "load_reports", counted)
+    monkeypatch.setattr(level_issues, "load_reports", counted)
+    outcome = grant(edition="enterprise")
+    assert outcome.result.success, outcome.result.errors
+    assert len(calls) == 1

@@ -207,6 +207,21 @@ def test_an_unmapped_level_watcher_is_not_named_in_the_result(level_setup, reade
     assert result.details["skip_reasons"] == {"user_unmapped": 1}
 
 
+def test_a_failed_level_watcher_read_refuses_the_work_package(level_setup, readers):
+    def watchers(key):
+        if key == "APP-10":
+            raise RuntimeError("watchers endpoint down")
+        return [{"name": "alice"}]
+
+    outcome = _run_with_readers(level_setup, readers, runs=0)
+    outcome.mappings.data["user"] = {"alice": {"openproject_id": 5}}
+    outcome.jira.get_issue_watchers.side_effect = watchers
+    result = WatcherMigration(jira_client=outcome.jira, op_client=outcome.op).run()
+    assert not result.success
+    level_rows = [row for row in outcome.op.bulk_calls[0] if row["work_package_id"] in (900, 901)]
+    assert level_rows == [{"work_package_id": 901, "user_id": 5}]
+
+
 def test_extra_readers_may_watch_their_shared_work_package_only(monkeypatch):
     from collections import Counter
 
@@ -220,7 +235,7 @@ def test_extra_readers_may_watch_their_shared_work_package_only(monkeypatch):
     migration._level = LevelWorkPackages(
         work_packages={"APP-12": 902, "APP-10": 900}, targets={"APP-12": target, "APP-10": static}
     )
-    migration._read_watchers = lambda key, issue: [{"name": "alice"}, {"name": "guest"}]
+    migration.jira_client = SimpleNamespace(get_issue_watchers=lambda key: [{"name": "alice"}, {"name": "guest"}])
     migration.mappings = SimpleNamespace(
         get_mapping=lambda name: {"alice": {"openproject_id": 5}, "guest": {"openproject_id": 7}}
     )
