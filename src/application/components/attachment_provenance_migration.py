@@ -211,8 +211,15 @@ class AttachmentProvenanceMigration(BaseMigration):  # noqa: D101
             "puts end_marker\n"
         )
         res = self.op_client.execute_script_with_data(script, updates)
-        updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-        failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
+        # The runner wraps the script's JSON as {"status": ..., "data": ...}.
+        counts = res.get("data") if isinstance(res, dict) and res.get("status") == "success" else None
+        if not isinstance(counts, dict):
+            logger.error(
+                "Attachment provenance not confirmed: %s", res.get("message") if isinstance(res, dict) else res
+            )
+            return ComponentResult(success=False, updated=0, failed=len(updates))
+        updated = int(counts.get("updated", 0))
+        failed = int(counts.get("failed", 0))
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:

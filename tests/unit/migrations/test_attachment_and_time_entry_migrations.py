@@ -109,7 +109,7 @@ def test_attachment_provenance_updates_metadata(tmp_path, monkeypatch, dummy_map
 
     jira_client = MagicMock()
     op_client = MagicMock()
-    op_client.execute_script_with_data.return_value = {"updated": 1, "failed": 0}
+    op_client.execute_script_with_data.return_value = {"status": "success", "data": {"updated": 1, "failed": 0}}
 
     migration = AttachmentProvenanceMigration(jira_client=jira_client, op_client=op_client)
 

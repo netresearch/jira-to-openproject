@@ -127,11 +127,18 @@ class NativeTagsMigration(LevelFieldsMigration):  # noqa: D101
             "    failed += 1\n"
             "  end\n"
             "end\n"
-            "STDOUT.puts({updated: updated, failed: failed}.to_json)\n"
+            "puts $j2o_start_marker\n"
+            "puts({updated: updated, failed: failed}.to_json)\n"
+            "puts $j2o_end_marker\n"
         )
         res = self.op_client.execute_script_with_data(script, updates)
-        updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-        failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
+        # The runner reads the JSON between its markers and wraps it as {"status": ..., "data": ...}.
+        counts = res.get("data") if isinstance(res, dict) and res.get("status") == "success" else None
+        if not isinstance(counts, dict):
+            self.logger.error("Native tags not confirmed: %s", res.get("message") if isinstance(res, dict) else res)
+            return ComponentResult(success=False, updated=0, failed=len(updates), details=details)
+        updated = int(counts.get("updated", 0))
+        failed = int(counts.get("failed", 0))
         return ComponentResult(success=failed == 0, updated=updated, failed=failed, details=details)
 
     @staticmethod

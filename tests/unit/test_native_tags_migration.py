@@ -34,7 +34,8 @@ class DummyOp:
 
     def execute_script_with_data(self, script_content: str, data: object):
         self.payload = list(data) if isinstance(data, list) else []
-        return {"updated": len(self.payload), "failed": 0}
+        # The runner's envelope around the script's JSON (openproject_rails_runner_service).
+        return {"status": "success", "data": {"updated": len(self.payload), "failed": 0}}
 
 
 @pytest.fixture(autouse=True)
