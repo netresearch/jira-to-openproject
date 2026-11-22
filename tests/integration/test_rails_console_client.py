@@ -115,8 +115,10 @@ class TestRailsConsoleClient(unittest.TestCase):
         """Test RailsConsoleClient initialization."""
         # Test that default parameters are set correctly
         assert self.rails_client.tmux_session_name == "test_session"
-        assert self.rails_client.window == 0
-        assert self.rails_client.pane == 0
+        # No fixed window or pane: tmux resolves the session to its active pane, also with base-index 1.
+        assert self.rails_client.window is None
+        assert self.rails_client.pane is None
+        assert self.rails_client._get_target() == "test_session"
         assert self.rails_client.command_timeout == 180
         assert self.rails_client.inactivity_timeout == 30
 
