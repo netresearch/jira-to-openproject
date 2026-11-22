@@ -53,7 +53,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
@@ -69,6 +69,7 @@ from src.application.components.issue_security import (
     warn_if_restricted_mappings,
 )
 from src.application.components.jira_field_values import without_empty_values
+from src.application.components.work_package_migration import WorkPackageMigration
 from src.application.transformers.issue_transformer import IssueTransformer
 from src.domain.enums import JournalEntryType
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
@@ -81,6 +82,18 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from jira.resources import Issue
+
+
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _iso_date(value: Any) -> str | None:
+    """The calendar date of a Jira date or date-time value, as the source wrote it."""
+    if value is None or value == "":
+        return None
+    text = value.isoformat() if isinstance(value, date) else str(value)
+    match = _ISO_DATE.match(text.strip())
+    return match.group(0) if match else None
 
 
 def _coerce_comment_timestamp(value: Any) -> str | None:
@@ -649,6 +662,7 @@ class WorkPackageContentMigration(BaseMigration):
             collected["description_update"] = converted_description
 
         collected["custom_field_updates"] = self._custom_field_updates(jira_issue)
+        collected["date_updates"] = self._date_updates(jira_issue)
 
         try:
             collected["comments"], collected["comments_held"] = self._collect_approved_comments(jira_issue.key)
@@ -689,6 +703,10 @@ class WorkPackageContentMigration(BaseMigration):
             "descriptions_target_changed": 0,
             "custom_fields_unchanged": 0,
             "custom_fields_target_changed": 0,
+            "dates_updated": 0,
+            "dates_unchanged": 0,
+            "dates_target_changed": 0,
+            "dates_failed": 0,
             "target_changed": [],
             "custom_fields_updated": 0,
             "custom_fields_failed": 0,
@@ -775,6 +793,10 @@ class WorkPackageContentMigration(BaseMigration):
             "descriptions_target_changed": 0,
             "custom_fields_unchanged": 0,
             "custom_fields_target_changed": 0,
+            "dates_updated": 0,
+            "dates_unchanged": 0,
+            "dates_target_changed": 0,
+            "dates_failed": 0,
             "target_changed": [],
             "custom_fields_failed": 0,
             "comment_reads_failed": 0,
@@ -881,6 +903,7 @@ class WorkPackageContentMigration(BaseMigration):
                     "total_failed",
                     "descriptions_failed",
                     "custom_fields_failed",
+                    "dates_failed",
                     "comments_failed",
                     "comment_reads_failed",
                 )
@@ -906,6 +929,8 @@ class WorkPackageContentMigration(BaseMigration):
                     "descriptions_failed": migration_results.get("descriptions_failed", 0),
                     "custom_fields_failed": migration_results.get("custom_fields_failed", 0),
                     "custom_fields_updated": migration_results.get("custom_fields_updated", 0),
+                    "dates_updated": migration_results.get("dates_updated", 0),
+                    "dates_failed": migration_results.get("dates_failed", 0),
                     # Targets changed in OpenProject since J2O wrote them; not written (ADR-013).
                     "target_changed": migration_results.get("target_changed", []),
                 }
@@ -961,6 +986,25 @@ class WorkPackageContentMigration(BaseMigration):
                     updates[f"customField{op_cf_id}"] = self._mapped_field_value(mapping, value, jira_issue.key)
         return updates
 
+    def _date_updates(self, jira_issue: Issue) -> dict[str, str]:
+        """The Jira due date and the first configured start date field, as OpenProject dates.
+
+        A due date before the start date is left out, because OpenProject's
+        ``work_packages_due_larger_start_date`` constraint refuses it.
+        """
+        fields = getattr(jira_issue, "fields", None)
+        raw = getattr(jira_issue, "raw", {}).get("fields", {})
+        dates: dict[str, str] = {}
+        if due := _iso_date(getattr(fields, "duedate", None) or raw.get("duedate")):
+            dates["due_date"] = due
+        for field_id in WorkPackageMigration.start_date_field_ids():
+            if start := _iso_date(getattr(fields, field_id, None) or raw.get(field_id)):
+                dates["start_date"] = start
+                break
+        if "start_date" in dates and dates.get("due_date", "9999") < dates["start_date"]:
+            del dates["due_date"]
+        return dates
+
     def _write_work_package_fields(self, collected_items: list, results: dict) -> None:
         """Write descriptions and field changes, counting each acknowledged row."""
         descriptions = [
@@ -978,7 +1022,12 @@ class WorkPackageContentMigration(BaseMigration):
         # Each row is written only while its target holds what J2O wrote last (ADR-013).
         store = written_values.store()
         overwrite = written_values.overwrite_allowed()
-        for kind, updates in (("descriptions", descriptions), ("custom_fields", fields)):
+        dates = [
+            {"id": item["wp_id"], key: value}
+            for item in collected_items
+            for key, value in item.get("date_updates", {}).items()
+        ]
+        for kind, updates in (("descriptions", descriptions), ("custom_fields", fields), ("dates", dates)):
             if not updates:
                 continue
             try:

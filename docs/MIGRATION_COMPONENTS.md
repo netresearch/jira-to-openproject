@@ -288,6 +288,7 @@ Populates all content using the complete mapping for link resolution.
 **Migrates**:
 - Descriptions with `PROJ-123` → `WP#456` link conversion
 - Custom field values
+- Due date (Jira's due date) and start date (the first set field of `WorkPackageMigration.START_DATE_FIELD_IDS_DEFAULT` and `migration.start_date_custom_fields`); a due date before the start date is left out. Unlike the legacy `work_packages` component, no start date is inferred from the status history.
 - Journals/comments with link conversion
 - User mentions (`@accountId` → `@username`)
 - With `migration.security_level_work_packages: true`: description and custom fields of level work packages, without watchers ([Level work packages](operator-restricted-issues.md#level-work-packages))
