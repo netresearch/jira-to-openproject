@@ -91,7 +91,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                 level, self.jira_client, project, wps, fields
             ).items():
                 refs = level_versions.version_ids(issue.raw["fields"].get("fixVersions", []))
-                audience = level_versions.copy_audience(level, key)
+                audience = level_versions.copy_audience(level, self._audience_key, key)
                 if refs and audience is None:
                     self._versions_withheld.append(key)
                 elif refs is None or not str(issue.id).isdecimal():
@@ -114,7 +114,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
             return copies
         copier = level_versions.LevelVersionCopies(self.op_client, self.mappings, self.jira_client.base_url, logger)
         for label, entry in plan.items():
-            wanted: dict[str, set[tuple[int, ...]]] = {}
+            wanted: dict[str, set[level_versions.CopyAudience]] = {}
             for row in entry["issues"]:
                 for sid in row["versions"]:
                     wanted.setdefault(sid, set()).add(row["audience"])
@@ -138,7 +138,7 @@ class VersionsMigration(BaseMigration):  # noqa: D101
                     "key": row["key"],
                     "url": f"{base}/browse/{row['key']}",
                 }
-                ids = [made[level_copy_id(sid, row["audience"])] for sid in row["versions"]]
+                ids = [made[level_copy_id(sid, row["audience"].token)] for sid in row["versions"]]
                 updates.append({"id": row["wp"], "target_version_ids": ids, "jira_version_issue_origin": origin})
         return updates
 
@@ -230,11 +230,13 @@ class VersionsMigration(BaseMigration):  # noqa: D101
         """
         self._level: level_issues.LevelWorkPackages | None = None
         self._versions_withheld: list[str] = []
+        self._audience_key: bytes | None = None
         if level_issues.enabled():
             try:
                 self._level = level_issues.level_work_packages(
                     self.jira_client, self.op_client, self.mappings, self.logger
                 )
+                self._audience_key = level_versions.audience_key(self._level)
             except LevelProjectError as exc:
                 self.logger.error("Level work package versions stopped: %s", exc)
                 return ComponentResult(success=False, message=str(exc), errors=["security_level"])

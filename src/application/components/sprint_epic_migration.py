@@ -134,7 +134,7 @@ class SprintEpicMigration(BaseMigration):
         sprints = _sprint_references(fields.get(self._sprint_field))
         if not sprints or fields.get("fixVersions"):
             return
-        audience = level_versions.copy_audience(level, issue.key)
+        audience = level_versions.copy_audience(level, self._audience_key, issue.key)
         if audience is None:
             self._sprints_withheld.append(issue.key)
             return
@@ -151,13 +151,13 @@ class SprintEpicMigration(BaseMigration):
                 "sprints": {},
             },
         )
-        copy = level_versions.level_copy_id(sprint[0], audience)
+        copy = level_versions.level_copy_id(sprint[0], audience.token)
         audiences = group.setdefault("audiences", {})
         if audiences.get(copy, audience) != audience:
             level.refused.append(f"{issue.key}: another audience has the same sprint copy in {target.label}")
             return
         group["sprints"][copy] = sprint[1]
-        if audience:
+        if audience.token:
             audiences[copy] = audience
         group.setdefault("issues", []).append({"key": issue.key, "id": str(issue.id), "wp": wp_id, "sprint": copy})
 
@@ -311,11 +311,13 @@ class SprintEpicMigration(BaseMigration):
         """
         self._level: level_issues.LevelWorkPackages | None = None
         self._sprints_withheld: list[str] = []
+        self._audience_key: bytes | None = None
         if level_issues.enabled():
             try:
                 self._level = level_issues.level_work_packages(
                     self.jira_client, self.op_client, self.mappings, self.logger
                 )
+                self._audience_key = level_versions.audience_key(self._level)
             except LevelProjectError as exc:
                 self.logger.error("Level work package components stopped: %s", exc)
                 return ComponentResult(success=False, message=str(exc), errors=["security_level"])

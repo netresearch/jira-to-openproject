@@ -8,7 +8,7 @@ A snapshot holds three parts:
 - `attachments.tar`: the attachment storage of the OpenProject container (`OPENPROJECT_ATTACHMENTS__STORAGE__PATH`).
 - `counts.tsv`, `attachment-files.txt`, `attachment-path.txt` and `SHA256SUMS`: row counts of the tables a migration writes, the number of attachment files, the storage path and the checksums of all files.
 
-Back up J2O's own data directory (`var/data`: the mappings and `written_values.sqlite` of [ADR-013](adr/ADR-013-content-rewrites-only-what-j2o-wrote.md)) at the same moment, because a restored target and a newer data directory do not fit together.
+Back up J2O's own data directory (`var/data`: the mappings, `written_values.sqlite` of [ADR-013](adr/ADR-013-content-rewrites-only-what-j2o-wrote.md) and `level_version_audience.key`, the audience key of [ADR-010](adr/ADR-010-level-versions-as-sub-project-copies.md)) at the same moment, because a restored target and a newer data directory do not fit together.
 
 ## Before each production run
 
