@@ -65,8 +65,9 @@ def test_a_readers_file_of_another_inventory_stops_the_staging_checks(granted):
     from tests.unit.test_security_level_access import READERS as FILE
 
     outcome = granted(readers={**FILE, "archive_sha256": "c" * 64})
+    report, edition = load_reports()
     with pytest.raises(LevelProjectError, match="another inventory"):
-        staging_audience(outcome.component.mappings, *load_reports())
+        staging_audience(outcome.component.mappings, report, edition)
 
 
 def _skeleton(level_setup, state, **kw):
