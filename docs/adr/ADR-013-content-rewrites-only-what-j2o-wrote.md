@@ -43,7 +43,7 @@ OpenProject stores what it receives in a form of its own: a list option as its o
 ## Guarded writers
 
 - `work_packages_content`: description and mapped custom fields (`batch_update_work_packages`).
-- `priorities` (`priority_id`), `estimates` (`estimated_hours` and `remaining_hours`, one row each), `versions` (`version_id`, or `target_version_ids` for level copies), `sprint_epic` (`parent_id`, `version_id`, `target_version_ids`): `written_values.write_rows` sends one guarded row per attribute. A work package column is read back with `pick`; `priority_id` counts the default priority as untouched.
+- `priorities` (`priority_id`), `estimates` (`estimated_hours` and `remaining_hours`, one row each), `versions` (`version_id`, or `target_version_ids` for level copies), `sprint_epic` (`parent_id`, `version_id`, `target_version_ids`): `written_values.write_rows` sends one guarded row per attribute. A work package column is read back with `pick`; `priority_id` counts the default priority as untouched. In OpenProject 17.9.7 `version_id` and `target_version_ids` are stored apart and keep separate records; on an OpenProject without `target_version_ids` both store `version_id`, and Rails returns the other attribute so that one digest is recorded for both.
 - `labels`, `votes`, the sprint fields of `sprint_epic`, and `story_points`, `resolution` and `security_levels` (through `BaseMigration._write_work_package_custom_value`): `written_values.write_custom_values` guards the rows of `bulk_set_wp_custom_field_values`.
 - `customfields_generic`: its single-value Rails script carries the same guard.
 - `simpletasks`, `inline_refs` and `remote_links` (its section in the description): their rewrites of the description keep the record current (decision 5).

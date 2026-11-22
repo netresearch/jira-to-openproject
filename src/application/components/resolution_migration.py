@@ -86,6 +86,9 @@ class ResolutionMigration(LevelFieldsMigration):  # noqa: D101
                 result = self._write_work_package_custom_value(entry, cf_id, res_name, projects_with_values)
                 if result:
                     updated += 1
+                else:
+                    # Rails did not acknowledge the write (ADR-013 guard or a failed call).
+                    failed += 1
             except Exception:
                 logger.exception("Failed to apply resolution for %s", jira_key)
                 failed += 1

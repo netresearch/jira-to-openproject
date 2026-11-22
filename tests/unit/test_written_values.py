@@ -342,3 +342,42 @@ def test_a_generic_field_value_is_confirmed_written_unchanged_or_kept(status, ra
         "expect": None,
         "overwrite": False,
     }
+
+
+def test_a_version_answer_for_both_attributes_records_both(tmp_path):
+    store = WrittenValues(tmp_path / "w.sqlite")
+    rows = written_values.guarded([{"id": 5, "version_id": 9}], store, overwrite=False)
+    answer = {"id": 5, "attr": "version_id", "status": "updated", "digest": DIGEST_A, "also": "target_version_ids"}
+    written_values.settle(store, rows, {"updated": 1, "results": [answer]})
+    assert store.expected([(5, "version_id"), (5, "target_version_ids")]) == {
+        (5, "version_id"): DIGEST_A,
+        (5, "target_version_ids"): DIGEST_A,
+    }
+
+
+def test_an_alias_outside_the_version_pair_is_ignored(tmp_path):
+    store = WrittenValues(tmp_path / "w.sqlite")
+    rows = written_values.guarded([{"id": 5, "priority_id": 2}], store, overwrite=False)
+    answer = {"id": 5, "attr": "priority_id", "status": "updated", "digest": DIGEST_A, "also": "description"}
+    written_values.settle(store, rows, {"updated": 1, "results": [answer]})
+    assert store.expected([(5, "description")]) == {}
+
+
+@pytest.mark.parametrize("component", ["security_levels", "resolution"])
+def test_an_unacknowledged_single_value_counts_as_failed(monkeypatch, component):
+    from src.application.components.resolution_migration import ResolutionMigration
+    from src.application.components.security_levels_migration import SecurityLevelsMigration
+
+    cls = {"security_levels": SecurityLevelsMigration, "resolution": ResolutionMigration}[component]
+    mig = cls.__new__(cls)
+    mig.logger = MagicMock()
+    mig.op_client = MagicMock()
+    mig.op_client.ensure_wp_custom_field_id.return_value = 7
+    mig.op_client.bulk_set_wp_custom_field_values.return_value = {"success": False, "updated": 0, "failed": 1}
+    mig.mappings = MagicMock()
+    mig.mappings.get_mapping.return_value = {"K-1": {"openproject_id": 5, "openproject_project_id": 3}}
+    monkeypatch.setattr(mig, "_ensure_wp_custom_field", lambda *a, **k: 7, raising=False)
+    monkeypatch.setattr(mig, "_enable_cf_for_projects", lambda *a, **k: None, raising=False)
+    key = "security" if component == "security_levels" else "resolution"
+    result = mig._load(SimpleNamespace(data={key: {"K-1": "Value"}}))
+    assert (result.success, result.failed) == (False, 1)

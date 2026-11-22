@@ -28,6 +28,9 @@ j2o_stored = lambda do |wp, attr|
   elsif attr == "target_version_ids"
     fresh = WorkPackage.find(wp.id)
     (fresh.respond_to?(:target_version_ids) ? fresh.target_version_ids : [fresh.version_id].compact).sort
+  elsif attr == "version_id"
+    # The same shape as target_version_ids, which falls back to this column (j2o_alias).
+    [WorkPackage.where(id: wp.id).pick(:version_id)].compact
   else
     raise "No guard for work package attribute #{attr}" unless WorkPackage.column_names.include?(attr)
     WorkPackage.where(id: wp.id).pick(attr)
@@ -35,11 +38,16 @@ j2o_stored = lambda do |wp, attr|
 end
 j2o_untouched = lambda do |wp, attr|
   return [""] if attr == "description"
-  return [[]] if attr == "target_version_ids"
+  return [[]] if %w[target_version_ids version_id].include?(attr)
   return [nil, IssuePriority.default&.id].uniq if attr == "priority_id"
   return [nil] unless attr.start_with?("customField")
   cf = CustomField.find(Integer(attr.delete_prefix("customField"), 10))
   [[], Array(cf.default_value).map(&:to_s).reject(&:empty?).sort].uniq
+end
+# Without target_version_ids both version attributes store version_id: one record covers both.
+j2o_alias = lambda do |attr|
+  next nil if WorkPackage.method_defined?(:target_version_ids)
+  {"version_id" => "target_version_ids", "target_version_ids" => "version_id"}[attr]
 end
 j2o_decide = lambda do |guard, before, wanted, untouched|
   next :unchanged if before == wanted

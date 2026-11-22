@@ -217,6 +217,7 @@ J2O_UPDATES
                 wanted = if !fields.empty? then expected.fetch(values.keys.sole)
                          elsif attr == 'description' then attributes.fetch(attr).to_s
                          elsif attr == 'target_version_ids' then target_ids.sort
+                         elsif attr == 'version_id' then [wp.version_id].compact
                          else wp.public_send(attr)
                          end
                 state = j2o_decide.call(guard, before, wanted, j2o_untouched.call(wp, attr))
@@ -247,6 +248,8 @@ J2O_UPDATES
             if guard
               row[:attr] = attr
               row[:digest] = digest if digest
+              also = j2o_alias.call(attr)
+              row[:also] = also if digest && also
             end
             case status
             when 'updated' then updated_count += 1

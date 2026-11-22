@@ -26,6 +26,7 @@ _GUARD = "_j2o_guard"
 # A precondition Rails checks before it writes, not a written attribute.
 _CHECKS = {"id", _GUARD, "jira_version_issue_origin"}
 _STATUSES = ("updated", "unchanged", "target_changed")
+_VERSION_ATTRIBUTES = {"version_id", "target_version_ids"}
 
 
 def store_path() -> Path:
@@ -212,6 +213,9 @@ def settle(store: WrittenValues, rows: list[dict[str, Any]], result: dict[str, A
             msg = f"Rails returned no digest for {key}"
             raise ValueError(msg)
         digests.append((*key, digest))
+        if answer.get("also") in _VERSION_ATTRIBUTES - {key[1]}:
+            # One stored column behind both version attributes (OpenProject without target_version_ids).
+            digests.append((key[0], str(answer["also"]), digest))
         setattr(outcome, status, getattr(outcome, status) + 1)
         if status == "updated":
             outcome.written.add(key[0])

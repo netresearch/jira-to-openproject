@@ -101,7 +101,7 @@ class EstimatesMigration(LevelFieldsMigration):  # noqa: D101
         return ComponentResult(success=True, data={"updates": updates}, mapped_fields_count=len(updates))
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        updates: list[dict[str, Any]] = (mapped.data or {}).get("updates", []) if mapped.data else []
+        updates: list[dict[str, Any]] = (mapped.data or {}).get("updates", [])
         if not updates:
             return ComponentResult(success=True, updated=0)
 
