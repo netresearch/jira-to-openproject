@@ -4,10 +4,14 @@
 """Rewrite inline image/file references to point to OpenProject attachments.
 
 A minimal Rails script is used to, per work package:
-- build a set of attachment filenames
-- rewrite markdown link/img targets whose URL ends with one of the filenames
-  into the form `(attachment:filename)`
+- map each attachment file name (case-insensitive, newest first, as OpenProject resolves it) to its ID
+- rewrite Markdown link and image targets whose URL ends with one of the file names, or that an
+  earlier run wrote as `attachment:filename`, into the attachment's API path
+  `/api/v3/attachments/<id>/content`
 - apply the same rewrite to comment journals' notes
+
+OpenProject 17.9.7 renders neither `![x](attachment:a.png)` nor `[x](attachment:a.pdf)`; a bare
+file name works only for images. The API path works for images and links alike.
 """
 
 from __future__ import annotations
@@ -19,6 +23,24 @@ from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 from src.models import ComponentResult, WorkPackageMappingEntry
+
+# Per work package: file name to the ID OpenProject would show for it, and the rewrite of a text.
+_REWRITE = r"""    files = wp.attachments.order(created_at: :desc, id: :desc).pluck(:id, :filename)
+    if files.any?
+      ids = {}
+      # downcase(:fold): the same Unicode case folding as /i (ß matches SS).
+      files.each { |aid, name| ids[name.downcase(:fold)] ||= aid }
+      union = Regexp.union(files.map(&:last).uniq)
+      # union.source: an embedded Regexp keeps its own flags, so /i would not reach the names.
+      # A target that already is an attachment's API path stays, even for an attachment named "content".
+      re = /\]\((?![^()\s]*\/api\/v3\/attachments\/\d+\/content\))(?:attachment:|[^()\s]*\/)?(#{union.source})\)/i
+      swap = lambda do |text|
+        text.gsub(re) do |match|
+          aid = ids[$1.downcase(:fold)]
+          aid ? "](#{API::V3::Utilities::PathHelper::ApiV3Path.attachment_content(aid)})" : match
+        end
+      end
+"""
 
 
 @register_entity_types("inline_refs")
@@ -71,14 +93,9 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "items.each do |item|\n"
             "  id = item.fetch('id')\n"
             "  begin\n"
-            "    wp = WorkPackage.find(id)\n"
-            "    names = wp.attachments.pluck(:filename)\n"
-            "    if names.any?\n"
-            "      union = Regexp.union(names)\n"
-            "      re = /\\((?:[^()]*\\/)?(#{union})\\)/i\n"
-            "      # Description\n"
+            "    wp = WorkPackage.find(id)\n" + _REWRITE + "      # Description\n"
             "      desc = (wp.description || '').to_s\n"
-            '      new_desc = desc.gsub(re) { "(attachment:#{$1})" }\n'
+            "      new_desc = swap.call(desc)\n"
             "      if new_desc != desc\n"
             "        kept = item['expect'] && j2o_digest.call(j2o_stored.call(wp, 'description')) == item['expect']\n"
             "        wp.description = new_desc\n"
@@ -89,7 +106,7 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "      # Comments\n"
             "      Journal.where(journable: wp).where.not(notes: [nil, '']).find_each do |j|\n"
             "        notes = j.notes.to_s\n"
-            '        new_notes = notes.gsub(re) { "(attachment:#{$1})" }\n'
+            "        new_notes = swap.call(notes)\n"
             "        if new_notes != notes\n"
             "          j.update_columns(notes: new_notes)\n"
             "          updated += 1\n"
