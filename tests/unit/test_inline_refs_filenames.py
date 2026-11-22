@@ -38,7 +38,7 @@ WPS = {1 => FakeWorkPackage.new(ARGV[0], JSON.parse(ARGV[1]))}
 class WorkPackage
   def self.find(id) = WPS.fetch(id)
 end
-input_data = [1]
+input_data = [{"id" => 1, "expect" => nil}]
 """
 
 
@@ -47,7 +47,7 @@ def _rewrite(description: str, names: list[str]) -> tuple[dict, str]:
     if not ruby:
         pytest.skip("Ruby is required to exercise the generated rewrite script")
     op = MagicMock()
-    op.execute_script_with_data.return_value = {"updated": 0, "failed": 0}
+    op.execute_script_with_data.return_value = {"status": "success", "data": {"updated": 0, "failed": 0, "digests": {}}}
     InlineRefsMigration(jira_client=MagicMock(), op_client=op)._load(SimpleNamespace(data={"work_package_ids": [1]}))
     script = "require 'json'\n" + HARNESS + op.execute_script_with_data.call_args.args[0]
     script += 'puts "J2O_DESCRIPTION" + WPS[1].description\n'
@@ -62,17 +62,17 @@ def test_a_file_name_with_dots_is_rewritten():
     counts, text = _rewrite(
         "See ![x](https://jira.example/secure/attachment/9/report.final.pdf).", ["report.final.pdf"]
     )
-    assert counts == {"updated": 1, "failed": 0}
+    assert counts == {"updated": 1, "failed": 0, "digests": {}}
     assert text == "See ![x](attachment:report.final.pdf)."
 
 
 def test_a_dot_in_the_name_matches_only_a_dot():
     counts, text = _rewrite("(https://jira.example/a/reportXfinal.pdf)", ["report.final.pdf"])
-    assert counts == {"updated": 0, "failed": 0}
+    assert counts == {"updated": 0, "failed": 0, "digests": {}}
     assert text == "(https://jira.example/a/reportXfinal.pdf)"
 
 
 def test_regex_characters_in_a_name_match_literally():
     counts, text = _rewrite("Plan: (https://jira.example/a/plan+v2[1].png) end", ["plan+v2[1].png"])
-    assert counts == {"updated": 1, "failed": 0}
+    assert counts == {"updated": 1, "failed": 0, "digests": {}}
     assert text == "Plan: (attachment:plan+v2[1].png) end"
