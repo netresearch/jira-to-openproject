@@ -149,3 +149,109 @@ def test_a_missing_report_stops_before_any_read(level_setup):
     assert outcome.result.errors == ["security_level"]
     assert _watched(outcome) == []
     assert outcome.op.bulk_calls == []
+
+
+READER_AUDIENCE = {"APP:10000": frozenset({5})}
+
+
+@pytest.fixture
+def readers(monkeypatch):
+    """A readers file of the inventory: alice (5) is a static reader of APP:10000, bob (6) is not."""
+    import src.config as cfg
+    from src.application.components.level_access import Audience
+
+    monkeypatch.setattr(
+        "src.application.components.level_issues.staging_audience",
+        lambda mappings, report, edition: Audience(members=READER_AUDIENCE),
+    )
+
+    def configure():
+        cfg.migration_config["security_level_readers"] = "readers.json"
+
+    return configure
+
+
+def _run_with_readers(level_setup, readers, **kw):
+    original = level_setup
+
+    def setup(**options):
+        result = original(**options)
+        readers()
+        return result
+
+    return _run(setup, **kw)
+
+
+def test_level_work_packages_get_only_the_watchers_who_are_readers(level_setup, readers):
+    def watchers(key):
+        return [{"name": "alice"}, {"name": "bob"}]
+
+    outcome = _run_with_readers(level_setup, readers, runs=0)
+    outcome.mappings.data["user"] = {"alice": {"openproject_id": 5}, "bob": {"openproject_id": 6}}
+    outcome.jira.get_issue_watchers.side_effect = watchers
+    result = WatcherMigration(jira_client=outcome.jira, op_client=outcome.op).run()
+    assert result.success, result.message
+    level_rows = [row for row in outcome.op.bulk_calls[0] if row["work_package_id"] in (900, 901)]
+    assert level_rows == [{"work_package_id": 900, "user_id": 5}, {"work_package_id": 901, "user_id": 5}]
+    assert result.details["watchers_not_readers"] == 2
+    assert "level_watchers_withheld" not in result.details
+    # The level watchers come from the watchers endpoint; their unmapped names are not listed.
+    assert sorted(_watched(outcome)) == ["APP-1", "APP-10", "APP-11", "APP-2"]
+
+
+def test_an_unmapped_level_watcher_is_not_named_in_the_result(level_setup, readers):
+    outcome = _run_with_readers(level_setup, readers, runs=0)
+    outcome.jira.get_issue_watchers.side_effect = lambda key: [{"name": "carol"}] if key == "APP-10" else []
+    result = WatcherMigration(jira_client=outcome.jira, op_client=outcome.op).run()
+    assert result.details["unmapped_users"] == []
+    assert result.details["skip_reasons"] == {"user_unmapped": 1}
+
+
+def test_a_failed_level_watcher_read_refuses_the_work_package(level_setup, readers):
+    def watchers(key):
+        if key == "APP-10":
+            raise RuntimeError("watchers endpoint down")
+        return [{"name": "alice"}]
+
+    outcome = _run_with_readers(level_setup, readers, runs=0)
+    outcome.mappings.data["user"] = {"alice": {"openproject_id": 5}}
+    outcome.jira.get_issue_watchers.side_effect = watchers
+    result = WatcherMigration(jira_client=outcome.jira, op_client=outcome.op).run()
+    assert not result.success
+    level_rows = [row for row in outcome.op.bulk_calls[0] if row["work_package_id"] in (900, 901)]
+    assert level_rows == [{"work_package_id": 901, "user_id": 5}]
+
+
+def test_level_watchers_are_migrated_without_ordinary_issues(level_setup, readers):
+    outcome = _run_with_readers(level_setup, readers, runs=0, ordinary={})
+    result = WatcherMigration(jira_client=outcome.jira, op_client=outcome.op).run()
+    assert result.success, result.message
+    level_rows = [row for row in outcome.op.bulk_calls[0] if row["work_package_id"] in (900, 901)]
+    assert level_rows == [{"work_package_id": 900, "user_id": 5}, {"work_package_id": 901, "user_id": 5}]
+
+
+def test_extra_readers_may_watch_their_shared_work_package_only(monkeypatch):
+    from collections import Counter
+
+    import src.config as cfg
+    from src.application.components.level_issues import LevelTarget, LevelWorkPackages
+
+    shared = {"members": [5], "shares": {"APP-12": [7]}}
+    target = LevelTarget("APP:10000", "10000", 100, 7, "app_level_10000", "per_issue", shared)
+    static = LevelTarget("APP:10000", "10000", 100, 7, "app_level_10000", "static", shared)
+    migration = WatcherMigration.__new__(WatcherMigration)
+    migration._level = LevelWorkPackages(
+        work_packages={"APP-12": 902, "APP-10": 900}, targets={"APP-12": target, "APP-10": static}
+    )
+    migration.jira_client = SimpleNamespace(get_issue_watchers=lambda key: [{"name": "alice"}, {"name": "guest"}])
+    migration.mappings = SimpleNamespace(
+        get_mapping=lambda name: {"alice": {"openproject_id": 5}, "guest": {"openproject_id": 7}}
+    )
+    monkeypatch.setitem(cfg.migration_config, "security_level_readers", "readers.json")
+    rows = migration._level_watchers(Counter())
+    assert rows == [
+        {"work_package_id": 900, "user_id": 5},
+        {"work_package_id": 902, "user_id": 5},
+        {"work_package_id": 902, "user_id": 7},
+    ]
+    assert migration._not_readers == 1

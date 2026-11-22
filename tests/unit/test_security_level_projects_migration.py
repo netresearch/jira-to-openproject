@@ -333,7 +333,9 @@ def test_rerun_keeps_other_entries_and_honours_the_project_filter(run):
     assert [json.loads(s.split("\n")[1])["identifier"] for s in outcome.target.creations()] == ["ops_level_10000"]
 
 
-def test_component_is_available_but_not_in_the_default_profile():
+def test_component_runs_in_the_default_profile_after_projects_and_before_the_skeleton():
     factories = _build_component_factories(Mock(), Mock())
     assert isinstance(factories["security_level_projects"](), SecurityLevelProjectsMigration)
-    assert "security_level_projects" not in DEFAULT_COMPONENT_SEQUENCE
+    sequence = DEFAULT_COMPONENT_SEQUENCE
+    assert sequence.index("projects") < sequence.index("security_level_projects")
+    assert sequence.index("security_level_projects") < sequence.index("work_packages_skeleton")

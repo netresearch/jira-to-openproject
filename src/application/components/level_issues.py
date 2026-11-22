@@ -26,6 +26,7 @@ from src.application.components.level_access import Audience, staging_audience
 from src.application.components.security_level_projects_migration import (
     _EDITIONS,
     MAPPING,
+    REPORT_SETTING,
     LevelProjectError,
     _script,
     level_identifier,
@@ -44,8 +45,14 @@ _LEVEL_ID = re.compile(r"[1-9]\d*", re.ASCII)
 
 
 def enabled() -> bool:
-    """The level path runs only when the switch is the boolean ``true``."""
-    return config.migration_config.get(SWITCH) is True
+    """The level path runs only when the switch is the boolean ``true`` and an inventory is configured.
+
+    Without ``security_level_report`` there is no inventory and no sub-project, so nothing can go
+    into one, and issues with a level stay out of the migration as with the switch off; the
+    ordinary path never selects them. A configured report that is missing or does not match
+    still stops each level component before any write.
+    """
+    return config.migration_config.get(SWITCH) is True and bool(config.migration_config.get(REPORT_SETTING))
 
 
 def level_project_jql(project_key: str) -> str:
@@ -401,15 +408,18 @@ class LevelWorkPackages:
                 self.refused.append(f"{key}: not selected for the level sub-project of its work package")
 
 
-def level_work_packages(jira_client: Any, op_client: Any, mappings: Any, logger: Any) -> LevelWorkPackages:
+def level_work_packages(
+    jira_client: Any, op_client: Any, mappings: Any, logger: Any, scope: LevelScope | None = None
+) -> LevelWorkPackages:
     """Repeat the selection for every Jira project in scope and read each sub-project once.
 
     A selected issue resolves to the work package its sub-project holds for it right now; a lost
     mapping entry is recovered from that read and not written back. A selected issue without such
     a work package, an entry that names another one, and an entry of an issue the selection no
     longer keeps are refused. Unselected issues get nothing. A missing or malformed report raises.
+    A caller that already read the reports passes its ``scope``, so the run uses one inventory.
     """
-    scope = LevelScope.load(mappings)
+    scope = scope or LevelScope.load(mappings)
     level_map = mappings.get_mapping(WORK_PACKAGE_MAPPING) or {}
     result = LevelWorkPackages(level_keys=set(scope.archived))
     live = LiveSubProjects(op_client, logger)

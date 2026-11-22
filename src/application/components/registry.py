@@ -107,6 +107,9 @@ DEFAULT_COMPONENT_SEQUENCE: list[ComponentName] = [
     "accounts",
     # === Structure: Projects ===
     "projects",
+    # Private sub-project per Jira project and security level (ADR-009); skips while no
+    # restricted-issue report is configured (migration.security_level_report).
+    "security_level_projects",
     "workflows",
     # === Phase 1: Work Package Skeletons (no content) ===
     "work_packages_skeleton",

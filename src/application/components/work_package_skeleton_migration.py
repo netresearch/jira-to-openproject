@@ -67,6 +67,7 @@ from src.application.components.issue_security import (
     unrestricted_project_jql,
     warn_if_restricted_mappings,
 )
+from src.application.components.level_readers import READERS_SETTING
 from src.application.components.security_level_projects_migration import LevelProjectError, verify_level_project
 from src.domain import provenance_fields
 from src.infrastructure.exceptions import QueryExecutionError
@@ -83,7 +84,35 @@ if TYPE_CHECKING:
     from jira.resources import Issue
 
 _FIELDS = "summary,issuetype,status,project,priority,assignee,reporter,created,updated,security"
-_LEVEL_COUNTS = ("processed", "created", "skipped", "adopted", "failed", "unmapped", "withheld", "refused")
+_LEVEL_COUNTS = (
+    "processed",
+    "created",
+    "skipped",
+    "adopted",
+    "failed",
+    "unmapped",
+    "withheld",
+    "refused",
+    "assignees_not_readers",
+)
+
+
+def _drop_assignee_not_reader(payload: dict[str, Any], target: level_issues.LevelTarget, key: str) -> int:
+    """Assign a level work package only to a reader of it (ADR-012); 1 if dropped.
+
+    A reader is a static reader of the level, or on Enterprise an extra reader of the issue. An
+    assignee who is none stays unassigned rather than becoming a member. Without a readers file
+    the sub-project has no member yet, so no assignee is known to be a reader and none is kept.
+    """
+    if "assigned_to_id" not in payload:
+        return 0
+    readers: set[Any] = set()
+    if config.migration_config.get(READERS_SETTING):
+        readers = set(target.audience["members"]) | set(target.audience["shares"].get(key, []))
+    if payload["assigned_to_id"] in readers:
+        return 0
+    del payload["assigned_to_id"]
+    return 1
 
 
 def _stringify_optional_timestamp(value: Any) -> str | None:
@@ -1254,6 +1283,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
             if not payload:
                 counters["failed"] += 1
                 continue
+            counters["assignees_not_readers"] += _drop_assignee_not_reader(payload, target, issue.key)
             payloads.append(payload)
             issues.append(issue)
             targets[str(issue.id)] = target
