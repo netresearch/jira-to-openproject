@@ -564,10 +564,15 @@ class TimeEntryTransformer:
         time_entry["_meta"]["tempo_billable"] = billable is not None and billable > 0
         time_entry["_meta"]["tempo_location"] = tempo_log.get("location")
 
-        # Handle billing information
+        # Handle billing information. Four decimals keep a single billable minute (#490).
         if billable is not None:
             billable_hours = billable / 3600.0
-            time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 2)
+            time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 4)
+        approval = tempo_log.get("approval_status", tempo_log.get("approvalStatus"))
+        if isinstance(approval, dict):
+            approval = approval.get("status") or approval.get("name")
+        if isinstance(approval, str) and approval.strip():
+            time_entry["_meta"]["tempo_approval_status"] = approval.strip()
 
         # Handle work attributes
         work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))

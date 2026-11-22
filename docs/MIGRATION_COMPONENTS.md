@@ -607,7 +607,7 @@ Migrates Tempo worklogs to OpenProject time entries.
 - Worklog → Time entry mapping
 - Activity mapping
 - Author preservation via Rails metadata
-- Billable flag support
+- Tempo billable hours and approval status in the admin-only time entry fields `Tempo Billable Hours` and `Tempo Approval Status`, updated on every run ([ADR-014](adr/ADR-014-tempo-billing-on-time-entries.md))
 
 **Dependencies**: WorkPackageMigration, UserMigration
 

@@ -42,6 +42,33 @@ fields_for = lambda do |row|
     values[field.id] = row[key].to_s
   end
 end
+# Tempo billable hours and approval status (#490): admin-only fields that mirror Tempo on every run.
+tempo_field_names = {
+  tempo_billable_hours: ['Tempo Billable Hours', 'float'],
+  tempo_approval_status: ['Tempo Approval Status', 'string']
+}
+tempo_fields_for = lambda do |row, record|
+  changed = 0
+  tempo_field_names.each_with_index do |(key, (name, format)), offset|
+    next unless row.key?(key)
+    field = TimeEntryCustomField.find_by(name: name)
+    unless field
+      TimeEntry.connection.select_value("SELECT pg_advisory_xact_lock(124481108, #{2 + offset})")
+      field = TimeEntryCustomField.find_or_create_by!(name: name) do |f|
+        f.assign_attributes(field_format: format, is_required: false, is_for_all: false, admin_only: true)
+      end
+    end
+    raise source_mismatch, 'Incompatible Tempo field' unless field.field_format == format && field.admin_only?
+    want = CustomValue.new(custom_field: field, value: row.fetch(key).to_s).value
+    values = record.custom_values.where(custom_field_id: field.id)
+    next if values.pluck(:value) == [want]
+    value = values.first || values.build
+    value.update!(value: want)
+    raise source_mismatch, 'Tempo field was not persisted' unless record.custom_values.where(custom_field_id: field.id).pluck(:value) == [want]
+    changed += 1
+  end
+  changed
+end
 tempo_archive_for = lambda do |row, wp, record|
   archive = row.fetch(:tempo_archive)
   raise source_mismatch, 'Missing expected project' unless row[:target_project_id] == wp.project_id
@@ -105,6 +132,7 @@ entries.each do |row|
       end
       raise source_mismatch, 'Work log differs from target provenance' unless values.all? { |id,v| record.custom_values.where(custom_field_id: id).sole.value == v }
       result = { index: row[:index], success: true, reused: existing, id: record.id }
+      result[:tempo_fields_changed] = tempo_fields_for.call(row, record)
       result[:verified_worklog_key] = row[:jira_worklog_key] if row[:jira_started]
       result.merge!(tempo_archive_for.call(row, wp, record)) if row[:tempo_archive]
       if row[:return_record]
@@ -121,7 +149,9 @@ entries.each do |row|
 end
 created = results.count { |r| r[:success] && !r[:reused] }
 reused = results.count { |r| r[:reused] }
-File.write(result_path, JSON.generate({ created: created, reused: reused, failed: results.size - created - reused, results: results }))
+tempo_changed = results.sum { |r| r[:tempo_fields_changed].to_i }
+File.write(result_path, JSON.generate({ created: created, reused: reused, failed: results.size - created - reused,
+                                        tempo_fields_changed: tempo_changed, results: results }))
 """
 
 
@@ -302,6 +332,8 @@ class OpenProjectTimeEntryService:
             "jira_start_minute",
             "jira_created_at",
             "jira_updated_at",
+            "tempo_billable_hours",
+            "tempo_approval_status",
         )
         return {
             "index": index,

@@ -383,6 +383,10 @@ class TimeEntryMigrator:
                 created = int(batch_result.get("created", 0))
                 failed = int(batch_result.get("failed", 0))
                 migration_summary["skipped_entries"] += int(batch_result.get("reused", 0))
+                # Tempo billable hours and approval status written or updated on the entries (#490).
+                migration_summary["tempo_fields_changed"] = migration_summary.get("tempo_fields_changed", 0) + int(
+                    batch_result.get("tempo_fields_changed", 0)
+                )
                 migration_summary["successful_migrations"] += created
                 migration_summary["failed_migrations"] += failed
                 ids = [
