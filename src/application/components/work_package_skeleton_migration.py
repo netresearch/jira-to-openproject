@@ -59,7 +59,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from src import config
-from src.application.components import level_issues
+from src.application.components import adopted_work_packages, level_issues
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.issue_security import (
     mapped_project_issues,
@@ -905,6 +905,8 @@ class WorkPackageSkeletonMigration(BaseMigration):
             "total_created": 0,
             "total_skipped": 0,
             "total_failed": 0,
+            # Work packages OpenProject already held for an unmapped issue, reused instead of created (#482).
+            "total_adopted": 0,
             "projects": {},
         }
 
@@ -949,6 +951,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
             results["total_created"] += project_results["created"]
             results["total_skipped"] += project_results["skipped"]
             results["total_failed"] += project_results["failed"]
+            results["total_adopted"] += project_results["adopted"]
             if scope is not None:
                 self._add_level_results(
                     results, project_results, self._create_level_skeletons(project_key, j2o_cf_id, scope)
@@ -1106,6 +1109,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
                 "total_created": migration_results["total_created"],
                 "total_skipped": migration_results["total_skipped"],
                 "total_failed": migration_results["total_failed"],
+                "total_adopted": migration_results.get("total_adopted", 0),
                 "mapping_file": str(self.work_package_mapping_file),
             }
             status, level_error = self._level_verdict(migration_results, details)
@@ -1154,9 +1158,11 @@ class WorkPackageSkeletonMigration(BaseMigration):
             "created": 0,
             "skipped": 0,
             "failed": 0,
+            "adopted": 0,
         }
 
         self.logger.info("Processing project %s", project_key)
+        existing = _ProjectWorkPackages(self, project_key, project_id)
         known = mapped_project_issues(project_key, self.work_package_mapping)
         warn_if_restricted_mappings(self.jira_client, project_key, known, self.logger)
 
@@ -1166,16 +1172,7 @@ class WorkPackageSkeletonMigration(BaseMigration):
 
         for issue in self.iter_project_issues(project_key):
             project_results["processed"] += 1
-            jira_id = str(issue.id)
-
-            # Skip if already migrated
-            if jira_id in self.work_package_mapping:
-                project_results["skipped"] += 1
-                continue
-            if jira_id in getattr(self, "level_work_packages", {}):
-                # The issue lost its level after it was created in its level sub-project.
-                self.logger.warning("%s is a work package of a level sub-project; not created again", issue.key)
-                project_results["skipped"] += 1
+            if not self._needs_creation(issue, existing, project_results):
                 continue
 
             # Build payload for batch
@@ -1199,6 +1196,52 @@ class WorkPackageSkeletonMigration(BaseMigration):
         if batch_payloads:
             self._flush_skeletons(batch_payloads, batch_issues, project_key, project_results)
         return project_results
+
+    def _needs_creation(self, issue: Issue, existing: _ProjectWorkPackages, counters: dict) -> bool:
+        """Whether the issue gets a new work package; counts every other outcome."""
+        jira_id = str(issue.id)
+        if jira_id in self.work_package_mapping:
+            counters["skipped"] += 1
+            return False
+        if jira_id in getattr(self, "level_work_packages", {}):
+            # The issue lost its level after it was created in its level sub-project.
+            self.logger.warning("%s is a work package of a level sub-project; not created again", issue.key)
+            counters["skipped"] += 1
+            return False
+        marked = existing.marked()
+        if marked is None:
+            counters["failed"] += 1
+            return False
+        return not self._adopt_existing(issue, marked, existing.project_key, counters)
+
+    def _adopt_existing(
+        self,
+        issue: Issue,
+        marked: adopted_work_packages.MarkedWorkPackages,
+        project_key: str,
+        counters: dict,
+    ) -> bool:
+        """Record the work package OpenProject already holds for the issue; True when none must be created."""
+        found = marked.match(str(issue.id), issue.key)
+        if not found:
+            return False
+        mapped = {
+            entry.get("openproject_id") if isinstance(entry, dict) else entry
+            for entry in self.work_package_mapping.values()
+        }
+        if len(found) > 1 or found[0] in mapped:
+            self.logger.error("%s is claimed by work packages %s; not created and not adopted", issue.key, found)
+            counters["failed"] += 1
+            return True
+        self.logger.warning("%s already has work package %d in %s; mapping restored", issue.key, found[0], project_key)
+        self.work_package_mapping[str(issue.id)] = {
+            "jira_key": issue.key,
+            "openproject_id": found[0],
+            "project_key": project_key,
+        }
+        self._save_mapping()
+        counters["adopted"] += 1
+        return True
 
     def _flush_skeletons(
         self,
@@ -1336,3 +1379,23 @@ class WorkPackageSkeletonMigration(BaseMigration):
             return f"{target.label} holds {len(stray)} work packages of issues not selected for it"
         self._level_existing[target.label] = existing
         return None
+
+
+class _ProjectWorkPackages:
+    """The marked work packages of one project, read once, before the first work package is created (#482)."""
+
+    def __init__(self, migration: WorkPackageSkeletonMigration, project_key: str, project_id: int) -> None:
+        self.migration, self.project_key, self.project_id = migration, project_key, project_id
+        self._marked: adopted_work_packages.MarkedWorkPackages | None = None
+        self._unreadable = False
+
+    def marked(self) -> adopted_work_packages.MarkedWorkPackages | None:
+        """The read result; None after a failed read, which stops every creation in the project."""
+        if self._marked is None and not self._unreadable:
+            try:
+                self._marked = adopted_work_packages.read(self.migration.op_client, self.project_id)
+            except (adopted_work_packages.AdoptionError, QueryExecutionError, RubyError) as exc:
+                # Without the read a lost mapping would yield a second work package per issue.
+                self.migration.logger.error("Not creating work packages in %s: %s", self.project_key, exc)
+                self._unreadable = True
+        return self._marked

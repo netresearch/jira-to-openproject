@@ -263,6 +263,7 @@ Creates minimal work packages to establish complete Jira-to-OpenProject ID mappi
 - Project assignment
 - J2O Origin Key custom field (for traceability)
 - Outputs `work_package_mapping.json` with all Jira→OP ID mappings
+- Before it creates a work package for an unmapped issue, it reads the work packages the project already holds with a `J2O Origin ID` or, without one, a `J2O Origin Key`. A match is recorded in the mapping instead of a second work package, so a rerun after a lost mapping file or a lost batch answer creates no duplicates; the run reports these as `total_adopted`. An issue claimed by two work packages, or by one that is mapped to another issue, is neither created nor adopted and counts as failed. If the read fails, nothing is created in that project.
 - With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set): the work packages of issues with a security level, in their level sub-project, recorded in `security_level_work_package_mapping.json` ([Level work packages](operator-restricted-issues.md#level-work-packages))
 
 **Does NOT migrate**:
