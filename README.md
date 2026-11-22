@@ -156,6 +156,8 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 
 [Operator archive of restricted Jira issues](docs/operator-restricted-issues.md) describes how to inventory issues with a security level and keep those that cannot be migrated with their level's static readers.
 
+[Rollback of a migration run](docs/operator-rollback.md) describes the snapshot to take and prove before each production run, and how to restore the target from it.
+
 ### Watch a migration
 
 From the configured checkout, start the dashboard in one terminal:
