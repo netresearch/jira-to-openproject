@@ -247,27 +247,30 @@ J2O_DATA
                 next
               end
 
-              desc = wp.description || ''
-              # Rewriting the text J2O wrote last keeps its digest current (ADR-013).
-              kept = item['expect'] ? j2o_digest.call(desc.to_s) == item['expect'] : desc.to_s.empty?
-              marker = '## ' + marker_text
+              # The row lock covers the read, the rewrite and the digest of the new text.
+              wp.with_lock do
+                desc = wp.description || ''
+                # Rewriting the text J2O wrote last keeps its digest current (ADR-013).
+                kept = item['expect'] ? j2o_digest.call(desc.to_s) == item['expect'] : desc.to_s.empty?
+                marker = '## ' + marker_text
 
-              # Find existing section using regex
-              section_regex = Regexp.new("\\n?" + Regexp.escape(marker) + "\\n[\\s\\S]*?(?=\\n## |\\z)")
-              if desc.match?(section_regex)
-                new_section = "\\n" + marker + "\\n" + content
-                desc = desc.gsub(section_regex, new_section)
-              else
-                desc = desc.strip + "\\n\\n" + marker + "\\n" + content
-              end
+                # Find existing section using regex
+                section_regex = Regexp.new("\\n?" + Regexp.escape(marker) + "\\n[\\s\\S]*?(?=\\n## |\\z)")
+                if desc.match?(section_regex)
+                  new_section = "\\n" + marker + "\\n" + content
+                  desc = desc.gsub(section_regex, new_section)
+                else
+                  desc = desc.strip + "\\n\\n" + marker + "\\n" + content
+                end
 
-              wp.description = desc.strip
-              if wp.save
-                results[:updated] += 1
-                results[:digests][wp_id] = j2o_digest.call(j2o_stored.call(wp, 'description')) if kept
-              else
-                results[:failed] += 1
-                results[:errors] << {{ wp_id: wp_id, error: wp.errors.full_messages.join(', ') }}
+                wp.description = desc.strip
+                if wp.save
+                  results[:updated] += 1
+                  results[:digests][wp_id] = j2o_digest.call(j2o_stored.call(wp, 'description')) if kept
+                else
+                  results[:failed] += 1
+                  results[:errors] << {{ wp_id: wp_id, error: wp.errors.full_messages.join(', ') }}
+                end
               end
             rescue => e
               results[:failed] += 1

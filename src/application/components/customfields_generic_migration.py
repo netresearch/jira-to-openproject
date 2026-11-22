@@ -49,7 +49,7 @@ field = WorkPackageCustomField.find(input_data.fetch('field_id'))
 guard = input_data.fetch('guard')
 attr = "customField#{field.id}"
 raise "Guard for another field than #{attr}" unless guard.fetch('attr') == attr
-status = nil
+status = digest = nil
 wp.with_lock do
   value = input_data.fetch('value')
   before = j2o_stored.call(wp, attr)
@@ -61,9 +61,11 @@ wp.with_lock do
     cv.value = value
     cv.save!
   end
+  # Read under the row lock, so a concurrent edit cannot become J2O's record.
+  digest = j2o_digest.call(j2o_stored.call(wp, attr)) unless status == 'target_changed'
 end
 row = {id: wp.id, attr: attr, status: status}
-row[:digest] = j2o_digest.call(j2o_stored.call(wp, attr)) unless status == 'target_changed'
+row[:digest] = digest if digest
 puts $j2o_start_marker
 puts JSON.generate({updated: status == 'updated' ? 1 : 0, results: [row]})
 puts $j2o_end_marker

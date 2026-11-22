@@ -144,6 +144,7 @@ J2O_DATA
                 guard = item['guard']
                 attr = "customField#{{cf.id}}"
                 status = 'updated'
+                digest = nil
                 wp.with_lock do
                   cv = wp.custom_value_for(cf)
                   raise 'Field unavailable for work package' unless cv
@@ -159,10 +160,12 @@ J2O_DATA
                     wp.save!
                     raise 'Custom value was not persisted' unless CustomValue.exists?(customized: wp, custom_field: cf, value: val)
                   end
+                  # Read under the row lock, so a concurrent edit cannot become J2O's record (ADR-013).
+                  digest = j2o_digest.call(j2o_stored.call(wp, attr)) if guard && status != 'target_changed'
                 end
                 if guard
                   row = {{ id: wp.id, attr: attr, status: status }}
-                  row[:digest] = j2o_digest.call(j2o_stored.call(wp, attr)) unless status == 'target_changed'
+                  row[:digest] = digest if digest
                   results[:results] << row
                   results[status.to_sym] += 1
                 else
