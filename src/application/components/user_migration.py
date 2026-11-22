@@ -83,17 +83,55 @@ def _printable_name(value: str, fallback: str) -> str:
     return re.sub(r"[^\w\s\-']", "", printable).strip() or fallback
 
 
-def _find_mapped_user(entry: dict, op_client: Any) -> dict | None:
+def _find_mapped_user(entry: dict, lookup: Any) -> dict | None:
     for probe in (entry.get("jira_name"), entry.get("jira_email")):
         if not probe:
             continue
         try:
-            user = op_client.get_user(probe)
+            user = lookup(probe)
         except Exception:
             continue
         if isinstance(user, dict) and user.get("id"):
             return user
     return None
+
+
+def _op_user_lookup(op_client: Any, logger: Any) -> Any:
+    """Look users up the way ``get_user`` does, from one read of every OpenProject user.
+
+    ``get_user`` answers a miss with a Rails query, and a first run misses for every Jira
+    user: about two queries per user. The index follows its rules: digits are an ID, a value
+    with ``@`` a mail address (case-insensitive), anything else an exact login. If the list
+    cannot be read, each probe falls back to ``get_user``.
+    """
+    try:
+        users = op_client.get_users(refresh=True)
+    except Exception as exc:
+        logger.debug("Reading all OpenProject users failed, looking users up one by one: %s", exc)
+        users = None
+    if not isinstance(users, list):
+        return op_client.get_user
+    by_id, by_login, by_mail = {}, {}, {}
+    for user in users:
+        if not isinstance(user, dict):
+            continue
+        if str(user.get("id", "")).isdigit():
+            by_id.setdefault(int(user["id"]), user)
+        if isinstance(user.get("login"), str):
+            by_login.setdefault(user["login"], user)
+        mail = user.get("mail") or user.get("email")
+        if isinstance(mail, str):
+            by_mail.setdefault(mail.lower(), user)
+
+    def lookup(probe: Any) -> dict | None:
+        value = probe.strip() if isinstance(probe, str) else probe
+        if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+            return by_id.get(int(value))
+        if not isinstance(value, str) or not value:
+            return None
+        return by_mail.get(value.lower()) if "@" in value else by_login.get(value)
+
+    return lookup
 
 
 def _backfill_unmapped_users_from_op(
@@ -113,10 +151,14 @@ def _backfill_unmapped_users_from_op(
     Returns the count of mappings updated.
     """
     n = 0
-    for entry in user_mapping.values():
-        if not isinstance(entry, dict) or entry.get("openproject_id") or entry.get("matched_by") != "none":
-            continue
-        existing = _find_mapped_user(entry, op_client)
+    pending = [
+        entry
+        for entry in user_mapping.values()
+        if isinstance(entry, dict) and not entry.get("openproject_id") and entry.get("matched_by") == "none"
+    ]
+    lookup = _op_user_lookup(op_client, logger) if pending else None
+    for entry in pending:
+        existing = _find_mapped_user(entry, lookup)
         if not existing:
             continue
         entry["openproject_id"] = int(existing["id"])
