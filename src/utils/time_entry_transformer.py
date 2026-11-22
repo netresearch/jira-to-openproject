@@ -579,20 +579,22 @@ class TimeEntryTransformer:
         if approval := self._tempo_approval_status(tempo_log):
             time_entry["_meta"]["tempo_approval_status"] = approval
 
-        # Handle work attributes
-        work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))
-        if work_attributes:
-            attributes = {}
-            for attr in work_attributes:
-                key = attr.get("key", "")
-                value = attr.get("value", "")
-                if key and key in attributes:
-                    msg = "Tempo contains duplicate work attribute keys."
-                    raise ValueError(msg)
-                if key and value is not None:
-                    attributes[key] = value
-            if attributes:
-                time_entry["_meta"]["tempo_attributes"] = attributes
+        if attributes := self._tempo_work_attributes(tempo_log):
+            time_entry["_meta"]["tempo_attributes"] = attributes
+
+    @staticmethod
+    def _tempo_work_attributes(tempo_log: dict[str, Any]) -> dict[str, Any]:
+        """The work attribute values of a Tempo work log by key; a repeated key is refused."""
+        attributes: dict[str, Any] = {}
+        for attr in tempo_log.get("work_attributes", tempo_log.get("workAttributes", [])) or []:
+            key = attr.get("key", "")
+            value = attr.get("value", "")
+            if key and key in attributes:
+                msg = "Tempo contains duplicate work attribute keys."
+                raise ValueError(msg)
+            if key and value is not None:
+                attributes[key] = value
+        return attributes
 
     def _map_custom_fields(
         self,
