@@ -158,7 +158,7 @@ J2O_UPDATES
           begin
             wp = WorkPackage.find(update.fetch('id'))
             status = 'updated'
-            guard = attr = before = nil
+            guard = attr = before = digest = nil
             wp.with_lock(requires_new: true) do
               attributes = update.except('id', '_rails_operations')
               guard = attributes.delete('_j2o_guard')
@@ -233,11 +233,15 @@ J2O_UPDATES
                   end
                 end
               end
+              # Read under the row lock, so a concurrent edit cannot become J2O's record.
+              if guard && status != 'target_changed'
+                digest = j2o_digest.call(status == 'updated' ? j2o_stored.call(wp, attr) : before)
+              end
             end
             row = {{ id: wp.id, status: status }}
             if guard
               row[:attr] = attr
-              row[:digest] = j2o_digest.call(status == 'updated' ? j2o_stored.call(wp, attr) : before) unless status == 'target_changed'
+              row[:digest] = digest if digest
             end
             case status
             when 'updated' then updated_count += 1

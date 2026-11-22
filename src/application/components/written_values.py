@@ -47,35 +47,52 @@ def overwrite_allowed() -> bool:
     return config.migration_config.get(SETTING) is True
 
 
+class WrittenValuesError(RuntimeError):
+    """The digest store could not be read or written."""
+
+
 class WrittenValues:
     """Digests keyed by work package id and attribute (``description``, ``customField<id>``)."""
 
     def __init__(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path, timeout=120)
-        with self._db:
-            self._db.execute(
-                "CREATE TABLE IF NOT EXISTS written("
-                "wp INTEGER NOT NULL, attr TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(wp, attr))"
-            )
+        self._path = path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._db = sqlite3.connect(path, timeout=120)
+            with self._db:
+                self._db.execute(
+                    "CREATE TABLE IF NOT EXISTS written("
+                    "wp INTEGER NOT NULL, attr TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(wp, attr))"
+                )
+        except (OSError, sqlite3.Error) as exc:
+            msg = f"Cannot open the written-values store {path}"
+            raise WrittenValuesError(msg) from exc
 
     def expected(self, keys: Iterable[tuple[int, str]]) -> dict[tuple[int, str], str]:
         """The recorded digests of the given keys; a key never written has none."""
         found: dict[tuple[int, str], str] = {}
-        for wp, attr in set(keys):
-            row = self._db.execute("SELECT digest FROM written WHERE wp=? AND attr=?", (wp, attr)).fetchone()
-            if row:
-                found[wp, attr] = row[0]
+        try:
+            for wp, attr in set(keys):
+                row = self._db.execute("SELECT digest FROM written WHERE wp=? AND attr=?", (wp, attr)).fetchone()
+                if row:
+                    found[wp, attr] = row[0]
+        except sqlite3.Error as exc:
+            msg = f"Cannot read the written-values store {self._path}"
+            raise WrittenValuesError(msg) from exc
         return found
 
     def record(self, rows: Iterable[tuple[int, str, str]]) -> None:
         """Remember the digest of each value J2O wrote or found unchanged."""
-        with self._db:
-            self._db.executemany(
-                "INSERT INTO written(wp, attr, digest) VALUES(?, ?, ?) "
-                "ON CONFLICT(wp, attr) DO UPDATE SET digest=excluded.digest",
-                list(rows),
-            )
+        try:
+            with self._db:
+                self._db.executemany(
+                    "INSERT INTO written(wp, attr, digest) VALUES(?, ?, ?) "
+                    "ON CONFLICT(wp, attr) DO UPDATE SET digest=excluded.digest",
+                    list(rows),
+                )
+        except sqlite3.Error as exc:
+            msg = f"Cannot record in the written-values store {self._path}"
+            raise WrittenValuesError(msg) from exc
 
     def close(self) -> None:
         """Close the database connection."""

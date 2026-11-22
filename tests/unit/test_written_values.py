@@ -204,3 +204,10 @@ def test_an_unconfirmed_inline_reference_rewrite_fails(answer):
         SimpleNamespace(data={"work_package_ids": [5, 6]})
     )
     assert (result.success, result.failed) == (False, 2)
+
+
+def test_a_store_that_cannot_be_opened_names_its_path(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    with pytest.raises(written_values.WrittenValuesError, match=str(blocker / "w.sqlite")):
+        WrittenValues(blocker / "w.sqlite")
