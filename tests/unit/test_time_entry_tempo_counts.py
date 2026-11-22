@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.utils.scoped_receipts import ScopedReceipts
 from src.utils.time_entry_migrator import TimeEntryMigrator
 
@@ -42,3 +44,17 @@ def test_a_single_created_entry_counts_too(monkeypatch):
     monkeypatch.setattr(migrator, "_validate_time_entry_with_reason", lambda entry: (True, ""))
     assert migrator._create_time_entry({}, parallel=False) == ("created", 9, None)
     assert migrator._tempo_fields_changed == 2
+
+
+@pytest.mark.parametrize(
+    "extra", [{"jira_started": "2026-01-02T10:00:00.000+0100"}, {"tempo_archive": {"packet": "p"}}]
+)
+def test_a_tempo_row_consumed_by_its_jira_entry_hands_over_its_billing(extra):
+    migrator = _migrator()
+    migrator.migration_results = {"successful_transformations": 0}
+    row = {"issue_key": "K-1", "jira_worklog_id": "10", "billable_seconds": 60, "approval_status": "APPROVED", **extra}
+    migrator.extracted_tempo_entries = [row]
+    entry = {"_meta": {"jira_worklog_key": "K-1:10"}}
+    assert migrator._attach_tempo_archives([entry]) == []
+    assert (entry["_meta"]["tempo_billable_hours"], entry["_meta"]["tempo_approval_status"]) == (0.0167, "APPROVED")
+    assert "tempo_attributes" not in entry["_meta"]

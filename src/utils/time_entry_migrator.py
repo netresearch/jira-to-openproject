@@ -437,6 +437,7 @@ class TimeEntryMigrator:
         self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
         self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
         self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
+        self.migration_results["tempo_fields_changed"] = migration_summary.get("tempo_fields_changed", 0)
         self.migration_results["processing_time_seconds"] += processing_time
         self.logger.success(
             "Migration completed: %d successful, %d failed in %.2fs",
@@ -892,6 +893,8 @@ class TimeEntryMigrator:
             elif not (len(matches) == 1 and row.get("jira_started")):
                 remaining.append(row)
                 continue
+            # The Tempo row is consumed here: its billing values go onto the Jira entry (#490).
+            matches[0]["_meta"].update(TimeEntryTransformer.tempo_billing(row))
             self._combined_tempo += 1
             self.migration_results["successful_transformations"] += 1
         return remaining
@@ -1382,6 +1385,7 @@ class TimeEntryMigrator:
             "successful_transformations": self.migration_results["successful_transformations"],
             "successful_migrations": self.migration_results["successful_migrations"],
             "failed_migrations": self.migration_results["failed_migrations"],
+            "tempo_fields_changed": self.migration_results.get("tempo_fields_changed", 0),
             "error_count": len(self.migration_results["errors"]),
             "warning_count": len(self.migration_results["warnings"]),
             "processing_time_seconds": self.migration_results["processing_time_seconds"],

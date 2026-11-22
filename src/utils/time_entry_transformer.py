@@ -547,6 +547,20 @@ class TimeEntryTransformer:
         description = tempo_log.get("description", tempo_log.get("comment")) or ""
         return self._detect_activity(description)
 
+    @classmethod
+    def tempo_billing(cls, tempo_log: dict[str, Any]) -> dict[str, Any]:
+        """Billable hours and approval status of a Tempo work log for the time entry writer (#490).
+
+        Four decimals keep a single billable minute.
+        """
+        billing: dict[str, Any] = {}
+        billable = tempo_log.get("billable_seconds", tempo_log.get("billableSeconds"))
+        if billable is not None:
+            billing["tempo_billable_hours"] = round(billable / 3600.0, 4)
+        if approval := cls._tempo_approval_status(tempo_log):
+            billing["tempo_approval_status"] = approval
+        return billing
+
     @staticmethod
     def _tempo_approval_status(tempo_log: dict[str, Any]) -> str | None:
         """Tempo's approval status as a string, or None when the work log has none (#490)."""
@@ -572,12 +586,7 @@ class TimeEntryTransformer:
         time_entry["_meta"]["tempo_billable"] = billable is not None and billable > 0
         time_entry["_meta"]["tempo_location"] = tempo_log.get("location")
 
-        # Handle billing information. Four decimals keep a single billable minute (#490).
-        if billable is not None:
-            billable_hours = billable / 3600.0
-            time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 4)
-        if approval := self._tempo_approval_status(tempo_log):
-            time_entry["_meta"]["tempo_approval_status"] = approval
+        time_entry["_meta"].update(self.tempo_billing(tempo_log))
 
         if attributes := self._tempo_work_attributes(tempo_log):
             time_entry["_meta"]["tempo_attributes"] = attributes
