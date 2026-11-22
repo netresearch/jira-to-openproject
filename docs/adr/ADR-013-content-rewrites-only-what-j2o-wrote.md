@@ -40,9 +40,16 @@ OpenProject stores what it receives in a form of its own: a list option as its o
 - A crash between the Rails write and the record leaves the old digest. The next run of the same content finds the wanted value and records it as `unchanged`. If the Jira content changed in between, the row is refused and needs the operator flag.
 - The legacy single-phase `work_packages` component writes descriptions at creation without a record. A content run after it records those that still match the converted Jira text and refuses the others unless the operator allows overwriting.
 
-## Not covered yet
+## Guarded writers
 
-`estimates`, `priorities`, `project_named_records` and the other custom field writers (`openproject_work_package_custom_field_service.py`, `BaseMigration._write_work_package_custom_value`) still write without the guard. They follow in the same issue.
+- `work_packages_content`: description and mapped custom fields (`batch_update_work_packages`).
+- `priorities` (`priority_id`), `estimates` (`estimated_hours` and `remaining_hours`, one row each), `versions` (`version_id`, or `target_version_ids` for level copies), `sprint_epic` (`parent_id`, `version_id`, `target_version_ids`): `written_values.write_rows` sends one guarded row per attribute. A work package column is read back with `pick`; `priority_id` counts the default priority as untouched. In OpenProject 17.9.7 `version_id` and `target_version_ids` are stored apart and keep separate records; on an OpenProject without `target_version_ids` both store `version_id`, and Rails returns the other attribute so that one digest is recorded for both.
+- `labels`, `votes`, the sprint fields of `sprint_epic`, and `story_points`, `resolution` and `security_levels` (through `BaseMigration._write_work_package_custom_value`): `written_values.write_custom_values` guards the rows of `bulk_set_wp_custom_field_values`.
+- `customfields_generic`: its single-value Rails script carries the same guard.
+- `simpletasks`, `inline_refs` and `remote_links` (its section in the description): their rewrites of the description keep the record current (decision 5).
+- `wp_metadata_backfill` writes an assignee or a custom field only while it is empty, so it needs no record. `native_tags` sets tags only where OpenProject has a tag model.
+
+Rows without `_j2o_guard` still write unconditionally. The legacy single-phase `work_packages` component and the creation path of the skeleton write without it.
 
 ## Verified
 
@@ -50,4 +57,7 @@ On the OpenProject 17.9.7 pilot, in a transaction that was rolled back:
 
 - description: a non-empty target without a record was refused; the operator flag wrote it; a repeated run with the same text was `unchanged` and added no journal (CRLF stored unchanged); new Jira text was written; a description changed by another writer was refused and kept.
 - custom fields of the formats string, text, date, float, int, list, multi-value list and bool: first write, then `unchanged` on a repeated run; an int and a bool changed in the database were refused; a list field holding its default option counted as untouched.
+- `priority_id` (from the default priority), `estimated_hours`, `parent_id`, `version_id` and `target_version_ids`: first write, then `unchanged`; a priority changed in the database was refused.
+- `bulk_set_wp_custom_field_values` and the `customfields_generic` script: written, `unchanged` on a repeat, a value changed in the database was refused and kept.
+- `bulk_upsert_wp_description_sections`: returned the digest of the new description when the old one held the recorded digest, and none after the description was changed in the database.
 - `inline_refs` returned the digest of the rewritten description.

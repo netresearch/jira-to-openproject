@@ -9,6 +9,7 @@ import pytest
 
 from src.application.components.registry import DEFAULT_COMPONENT_SEQUENCE, PREDEFINED_PROFILES
 from src.application.components.sprint_epic_migration import SprintEpicMigration
+from tests.helpers.rails_writes import answer, sent, unguarded
 from tests.unit.test_level_attachments import LEVEL_MAP, LEVEL_REFUSALS, LIVE
 from tests.unit.test_level_versions import _payload
 from tests.unit.test_level_work_packages import level_issues
@@ -46,8 +47,8 @@ def migration(monkeypatch):
     }
     op = Mock()
     op.ensure_wp_custom_field_id.return_value = 101
-    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
-    op.bulk_set_wp_custom_field_values.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
+    op.batch_update_work_packages.side_effect = answer
+    op.bulk_set_wp_custom_field_values.side_effect = answer
     return SprintEpicMigration(jira_client=jira, op_client=op), mappings
 
 
@@ -66,12 +67,12 @@ def test_real_field_ids_and_confirmed_writes(migration):
     result = mig.run_with_change_detection("sprint_epic")
     assert result.success, result
     assert result.updated == 4
-    assert [call.args[0] for call in mig.op_client.batch_update_work_packages.call_args_list] == [
+    assert sent(mig.op_client.batch_update_work_packages) == [
         [{"id": 20, "parent_id": 10}],
         [{"id": 20, "version_id": 9}],
     ]
     fields = mig.op_client.bulk_set_wp_custom_field_values.call_args_list
-    assert fields[0].args[0] == [
+    assert unguarded(fields[0].args[0]) == [
         {"work_package_id": 20, "custom_field_id": 101, "value": "Closed, sprint, Next sprint"}
     ]
     assert json.loads(fields[1].args[0][0]["value"]) == [
@@ -153,7 +154,7 @@ def test_subtask_keeps_immediate_parent_instead_of_inherited_epic(migration):
     mig.jira_client.batch_get_issues.return_value["DEMO-2"]["fields"]["parent"] = {"key": "DEMO-3"}
     result = mig.run()
     assert result.success
-    assert mig.op_client.batch_update_work_packages.call_args_list[0].args[0] == [{"id": 20, "parent_id": 30}]
+    assert sent(mig.op_client.batch_update_work_packages)[0] == [{"id": 20, "parent_id": 30}]
 
 
 def test_missing_subtask_parent_is_actionable(migration):
@@ -270,8 +271,8 @@ def level_op(live=None, snapshot=()):
     op.execute_query_to_json_file.side_effect = read
     op.get_project_wp_cf_snapshot.return_value = [dict(row) for row in snapshot]
     op.ensure_wp_custom_field_id.return_value = 101
-    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
-    op.bulk_set_wp_custom_field_values.side_effect = lambda rows: {"updated": len(rows), "failed": 0}
+    op.batch_update_work_packages.side_effect = answer
+    op.bulk_set_wp_custom_field_values.side_effect = answer
     return op
 
 
@@ -481,7 +482,7 @@ def test_level_sprint_versions_are_withheld_from_shared_work_packages(level_setu
 
 def test_level_switch_off_writes_no_sprint_copy(level_setup):
     outcome = level_sprint_run(level_setup, on=False, reports=False)
-    assert [c.args[0] for c in outcome.op.batch_update_work_packages.call_args_list] == [[{"id": 500, "version_id": 9}]]
+    assert sent(outcome.op.batch_update_work_packages) == [[{"id": 500, "version_id": 9}]]
     assert not outcome.jira.searches
     outcome.op.execute_json_query.assert_not_called()
     assert not level_assignments(outcome.op)
@@ -498,7 +499,7 @@ def test_level_issues_get_the_sprint_copy_of_their_sub_project(level_setup):
     assert level_assignments(outcome.op) == {(100, 900, (copy,)), (100, 901, (copy,))}
     # The ordinary work package keeps the parent's sprint version; no level work package gets the
     # sprint field or the parent version.
-    ordinary = [r for c in outcome.op.batch_update_work_packages.call_args_list for r in c.args[0] if "version_id" in r]
+    ordinary = [r for rows in sent(outcome.op.batch_update_work_packages) for r in rows if "version_id" in r]
     assert ordinary == [{"id": 500, "version_id": 9}]
     fields = {
         r["work_package_id"] for c in outcome.op.bulk_set_wp_custom_field_values.call_args_list for r in c.args[0]

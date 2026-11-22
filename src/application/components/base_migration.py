@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from src import config
+from src.application.components import written_values
 from src.display import configure_logging
 from src.domain.repositories import MappingRepository
 from src.infrastructure.jira.jira_client import JiraClient
-from src.infrastructure.openproject.openproject_client import OpenProjectClient, escape_ruby_single_quoted
+from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.infrastructure.persistence.mapping_repo import JsonFileMappingRepository
 from src.models import ComponentResult
 from src.models.mapping.work_package_entry import WorkPackageMappingEntry
@@ -610,24 +611,19 @@ class BaseMigration:
         cf_id: int,
         text: str,
         projects: set[int],
-        *,
-        return_project: bool = False,
     ) -> bool:
-        """Update one work package value and optionally return its project for field enablement."""
-        wp_id = entry.openproject_id
+        """Update one work package value through the guard of ADR-013.
+
+        True when Rails wrote the value, found it unchanged, or kept a value changed in
+        OpenProject since J2O wrote it (logged). The bulk writer enables the field for the
+        work package's project and type; ``projects`` collects the mapped project for the
+        caller's enablement.
+        """
         if entry.openproject_project_id is not None:
             projects.add(int(entry.openproject_project_id))
-        value = escape_ruby_single_quoted(text)
-        result = "wp.project_id" if return_project else "true"
-        script = (
-            f"wp = WorkPackage.find({int(wp_id)}); cf = CustomField.find({int(cf_id)}); "
-            f"cv = wp.custom_value_for(cf); if cv; cv.value = '{value}'; cv.save; else; "
-            f"wp.custom_field_values = {{ cf.id => '{value}' }}; end; wp.save!; {result}"
-        )
-        written = self.op_client.execute_query(script)
-        if return_project and type(written) is int and written > 0:
-            projects.add(written)
-        return bool(written)
+        row = {"work_package_id": int(entry.openproject_id), "custom_field_id": int(cf_id), "value": text}
+        outcome = written_values.write_custom_values(self.op_client, [row], what="field values", logger=self.logger)
+        return outcome.acknowledged == 1
 
     def _ensure_wp_custom_field(self, name: str, field_format: str = "text") -> int:
         """Ensure a WorkPackageCustomField exists, creating it if needed.

@@ -4,6 +4,7 @@
 import pytest
 
 from src.application.components.resolution_migration import RESOLUTION_CF_NAME, ResolutionMigration
+from tests.helpers.rails_writes import answer, unguarded
 
 
 class DummyIssue:
@@ -33,6 +34,10 @@ class DummyOp:
         if "cf.id" in script:
             return 99
         return True
+
+    def bulk_set_wp_custom_field_values(self, values: list[dict]):
+        self.values = [*getattr(self, "values", []), *unguarded(values)]
+        return answer(values)
 
     def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
         return 99

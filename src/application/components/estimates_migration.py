@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.application.components import written_values
 from src.application.components.base_migration import register_entity_types
 from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
@@ -100,21 +101,19 @@ class EstimatesMigration(LevelFieldsMigration):  # noqa: D101
         return ComponentResult(success=True, data={"updates": updates}, mapped_fields_count=len(updates))
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
-        updates: list[dict[str, Any]] = (mapped.data or {}).get("updates", []) if mapped.data else []
+        updates: list[dict[str, Any]] = (mapped.data or {}).get("updates", [])
         if not updates:
             return ComponentResult(success=True, updated=0)
 
-        updated = 0
-        failed = 0
-        try:
-            res = self.op_client.batch_update_work_packages(updates)
-            updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-            failed = max(len(updates) - updated, int((res or {}).get("failed", 0)))
-        except Exception:
-            logger.exception("Failed to batch update estimates on work packages")
-            failed = len(updates)
-
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+        # One guarded row per estimate: a value changed in OpenProject is kept (ADR-013).
+        outcome = written_values.write_rows(self.op_client, updates, what="estimates", logger=logger)
+        return ComponentResult(
+            success=outcome.failed == 0,
+            # Work packages, as before the estimates became one guarded row each.
+            updated=len(outcome.written),
+            failed=outcome.failed,
+            details={"unchanged": outcome.unchanged, "target_changed": outcome.changed},
+        )
 
     def run(self) -> ComponentResult:
         """Run Estimates migration, also for the level work packages (ADR-009)."""

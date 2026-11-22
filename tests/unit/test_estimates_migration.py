@@ -4,6 +4,7 @@
 import pytest
 
 from src.application.components.estimates_migration import EstimatesMigration
+from tests.helpers.rails_writes import answer, unguarded
 
 
 class DummyTT:
@@ -42,8 +43,8 @@ class DummyOp:
         self.updated_payloads: list[dict] = []
 
     def batch_update_work_packages(self, updates):
-        self.updated_payloads.extend(updates)
-        return {"updated": len(updates), "failed": 0}
+        self.updated_payloads.extend(unguarded(updates))
+        return answer(updates)
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +84,8 @@ def test_estimates_include_numeric_jira_ids_and_partial_updates():
     mapping["801"] = {"jira_key": "PRJ-1", **mapping.pop("PRJ-1")}
     mapped = migration._map(migration._extract())
     assert {"id": 2001, "estimated_hours": 2.0, "remaining_hours": 1.0} in mapped.data["updates"]
-    migration.op_client.batch_update_work_packages = lambda updates: {"updated": 1, "failed": 1}
+    # Rails answers for every guarded row but the last one.
+    migration.op_client.batch_update_work_packages = lambda updates: answer(updates[:-1])
     result = migration._load(mapped)
     assert not result.success
     assert result.failed == 1

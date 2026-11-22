@@ -4,6 +4,7 @@
 import pytest
 
 from src.application.components.priority_migration import PriorityMigration
+from tests.helpers.rails_writes import answer, unguarded
 
 
 class DummyJira:
@@ -38,8 +39,8 @@ class DummyOp:
         return {"id": 2 if name == "High" else 3, "name": name}
 
     def batch_update_work_packages(self, updates):
-        self.updated.extend(updates)
-        return {"updated": len(updates), "failed": 0, "results": []}
+        self.updated.extend(unguarded(updates))
+        return answer(updates)
 
 
 @pytest.fixture(autouse=True)

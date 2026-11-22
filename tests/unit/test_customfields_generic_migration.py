@@ -34,8 +34,9 @@ class DummyOp:
         raise Exception("not found")
 
     def execute_script_with_data(self, script, data):
-        self.values = [*getattr(self, "values", []), data]
-        return {"data": True}
+        self.values = [*getattr(self, "values", []), {k: v for k, v in data.items() if k != "guard"}]
+        row = {"id": data["wp_id"], "attr": data["guard"]["attr"], "status": "updated", "digest": "d" * 64}
+        return {"data": {"updated": 1, "results": [row]}}
 
     def execute_query(self, script: str):
         self.queries.append(script)

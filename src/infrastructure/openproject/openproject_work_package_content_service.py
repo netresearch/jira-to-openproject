@@ -41,6 +41,7 @@ from typing import Any
 
 from src.infrastructure.openproject.checklist_section import CHECKLIST_SECTION
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 
 # Provenance marker template embedded at the end of every migrated comment.
 # CommonMark HTML comments (<!-- ... -->) are stripped from rendered output by
@@ -214,20 +215,24 @@ class OpenProjectWorkPackageContentService:
                     "wp_id": int(s["work_package_id"]),
                     "marker": str(s["section_marker"]),
                     "content": str(s["content"]),
+                    # The digest J2O recorded for the description (ADR-013), if any.
+                    "expect": s.get("expect"),
                 },
             )
 
         # Use ensure_ascii=False to output UTF-8 directly, avoiding \uXXXX escapes
         data_json = json.dumps(data, ensure_ascii=False)
         # Use Ruby heredoc with literal syntax (<<-'X') to prevent \u escape interpretation
-        script = f"""
+        script = (
+            WRITTEN_GUARD
+            + f"""
           require 'json'
           data = JSON.parse(<<-'J2O_DATA'
 {data_json}
 J2O_DATA
 )
 
-          results = {{ updated: 0, failed: 0, errors: [] }}
+          results = {{ updated: 0, failed: 0, errors: [], digests: {{}} }}
 
           data.each do |item|
             begin
@@ -242,24 +247,30 @@ J2O_DATA
                 next
               end
 
-              desc = wp.description || ''
-              marker = '## ' + marker_text
+              # The row lock covers the read, the rewrite and the digest of the new text.
+              wp.with_lock do
+                desc = wp.description || ''
+                # Rewriting the text J2O wrote last keeps its digest current (ADR-013).
+                kept = item['expect'] ? j2o_digest.call(desc.to_s) == item['expect'] : desc.to_s.empty?
+                marker = '## ' + marker_text
 
-              # Find existing section using regex
-              section_regex = Regexp.new("\\n?" + Regexp.escape(marker) + "\\n[\\s\\S]*?(?=\\n## |\\z)")
-              if desc.match?(section_regex)
-                new_section = "\\n" + marker + "\\n" + content
-                desc = desc.gsub(section_regex, new_section)
-              else
-                desc = desc.strip + "\\n\\n" + marker + "\\n" + content
-              end
+                # Find existing section using regex
+                section_regex = Regexp.new("\\n?" + Regexp.escape(marker) + "\\n[\\s\\S]*?(?=\\n## |\\z)")
+                if desc.match?(section_regex)
+                  new_section = "\\n" + marker + "\\n" + content
+                  desc = desc.gsub(section_regex, new_section)
+                else
+                  desc = desc.strip + "\\n\\n" + marker + "\\n" + content
+                end
 
-              wp.description = desc.strip
-              if wp.save
-                results[:updated] += 1
-              else
-                results[:failed] += 1
-                results[:errors] << {{ wp_id: wp_id, error: wp.errors.full_messages.join(', ') }}
+                wp.description = desc.strip
+                if wp.save
+                  results[:updated] += 1
+                  results[:digests][wp_id] = j2o_digest.call(j2o_stored.call(wp, 'description')) if kept
+                else
+                  results[:failed] += 1
+                  results[:errors] << {{ wp_id: wp_id, error: wp.errors.full_messages.join(', ') }}
+                end
               end
             rescue => e
               results[:failed] += 1
@@ -270,6 +281,7 @@ J2O_DATA
           results[:success] = (results[:failed] == 0)
           results
         """
+        )
         # See ``upsert_work_package_description_section`` — drop the
         # ``.to_json`` to avoid double-encoding through
         # ``execute_query_to_json_file``.

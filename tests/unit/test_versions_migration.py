@@ -7,6 +7,7 @@ import json
 import pytest
 
 from src.application.components.versions_migration import VersionsMigration
+from tests.helpers.rails_writes import answer
 
 
 class DummyFV:
@@ -69,7 +70,7 @@ class DummyOp:
 
     def batch_update_work_packages(self, updates):
         # Pretend all succeeded
-        return {"updated": len(updates)}
+        return answer(updates)
 
 
 @pytest.fixture(autouse=True)

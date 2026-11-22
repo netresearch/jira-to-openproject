@@ -9,6 +9,7 @@ This avoids CF proliferation and presents links inline for users.
 
 from __future__ import annotations
 
+from src.application.components import written_values
 from src.application.components.base_migration import register_entity_types
 from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
@@ -109,9 +110,16 @@ class RemoteLinksMigration(LevelFieldsMigration):  # noqa: D101
         failed = 0
         if sections_to_upsert:
             logger.info("Bulk upserting %d remote link sections...", len(sections_to_upsert))
+            # The section rewrites the description J2O wrote; its digest follows (ADR-013).
+            store = written_values.store()
+            expect = store.expected((row["work_package_id"], "description") for row in sections_to_upsert)
+            for row in sections_to_upsert:
+                row["expect"] = expect.get((row["work_package_id"], "description"))
             bulk_result = self.op_client.bulk_upsert_wp_description_sections(sections_to_upsert)
             updated = bulk_result.get("updated", 0)
             failed = bulk_result.get("failed", 0)
+            digests = bulk_result.get("digests") or {}
+            store.record((int(wp), "description", str(digest)) for wp, digest in digests.items())
             logger.info("Bulk remote links: updated=%d, failed=%d", updated, failed)
 
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)

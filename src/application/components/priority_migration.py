@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.application.components import written_values
 from src.application.components.base_migration import register_entity_types
 from src.application.components.level_fields import LevelFieldsMigration
 from src.config import logger
@@ -123,7 +124,6 @@ class PriorityMigration(LevelFieldsMigration):
 
         # Load work package mapping and Jira issues with priorities
         wp_map = self._work_package_map()
-        updated = 0
         failed = 0
 
         # Build a minimal batch of updates: [{'id': x, 'priority_id': y}]
@@ -147,14 +147,15 @@ class PriorityMigration(LevelFieldsMigration):
         if not updates:
             return ComponentResult(success=True, updated=0)
 
-        try:
-            res = self.op_client.batch_update_work_packages(updates)
-            updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-        except Exception:
-            logger.exception("Failed to batch update priorities on work packages")
-            failed += len(updates)
-
-        return ComponentResult(success=failed == 0, updated=updated, failed=failed)
+        # A priority changed in OpenProject since J2O wrote it is kept (ADR-013).
+        outcome = written_values.write_rows(self.op_client, updates, what="priorities", logger=logger)
+        failed += outcome.failed
+        return ComponentResult(
+            success=failed == 0,
+            updated=outcome.updated,
+            failed=failed,
+            details={"unchanged": outcome.unchanged, "target_changed": outcome.changed},
+        )
 
     def _priority_assignment(
         self, key: str, entry: Any, issues: dict, priorities: dict[str, int]

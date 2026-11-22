@@ -4,6 +4,7 @@
 import pytest
 
 from src.application.components.votes_migration import VOTES_CF_NAME, VotesMigration
+from tests.helpers.rails_writes import answer, unguarded
 
 
 class DummyVotes:
@@ -49,8 +50,9 @@ class DummyOp:
         return True
 
     def bulk_set_wp_custom_field_values(self, values: list[dict]):
-        self.cf_values_set.extend(values)
-        return {"updated": len(values), "failed": 0}
+        self.cf_values_set.extend(unguarded(values))
+        self.guards = [value.get("_j2o_guard") for value in values]
+        return answer(values)
 
     def ensure_wp_custom_field_id(self, name: str, field_format: str = "text") -> int:
         return 702
@@ -90,3 +92,5 @@ def test_votes_migration_sets_cf():
     ld = mig._load(mp)
     assert ld.success is True
     assert ld.updated == 1
+    # Every votes write carries the guard of ADR-013.
+    assert mig.op_client.guards == [{"attr": "customField702", "expect": None, "overwrite": False}]
