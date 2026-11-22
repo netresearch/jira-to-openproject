@@ -91,7 +91,6 @@ def _fields(number, level):
         "labels": [f"label-{number}"],
         "votes": {"votes": 7},
         "resolution": {"name": "Fixed", "id": "1"},
-        "remotelinks": [{"object": {"url": f"https://example.org/{number}", "title": f"Link {number}"}}],
     }
     return fields | ({"security": {"id": level, "name": f"Level {level}"}} if level else {})
 
@@ -109,7 +108,7 @@ class FakeJira:
         self.base_url = "https://jira.local"
         self.batch_level = batch_level
         self.moved, self.omitted, self.fails = set(moved), set(omitted), fails
-        self.searches, self.batches = [], []
+        self.searches, self.batches, self.remote_link_reads = [], [], []
         self.get_projects = MagicMock(return_value=[{"key": "APP"}])
         self.get_priorities = MagicMock(return_value=[{"name": "High", "id": "2"}])
         self.jira = MagicMock()
@@ -131,6 +130,25 @@ class FakeJira:
     def batch_get_issues(self, keys):
         self.batches.append(list(keys))
         return {key: _issue(int(key.split("-")[1]), self.batch_level) for key in keys}
+
+    def get_issue_remote_links(self, key):
+        # The shape of GET /rest/api/2/issue/{key}/remotelink on Jira Server 9.12; a search returns none (#501).
+        self.remote_link_reads.append(key)
+        number = int(key.split("-")[1])
+        target = {
+            "url": f"https://example.org/{number}",
+            "title": f"Link {number}",
+            "icon": {},
+            "status": {"resolved": False, "icon": {}},
+        }
+        return [
+            {
+                "id": number,
+                "self": f"https://jira.local/rest/api/2/issue/{key}/remotelink/{number}",
+                "application": {},
+                "object": target,
+            }
+        ]
 
 
 def _op(live):
@@ -374,6 +392,15 @@ def test_a_level_work_package_gets_no_other_level_name(level_setup):
     assert _refused(outcome) == 1
     assert _values(outcome.op) == {(901, "Level 10000")}
     assert "Level 10001" not in repr(outcome.op.method_calls)
+
+
+@pytest.mark.parametrize(("kwargs", "unread"), [({"moved": (10,)}, "APP-10"), ({"omitted": (11,)}, "APP-11")])
+def test_remote_links_are_read_only_for_issues_the_level_search_returned(level_setup, kwargs, unread):
+    # The remotelink resource has no level of its own; the level search decides which issues are read (#501).
+    outcome = _run(level_setup, "remote_links", **kwargs)
+    assert _refused(outcome) == 1
+    assert unread not in outcome.jira.remote_link_reads
+    assert {"APP-10", "APP-11"} - {unread} <= set(outcome.jira.remote_link_reads)
 
 
 def test_native_tags_never_put_the_labels_of_a_level_issue_into_a_tag(level_setup):

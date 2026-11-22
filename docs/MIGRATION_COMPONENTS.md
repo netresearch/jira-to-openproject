@@ -838,16 +838,16 @@ Each work package is found through the `jira_key` inside its mapping entry, so a
 
 **Location**: `src/migrations/remote_links_migration.py`
 
-Migrates Jira remote links to OpenProject custom field.
+Writes the Jira remote links of each issue as a "Remote Links" section of Markdown links into the work package description.
 
 **Features**:
-- Remote link URL tracking
-- Link title/description
-- Icon/application metadata
+- Reads `GET /rest/api/2/issue/{key}/remotelink` per issue, because a Jira search does not return remote links
+- Keeps only http and https URLs; a link without a title shows its URL
+- An unreadable answer counts as failed, never as an issue without links
 
 **Dependencies**: WorkPackageMigration, CustomFieldMigration
 
-Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused; the section goes into the description of the level work package. In production the component writes nothing yet: a Jira search does not return remote links, and nothing reads the remote-link endpoint ([#501](https://github.com/netresearch/jira-to-openproject/issues/501)); the tests supply the field directly. See [Level work packages](operator-restricted-issues.md#level-work-packages).
+Each work package is found through the `jira_key` inside its mapping entry, so a mapping keyed by Jira issue ID, as `work_packages_skeleton` writes it, works too ([#498](https://github.com/netresearch/jira-to-openproject/issues/498)). With `migration.security_level_work_packages: true` (the default; the level path runs once `migration.security_level_report` is set), the selected level work packages get their values too, read through the level search; an ordinary entry of a level issue is refused; the section goes into the description of the level work package. The remote links are read only for issues that the batch read or the level search returned ([#501](https://github.com/netresearch/jira-to-openproject/issues/501)). See [Level work packages](operator-restricted-issues.md#level-work-packages).
 
 ---
 
