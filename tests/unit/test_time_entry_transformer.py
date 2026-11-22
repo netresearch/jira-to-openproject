@@ -325,6 +325,41 @@ class TestTimeEntryTransformer:
         assert time_entry["_meta"]["tempo_billable_hours"] == 1.0
         assert time_entry["_meta"]["tempo_location"] == "Office"
         assert time_entry["_meta"]["tempo_attributes"]["client"] == "ACME Corp"
+        assert "tempo_approval_status" not in time_entry["_meta"]
+
+    @pytest.mark.parametrize(
+        ("approval", "expected"),
+        [
+            ("APPROVED", "APPROVED"),
+            ({"status": "WAITING_FOR_APPROVAL"}, "WAITING_FOR_APPROVAL"),
+            ("  ", None),
+            (None, None),
+        ],
+    )
+    def test_tempo_approval_status_and_minute_precise_billable_hours(self, transformer, approval, expected) -> None:
+        """Both values reach the time entry writer (#490)."""
+        time_entry = {"_meta": {}}
+        transformer._handle_tempo_specific_fields({"billable_seconds": 60, "approval_status": approval}, time_entry)
+        assert time_entry["_meta"]["tempo_billable_hours"] == 0.0167
+        assert time_entry["_meta"].get("tempo_approval_status") == expected
+
+    def test_the_writer_row_carries_the_tempo_values(self) -> None:
+        from src.infrastructure.openproject.openproject_time_entry_service import OpenProjectTimeEntryService
+
+        entry = {
+            "_embedded": {
+                "workPackage": {"href": "/api/v3/work_packages/5"},
+                "user": {"href": "/api/v3/users/6"},
+                "activity": {"href": "/api/v3/time_entries/activities/7"},
+            },
+            "hours": 1.0,
+            "spentOn": "2026-01-02",
+            "_meta": {"tempo_billable_hours": 0.5, "tempo_approval_status": "APPROVED"},
+        }
+        row = OpenProjectTimeEntryService._entry_row(entry, 0)
+        assert (row["tempo_billable_hours"], row["tempo_approval_status"]) == (0.5, "APPROVED")
+        del entry["_meta"]["tempo_approval_status"]
+        assert "tempo_approval_status" not in OpenProjectTimeEntryService._entry_row(entry, 0)
 
     def test_map_custom_fields(self, transformer) -> None:
         """Test custom field mapping."""

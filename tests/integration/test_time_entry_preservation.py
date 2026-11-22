@@ -36,7 +36,8 @@ TimeEntry.transaction do
             spent_on: '2024-01-16', comments: " Synthetic note\\n ",
             jira_worklog_key: key, jira_started: '2024-01-15T23:15:00.123+0000',
             jira_time_zone: 'Europe/Berlin', jira_update_author_id: user.id,
-            jira_created_at: '2024-01-16T09:00:00Z', jira_updated_at: '2024-01-17T09:00:00Z' }
+            jira_created_at: '2024-01-16T09:00:00Z', jira_updated_at: '2024-01-17T09:00:00Z',
+            tempo_billable_hours: 0.0047, tempo_approval_status: 'WAITING_FOR_APPROVAL' }
     # Supply a synthetic Jira origin within this rollback-only transaction.
     issue_url = "https://jira.example.test/browse/TEST-15"
     { 'J2O Origin ID' => '15', 'J2O Origin URL' => issue_url }.each do |name, value|
@@ -50,13 +51,17 @@ TimeEntry.transaction do
     with_archive = row.merge(tempo_archive: archive)
     rows = [row, row, row.merge(comments: 'Changed'), row.merge(target_project_id: -1), with_archive,
             row.merge(tempo_archive: archive.merge(packet: 'second-test-packet')),
-            row.merge(tempo_archive: archive.merge(issue_id: '16'))]
+            row.merge(tempo_archive: archive.merge(issue_id: '16')),
+            row.merge(tempo_approval_status: 'APPROVED')]
     File.write(data_path, rows.to_json)
 """
     assertions = """
     result = JSON.parse(File.read(result_path))
-    raise unless result.values_at('created', 'reused', 'failed') == [1, 3, 3]
-    first, second, conflict, wrong_project, attached, repeated, wrong_source = result.fetch('results')
+    raise unless result.values_at('created', 'reused', 'failed') == [1, 4, 3]
+    first, second, conflict, wrong_project, attached, repeated, wrong_source, approved = result.fetch('results')
+    # Tempo billable hours and approval status (#490): written once, then only the change.
+    raise unless [first, second, approved].map { |r| r.fetch('tempo_fields_changed') } == [2, 0, 1]
+    raise unless result.fetch('tempo_fields_changed') == 3
     raise unless attached.fetch('tempo_attributes_written') && !repeated.fetch('tempo_attributes_written')
     raise unless attached.fetch('tempo_packet') == repeated.fetch('tempo_packet') && repeated.fetch('id') == first.fetch('id')
     raise if wrong_source.fetch('success')
@@ -72,6 +77,8 @@ TimeEntry.transaction do
     values = te.custom_values.joins(:custom_field).pluck('custom_fields.name', :value).to_h
     raise unless values.fetch('J2O Source Worklog Started') == row[:jira_started]
     raise unless values.fetch('J2O Worklog Update Author ID') == user.id.to_s
+    raise unless values.fetch('Tempo Billable Hours').to_f == 0.0047 && values.fetch('Tempo Approval Status') == 'APPROVED'
+    raise unless TimeEntryCustomField.where(name: ['Tempo Billable Hours', 'Tempo Approval Status']).all?(&:admin_only?)
   end
   raise ActiveRecord::Rollback
 end

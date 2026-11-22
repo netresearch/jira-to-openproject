@@ -547,6 +547,28 @@ class TimeEntryTransformer:
         description = tempo_log.get("description", tempo_log.get("comment")) or ""
         return self._detect_activity(description)
 
+    @classmethod
+    def tempo_billing(cls, tempo_log: dict[str, Any]) -> dict[str, Any]:
+        """Billable hours and approval status of a Tempo work log for the time entry writer (#490).
+
+        Four decimals keep a single billable minute.
+        """
+        billing: dict[str, Any] = {}
+        billable = tempo_log.get("billable_seconds", tempo_log.get("billableSeconds"))
+        if billable is not None:
+            billing["tempo_billable_hours"] = round(billable / 3600.0, 4)
+        if approval := cls._tempo_approval_status(tempo_log):
+            billing["tempo_approval_status"] = approval
+        return billing
+
+    @staticmethod
+    def _tempo_approval_status(tempo_log: dict[str, Any]) -> str | None:
+        """Tempo's approval status as a string, or None when the work log has none (#490)."""
+        approval = tempo_log.get("approval_status", tempo_log.get("approvalStatus"))
+        if isinstance(approval, dict):
+            approval = approval.get("status") or approval.get("name")
+        return approval.strip() or None if isinstance(approval, str) else None
+
     def _handle_tempo_specific_fields(
         self,
         tempo_log: dict[str, Any],
@@ -564,25 +586,24 @@ class TimeEntryTransformer:
         time_entry["_meta"]["tempo_billable"] = billable is not None and billable > 0
         time_entry["_meta"]["tempo_location"] = tempo_log.get("location")
 
-        # Handle billing information
-        if billable is not None:
-            billable_hours = billable / 3600.0
-            time_entry["_meta"]["tempo_billable_hours"] = round(billable_hours, 2)
+        time_entry["_meta"].update(self.tempo_billing(tempo_log))
 
-        # Handle work attributes
-        work_attributes = tempo_log.get("work_attributes", tempo_log.get("workAttributes", []))
-        if work_attributes:
-            attributes = {}
-            for attr in work_attributes:
-                key = attr.get("key", "")
-                value = attr.get("value", "")
-                if key and key in attributes:
-                    msg = "Tempo contains duplicate work attribute keys."
-                    raise ValueError(msg)
-                if key and value is not None:
-                    attributes[key] = value
-            if attributes:
-                time_entry["_meta"]["tempo_attributes"] = attributes
+        if attributes := self._tempo_work_attributes(tempo_log):
+            time_entry["_meta"]["tempo_attributes"] = attributes
+
+    @staticmethod
+    def _tempo_work_attributes(tempo_log: dict[str, Any]) -> dict[str, Any]:
+        """The work attribute values of a Tempo work log by key; a repeated key is refused."""
+        attributes: dict[str, Any] = {}
+        for attr in tempo_log.get("work_attributes", tempo_log.get("workAttributes", [])) or []:
+            key = attr.get("key", "")
+            value = attr.get("value", "")
+            if key and key in attributes:
+                msg = "Tempo contains duplicate work attribute keys."
+                raise ValueError(msg)
+            if key and value is not None:
+                attributes[key] = value
+        return attributes
 
     def _map_custom_fields(
         self,

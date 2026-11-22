@@ -165,6 +165,8 @@ class TimeEntryMigrator:
         self._expected_attribute_origins: set[str] = set()
         self._verified_attribute_origins: set[str] = set()
         self._written_attribute_origins: set[str] = set()
+        # Tempo billable hours and approval status written or updated (#490), from every receipt.
+        self._tempo_fields_changed = 0
         self._requested_issues: set[str] | None = None
         self._target_projects: dict[str, int] = {}
         # Jira key to the security level a selected level issue must still have (ADR-009).
@@ -435,6 +437,7 @@ class TimeEntryMigrator:
         self.migration_results["successful_migrations"] = migration_summary["successful_migrations"]
         self.migration_results["failed_migrations"] = migration_summary["failed_migrations"]
         self.migration_results["skipped_entries"] = migration_summary["skipped_entries"]
+        self.migration_results["tempo_fields_changed"] = migration_summary.get("tempo_fields_changed", 0)
         self.migration_results["processing_time_seconds"] += processing_time
         self.logger.success(
             "Migration completed: %d successful, %d failed in %.2fs",
@@ -492,6 +495,10 @@ class TimeEntryMigrator:
                 yield None, outcome
 
     def _confirm_worklog(self, receipt: dict[str, Any]) -> None:
+        changed = receipt.get("tempo_fields_changed")
+        if receipt.get("success") is True and type(changed) is int and changed > 0:
+            with self._worklog_receipts.lock:
+                self._tempo_fields_changed += changed
         origin = receipt.get("verified_worklog_key")
         if isinstance(origin, str) and receipt.get("success") is True:
             issue, _, identifier = origin.partition(":")
@@ -886,6 +893,8 @@ class TimeEntryMigrator:
             elif not (len(matches) == 1 and row.get("jira_started")):
                 remaining.append(row)
                 continue
+            # The Tempo row is consumed here: its billing values go onto the Jira entry (#490).
+            matches[0]["_meta"].update(TimeEntryTransformer.tempo_billing(row))
             self._combined_tempo += 1
             self.migration_results["successful_transformations"] += 1
         return remaining
@@ -1023,6 +1032,7 @@ class TimeEntryMigrator:
             "warnings": [],
             "skipped_details": [],
         }
+        self._tempo_fields_changed = 0
 
         # Build set of existing external keys to enforce idempotency.
         # The bulk-create script writes provenance to the canonical CF
@@ -1065,6 +1075,7 @@ class TimeEntryMigrator:
         if use_batch:
             remaining = self._migrate_adaptive_chunks(entries_to_migrate, batch_size, migration_summary)
             if remaining is None:
+                migration_summary["tempo_fields_changed"] = self._tempo_fields_changed
                 self._record_migration_totals(migration_summary, start_time)
                 return migration_summary
             entries_to_migrate = remaining
@@ -1072,6 +1083,7 @@ class TimeEntryMigrator:
         self._migrate_individual_entries(
             entries_to_migrate, batch_size, existing_keys, migration_summary, heartbeat_sec
         )
+        migration_summary["tempo_fields_changed"] = self._tempo_fields_changed
         self._record_migration_totals(migration_summary, start_time)
         return migration_summary
 
@@ -1373,6 +1385,7 @@ class TimeEntryMigrator:
             "successful_transformations": self.migration_results["successful_transformations"],
             "successful_migrations": self.migration_results["successful_migrations"],
             "failed_migrations": self.migration_results["failed_migrations"],
+            "tempo_fields_changed": self.migration_results.get("tempo_fields_changed", 0),
             "error_count": len(self.migration_results["errors"]),
             "warning_count": len(self.migration_results["warnings"]),
             "processing_time_seconds": self.migration_results["processing_time_seconds"],
