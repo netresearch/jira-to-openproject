@@ -105,11 +105,16 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "puts start_marker + {updated: updated, failed: failed, digests: digests}.to_json + end_marker\n"
         )
         res = self.op_client.execute_script_with_data(script, items)
-        digests = res.get("digests") if isinstance(res, dict) else None
-        if isinstance(digests, dict):
-            store.record((int(wp_id), "description", str(digest)) for wp_id, digest in digests.items())
-        updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-        failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
+        # The runner wraps the script's JSON as {"status": ..., "data": ...}.
+        answer = res.get("data") if isinstance(res, dict) and res.get("status") == "success" else None
+        if not isinstance(answer, dict):
+            message = res.get("message") if isinstance(res, dict) else res
+            self.logger.error("Inline reference rewrite not confirmed: %s", message)
+            return ComponentResult(success=False, updated=0, failed=len(ids))
+        digests = answer.get("digests") or {}
+        store.record((int(wp_id), "description", str(digest)) for wp_id, digest in digests.items())
+        updated = int(answer.get("updated", 0))
+        failed = int(answer.get("failed", 0))
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:

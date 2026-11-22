@@ -155,7 +155,10 @@ def test_inline_refs_send_the_recorded_digest_and_record_the_new_one(monkeypatch
 
     written_values.store().record([(5, "description", DIGEST_A)])
     op = MagicMock()
-    op.execute_script_with_data.return_value = {"updated": 1, "failed": 0, "digests": {"5": DIGEST_B}}
+    op.execute_script_with_data.return_value = {
+        "status": "success",
+        "data": {"updated": 1, "failed": 0, "digests": {"5": DIGEST_B}},
+    }
     mig = InlineRefsMigration(jira_client=MagicMock(), op_client=op)
     result = mig._load(SimpleNamespace(data={"work_package_ids": [5, 6]}))
     assert result.success
@@ -185,3 +188,19 @@ def test_tasklists_send_the_recorded_digest_and_record_the_new_one(monkeypatch):
     )
     assert sent == [[{"id": "1", "wp": 5, "expect": DIGEST_A}, {"id": "2", "wp": 6, "expect": None}]]
     assert written_values.store().expected([(5, "description")]) == {(5, "description"): DIGEST_B}
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [{"status": "error", "message": "JSON markers not found in Rails output"}, {"updated": 1, "failed": 0}],
+    ids=["no-markers", "unwrapped"],
+)
+def test_an_unconfirmed_inline_reference_rewrite_fails(answer):
+    from src.application.components.inline_refs_migration import InlineRefsMigration
+
+    op = MagicMock()
+    op.execute_script_with_data.return_value = answer
+    result = InlineRefsMigration(jira_client=MagicMock(), op_client=op)._load(
+        SimpleNamespace(data={"work_package_ids": [5, 6]})
+    )
+    assert (result.success, result.failed) == (False, 2)

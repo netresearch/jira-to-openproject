@@ -35,10 +35,10 @@ OpenProject stores what it receives in a form of its own: a list option as its o
 
 - A repeated run leaves a description or a custom field value that someone changed in OpenProject as it is and names it in the log and in the `target_changed` result detail.
 - A repeated run with unchanged Jira content writes nothing and adds no journal entries.
-- The store is migration state like the mappings. Without it (a new data directory, a lost file), every non-empty target counts as changed by a person until the operator runs once with `overwrite_edited_targets: true`. Back up the data directory with the mappings.
-- Work packages migrated before this change have no record. Their first content run refuses every non-empty description and custom field value. For an instance where nobody has worked yet, one run with `overwrite_edited_targets: true` records them all.
+- The store is migration state like the mappings. Without it (a new data directory, a lost file), a target counts as changed by a person when it holds a value other than the wanted one, other than empty and other than the field default. The operator records such targets with one run with `overwrite_edited_targets: true`. Back up the data directory with the mappings.
+- Work packages migrated before this change have no record. Their first content run records every target that already holds the wanted value (`unchanged`) and writes every empty one or one at its field default; it refuses the others. For an instance where nobody has worked yet, one run with `overwrite_edited_targets: true` records those too.
 - A crash between the Rails write and the record leaves the old digest. The next run of the same content finds the wanted value and records it as `unchanged`. If the Jira content changed in between, the row is refused and needs the operator flag.
-- The legacy single-phase `work_packages` component writes descriptions at creation without a record. A content run after it refuses them unless the operator allows overwriting.
+- The legacy single-phase `work_packages` component writes descriptions at creation without a record. A content run after it records those that still match the converted Jira text and refuses the others unless the operator allows overwriting.
 
 ## Not covered yet
 
