@@ -158,6 +158,8 @@ Compare counts for issues, copied and retained comments, attachments and logged 
 
 [Rollback of a migration run](docs/operator-rollback.md) describes the snapshot to take and prove before each production run, and how to restore the target from it.
 
+[Data coverage](docs/DATA_COVERAGE.md) lists, for each kind of Jira data, whether J2O migrates it natively, keeps it in a custom field or an archive, or does not migrate it, and why.
+
 ### Watch a migration
 
 From the configured checkout, start the dashboard in one terminal:
