@@ -19,6 +19,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from requests import Response
 
@@ -484,6 +485,14 @@ class JiraClient:
     def get_priorities(self) -> list[dict[str, Any]]:
         """Thin delegator over ``self.search.get_priorities``."""
         return self.search.get_priorities()
+
+    def get_issue_remote_links(self, issue_key: str) -> list[dict[str, Any]]:
+        """The remote links of an issue; a Jira search never returns them (#501)."""
+        links = self._make_request(f"/rest/api/2/issue/{quote(issue_key, safe='')}/remotelink").json()
+        if not isinstance(links, list) or not all(isinstance(link, dict) for link in links):
+            msg = f"Malformed remote links of {issue_key}"
+            raise JiraApiError(msg)
+        return links
 
     def get_issue_simpletasks(self, issue_key: str) -> list[dict[str, Any]]:
         """Read the same issue-scoped task list as the Jira Software sidebar."""

@@ -16,7 +16,6 @@ from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
-from src.models.jira import JiraIssueFields
 
 SECTION_TITLE = "Remote Links"
 
@@ -27,39 +26,37 @@ class RemoteLinksMigration(LevelFieldsMigration):  # noqa: D101
         super().__init__(jira_client=jira_client, op_client=op_client)
 
     @staticmethod
-    def _extract_links_from_fields(fields: JiraIssueFields) -> list[tuple[str, str]]:
-        """Return ``(title, url)`` pairs from a typed :class:`JiraIssueFields`.
-
-        ``fields.remote_links`` already holds the boundary-flattened
-        :class:`JiraRemoteLinkRef` payloads — we only need to drop entries
-        with a missing/non-http URL and fill in a sensible title fallback.
-        """
+    def _extract_links(remote_links: list[dict]) -> list[tuple[str, str]]:
+        """``(title, url)`` pairs of an issue's ``remotelink`` answer; only http and https URLs."""
         pairs: list[tuple[str, str]] = []
-        for ref in fields.remote_links:
-            url = ref.url
-            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        for link in remote_links:
+            target = link.get("object") if isinstance(link.get("object"), dict) else {}
+            url, title = target.get("url"), target.get("title")
+            if not isinstance(url, str) or not url.strip().startswith(("http://", "https://")):
                 continue
             url = url.strip()
-            title = ref.title.strip() if isinstance(ref.title, str) and ref.title.strip() else url
-            pairs.append((title, url))
+            pairs.append((title.strip() if isinstance(title, str) and title.strip() else url, url))
         return pairs
 
     def _extract(self) -> ComponentResult:
         wp_map = self._work_package_map()
         keys = self._jira_keys_from_wp_map(wp_map)
         if not keys:
-            return ComponentResult(success=True, data={"links": {}})
+            return ComponentResult(success=True, data={"links": {}, "read_failed": []})
+        # Only issues the batch read or the level search returned; their links are a separate resource.
         issues = self._merge_batch_issues(keys)
         links_by_key: dict[str, list[tuple[str, str]]] = {}
-        for k, issue in issues.items():
+        read_failed: list[str] = []
+        for key in sorted(issues):
             try:
-                fields = JiraIssueFields.from_issue_any(issue)
-                pairs = self._extract_links_from_fields(fields)
-                if pairs:
-                    links_by_key[k] = pairs
+                pairs = self._extract_links(self.jira_client.get_issue_remote_links(key))
             except Exception:
+                self.logger.exception("Could not read the remote links of %s", key)
+                read_failed.append(key)
                 continue
-        return ComponentResult(success=True, data={"links": links_by_key})
+            if pairs:
+                links_by_key[key] = pairs
+        return ComponentResult(success=True, data={"links": links_by_key, "read_failed": read_failed})
 
     def _map(self, extracted: ComponentResult) -> ComponentResult:
         data = extracted.data or {}
@@ -77,7 +74,8 @@ class RemoteLinksMigration(LevelFieldsMigration):  # noqa: D101
                 lines.append(f"- [{safe_title}]({url})")
             if lines:
                 md_by_key[key] = "\n".join(lines)
-        return ComponentResult(success=True, data={"markdown": md_by_key})
+        failed = data.get("read_failed", []) if isinstance(data, dict) else []
+        return ComponentResult(success=True, data={"markdown": md_by_key, "read_failed": failed})
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         data = mapped.data or {}
@@ -107,7 +105,8 @@ class RemoteLinksMigration(LevelFieldsMigration):  # noqa: D101
 
         # Bulk upsert all sections in single Rails call
         updated = 0
-        failed = 0
+        # An unreadable remote link answer is a failure, never an issue without links.
+        failed = len(data.get("read_failed", [])) if isinstance(data, dict) else 0
         if sections_to_upsert:
             logger.info("Bulk upserting %d remote link sections...", len(sections_to_upsert))
             # The section rewrites the description J2O wrote; its digest follows (ADR-013).
@@ -117,7 +116,7 @@ class RemoteLinksMigration(LevelFieldsMigration):  # noqa: D101
                 row["expect"] = expect.get((row["work_package_id"], "description"))
             bulk_result = self.op_client.bulk_upsert_wp_description_sections(sections_to_upsert)
             updated = bulk_result.get("updated", 0)
-            failed = bulk_result.get("failed", 0)
+            failed += bulk_result.get("failed", 0)
             digests = bulk_result.get("digests") or {}
             store.record((int(wp), "description", str(digest)) for wp, digest in digests.items())
             logger.info("Bulk remote links: updated=%d, failed=%d", updated, failed)
