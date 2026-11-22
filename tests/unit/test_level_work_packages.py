@@ -79,9 +79,13 @@ def FakeOpenProject(state=None, existing=None, fail=False):
     """Record batch payloads; answer the sub-project read with ``state``, the work-package read with ``existing``."""
     op = Mock()
     op.payloads, op.reads, op.existing_reads = [], [], []
+    # The parent project's work packages with J2O Origin ID and Key (#482); none by default.
+    op.marked = []
 
     def read(script):
         values = json.loads(script.split("\n")[1])
+        if "pluck(:customized_id, :custom_field_id, :value)" in script:
+            return json.loads(json.dumps(op.marked))
         if '"work_packages" => ids' in script:
             op.existing_reads.append(values)
             return json.loads(json.dumps(NO_WORK_PACKAGES if existing is None else existing))
@@ -164,9 +168,11 @@ def setup(monkeypatch, tmp_path):
     return _setup
 
 
-def skeleton(setup, *, unrestricted=(), levels=(), state=None, existing=None, fail=False, **kwargs):
+def skeleton(setup, *, unrestricted=(), levels=(), state=None, existing=None, fail=False, marked=None, **kwargs):
     mappings, data = setup(**kwargs)
     jira, op = fake_jira(list(unrestricted), list(levels)), FakeOpenProject(state, existing, fail)
+    if marked is not None:
+        op.marked = marked
     migration = WorkPackageSkeletonMigration(jira_client=jira, op_client=op)
     migration._get_j2o_origin_key_cf_id = lambda: 5
     migration._build_skeleton_payload = lambda source, project_id, _cf: {

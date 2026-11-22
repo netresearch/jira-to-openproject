@@ -45,6 +45,8 @@ def test_skeleton_creation_requires_positive_scope_before_payload(monkeypatch):
     migration.logger = Mock()
     migration.work_package_mapping = {}
     migration.jira_client = Mock()
+    migration.op_client = Mock()
+    migration.op_client.execute_query_to_json_file.return_value = []
     safe, restricted = issue(1), issue(2, security={"id": "7"})
     # A contradictory result from Jira must also be rejected before target writes.
     migration.jira_client.jira.search_issues.side_effect = [[safe, restricted], []]
