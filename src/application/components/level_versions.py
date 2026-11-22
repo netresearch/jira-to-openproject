@@ -90,7 +90,7 @@ class LevelVersionCopies:
                 msg = "a version is not in the Jira project catalogue"
                 raise ValueError(msg)
             copies = sync_level_versions(
-                self.op_client, (target.project_id, target.parent_id), self.source, project_key, rows
+                self.op_client, (target.project_id, target.parent_id, target.audience), self.source, project_key, rows
             )
         except Exception:
             self.logger.exception("Could not create the version copies of %s", target.label)
@@ -117,7 +117,7 @@ class LevelVersionCopies:
         project_key = origin[0]
         try:
             copies = sync_level_sprints(
-                self.op_client, (target.project_id, target.parent_id), (self.source, *origin), sprints
+                self.op_client, (target.project_id, target.parent_id, target.audience), (self.source, *origin), sprints
             )
         except Exception:
             self.logger.exception("Could not create the sprint copies of %s", target.label)

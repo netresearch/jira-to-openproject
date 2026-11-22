@@ -224,7 +224,9 @@ def test_community_audience_has_no_shares_and_counts_only_static_readers():
     from src.application.components.level_access import audience
     from src.application.components.level_readers import Readers
 
-    readers = Readers({"APP:10000": frozenset({"reader.one"})}, {"APP-12": frozenset({"nobody"})})
+    readers = Readers(
+        {"APP:10000": frozenset({"reader.one"})}, {"APP-12": frozenset({"nobody"})}, {"APP-12": "APP:10000"}
+    )
     community = audience(readers, USERS, shares=False)
     assert (community.members, community.shares) == ({"APP:10000": {41}}, {})
     assert sum(community.unmapped.values()) == 0
@@ -263,3 +265,22 @@ def test_the_state_read_drops_every_role_that_widens_the_audience():
 def test_parent_roles_and_the_reader_role_both_pass_the_filter():
     assert "m.roles.select(&narrow)" in access._STATE
     assert "(reader if reader && narrow.call(reader))&.id" in access._STATE
+
+
+def test_the_grant_reads_the_reports_once(grant, monkeypatch):
+    # The issues the scope selects and the grants it checks come from one inventory read.
+    from src.application.components import level_issues
+    from src.application.components import security_level_access_migration as module
+
+    calls = []
+    real = module.load_reports
+
+    def counted():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(module, "load_reports", counted)
+    monkeypatch.setattr(level_issues, "load_reports", counted)
+    outcome = grant()
+    assert outcome.result.success, outcome.result.errors
+    assert len(calls) == 1

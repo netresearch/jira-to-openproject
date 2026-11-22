@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 from src.domain.provenance_fields import JIRA_SOURCE_LABELS
+from src.infrastructure.openproject.level_audience import LEVEL_AUDIENCE
 
 _REGISTER = "Jira component membership origins"
 _APPLY = """
@@ -15,7 +16,8 @@ project = Project.find(data.fetch("project_id"))
 project.with_lock(requires_new: true) do
   raise "Component migration requires a private project" if project.public?
   # A level sub-project (ADR-009) has no origin of its own: its parent carries the Jira project's
-  # origin, and every membership row of the sub-project, locked users and shares included, is access.
+  # origin, and every membership row of the sub-project, locked users and shares included, is
+  # access; only the grants of its readers may exist (ADR-012).
   level = data.key?("parent_id")
   owner = level ? Project.find(data.fetch("parent_id")) : project
   raise "Unexpected target sub-project" if level && project.parent_id != owner.id
@@ -26,7 +28,7 @@ project.with_lock(requires_new: true) do
   source = {"Jira Project Key"=>data.fetch("key"), "Jira Project ID"=>data.fetch("jira_id"), "Jira Base URL"=>data.fetch("jira")}
   raise "Unexpected target project origin" unless origins.call(owner, "ProjectCustomField", source.keys) == source
 
-  private_staging = !project.members.exists? && !(level && Member.where(project_id: project.id).exists?)
+  private_staging = level ? level_audience.call(project, data.fetch("audience")) : !project.members.exists?
   existing_field = ProjectCustomField.find_by(name: data.fetch("register"))
   if data.fetch("issues").all? { |row| row.fetch("components").empty? } &&
       (!existing_field || !project.custom_values.exists?(custom_field_id: existing_field.id))
@@ -114,5 +116,5 @@ def apply_component_assignments(client: Any, project: dict, legacy: dict) -> dic
     data = {**project, "legacy": legacy, "register": _REGISTER, "systems": JIRA_SOURCE_LABELS}
     payload = base64.b64encode(json.dumps(data, ensure_ascii=False).encode()).decode("ascii")
     return client.execute_large_query_to_json_file(
-        f'data = JSON.parse(Base64.strict_decode64("{payload}"))\n{_APPLY}', timeout=180
+        f'data = JSON.parse(Base64.strict_decode64("{payload}"))\n{LEVEL_AUDIENCE}{_APPLY}', timeout=180
     )

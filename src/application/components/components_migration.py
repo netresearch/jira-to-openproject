@@ -146,6 +146,7 @@ class ComponentsMigration(BaseMigration):
                     projects[label] = {
                         "project_id": target.project_id,
                         "parent_id": target.parent_id,
+                        "audience": target.audience,
                         "jira_id": source_pid,
                         "key": project,
                         "jira": base,

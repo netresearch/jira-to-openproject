@@ -391,11 +391,13 @@ def test_level_version_writer_checks_the_parent_and_the_memberless_sub_project()
     from src.infrastructure.openproject.version_catalog import sync_level_versions
 
     client = _Answer({"versions": {"41": 1000}, "changed": 1})
-    assert sync_level_versions(client, (100, 7), "https://jira.local/", "APP", [CATALOGUE[0]]) == {"41": 1000}
+    audience = {"members": [41], "shares": {"APP-12": [43]}}
+    assert sync_level_versions(client, (100, 7, audience), "https://jira.local/", "APP", [CATALOGUE[0]]) == {"41": 1000}
     (script,) = client.scripts
     assert _payload(script) == {
         "project": 100,
         "parent_id": 7,
+        "audience": audience,
         "source": "https://jira.local",
         "key": "APP",
         "jira_project_id": "10",
@@ -414,10 +416,11 @@ def test_level_version_writer_checks_the_parent_and_the_memberless_sub_project()
             }
         ],
     }
-    # The parent carries the origin; every membership row of the sub-project stops a change.
+    # The parent carries the origin; a membership row other than a grant of the readers stops a change.
     assert "owner.custom_values.where(custom_field: field).sole.value == value" in script
     assert "project.parent_id == owner.id && !project.public?" in script
-    assert "staging = !project.members.exists? && !Member.where(project_id: project.id).exists?" in script
+    assert "level_audience = lambda do |project, audience|" in script
+    assert "staging = level_audience.call(project, data.fetch('audience'))" in script
     assert "merge('sharing' => 'none')" in script
     assert "project.versions.new" in script
     assert "Version.new" not in script
@@ -429,7 +432,9 @@ def test_level_version_writer_rejects_an_incomplete_answer(answer):
 
     client = _Answer(answer)
     with pytest.raises(ValueError, match="Incomplete"):
-        sync_level_versions(client, (100, 7), "https://jira.local", "APP", [CATALOGUE[0]])
+        sync_level_versions(
+            client, (100, 7, {"members": [], "shares": {}}), "https://jira.local", "APP", [CATALOGUE[0]]
+        )
 
 
 def test_level_affected_versions_check_the_parent_origin():

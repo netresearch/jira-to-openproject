@@ -22,6 +22,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from src import config
+from src.application.components.level_access import Audience, staging_audience
 from src.application.components.security_level_projects_migration import (
     _EDITIONS,
     MAPPING,
@@ -89,6 +90,8 @@ class LevelTarget:
     parent_id: int
     identifier: str
     kind: str
+    # Who may already be a member of the sub-project (ADR-012): the Ruby input of the staging checks.
+    audience: dict[str, Any] = field(default_factory=lambda: {"members": [], "shares": {}}, compare=False)
 
     def mapping_fields(self) -> dict[str, Any]:
         """What a level work-package mapping entry adds to an ordinary one."""
@@ -123,7 +126,9 @@ class Selection:
 class LevelScope:
     """The inventory report, the edition and the sub-project mapping of one run."""
 
-    def __init__(self, report: dict[str, Any], edition: str, projects: Mapping[str, Any]) -> None:
+    def __init__(
+        self, report: dict[str, Any], edition: str, projects: Mapping[str, Any], audience: Audience | None = None
+    ) -> None:
         """Check the report rows; the archived rows carry key, level ID and a non-static class."""
         migratable_levels(report, edition)
         archived = report.get("archived")
@@ -153,12 +158,13 @@ class LevelScope:
             raise LevelProjectError(msg)
         self.kinds = _EDITIONS[edition]
         self.projects = projects
+        self.audience = audience or Audience()
 
     @classmethod
     def load(cls, mappings: Any) -> LevelScope:
-        """Both reports (see ``load_reports``) and the ``security_level_project`` mapping."""
+        """Both reports (see ``load_reports``), the ``security_level_project`` mapping and the staging audience."""
         report, edition = load_reports()
-        return cls(report, edition, mappings.get_mapping(MAPPING) or {})
+        return cls(report, edition, mappings.get_mapping(MAPPING) or {}, staging_audience(mappings, report, edition))
 
     def select(self, project_key: str, issues: Iterable[Any]) -> Selection:
         """Partition one project's level search by level and keep what goes to a sub-project."""
@@ -202,7 +208,10 @@ class LevelScope:
         except LevelProjectError as exc:
             result.refused.append(f"{label}: {exc}")
             return
-        result.selected.extend((issue, replace(target, kind=classes[_issue_key(issue)])) for issue in keep)
+        audience = self.audience.of_level(label)
+        result.selected.extend(
+            (issue, replace(target, kind=classes[_issue_key(issue)], audience=audience)) for issue in keep
+        )
 
 
 def _expected_keys(row: Mapping[str, Any], archived: list[dict[str, Any]]) -> dict[str, str]:
