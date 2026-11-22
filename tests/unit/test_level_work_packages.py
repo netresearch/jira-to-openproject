@@ -517,7 +517,12 @@ def live_op(live=None):
         return json.loads(json.dumps(LIVE if live is None else live))
 
     op.execute_query_to_json_file.side_effect = read
-    op.batch_update_work_packages.side_effect = lambda rows: {"updated": len(rows)}
+    op.batch_update_work_packages.side_effect = lambda rows: {
+        "updated": len(rows),
+        "results": [
+            {"id": r["id"], "status": "updated", "attr": r["_j2o_guard"]["attr"], "digest": "a" * 64} for r in rows
+        ],
+    }
     return op
 
 
@@ -531,7 +536,12 @@ def content(setup, *, unrestricted=(), levels=(), level_map=None, wp_map=None, l
     migration = WorkPackageContentMigration(jira_client=jira, op_client=op)
     migration.work_package_mapping = wp_map or {"1": {"jira_key": "APP-1", "openproject_id": 500}}
     results = migration._migrate_content()
-    written = [row for call in op.batch_update_work_packages.call_args_list for row in call.args[0]]
+    # The guard of ADR-013 travels with each row; these tests look at what is written.
+    written = [
+        {k: v for k, v in row.items() if k != "_j2o_guard"}
+        for call in op.batch_update_work_packages.call_args_list
+        for row in call.args[0]
+    ]
     return SimpleNamespace(results=results, jira=jira, op=op, written=written)
 
 

@@ -13,7 +13,7 @@ from itertools import batched
 from typing import Any
 
 from src import config
-from src.application.components import level_issues
+from src.application.components import level_issues, written_values
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.issue_security import permits_unrestricted_result, unrestricted_project_jql
 from src.application.components.project_named_records import project_id
@@ -302,11 +302,16 @@ class SimpleTasksMigration(BaseMigration):
 
     def _load(self, mapped: ComponentResult) -> ComponentResult:
         counts = {"updated": 0, "tasks": 0}
+        store = written_values.store()
         for project in mapped.data or []:
             for batch in batched(project["rows"], 100, strict=False):
-                actual = apply_tasklists(self.op_client, {**project, "rows": list(batch)})
+                expect = store.expected((row["wp"], "description") for row in batch)
+                rows = [{**row, "expect": expect.get((row["wp"], "description"))} for row in batch]
+                actual = apply_tasklists(self.op_client, {**project, "rows": rows})
                 for key in counts:
                     counts[key] += actual[key]
+                # The checklist rewrites the text J2O wrote last; its digest follows (ADR-013).
+                store.record((int(wp), "description", str(d)) for wp, d in (actual.get("digests") or {}).items())
         details = {**mapped.details, **counts}
         warnings = []
         if n := details["unverified_task_audience"]:

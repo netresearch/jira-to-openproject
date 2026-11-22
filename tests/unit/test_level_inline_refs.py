@@ -40,8 +40,8 @@ class FakeOpenProject:
         return json.loads(json.dumps(self.live))
 
     def execute_script_with_data(self, script, data):
-        self.rewrites.append(list(data))
-        return {"updated": len(data), "failed": 0}
+        self.rewrites.append([item["id"] for item in data])
+        return {"status": "success", "data": {"updated": len(data), "failed": 0, "digests": {}}}
 
 
 def _run(level_setup, *, live=None, ordinary=None, level_map=None, runs=1, **kw):

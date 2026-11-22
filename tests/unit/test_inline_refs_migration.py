@@ -15,8 +15,9 @@ class DummyOp:
         self.last_ids = None
 
     def execute_script_with_data(self, script_content: str, data: object):
-        self.last_ids = list(data) if isinstance(data, list) else []
-        return {"updated": len(self.last_ids), "failed": 0}
+        self.last_ids = [item["id"] for item in data] if isinstance(data, list) else []
+        # The runner's envelope around the script's JSON (openproject_rails_runner_service).
+        return {"status": "success", "data": {"updated": len(self.last_ids), "failed": 0, "digests": {}}}
 
 
 @pytest.fixture(autouse=True)

@@ -57,6 +57,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_bulk_create_service import reject_legacy_journal_operations
+from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 
 if TYPE_CHECKING:
     from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -128,27 +129,46 @@ class OpenProjectWorkPackageService:
         self,
         updates: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Update multiple work packages in batches."""
+        """Update multiple work packages in batches.
+
+        A row may carry ``_j2o_guard`` (``attr``, ``expect``, ``overwrite``) for the one attribute
+        it writes. Such a row is written only while the target holds what J2O wrote last
+        (ADR-013); otherwise it reports ``unchanged`` or ``target_changed`` and carries the
+        digest of the stored value. Rows without a guard behave as before.
+        """
         reject_legacy_journal_operations(updates)
         if not updates:
             return {"updated": 0, "failed": 0, "results": []}
 
         updates_json = json.dumps(updates, ensure_ascii=False)
-        script = f"""
+        script = (
+            WRITTEN_GUARD
+            + f"""
         updates = JSON.parse(<<-'J2O_UPDATES'
 {updates_json}
 J2O_UPDATES
 )
         updated_count = 0
+        unchanged_count = 0
+        changed_count = 0
         failed_count = 0
         results = []
 
         updates.each do |update|
           begin
             wp = WorkPackage.find(update.fetch('id'))
+            status = 'updated'
+            guard = attr = before = digest = nil
             wp.with_lock(requires_new: true) do
               attributes = update.except('id', '_rails_operations')
+              guard = attributes.delete('_j2o_guard')
               fields = attributes.extract!(*attributes.keys.grep(/\\AcustomField[0-9]+\\z/))
+              if guard
+                # A guarded row (ADR-013) writes exactly the one attribute its digest covers.
+                attr = guard.fetch('attr')
+                raise "Guarded row writes more than #{{attr}}" unless (attributes.keys + fields.keys) == [attr]
+                before = j2o_stored.call(wp, attr)
+              end
               origin = attributes.delete('jira_version_issue_origin')
               if origin
                 raise "Wrong work package project" unless wp.project_id == origin.fetch('project')
@@ -192,23 +212,43 @@ J2O_UPDATES
                 expected[cf.id] = normalized.compact.reject(&:empty?).sort
                 [cf.id, cf.multi_value? ? normalized : normalized.first]
               end
-              wp.custom_field_values = values unless values.empty?
-              wp.save!
-              if target_ids
-                stored_ids = wp.reload.respond_to?(:target_version_ids) ? wp.target_version_ids : [wp.version_id].compact
-                raise "Target versions were not persisted" unless stored_ids.sort == target_ids.sort
+              if guard
+                wanted = fields.empty? ? attributes.fetch(attr).to_s : expected.fetch(values.keys.sole)
+                state = j2o_decide.call(guard, before, wanted, j2o_untouched.call(wp, attr))
+                status = {{unchanged: 'unchanged', changed: 'target_changed'}}.fetch(state, status)
               end
-              unless expected.empty?
-                stored = CustomValue.where(customized: wp, custom_field_id: expected.keys)
-                                    .pluck(:custom_field_id, :value).group_by(&:first)
-                expected.each do |id, want|
-                  actual = Array(stored[id]).map(&:last).compact.reject(&:empty?).sort
-                  raise "Custom field #{{id}} was not persisted" unless actual == want
+              if status == 'updated'
+                wp.custom_field_values = values unless values.empty?
+                wp.save!
+                if target_ids
+                  stored_ids = wp.reload.respond_to?(:target_version_ids) ? wp.target_version_ids : [wp.version_id].compact
+                  raise "Target versions were not persisted" unless stored_ids.sort == target_ids.sort
+                end
+                unless expected.empty?
+                  stored = CustomValue.where(customized: wp, custom_field_id: expected.keys)
+                                      .pluck(:custom_field_id, :value).group_by(&:first)
+                  expected.each do |id, want|
+                    actual = Array(stored[id]).map(&:last).compact.reject(&:empty?).sort
+                    raise "Custom field #{{id}} was not persisted" unless actual == want
+                  end
                 end
               end
+              # Read under the row lock, so a concurrent edit cannot become J2O's record.
+              if guard && status != 'target_changed'
+                digest = j2o_digest.call(status == 'updated' ? j2o_stored.call(wp, attr) : before)
+              end
             end
-            updated_count += 1
-            results << {{ id: wp.id, status: 'updated' }}
+            row = {{ id: wp.id, status: status }}
+            if guard
+              row[:attr] = attr
+              row[:digest] = digest if digest
+            end
+            case status
+            when 'updated' then updated_count += 1
+            when 'unchanged' then unchanged_count += 1
+            else changed_count += 1
+            end
+            results << row
           rescue => e
             failed_count += 1
             results << {{ id: update['id'], status: 'failed', error: e.message }}
@@ -217,10 +257,13 @@ J2O_UPDATES
 
         {{
           updated: updated_count,
+          unchanged: unchanged_count,
+          target_changed: changed_count,
           failed: failed_count,
           results: results
         }}
         """
+        )
 
         try:
             return self._client.execute_json_query(script)

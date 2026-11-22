@@ -198,13 +198,17 @@ def test_run_reports_unread_comments_and_individual_field_failures(tmp_path, _mo
     mig.op_client.batch_update_work_packages.return_value = {
         "updated": 1,
         "failed": 1,
-        "results": [{"id": 5001, "status": "failed"}],
+        "results": [
+            {"id": 5001, "status": "updated", "attr": "customField91", "digest": "a" * 64},
+            {"id": 5001, "status": "failed"},
+        ],
     }
     result = mig.run()
+    guard = {"expect": None, "overwrite": False}
     mig.op_client.batch_update_work_packages.assert_called_once_with(
         [
-            {"id": 5001, "customField91": 4},
-            {"id": 5001, "customField92": {"value": "unknown"}},
+            {"id": 5001, "customField91": 4, "_j2o_guard": {"attr": "customField91", **guard}},
+            {"id": 5001, "customField92": {"value": "unknown"}, "_j2o_guard": {"attr": "customField92", **guard}},
         ]
     )
     assert not result.success

@@ -12,11 +12,12 @@ A minimal Rails script is used to, per work package:
 
 from __future__ import annotations
 
-from src.application.components import level_issues
+from src.application.components import level_issues, written_values
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.security_level_projects_migration import LevelProjectError
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
+from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 from src.models import ComponentResult, WorkPackageMappingEntry
 
 
@@ -58,11 +59,17 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
         if not ids:
             return ComponentResult(success=True, updated=0)
 
-        script = (
+        # A rewrite of the text J2O wrote last keeps its digest current (ADR-013), so the next
+        # content run does not take it for an edit made in OpenProject.
+        store = written_values.store()
+        expect = store.expected((wp_id, "description") for wp_id in ids)
+        items = [{"id": wp_id, "expect": expect.get((wp_id, "description"))} for wp_id in ids]
+        script = WRITTEN_GUARD + (
             "require 'json'\n"
-            "ids = input_data || []\n"
-            "updated = 0; failed = 0\n"
-            "ids.each do |id|\n"
+            "items = input_data || []\n"
+            "updated = 0; failed = 0; digests = {}\n"
+            "items.each do |item|\n"
+            "  id = item.fetch('id')\n"
             "  begin\n"
             "    wp = WorkPackage.find(id)\n"
             "    names = wp.attachments.pluck(:filename)\n"
@@ -73,8 +80,10 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "      desc = (wp.description || '').to_s\n"
             '      new_desc = desc.gsub(re) { "(attachment:#{$1})" }\n'
             "      if new_desc != desc\n"
+            "        kept = item['expect'] && j2o_digest.call(j2o_stored.call(wp, 'description')) == item['expect']\n"
             "        wp.description = new_desc\n"
             "        wp.save!\n"
+            "        digests[id] = j2o_digest.call(j2o_stored.call(wp, 'description')) if kept\n"
             "        updated += 1\n"
             "      end\n"
             "      # Comments\n"
@@ -93,11 +102,19 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "end\n"
             "start_marker = defined?($j2o_start_marker) && $j2o_start_marker ? $j2o_start_marker : 'JSON_OUTPUT_START'\n"
             "end_marker = defined?($j2o_end_marker) && $j2o_end_marker ? $j2o_end_marker : 'JSON_OUTPUT_END'\n"
-            "puts start_marker + {updated: updated, failed: failed}.to_json + end_marker\n"
+            "puts start_marker + {updated: updated, failed: failed, digests: digests}.to_json + end_marker\n"
         )
-        res = self.op_client.execute_script_with_data(script, ids)
-        updated = int(res.get("updated", 0)) if isinstance(res, dict) else 0
-        failed = int(res.get("failed", 0)) if isinstance(res, dict) else 0
+        res = self.op_client.execute_script_with_data(script, items)
+        # The runner wraps the script's JSON as {"status": ..., "data": ...}.
+        answer = res.get("data") if isinstance(res, dict) and res.get("status") == "success" else None
+        if not isinstance(answer, dict):
+            message = res.get("message") if isinstance(res, dict) else res
+            self.logger.error("Inline reference rewrite not confirmed: %s", message)
+            return ComponentResult(success=False, updated=0, failed=len(ids))
+        digests = answer.get("digests") or {}
+        store.record((int(wp_id), "description", str(digest)) for wp_id, digest in digests.items())
+        updated = int(answer.get("updated", 0))
+        failed = int(answer.get("failed", 0))
         return ComponentResult(success=failed == 0, updated=updated, failed=failed)
 
     def run(self) -> ComponentResult:

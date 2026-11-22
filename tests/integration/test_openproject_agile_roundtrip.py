@@ -761,8 +761,12 @@ def test_task_origins_bind_to_the_native_work_package_without_comment_data(nativ
     def run(*rows):
         return apply_tasklists(client, {**project, "rows": list(rows)})
 
-    assert run(row) == {"updated": 1, "tasks": 1}
-    assert run(row) == {"updated": 0, "tasks": 1}
+    # The checklist rewrites the description J2O wrote, so it returns the new digest (ADR-013).
+    digest = 'require "digest"; Digest::SHA256.hexdigest(%s.to_json)'
+    first = run({**row, "expect": query(digest % '"Before"')})
+    stored = query(digest % f"WorkPackage.find({wid}).description.to_s")
+    assert first == {"updated": 1, "tasks": 1, "digests": {str(wid): stored}}
+    assert run(row) == {"updated": 0, "tasks": 1, "digests": {}}
     observed = query(f"""
         require "rack/mock"
         token=Token::API.create!(user:User.admin.active.first!);auth=ActionController::HttpAuthentication::Basic.encode_credentials("apikey",token.plain_value)
