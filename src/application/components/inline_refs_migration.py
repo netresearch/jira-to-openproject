@@ -67,7 +67,7 @@ class InlineRefsMigration(BaseMigration):  # noqa: D101
             "    wp = WorkPackage.find(id)\n"
             "    names = wp.attachments.pluck(:filename)\n"
             "    if names.any?\n"
-            "      union = Regexp.union(names.map { |n| Regexp.escape(n) })\n"
+            "      union = Regexp.union(names)\n"
             "      re = /\\((?:[^()]*\\/)?(#{union})\\)/i\n"
             "      # Description\n"
             "      desc = (wp.description || '').to_s\n"
