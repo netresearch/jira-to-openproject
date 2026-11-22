@@ -31,7 +31,8 @@ db_user="$(docker exec "$db" printenv POSTGRES_USER)"
 
 # Row counts of the tables a migration writes; the drill compares them after the restore.
 counts() {
-  docker exec "$db" psql -U "$db_user" -d "$1" -v ON_ERROR_STOP=1 -AtF $'\t' -c "
+  local database="$1"
+  docker exec "$db" psql -U "$db_user" -d "$database" -v ON_ERROR_STOP=1 -AtF $'\t' -c "
     SELECT 'projects', count(*) FROM projects UNION ALL
     SELECT 'work_packages', count(*) FROM work_packages UNION ALL
     SELECT 'journals', count(*) FROM journals UNION ALL
@@ -45,10 +46,10 @@ counts() {
 }
 
 take() {
+  local parent="$1" out
   umask 077
-  local out
-  out="$1/openproject-$(date -u +%Y%m%dT%H%M%SZ)"
-  mkdir -p "$1"
+  out="$parent/openproject-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$parent"
   mkdir "$out"
   local storage
   storage="$(docker exec "$app" printenv OPENPROJECT_ATTACHMENTS__STORAGE__PATH || echo /var/openproject/assets/files)"
