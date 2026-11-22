@@ -192,6 +192,19 @@ def guarded(rows: list[dict[str, Any]], store: WrittenValues, *, overwrite: bool
     ]
 
 
+def _recorded(key: tuple[int, str], answer: dict[str, Any]) -> list[tuple[int, str, str]]:
+    """The store rows of one written or unchanged answer."""
+    digest = answer.get("digest")
+    if not isinstance(digest, str) or len(digest) != 64:  # SHA-256 in hex
+        msg = f"Rails returned no digest for {key}"
+        raise ValueError(msg)
+    rows = [(*key, digest)]
+    if answer.get("also") in _VERSION_ATTRIBUTES - {key[1]}:
+        # One stored column behind both version attributes (OpenProject without target_version_ids).
+        rows.append((key[0], str(answer["also"]), digest))
+    return rows
+
+
 def settle(store: WrittenValues, rows: list[dict[str, Any]], result: dict[str, Any]) -> Outcome:
     """Record the digests Rails returned and count what it did with each guarded row."""
     sent = {(int(row["id"]), row[_GUARD]["attr"]) for row in rows}
@@ -208,14 +221,7 @@ def settle(store: WrittenValues, rows: list[dict[str, Any]], result: dict[str, A
         if status == "target_changed":
             outcome.changed.append(f"{key[0]}:{key[1]}")
             continue
-        digest = answer.get("digest")
-        if not isinstance(digest, str) or len(digest) != 64:
-            msg = f"Rails returned no digest for {key}"
-            raise ValueError(msg)
-        digests.append((*key, digest))
-        if answer.get("also") in _VERSION_ATTRIBUTES - {key[1]}:
-            # One stored column behind both version attributes (OpenProject without target_version_ids).
-            digests.append((key[0], str(answer["also"]), digest))
+        digests.extend(_recorded(key, answer))
         setattr(outcome, status, getattr(outcome, status) + 1)
         if status == "updated":
             outcome.written.add(key[0])
