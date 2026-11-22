@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from src import config
 from src.models import ComponentResult, MigrationError
 
 if TYPE_CHECKING:
@@ -74,6 +75,15 @@ class ChangeAwareRunner:
         if not entity_type:
             self.logger.debug(
                 "No entity type specified, running migration without change detection",
+            )
+            return self.migration.run()
+        if scope := config.selected_jira_projects():
+            # A run limited to some projects is partial. Its snapshot would record every Jira
+            # entity as the baseline, so a later run would find no changes and skip the rest.
+            self.logger.info(
+                "Project filter active (%d projects): %s runs without change detection and writes no snapshot",
+                len(scope),
+                entity_type,
             )
             return self.migration.run()
 
