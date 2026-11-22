@@ -24,5 +24,6 @@ def test_the_resource_of_the_issue_is_read():
 
 @pytest.mark.parametrize("answer", [{"errorMessages": []}, [1], None])
 def test_a_malformed_answer_raises(answer):
+    client = _client(answer)
     with pytest.raises(JiraApiError):
-        _client(answer).get_issue_remote_links("APP-1")
+        client.get_issue_remote_links("APP-1")
