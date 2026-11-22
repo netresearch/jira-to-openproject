@@ -231,7 +231,8 @@ def _argument_parser() -> argparse.ArgumentParser:
         metavar="KEYS",
         help=(
             "Comma-separated Jira project keys to migrate (e.g., 'NRBARCAMP,ADIC'). "
-            "If omitted, all mapped projects are processed."
+            "If omitted, all mapped projects are processed. A filtered run is partial: it runs "
+            "every component without change detection and writes no change snapshot."
         ),
     )
 
