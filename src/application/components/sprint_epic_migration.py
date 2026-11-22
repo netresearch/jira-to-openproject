@@ -152,9 +152,13 @@ class SprintEpicMigration(BaseMigration):
             },
         )
         copy = level_versions.level_copy_id(sprint[0], audience)
+        audiences = group.setdefault("audiences", {})
+        if audiences.get(copy, audience) != audience:
+            level.refused.append(f"{issue.key}: another audience has the same sprint copy in {target.label}")
+            return
         group["sprints"][copy] = sprint[1]
         if audience:
-            group.setdefault("audiences", {})[copy] = audience
+            audiences[copy] = audience
         group.setdefault("issues", []).append({"key": issue.key, "id": str(issue.id), "wp": wp_id, "sprint": copy})
 
     def _level_sprint_assignments(self) -> list[dict[str, Any]]:

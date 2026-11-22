@@ -189,6 +189,35 @@ def test_shared_work_packages_get_the_sprint_copy_of_their_audience(sprint_level
     assert "audience" not in mapping["APP:10000:sprint:42"]
 
 
+@pytest.fixture
+def one_token(monkeypatch):
+    """Every audience gets the same token, as two audiences whose hashes collide would."""
+    monkeypatch.setattr("src.infrastructure.openproject.version_catalog.audience_token", lambda users: "c0ffee000000")
+
+
+def test_two_audiences_with_one_token_never_share_a_version_copy(level_setup, shared, one_token):
+    outcome = versions._run(level_setup, "versions", live=LIVE, **REPORT)
+    assert not outcome.result.success
+    assert not outcome.op.copies
+    assert not versions._level_writes(outcome, "versions")
+    assert outcome.result.details["security_level"]["refused"] == 5
+
+
+def test_two_audiences_with_one_token_never_share_a_sprint_copy(sprint_level_setup, shared, one_token):  # noqa: F811
+    rows = [sprints.level_sprint_row(n, "10000") for n in (10, 11, 12, 14, 15)]
+    outcome = sprints.level_sprint_run(sprint_level_setup, rows=rows, live=LIVE, **REPORT)
+    copy = {users: outcome.op.copies[100, level_copy_id("42", users)] for users in ((), PAIR)}
+    # APP-15 has another audience than APP-12 but the same copy ID: it is refused, not merged.
+    assert sprints.level_assignments(outcome.op) == {
+        (100, 900, (copy[()],)),
+        (100, 901, (copy[()],)),
+        (100, 902, (copy[PAIR],)),
+        (100, 904, (copy[PAIR],)),
+    }
+    assert outcome.result.details["security_level"]["refused"] == 1
+    assert [row.get("audience") for row in outcome.op.copy_syncs[0]["sprints"]] == [None, [43, 44]]
+
+
 def test_the_audience_token_names_the_sorted_user_ids():
     assert audience_token([44, 43]) == audience_token((43, 44)) == hashlib.sha256(b"43,44").hexdigest()[:12]
     assert audience_token([43]) != audience_token([43, 44])

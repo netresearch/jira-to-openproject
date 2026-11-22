@@ -194,8 +194,9 @@ ENTERPRISE_LIVE = {
 
 
 def test_level_versions_withhold_target_versions_of_shared_work_packages(level_setup):
-    # On Enterprise the per_issue APP-12 is migrated and later shared with its extra readers; a
-    # target version would show them the other level issues of that version (ADR-010).
+    # On Enterprise the per_issue APP-12 is migrated and later shared with its extra readers.
+    # Without a readers file its audience is unknown, so it gets no target version: the static
+    # copy would show them the other level issues of that version (ADR-010).
     outcome = _run(level_setup, "versions", edition="enterprise", live=ENTERPRISE_LIVE)
     copies = outcome.op.copies
     assert _level_writes(outcome, "versions") == _expected("versions", copies, APP_10, APP_11)
