@@ -87,7 +87,9 @@ def test_an_assignee_who_is_no_reader_is_not_assigned(level_setup, monkeypatch):
     assert result.details["security_level"]["assignees_not_readers"] == 1
 
 
-def test_without_a_readers_file_the_level_assignee_is_unchanged(level_setup, monkeypatch):
+def test_without_a_readers_file_no_level_work_package_gets_an_assignee(level_setup, monkeypatch):
+    # Before the grant the sub-project has no member, so no assignee is known to be a reader.
     result, assigned = _with_assignees(level_setup, monkeypatch, readers_file=False)
-    assert assigned == {"APP-1": 99, "APP-10": 41, "APP-11": 99}
-    assert result.details["security_level"]["assignees_not_readers"] == 0
+    assert result.success, result.error
+    assert assigned == {"APP-1": 99, "APP-10": None, "APP-11": None}
+    assert result.details["security_level"]["assignees_not_readers"] == 2

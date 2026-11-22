@@ -98,14 +98,17 @@ _LEVEL_COUNTS = (
 
 
 def _drop_assignee_not_reader(payload: dict[str, Any], target: level_issues.LevelTarget, key: str) -> int:
-    """With a readers file, assign a level work package only to a reader of it (ADR-012); 1 if dropped.
+    """Assign a level work package only to a reader of it (ADR-012); 1 if dropped.
 
     A reader is a static reader of the level, or on Enterprise an extra reader of the issue. An
-    assignee who is none stays unassigned rather than becoming a member.
+    assignee who is none stays unassigned rather than becoming a member. Without a readers file
+    the sub-project has no member yet, so no assignee is known to be a reader and none is kept.
     """
-    if not config.migration_config.get(READERS_SETTING) or "assigned_to_id" not in payload:
+    if "assigned_to_id" not in payload:
         return 0
-    readers = set(target.audience["members"]) | set(target.audience["shares"].get(key, []))
+    readers: set[Any] = set()
+    if config.migration_config.get(READERS_SETTING):
+        readers = set(target.audience["members"]) | set(target.audience["shares"].get(key, []))
     if payload["assigned_to_id"] in readers:
         return 0
     del payload["assigned_to_id"]
