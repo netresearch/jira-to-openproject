@@ -10,3 +10,9 @@ permissions:
 jobs:
   auto-merge:
     uses: netresearch/.github/.github/workflows/auto-merge-deps.yml@main
+    # Enqueue and merge with the org App (netresearch/.github#450): an entry the
+    # GITHUB_TOKEN adds to the merge queue starts no CI run and blocks the queue
+    # until its check timeout. Only these two secrets are passed, not `secrets: inherit`.
+    secrets:
+      merge-app-id: ${{ secrets.PROJECT_APP_ID }}
+      merge-app-private-key: ${{ secrets.PROJECT_APP_PRIVATE_KEY }}
