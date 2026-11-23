@@ -72,17 +72,19 @@ def test_a_transient_refusal_is_retried_once(status: int) -> None:
 
 def test_a_second_refusal_raises() -> None:
     jira = _Jira(401, 401)
+    service = _service(jira)
 
     with pytest.raises(JiraApiError):
-        _service(jira).get_issue_watchers("APP-1")
+        service.get_issue_watchers("APP-1")
     assert jira.calls == 2
 
 
 def test_another_status_is_not_retried() -> None:
     jira = _Jira(500)
+    service = _service(jira)
 
     with pytest.raises(JiraApiError):
-        _service(jira).get_issue_watchers("APP-1")
+        service.get_issue_watchers("APP-1")
     assert jira.calls == 1
 
 
@@ -157,9 +159,10 @@ def test_a_failed_watcher_read_fails_the_content_component(tmp_path: Path, monke
 def test_the_single_issue_path_raises_on_a_failed_read(tmp_path: Path, _no_mappings: None) -> None:
     mig = _build_mig(tmp_path)
     mig.jira_client.get_issue_watchers.side_effect = JiraApiError("HTTP 401")
+    issue = _issue()
 
     with pytest.raises(JiraApiError):
-        mig._populate_watchers(_issue(), wp_id=5)
+        mig._populate_watchers(issue, wp_id=5)
 
 
 class _Op:
