@@ -26,6 +26,12 @@ def _rails_writes(rows):
     return {"updated": len(rows), "failed": 0, "results": answers}
 
 
+def _options_confirmed(fields):
+    """OpenProject confirming the options of every requested list field (ADR-017)."""
+    answers = {f["id"]: {"created": [], "multi_changed": False, "placeholder_removed": False} for f in fields}
+    return {"fields": answers, "errors": {}}
+
+
 def _first_write(attr):
     return {"attr": attr, "expect": None, "overwrite": False}
 
@@ -88,6 +94,7 @@ def test_empty_placeholders_are_not_sent_and_not_counted(tmp_path, _mock_mapping
     mig.jira_client.jira.search_issues.return_value = [issue]
     monkeypatch.setattr(mig, "iter_project_issues", lambda project: iter([issue]))
     mig.op_client.batch_update_work_packages.side_effect = _rails_writes
+    mig.op_client.ensure_list_field_options.side_effect = _options_confirmed
 
     result = mig.run()
 

@@ -34,6 +34,7 @@ from typing import Any
 from src.application.components import written_values
 from src.application.components.base_migration import register_entity_types
 from src.application.components.level_fields import LevelFieldsMigration
+from src.application.components.list_field_options import is_sprint_field
 from src.config import logger
 from src.infrastructure.jira.jira_client import JiraClient
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
@@ -159,6 +160,8 @@ class CustomFieldsGenericMigration(LevelFieldsMigration):  # noqa: D101
             mapping = cf_mapping.get(attr) or {}
             if isinstance(mapping, int) or mapping.get("openproject_id"):
                 continue  # The content pass writes this field in its native format.
+            if is_sprint_field(mapping):
+                continue  # The sprint and epic component owns sprint data (ADR-017).
             if value in (None, "", [], {}):
                 continue
             normalized = self._to_string_value(value)

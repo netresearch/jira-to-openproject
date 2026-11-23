@@ -1140,3 +1140,71 @@ def test_bulk_created_custom_fields_reach_every_work_package_type(rails, monkeyp
 
     assert query(available) is True
     assert mappings["custom_field"]["customfield_1"]["openproject_id"] == field_id
+
+
+def test_list_field_options_follow_the_written_values(rails):
+    """A placeholder-only list field gets the written labels and takes a multi value (ADR-017)."""
+    client, query = rails
+    fields = OpenProjectCustomFieldService(client)
+    ids = query("""
+      made = ['J2O Ensure Colors', 'J2O Ensure Kept', 'J2O Ensure Named'].map do |name|
+        cf = WorkPackageCustomField.new(name: name, field_format: 'list', is_for_all: true)
+        cf.custom_options.build(value: 'Default option')
+        cf.save!
+        cf.id
+      end
+      text = WorkPackageCustomField.create!(name: 'J2O Ensure Text', field_format: 'text', is_for_all: true)
+      made + [text.id]
+    """)
+    colors, kept, named, text = ids
+    for name in ("J2O Ensure Colors", "J2O Ensure Kept", "J2O Ensure Named"):
+        fields.ensure_custom_field(name, field_format="list")
+    wp_id = query(f"""
+      wp = WorkPackage.first!
+      kept = CustomField.find({kept})
+      CustomValue.create!(customized: wp, custom_field: kept, value: kept.custom_options.first!.id.to_s)
+      # The migration console is long-lived: the writer may find these fields memoized single-valued.
+      wp.available_custom_fields.to_a
+      wp.id
+    """)
+    client.rails_client.execute.side_effect = lambda command, timeout=None: query(command) and ""
+    client.execute_script_with_data.side_effect = OpenProjectRailsRunnerService(client).execute_script_with_data
+    request = [
+        {"id": colors, "labels": ["Red", "Green"], "multi": True},
+        {"id": kept, "labels": ["Other"], "multi": False},
+        # A Jira option that is itself named "Default option" keeps the placeholder.
+        {"id": named, "labels": ["Default option", "New"], "multi": False},
+        {"id": text, "labels": ["x"], "multi": False},
+    ]
+
+    answer = fields.ensure_list_field_options(request)
+
+    assert answer["fields"][colors] == {"created": ["Red", "Green"], "multi_changed": True, "placeholder_removed": True}
+    # A placeholder that a stored value references stays.
+    assert answer["fields"][kept] == {"created": ["Other"], "multi_changed": False, "placeholder_removed": False}
+    assert "not a work package list field" in answer["errors"][text]
+    assert answer["fields"][named] == {"created": ["New"], "multi_changed": False, "placeholder_removed": False}
+    assert set(answer["fields"]) == {colors, kept, named}
+
+    def options(field_id):
+        return query(f"CustomField.find({field_id}).custom_options.order(:position).pluck(:value)")
+
+    assert options(colors) == ["Red", "Green"]
+    assert query(f"CustomField.find({colors}).multi_value?") is True
+    assert options(kept) == ["Default option", "Other"]
+    assert options(named) == ["Default option", "New"]
+    assert query(f"CustomField.find({kept}).multi_value?") is False
+    assert query(f"CustomField.find({text}).custom_options.count") == 0
+    again = fields.ensure_list_field_options(request[:2])
+    assert again["fields"][colors] == {"created": [], "multi_changed": False, "placeholder_removed": False}
+
+    written = OpenProjectWorkPackageService(client).batch_update_work_packages(
+        [{"id": wp_id, f"customField{colors}": [{"value": "Red", "id": "1"}, {"value": "Green", "id": "2"}]}]
+    )
+
+    assert written["updated"] == 1, written
+    stored = query(f"""
+      ids = CustomValue.where(customized: WorkPackage.find({wp_id}), custom_field_id: {colors}).pluck(:value)
+      CustomOption.where(id: ids).order(:position).pluck(:value)
+    """)
+    assert stored == ["Red", "Green"]

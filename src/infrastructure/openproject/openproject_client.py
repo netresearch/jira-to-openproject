@@ -554,6 +554,13 @@ class OpenProjectClient:
         """
         return self.custom_fields.ensure_wp_custom_field_id(name, field_format)
 
+    def ensure_list_field_options(self, fields: list[dict[str, Any]]) -> dict[str, dict[int, Any]]:
+        """Create the list field options the content step will write (ADR-017).
+
+        Thin delegator over ``self.custom_fields.ensure_list_field_options``.
+        """
+        return self.custom_fields.ensure_list_field_options(fields)
+
     def enable_custom_field_for_projects(
         self,
         cf_id: int,

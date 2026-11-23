@@ -22,6 +22,7 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [ADR-014](ADR-014-tempo-billing-on-time-entries.md) | Tempo billable hours and approval status are time entry custom fields | Accepted | 2026-11-22 |
 | [ADR-015](ADR-015-rollback-by-snapshot.md) | A migration run is undone by restoring a snapshot | Accepted | 2026-11-22 |
 | [ADR-016](ADR-016-unsafe-attachment-names-stored-safely.md) | An attachment name the target refuses is stored under a safe name | Accepted | 2026-11-23 |
+| [ADR-017](ADR-017-list-field-options-from-written-values.md) | List field options come from the values J2O writes | Accepted | 2026-11-23 |
 
 ## What is an ADR?
 
