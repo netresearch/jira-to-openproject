@@ -485,6 +485,28 @@ class JiraIssueService:
 
     # ── watchers ─────────────────────────────────────────────────────────
 
+    def _watchers_with_one_retry(self, jira: Any, issue_key: str) -> Any:
+        """Read the watchers; an unexpected 401/403 gets one more attempt, as issue chunks do.
+
+        In a full run, single watcher reads were refused with 401 about every 30 minutes while the
+        same request succeeded right after, so one retry keeps those watchers.
+        """
+        for attempt in range(_CHUNK_TRANSIENT_RETRIES + 1):
+            try:
+                return jira.watchers(issue_key)
+            except Exception as exc:
+                status = self._extract_http_status(exc)
+                if status not in {401, 403} or attempt == _CHUNK_TRANSIENT_RETRIES:
+                    raise
+                self._logger.warning(
+                    "Watcher read of %s refused with HTTP %s; retrying once after %.0fs",
+                    issue_key,
+                    status,
+                    _CHUNK_TRANSIENT_RETRY_BACKOFF_SECONDS,
+                )
+                time.sleep(_CHUNK_TRANSIENT_RETRY_BACKOFF_SECONDS)
+        return None  # unreachable: the last attempt returns or raises
+
     def get_issue_watchers(self, issue_key: str) -> list[dict[str, Any]]:
         """Get the watchers for a specific Jira issue.
 
@@ -504,7 +526,7 @@ class JiraIssueService:
             raise JiraConnectionError(msg)
 
         try:
-            result = self._client.jira.watchers(issue_key)
+            result = self._watchers_with_one_retry(self._client.jira, issue_key)
 
             if not result:
                 self._logger.debug("No watchers found for issue %s", issue_key)

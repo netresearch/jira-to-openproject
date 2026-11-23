@@ -213,6 +213,8 @@ class WatcherMigration(BaseMigration):
         # dropped; this set tells them WHICH users to fix. Stored
         # as a set so a user watching N issues only logs once.
         unmapped_users: set[str] = set()
+        # Issues whose watchers could not be read; they fail the component.
+        read_failures: list[str] = []
 
         # Use cached issues if available, otherwise iterate through keys directly.
         # The ``issue`` value is only used by the field-fallback path
@@ -232,6 +234,9 @@ class WatcherMigration(BaseMigration):
                 continue
 
             watchers = self._read_watchers(key, issue)
+            if watchers is None:
+                read_failures.append(str(key))
+                continue
 
             self._collect_watchers(watchers, wp_id, watchers_to_create, skip_reasons, unmapped_users)
         watchers_to_create.extend(self._level_watchers(skip_reasons))
@@ -298,10 +303,14 @@ class WatcherMigration(BaseMigration):
                 "unmapped_users": sorted_unmapped_users,
                 "unmapped_user_count": len(sorted_unmapped_users),
                 "errors": errors,
+                "read_failures": read_failures,
             },
         )
-        result.success = errors == 0
-        result.message = f"Watchers created={created}, skipped={skipped + bulk_skipped}, errors={errors}"
+        result.success = errors == 0 and not read_failures
+        result.message = (
+            f"Watchers created={created}, skipped={skipped + bulk_skipped}, errors={errors}, "
+            f"unread issues={len(read_failures)}"
+        )
         logger.info(result.message)
         return result
 
@@ -375,20 +384,25 @@ class WatcherMigration(BaseMigration):
             issues = {key: issue for key, issue in issues.items() if key not in level.level_keys}
         return issues
 
-    def _read_watchers(self, key: str, issue: Any) -> list:
-        """Prefer the watchers endpoint, then fall back to embedded watcher records."""
-        watchers = []
+    def _read_watchers(self, key: str, issue: Any) -> list | None:
+        """Prefer the watchers endpoint, then fall back to embedded watcher records.
+
+        Returns None when the endpoint failed and the issue embeds no watcher records: Jira's
+        issue fields carry only the watcher count, so an empty fallback is no answer.
+        """
         try:
             # Prefer explicit API for watchers (more complete)
-            watchers = self.jira_client.get_issue_watchers(str(key))
-        except Exception:
-            # Fallback to fields if available
+            return self.jira_client.get_issue_watchers(str(key))
+        except Exception as exc:
             try:
                 w = getattr(getattr(issue, "fields", None), "watches", None)
-                watchers = getattr(w, "watchers", []) or []
+                embedded = getattr(w, "watchers", []) or []
             except Exception:
-                watchers = []
-        return watchers
+                embedded = []
+            if embedded:
+                return embedded
+            logger.warning("Could not read the watchers of %s: %s", key, type(exc).__name__)
+            return None
 
     def _collect_watchers(
         self, watchers: list, wp_id: int, watchers_to_create: list, skip_reasons: Counter, unmapped_users: set
