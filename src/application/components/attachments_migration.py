@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,37 @@ from src.infrastructure.openproject.container_staging import private_container_d
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 from src.models import ComponentResult, WorkPackageMappingEntry
 from src.utils.scoped_receipts import ScopedReceipts
+
+# Characters the Rails attach script refuses in a stored attachment name
+# (``[[:cntrl:]/\\;"]``). The stored name is also the HTTP download name, so
+# path separators, the header delimiters ";" and '"', and control characters
+# cannot be kept as they are.
+_UNSAFE_NAME_PUNCTUATION = frozenset('/\\;"')
+_MAX_NAME_BYTES = 255
+
+
+def _is_unsafe_name_char(char: str) -> bool:
+    return char in _UNSAFE_NAME_PUNCTUATION or unicodedata.category(char) == "Cc"
+
+
+def storage_safe_attachment_name(name: str, fallback: str) -> str:
+    """Return ``name`` in the form the Rails attach script accepts.
+
+    Each unsafe character becomes "_". A name longer than 255 bytes loses
+    characters from the end of its stem, so the extension stays. A name that
+    ends up empty, "." or ".." becomes ``fallback``.
+    """
+    safe = "".join("_" if _is_unsafe_name_char(char) else char for char in name)
+    if len(safe.encode()) > _MAX_NAME_BYTES:
+        stem, dot, ext = safe.rpartition(".")
+        tail = dot + ext if dot and stem and len((dot + ext).encode()) < _MAX_NAME_BYTES else ""
+        base = stem if tail else safe
+        while base and len((base + tail).encode()) > _MAX_NAME_BYTES:
+            base = base[:-1]
+        safe = base + tail
+    if safe.strip() in {"", ".", ".."}:
+        return fallback
+    return safe
 
 
 def compute_wp_lookup_by_jira_key(mappings: Any) -> dict[str, int]:
@@ -570,7 +602,7 @@ class AttachmentsMigration(BaseMigration):  # noqa: D101
         # Live 2026-05-07 NRS: 95 still_missing files traced largely to
         # this collision class (NRS-3363 alone: 13 distinct duplicate
         # filename pairs == 26 files).
-        container_ops = self._disambiguate_duplicate_filenames(container_ops)
+        container_ops = self._disambiguate_duplicate_filenames(self._storage_safe_filenames(container_ops))
 
         ruby_runner = r"""
 require "digest"
@@ -651,8 +683,14 @@ puts end_marker
                 logger.warning("_load: Rails did not acknowledge the requested attachment identities")
                 return ComponentResult(success=False, failed=len(container_ops), data={"attachment_mapping": {}})
             self._confirm_attachment_digests(container_ops, results)
+            source_names = {(op["jira_key"], op["filename"]): op.get("source_filename") for op in container_ops}
             for result in results:
-                attachment_mapping.setdefault(result["jira_key"], {})[result["filename"]] = result["attachment_id"]
+                per_issue = attachment_mapping.setdefault(result["jira_key"], {})
+                per_issue[result["filename"]] = result["attachment_id"]
+                # Jira markup names the file by its original name, so keep that name as a key too.
+                source = source_names.get((result["jira_key"], result["filename"]))
+                if source:
+                    per_issue.setdefault(source, result["attachment_id"])
                 if not result.get("existed"):
                     updated += 1
             failed = len(errors)
@@ -707,6 +745,23 @@ puts end_marker
         logger.warning("_load: Rails attachment results or errors have an unexpected format")
         self._loss_counters["load_rails_malformed_data"] += count
         return None
+
+    @staticmethod
+    def _storage_safe_filenames(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Rename each op whose filename the Rails attach script would refuse.
+
+        The renamed op keeps the Jira name in ``source_filename``.
+        """
+        renamed: list[dict[str, Any]] = []
+        for op in ops:
+            name = str(op["filename"])
+            safe = storage_safe_attachment_name(name, f"jira-attachment-{op.get('jira_attachment_id') or 'unnamed'}")
+            if safe == name:
+                renamed.append(op)
+                continue
+            logger.info("_load: storing attachment %r of %s as %r", name, op["jira_key"], safe)
+            renamed.append({**op, "filename": safe, "source_filename": name})
+        return renamed
 
     @staticmethod
     def disambiguate_duplicate_filenames_in_group(

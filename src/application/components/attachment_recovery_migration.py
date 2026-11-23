@@ -52,6 +52,7 @@ from src.application.components import level_issues
 from src.application.components.attachments_migration import (
     AttachmentsMigration,
     compute_wp_lookup_by_jira_key,
+    storage_safe_attachment_name,
 )
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
@@ -211,6 +212,7 @@ class AttachmentRecoveryMigration(BaseMigration):
                 if not aid:
                     continue
                 filename = f"jira-attachment-{aid}"
+            filename = storage_safe_attachment_name(filename, f"jira-attachment-{aid or 'unnamed'}")
             entries.append(
                 {
                     "filename": filename,
