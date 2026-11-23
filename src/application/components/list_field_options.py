@@ -43,21 +43,27 @@ def option_labels(value: Any) -> list[Any]:
     labels: list[Any] = []
     seen: set[tuple[type, Any]] = set()
     for item in value if isinstance(value, list) else [value]:
-        label = item
-        if isinstance(item, dict):
-            # Ruby truthiness: only nil and false are false.
-            if item.get("child") not in (None, False):
-                continue
-            label = item.get("value")
-            if label is None or label is False:
-                label = item.get("name")
-        if label is None or not isinstance(label, _SCALARS) or label == "":
-            continue
+        label = _label_of(item)
         # True == 1 in Python, but Ruby writes "true" and "1".
-        if (type(label), label) not in seen:
+        if label is not None and (type(label), label) not in seen:
             seen.add((type(label), label))
             labels.append(label)
     return labels
+
+
+def _label_of(item: Any) -> Any:
+    """The label the writer looks up for one item, or None when it takes no option."""
+    label = item
+    if isinstance(item, dict):
+        # Ruby truthiness: only nil and false are false.
+        if item.get("child") not in (None, False):
+            return None
+        label = item.get("value")
+        if label is None or label is False:
+            label = item.get("name")
+    if label is None or not isinstance(label, _SCALARS) or label == "":
+        return None
+    return label
 
 
 def list_fields(mapping: dict[str, Any]) -> dict[int, bool]:

@@ -112,6 +112,16 @@ def _coerce_comment_timestamp(value: Any) -> str | None:
     return str(value)
 
 
+def _target_field_id(mapping: Any) -> Any:
+    """The OpenProject field a mapped Jira field writes to, or None when the content step writes none.
+
+    The sprint and epic component owns sprint data (ADR-017).
+    """
+    if mapping is None or list_field_options.is_sprint_field(mapping):
+        return None
+    return mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
+
+
 @register_entity_types("work_packages_content")
 class WorkPackageContentMigration(BaseMigration):
     """Phase 2: Populate work package content with link resolution.
@@ -978,14 +988,10 @@ class WorkPackageContentMigration(BaseMigration):
             if value is None:
                 continue
 
-            # Check if we have a mapping for this field
-            if jira_field_id in self.custom_field_mapping:
-                mapping = self.custom_field_mapping[jira_field_id]
-                if list_field_options.is_sprint_field(mapping):
-                    continue  # The sprint and epic component owns sprint data (ADR-017).
-                op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
-                if op_cf_id:
-                    updates[f"customField{op_cf_id}"] = self._mapped_field_value(mapping, value, jira_issue.key)
+            mapping = self.custom_field_mapping.get(jira_field_id)
+            op_cf_id = _target_field_id(mapping)
+            if op_cf_id:
+                updates[f"customField{op_cf_id}"] = self._mapped_field_value(mapping, value, jira_issue.key)
         return updates
 
     def _date_updates(self, jira_issue: Issue) -> dict[str, str]:
