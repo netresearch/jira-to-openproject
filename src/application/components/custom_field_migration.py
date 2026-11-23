@@ -43,6 +43,7 @@ from typing import Any
 
 from src import config
 from src.application.components.base_migration import BaseMigration, register_entity_types
+from src.application.components.list_field_options import GH_SPRINT_CUSTOM_TYPE, SPRINT_OWNER, is_sprint_field
 
 # Import RailsConsolePexpect to handle direct Rails console execution
 from src.display import ProgressTracker
@@ -541,6 +542,8 @@ class CustomFieldMigration(BaseMigration):
         # Update mapping entries
         updated_count = 0
         for entry in self.mapping.values():
+            if is_sprint_field(entry):
+                continue
             # Use openproject_name for lookup (may differ from jira_name due to deduplication)
             op_name = entry.get("openproject_name") or entry.get("jira_name")
             if op_name and op_name in name_to_op_id:
@@ -619,6 +622,18 @@ class CustomFieldMigration(BaseMigration):
         return None if op_field else f"{TEMPO_ACCOUNT_FIELD_NAME} (Format: string)"
 
     def _map_single_field(self, jira_field, mapping, op_fields_by_name, used_op_names):
+        if self._field_schema(jira_field).get("custom") == GH_SPRINT_CUSTOM_TYPE:
+            # No target field: the sprint and epic component writes sprints (ADR-017). The entry
+            # stays so that no other component takes the field for an unmapped one.
+            mapping[jira_field.get("id")] = {
+                "jira_id": jira_field.get("id"),
+                "jira_name": jira_field.get("name", ""),
+                "jira_type": self._field_schema(jira_field).get("type", ""),
+                "jira_custom_type": GH_SPRINT_CUSTOM_TYPE,
+                "openproject_id": None,
+                "matched_by": SPRINT_OWNER,
+            }
+            return None
         if self._field_schema(jira_field).get("custom") == TEMPO_ACCOUNT_CUSTOM_TYPE:
             return self._map_tempo_account_field(jira_field, mapping, op_fields_by_name, used_op_names)
         jira_id = jira_field.get("id")

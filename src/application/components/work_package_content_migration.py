@@ -59,7 +59,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from src import config
-from src.application.components import level_issues, written_values
+from src.application.components import level_issues, list_field_options, written_values
 from src.application.components.base_migration import BaseMigration, register_entity_types
 from src.application.components.custom_field_migration import TEMPO_ACCOUNT_CUSTOM_TYPE
 from src.application.components.issue_security import (
@@ -981,6 +981,8 @@ class WorkPackageContentMigration(BaseMigration):
             # Check if we have a mapping for this field
             if jira_field_id in self.custom_field_mapping:
                 mapping = self.custom_field_mapping[jira_field_id]
+                if list_field_options.is_sprint_field(mapping):
+                    continue  # The sprint and epic component owns sprint data (ADR-017).
                 op_cf_id = mapping.get("openproject_id") if isinstance(mapping, dict) else mapping
                 if op_cf_id:
                     updates[f"customField{op_cf_id}"] = self._mapped_field_value(mapping, value, jira_issue.key)
@@ -1019,6 +1021,8 @@ class WorkPackageContentMigration(BaseMigration):
             for item in collected_items
             for key, value in item["custom_field_updates"].items()
         ]
+        # A list field gets the options its rows name before they are written (ADR-017).
+        fields, held_back = self._ensure_list_options(fields)
         # Each row is written only while its target holds what J2O wrote last (ADR-013).
         store = written_values.store()
         overwrite = written_values.overwrite_allowed()
@@ -1057,6 +1061,39 @@ class WorkPackageContentMigration(BaseMigration):
             except Exception as exc:
                 results[f"{kind}_failed"] = len(updates)
                 self.logger.warning("Could not confirm %s writes: %s", kind, exc)
+        results["custom_fields_failed"] = results.get("custom_fields_failed", 0) + held_back
+
+    def _ensure_list_options(self, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+        """Create the options the rows name; hold back the rows of every field not confirmed.
+
+        Returns the rows to write and the number held back, which count as failed.
+        """
+        requests = list_field_options.ensure_requests(rows, list_field_options.list_fields(self.custom_field_mapping))
+        if not requests:
+            return rows, 0
+        confirmed: dict[int, Any] = {}
+        try:
+            answer = self.op_client.ensure_list_field_options(list(requests.values()))
+            confirmed = {
+                field_id: entry
+                for field_id, entry in answer["fields"].items()
+                if field_id in requests and field_id not in answer["errors"]
+            }
+            for field_id, message in answer["errors"].items():
+                self.logger.error("List field %s refused its options: %s", field_id, message)
+        except Exception as exc:
+            self.logger.error("Could not ensure the options of list fields %s: %s", sorted(requests), exc)
+        created = {field_id: len(entry.get("created") or []) for field_id, entry in confirmed.items()}
+        if any(created.values()):
+            self.logger.info("Created list field options (field id: count): %s", created)
+        failed = sorted(set(requests) - set(confirmed))
+        if not failed:
+            return rows, 0
+        kept = [row for row in rows if not any(list_field_options.field_id_of(key) in failed for key in row)]
+        self.logger.error(
+            "Not writing %d values of list fields %s: their options are not confirmed", len(rows) - len(kept), failed
+        )
+        return kept, len(rows) - len(kept)
 
     def _write_approved_comments(self, collected_items: list, results: dict) -> None:
         """Write approved comment rows and account for missing acknowledgments."""

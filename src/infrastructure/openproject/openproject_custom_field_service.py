@@ -50,6 +50,66 @@ from src.infrastructure.exceptions import QueryExecutionError, RecordNotFoundErr
 from src.infrastructure.openproject.batch_records import index_batch_rows
 from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
+# One transaction per field, so a refused field leaves the others intact (ADR-017).
+_ENSURE_LIST_OPTIONS = """
+placeholder = 'Default option'
+answers = {}
+errors = {}
+input_data.fetch('fields').each do |spec|
+  id = spec.fetch('id').to_i
+  begin
+    answer = CustomField.transaction(requires_new: true) do
+      cf = CustomField.lock.find_by(id: id)
+      raise "Custom field #{id} not found" unless cf
+      unless cf.is_a?(WorkPackageCustomField) && cf.field_format == 'list'
+        raise "Custom field #{id} is not a work package list field (#{cf.type}, #{cf.field_format})"
+      end
+      labels = spec.fetch('labels').map(&:to_s).uniq
+      created = []
+      # Options built without a position (as _CREATE_FIELD does) sort last; number them first,
+      # so the new options are appended after every existing one.
+      position = cf.custom_options.maximum(:position).to_i
+      cf.custom_options.where(position: nil).order(:id).each { |option| option.update_columns(position: position += 1) }
+      labels.each do |label|
+        next if cf.custom_options.where(value: label).exists?
+        position += 1
+        cf.custom_options.create!(value: label, position: position)
+        created << label
+      end
+      multi_changed = false
+      if spec.fetch('multi') && !cf.multi_value?
+        cf.update!(multi_value: true)
+        multi_changed = true
+      end
+      removed = false
+      unless labels.include?(placeholder)
+        options = cf.custom_options.reload.to_a
+        holders = options.select { |option| option.value == placeholder }
+        if holders.one? && options.size > 1 &&
+           !CustomValue.where(custom_field_id: cf.id, value: holders.first.id.to_s).exists?
+          holders.first.destroy!
+          removed = true
+        end
+      end
+      missing = labels - cf.custom_options.reload.pluck(:value)
+      raise "Custom field #{id} still lacks #{missing.size} options" unless missing.empty?
+      raise "Custom field #{id} is still single-valued" if spec.fetch('multi') && !cf.reload.multi_value?
+      {created: created, multi_changed: multi_changed, placeholder_removed: removed}
+    end
+    # Recorded only after the commit, so a failed commit is an error, not an answer.
+    answers[id.to_s] = answer
+  rescue => e
+    errors[id.to_s] = e.message
+  end
+end
+# A long-lived console keeps the available fields of each project and type in RequestStore
+# (WorkPackage.available_custom_field_key); drop them, or the writer sees the old multi_value.
+RequestStore.store.keys.grep(/\\Awork_package_custom_fields_/).each { |key| RequestStore.store.delete(key) }
+puts $j2o_start_marker
+puts JSON.generate({fields: answers, errors: errors})
+puts $j2o_end_marker
+"""
+
 
 class OpenProjectCustomFieldService:
     """Read/write helpers for OpenProject CustomField records."""
@@ -84,6 +144,9 @@ class OpenProjectCustomFieldService:
         Returns:
             Custom field ID, or 0 if creation failed.
 
+        Raises:
+            ValueError: A field of that name exists with another format.
+
         """
         # Lazy import avoids the openproject_client ↔ this-module import cycle
         # at module load time.
@@ -105,12 +168,50 @@ class OpenProjectCustomFieldService:
             cf = CustomField.new(name: '{escaped}', field_format: '{escaped_format}', is_required: false, is_for_all: false, type: 'WorkPackageCustomField')
             cf.save!
           end
-          cf && cf.as_json(only: [:id])
+          cf && cf.as_json(only: [:id, :field_format])
         """
         result = self._client.execute_json_query(ruby)
         if isinstance(result, dict) and result.get("id"):
+            # A same-named field of another format would take values it cannot hold.
+            if result.get("field_format") != field_format:
+                msg = (
+                    f"Custom field {result['id']} named {name!r} has format {result.get('field_format')!r}, "
+                    f"not the requested {field_format!r}"
+                )
+                raise ValueError(msg)
             return int(result["id"])
         return 0
+
+    def ensure_list_field_options(self, fields: list[dict[str, Any]]) -> dict[str, dict[int, Any]]:
+        """Give each list field an option for every label the content step will write (ADR-017).
+
+        Each entry of ``fields`` holds ``id``, ``labels`` and ``multi``. Per field, in its own
+        transaction, the script refuses anything but a work package list field, appends each
+        missing option, sets ``multi_value`` when asked, and removes the placeholder
+        "Default option" when another option exists and no value references it. No other option
+        is deleted or renamed.
+
+        Returns:
+            ``{"fields": {id: {created, multi_changed, placeholder_removed}}, "errors": {id: message}}``.
+            A requested id in neither part was not confirmed.
+
+        Raises:
+            QueryExecutionError: OpenProject did not answer with that structure.
+
+        """
+        if not fields:
+            return {"fields": {}, "errors": {}}
+        result = self._client.execute_script_with_data(_ENSURE_LIST_OPTIONS, {"fields": fields})
+        data = result.get("data") if isinstance(result, dict) and result.get("status") == "success" else None
+        answers = data.get("fields") if isinstance(data, dict) else None
+        errors = data.get("errors") if isinstance(data, dict) else None
+        if not isinstance(answers, dict) or not isinstance(errors, dict):
+            msg = f"OpenProject did not confirm the list field options: {str(result)[:500]}"
+            raise QueryExecutionError(msg)
+        return {
+            "fields": {int(key): value for key, value in answers.items() if isinstance(value, dict)},
+            "errors": {int(key): str(value) for key, value in errors.items()},
+        }
 
     def enable_custom_field_for_projects(
         self,

@@ -85,7 +85,7 @@ def test_contaminated_console_buffer_does_not_break_cf_id_resolution() -> None:
     With the fix the method reads the id from the isolated JSON path; the
     contaminated ``execute_query`` buffer is never fed to ``int()``.
     """
-    client = _FakeClient(json_result={"id": 42})
+    client = _FakeClient(json_result={"id": 42, "field_format": "string"})
     service = OpenProjectCustomFieldService(client)
 
     cf_id = service.ensure_wp_custom_field_id("J2O Resolution", "string")
@@ -99,7 +99,7 @@ def test_contaminated_console_buffer_does_not_break_cf_id_resolution() -> None:
 
 def test_cf_id_is_int_even_when_json_returns_string_id() -> None:
     """The id is coerced to ``int`` (Rails ``as_json`` may emit it as text)."""
-    client = _FakeClient(json_result={"id": "57"})
+    client = _FakeClient(json_result={"id": "57", "field_format": "text"})
     service = OpenProjectCustomFieldService(client)
 
     assert service.ensure_wp_custom_field_id("J2O Labels", "text") == 57
