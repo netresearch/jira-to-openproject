@@ -205,6 +205,7 @@ class AttachmentRecoveryMigration(BaseMigration):
 
     def _attachment_entries(self, attachments):
         entries = []
+        renamed: set[int] = set()
         for attachment in attachments:
             filename = self._read_attr(attachment, "filename")
             aid = self._read_attr(attachment, "id")
@@ -212,7 +213,10 @@ class AttachmentRecoveryMigration(BaseMigration):
                 if not aid:
                     continue
                 filename = f"jira-attachment-{aid}"
-            filename = storage_safe_attachment_name(filename, f"jira-attachment-{aid or 'unnamed'}")
+            safe = storage_safe_attachment_name(filename, f"jira-attachment-{aid or 'unnamed'}")
+            if safe != filename:
+                renamed.add(len(entries))
+            filename = safe
             entries.append(
                 {
                     "filename": filename,
@@ -221,7 +225,7 @@ class AttachmentRecoveryMigration(BaseMigration):
                     "url": self._read_attr(attachment, "content"),
                 }
             )
-        names = AttachmentsMigration.disambiguate_duplicate_filenames_in_group([row["filename"] for row in entries])
+        names = AttachmentsMigration.disambiguate_with_renamed_last([row["filename"] for row in entries], renamed)
         for row, name in zip(entries, names, strict=True):
             row["filename"] = name
         return entries

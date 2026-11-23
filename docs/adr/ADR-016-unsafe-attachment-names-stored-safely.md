@@ -10,7 +10,11 @@ The Rails attach script refuses a stored attachment name that holds a control ch
 
 ## Decision
 
-J2O stores such an attachment under a safe name. Each refused character becomes `_`. A name over 255 bytes loses characters from the end of its stem and keeps its extension. A name left empty, `.` or `..` becomes `jira-attachment-<id>`. The renaming happens before the duplicate-name disambiguation, so a safe name that meets an existing name on the same work package gets a `(2)` suffix. The Rails guard stays as the last check.
+J2O stores such an attachment under a safe name. Each refused character becomes `_`. A name over 255 bytes loses characters from the end of its stem until it is 8 bytes below the limit, so the extension and a later `(2)` suffix fit. A name left empty, `.` or `..` becomes `jira-attachment-<id>`. The Rails guard stays as the last check.
+
+The renaming happens before the duplicate-name disambiguation. A file that keeps its Jira name keeps it in OpenProject too; a renamed file that meets that name yields and gets the `(2)` suffix. An earlier run stored only the files it did not refuse, under their own names, so a re-run finds them again and adds only the renamed files.
+
+The local and container staging files use the same safe name, shortened to 200 bytes, because they carry a prefix and a `.part` suffix.
 
 The attachment mapping keeps the Jira name as a second key, because Jira markup names the file by its original name. The recovery audit applies the same renaming, so it does not report a renamed file as missing.
 

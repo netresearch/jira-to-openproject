@@ -3,6 +3,7 @@
 
 """Attachment names that the Rails attach script refuses are stored under a safe name."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -73,10 +74,42 @@ def test_the_stored_name_is_safe_and_the_mapping_keeps_the_jira_name() -> None:
     result = migration._attach_files(ops)
 
     assert result.success
-    assert [op["filename"] for op in client.sent] == ["notes (18_18).html", "notes (18_18) (2).html"]
-    mapping = result.data["attachment_mapping"]["PRJ-1"]
-    assert mapping["notes (18;18).html"] == mapping["notes (18_18).html"] == 500
-    assert mapping["notes (18_18) (2).html"] == 501
+    # The file whose own name is "notes (18_18).html" keeps it; the renamed file yields.
+    assert [op["filename"] for op in client.sent] == ["notes (18_18) (2).html", "notes (18_18).html"]
+    assert result.data["attachment_mapping"]["PRJ-1"] == {
+        "notes (18_18) (2).html": 500,
+        "notes (18;18).html": 500,
+        "notes (18_18).html": 501,
+    }
+
+
+def test_a_duplicate_suffix_on_a_shortened_name_stays_within_255_bytes() -> None:
+    client = _RecordingClient()
+    migration = AttachmentsMigration(jira_client=SimpleNamespace(), op_client=client)  # type: ignore[arg-type]
+    ops = [
+        {"jira_key": "PRJ-1", "work_package_id": 12, "filename": "x" * 300 + ";.txt", "container_path": "/s/0"},
+        {"jira_key": "PRJ-1", "work_package_id": 12, "filename": "x" * 300 + "_.txt", "container_path": "/s/1"},
+    ]
+
+    assert migration._attach_files(ops).success
+
+    names = [op["filename"] for op in client.sent]
+    assert len(set(names)) == 2
+    assert all(len(name.encode()) <= 255 and name.endswith(".txt") for name in names)
+
+
+def test_staged_file_names_stay_below_the_component_limit(tmp_path: Path) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"data")
+    transfers: list[Path] = []
+    client = SimpleNamespace(transfer_file_to_container=lambda local, remote: transfers.append(remote))
+    migration = AttachmentsMigration(jira_client=SimpleNamespace(), op_client=client)  # type: ignore[arg-type]
+    op = {"jira_key": "PRJ-1", "work_package_id": 12, "filename": "y" * 255, "local_path": source.as_posix()}
+
+    staged = migration._transfer_attachments([op], Path("/private/stage"))
+
+    assert staged[0]["filename"] == "y" * 255
+    assert len(transfers[0].name.encode()) <= 210
 
 
 def test_the_recovery_audit_expects_the_stored_name() -> None:
@@ -90,4 +123,4 @@ def test_the_recovery_audit_expects_the_stored_name() -> None:
         attachments,
     )
 
-    assert [row["filename"] for row in entries] == ["a_b.html", "a_b (2).html"]
+    assert [row["filename"] for row in entries] == ["a_b (2).html", "a_b.html"]
