@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 
-from src.infrastructure.openproject import openproject_work_package_service as service_module
 from src.infrastructure.openproject.openproject_work_package_service import (
     BATCH_UPDATE_CHUNK_ROWS,
     BATCH_UPDATE_TIMEOUT_SECONDS,
@@ -86,9 +85,20 @@ def test_no_rows_take_no_call() -> None:
     assert answer["results"] == []
 
 
-def test_an_answer_that_is_no_mapping_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_answer_that_is_no_mapping_fails_only_its_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
     rails = _Rails()
-    monkeypatch.setattr(rails, "execute_json_query", lambda script, timeout=None: "garbage")
+    answer_rows = rails.execute_json_query
+    calls = []
 
-    with pytest.raises(service_module.QueryExecutionError):
-        OpenProjectWorkPackageService(rails).batch_update_work_packages(_rows(3))  # type: ignore[arg-type]
+    def answer(script: str, timeout: int | None = None) -> Any:
+        calls.append(script)
+        return "garbage" if len(calls) == 2 else answer_rows(script, timeout)
+
+    monkeypatch.setattr(rails, "execute_json_query", answer)
+    result = OpenProjectWorkPackageService(rails).batch_update_work_packages(_rows(250))  # type: ignore[arg-type]
+
+    assert result["updated"] == 150
+    assert result["failed"] == 100
+    failed = [row for row in result["results"] if row["status"] == "failed"]
+    assert [row["id"] for row in failed] == list(range(101, 201))
+    assert all("Unexpected batch update answer: str" in row["error"] for row in failed)

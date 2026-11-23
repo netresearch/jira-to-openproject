@@ -151,15 +151,16 @@ class OpenProjectWorkPackageService:
             chunk = updates[start : start + BATCH_UPDATE_CHUNK_ROWS]
             try:
                 answer = self._batch_update_chunk(chunk)
+                if not isinstance(answer, dict):
+                    msg = f"Unexpected batch update answer: {type(answer).__name__}"
+                    raise QueryExecutionError(msg)
             except QueryExecutionError as exc:
+                # Only this chunk's rows fail; the rows earlier chunks wrote stay acknowledged.
                 self._logger.warning("Batch update of %d work packages failed: %s", len(chunk), exc)
                 answer = {
                     "failed": len(chunk),
                     "results": [{"id": row.get("id"), "status": "failed", "error": str(exc)} for row in chunk],
                 }
-            if not isinstance(answer, dict):
-                msg = f"Unexpected batch update answer: {type(answer).__name__}"
-                raise QueryExecutionError(msg)
             for key in ("updated", "unchanged", "target_changed", "failed"):
                 totals[key] += int(answer.get(key) or 0)
             totals["results"].extend(answer.get("results") or [])
