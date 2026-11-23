@@ -574,8 +574,9 @@ class WorkPackageContentMigration(BaseMigration):
 
         try:
             watchers = self.jira_client.get_issue_watchers(jira_issue.key)
-        except Exception:
-            return 0
+        except Exception as exc:
+            self.logger.warning("Could not read the watchers of %s (%s)", jira_issue.key, type(exc).__name__)
+            raise
 
         for watcher in watchers:
             op_user_id = self._resolve_jira_user_id(watcher)
@@ -680,16 +681,19 @@ class WorkPackageContentMigration(BaseMigration):
             collected["comment_read_failed"] = True
             self.logger.warning("Incomplete Jira comment read for %s (%s)", jira_issue.key, type(exc).__name__)
 
-        # Collect watchers
-        if not watchers:
+        # Collect watchers; with J2O_SKIP_WATCHERS set they are neither read nor written.
+        if not watchers or os.environ.get("J2O_SKIP_WATCHERS"):
             return collected
         try:
             for watcher in self.jira_client.get_issue_watchers(jira_issue.key):
                 op_user_id = self._resolve_jira_user_id(watcher)
                 if op_user_id:
                     collected["watchers"].append(op_user_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            # A failed read is no empty watcher list; it counts as failed.
+            collected["watchers"] = []
+            collected["watcher_read_failed"] = True
+            self.logger.warning("Could not read the watchers of %s (%s)", jira_issue.key, type(exc).__name__)
 
         return collected
 
@@ -724,6 +728,7 @@ class WorkPackageContentMigration(BaseMigration):
             "comments_failed": 0,
             "comments_held": sum(item.get("comments_held", 0) for item in collected_items),
             "comment_reads_failed": sum(bool(item.get("comment_read_failed")) for item in collected_items),
+            "watcher_reads_failed": sum(bool(item.get("watcher_read_failed")) for item in collected_items),
             "watchers_added": 0,
         }
 
@@ -810,6 +815,7 @@ class WorkPackageContentMigration(BaseMigration):
             "target_changed": [],
             "custom_fields_failed": 0,
             "comment_reads_failed": 0,
+            "watcher_reads_failed": 0,
             "comments_held": 0,
             "custom_fields_updated": 0,
             "comments_migrated": 0,
@@ -916,6 +922,7 @@ class WorkPackageContentMigration(BaseMigration):
                     "dates_failed",
                     "comments_failed",
                     "comment_reads_failed",
+                    "watcher_reads_failed",
                 )
             )
             return ComponentResult(
@@ -936,6 +943,7 @@ class WorkPackageContentMigration(BaseMigration):
                     "comments_held": migration_results.get("comments_held", 0),
                     "comments_failed": migration_results.get("comments_failed", 0),
                     "comment_reads_failed": migration_results.get("comment_reads_failed", 0),
+                    "watcher_reads_failed": migration_results.get("watcher_reads_failed", 0),
                     "descriptions_failed": migration_results.get("descriptions_failed", 0),
                     "custom_fields_failed": migration_results.get("custom_fields_failed", 0),
                     "custom_fields_updated": migration_results.get("custom_fields_updated", 0),
