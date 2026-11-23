@@ -228,3 +228,30 @@ def test_the_watcher_step_uses_embedded_watchers_when_the_read_fails(tmp_path: P
     assert (
         step._read_watchers("J2", SimpleNamespace(fields=SimpleNamespace(watches=SimpleNamespace(watchers=[])))) is None
     )
+
+
+def test_the_watcher_step_reads_embedded_watchers_from_a_cached_dictionary(tmp_path: Path, _watcher_maps: None) -> None:
+    step, op = _watcher_step(
+        tmp_path,
+        '{"J1": {"key": "J1"}, "J2": {"key": "J2", "fields": {"watches": {"watchers": [{"name": "alice"}]}}}}',
+    )
+
+    result = step.run()
+
+    assert result.success is True
+    assert result.details["read_failures"] == []
+    assert sorted(row["work_package_id"] for row in op.rows) == [10, 11]
+
+
+def test_skipped_watchers_are_not_read_and_not_counted(
+    tmp_path: Path, _no_mappings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("J2O_SKIP_WATCHERS", "1")
+    mig = _build_mig(tmp_path)
+    mig.jira_client.select_comments_for_migration.return_value.comments = []
+    mig.jira_client.get_issue_watchers.side_effect = JiraApiError("HTTP 401")
+
+    collected = mig._collect_content_for_issue(_issue(), wp_id=5)
+
+    assert "watcher_read_failed" not in collected
+    mig.jira_client.get_issue_watchers.assert_not_called()

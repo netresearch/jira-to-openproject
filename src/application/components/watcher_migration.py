@@ -40,6 +40,16 @@ def _readers_configured() -> bool:
     return bool(config.migration_config.get(READERS_SETTING))
 
 
+def _embedded_watchers(issue: Any) -> list:
+    """Watcher records embedded in an issue, from an SDK object or a cached JSON dictionary."""
+
+    def part(value: Any, name: str) -> Any:
+        return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+    watchers = part(part(part(issue, "fields"), "watches"), "watchers")
+    return list(watchers) if isinstance(watchers, list) else []
+
+
 @register_entity_types("watchers")
 class WatcherMigration(BaseMigration):
     """Migrate watchers from Jira issues to OpenProject work packages."""
@@ -394,11 +404,7 @@ class WatcherMigration(BaseMigration):
             # Prefer explicit API for watchers (more complete)
             return self.jira_client.get_issue_watchers(str(key))
         except Exception as exc:
-            try:
-                w = getattr(getattr(issue, "fields", None), "watches", None)
-                embedded = getattr(w, "watchers", []) or []
-            except Exception:
-                embedded = []
+            embedded = _embedded_watchers(issue)
             if embedded:
                 return embedded
             logger.warning("Could not read the watchers of %s: %s", key, type(exc).__name__)

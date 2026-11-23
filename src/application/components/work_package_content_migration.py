@@ -681,8 +681,8 @@ class WorkPackageContentMigration(BaseMigration):
             collected["comment_read_failed"] = True
             self.logger.warning("Incomplete Jira comment read for %s (%s)", jira_issue.key, type(exc).__name__)
 
-        # Collect watchers
-        if not watchers:
+        # Collect watchers; with J2O_SKIP_WATCHERS set they are neither read nor written.
+        if not watchers or os.environ.get("J2O_SKIP_WATCHERS"):
             return collected
         try:
             for watcher in self.jira_client.get_issue_watchers(jira_issue.key):
