@@ -59,6 +59,11 @@ from src.infrastructure.exceptions import QueryExecutionError
 from src.infrastructure.openproject.openproject_bulk_create_service import reject_legacy_journal_operations
 from src.infrastructure.openproject.written_guard import WRITTEN_GUARD
 
+# One Rails call writes at most this many rows. In a full run, content batches of 466 and
+# 873 rows ran past the 90-second limit of one call, while a batch of 141 rows finished.
+BATCH_UPDATE_CHUNK_ROWS = 100
+BATCH_UPDATE_TIMEOUT_SECONDS = 180
+
 if TYPE_CHECKING:
     from src.infrastructure.openproject.openproject_client import OpenProjectClient
 
@@ -135,11 +140,34 @@ class OpenProjectWorkPackageService:
         it writes. Such a row is written only while the target holds what J2O wrote last
         (ADR-013); otherwise it reports ``unchanged`` or ``target_changed`` and carries the
         digest of the stored value. Rows without a guard behave as before.
+
+        The rows travel in chunks of at most ``BATCH_UPDATE_CHUNK_ROWS``, one Rails call each,
+        so a large project stays within the time limit of one call. A chunk whose call fails
+        reports each of its rows as failed with the error; the other chunks still run.
         """
         reject_legacy_journal_operations(updates)
-        if not updates:
-            return {"updated": 0, "failed": 0, "results": []}
+        totals: dict[str, Any] = {"updated": 0, "unchanged": 0, "target_changed": 0, "failed": 0, "results": []}
+        for start in range(0, len(updates), BATCH_UPDATE_CHUNK_ROWS):
+            chunk = updates[start : start + BATCH_UPDATE_CHUNK_ROWS]
+            try:
+                answer = self._batch_update_chunk(chunk)
+                if not isinstance(answer, dict):
+                    msg = f"Unexpected batch update answer: {type(answer).__name__}"
+                    raise QueryExecutionError(msg)
+            except QueryExecutionError as exc:
+                # Only this chunk's rows fail; the rows earlier chunks wrote stay acknowledged.
+                self._logger.warning("Batch update of %d work packages failed: %s", len(chunk), exc)
+                answer = {
+                    "failed": len(chunk),
+                    "results": [{"id": row.get("id"), "status": "failed", "error": str(exc)} for row in chunk],
+                }
+            for key in ("updated", "unchanged", "target_changed", "failed"):
+                totals[key] += int(answer.get(key) or 0)
+            totals["results"].extend(answer.get("results") or [])
+        return totals
 
+    def _batch_update_chunk(self, updates: list[dict[str, Any]]) -> Any:
+        """Write one chunk of rows in one Rails call."""
         updates_json = json.dumps(updates, ensure_ascii=False)
         script = (
             WRITTEN_GUARD
@@ -274,7 +302,7 @@ J2O_UPDATES
         )
 
         try:
-            return self._client.execute_json_query(script)
+            return self._client.execute_json_query(script, timeout=BATCH_UPDATE_TIMEOUT_SECONDS)
         except Exception as e:
             msg = f"Failed to batch update work packages: {e}"
             raise QueryExecutionError(msg) from e
