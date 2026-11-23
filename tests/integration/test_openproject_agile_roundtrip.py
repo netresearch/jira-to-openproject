@@ -185,10 +185,22 @@ def test_attachment_native_filename_download_and_repeat(rails, tmp_path):
         assert again.success
         assert again.updated == 0
         assert again.data == create.data
+        # ADR-016: a name the Rails guard refuses is stored under a safe name and stays
+        # reachable under its Jira name; a repeat finds the stored file again.
+        for unsafe, stored in (("one;other.txt", "one_other.txt"), ("../other", ".._other"), ("bad\nname", "bad_name")):
+            renamed = loader._attach_files([{**op, "filename": unsafe}])
+            assert renamed.success
+            assert renamed.updated == 1
+            names = renamed.data["attachment_mapping"]["DEMO-1"]
+            assert names[unsafe] == names[stored]
+            assert loader._attach_files([{**op, "filename": unsafe}]).updated == 0
+        # The Rails guard still refuses these names when they reach it unchanged.
+        loader._storage_safe_filenames = lambda ops: ops
         for unsafe in ("one;other.txt", "../other", "bad\nname"):
             rejected = loader._attach_files([{**op, "filename": unsafe}])
             assert not rejected.success
             assert rejected.failed == 1
+        del loader._storage_safe_filenames
         mismatched = loader._attach_files([{**op, "digest": "0" * 64}])
         assert not mismatched.success
         assert mismatched.failed == 1
@@ -227,7 +239,7 @@ def test_attachment_native_filename_download_and_repeat(rails, tmp_path):
         hashlib.sha256(payload).hexdigest(),
         f"filename={required_name}",
         True,
-        1,
+        4,
     ]
 
 
