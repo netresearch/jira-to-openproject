@@ -512,3 +512,51 @@ def test_level_switch_on_without_reports_stops_before_any_search_or_write(level_
     assert not outcome.result.success
     assert not outcome.jira.searches
     assert not outcome.op.payloads
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # Text that only looks like a macro, and tasks without a closing tag.
+        "Set {{task: example}} in {{SOME\\_NAME}}",
+        "{task:id=42}\r\n{task:id=43}\r\n",
+        "{task:id=42}Update to the newest version",
+    ],
+)
+def test_unreadable_task_markup_skips_only_that_issue_and_names_it(stage, source):
+    migration, jira, target = stage
+    raw = jira.jira.issue.return_value.raw
+    raw["fields"]["description"] = source
+    other = _project_issue()
+    other.update(id="91", key="J-2")
+    other["renderedFields"]["description"] = _render(key="J-2")
+    del other["fields"]["customfield_42"]  # J-2 takes its task from the description alone
+    second = SimpleNamespace(key="J-2", id="91", raw=other, fields=other["fields"])
+    first = jira.jira.search_issues.side_effect("", startAt=0)[0]
+    jira.jira.search_issues.side_effect = lambda jql, **kwargs: [first, second] if kwargs["startAt"] == 0 else []
+    jira.jira.issue.side_effect = lambda key, **kwargs: SimpleNamespace(raw=raw if key == "J-1" else other)
+    migration.mappings.get_mapping.side_effect = {
+        "work_package": {
+            "90": {"jira_key": "J-1", "openproject_id": 101},
+            "91": {"jira_key": "J-2", "openproject_id": 102},
+        },
+        "project": {"J": 77},
+    }.get
+
+    result = migration.run()
+
+    assert result.success
+    [row] = target.call_args.args[1]["rows"]
+    assert row["wp"] == 102
+    [entry] = result.details["unreadable_task_markup"]
+    assert entry.startswith("J-1: ")
+    assert any("unreadable task markup" in warning for warning in result.warnings)
+    # A second run on the same instance names the issue once, not twice.
+    assert len(migration.run().details["unreadable_task_markup"]) == 1
+
+
+def test_issue_identity_mismatch_still_stops_the_component(stage):
+    migration, jira, target = stage
+    jira.jira.issue.return_value.raw = {**jira.jira.issue.return_value.raw, "key": "J-9"}
+    assert not migration.run().success
+    target.assert_not_called()

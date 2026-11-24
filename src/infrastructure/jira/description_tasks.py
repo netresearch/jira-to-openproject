@@ -10,6 +10,10 @@ _TASK_START = re.compile(r"\{task(?=[:}])")
 _TASK_ID = re.compile(r"\{task:id=(\d+)\}", re.ASCII)
 
 
+class UnreadableTaskMarkupError(ValueError):
+    """The description's task markup cannot be bound to the rendered checkboxes."""
+
+
 def _macro_titles(source: str) -> dict[str, str]:
     titles = {}
     opening = None
@@ -22,11 +26,11 @@ def _macro_titles(source: str) -> dict[str, str]:
         current = _TASK_ID.match(source, position)
         if opening or current is None or current[1] in titles:
             msg = "Jira description contains an unsupported or duplicate task macro."
-            raise ValueError(msg)
+            raise UnreadableTaskMarkupError(msg)
         opening = current
     if opening:
         msg = "Unclosed task macro in Jira description."
-        raise ValueError(msg)
+        raise UnreadableTaskMarkupError(msg)
     return titles
 
 
@@ -54,7 +58,7 @@ class _DescriptionCheckboxes(HTMLParser):
             return
         if identifier in self.states:
             msg = "Duplicate checkbox for a Jira description task."
-            raise ValueError(msg)
+            raise UnreadableTaskMarkupError(msg)
         self.states[identifier] = "checked" in attributes
 
     def handle_endtag(self, tag: str) -> None:
@@ -76,5 +80,5 @@ def description_tasks(issue_key: str, raw: dict) -> list[dict]:
     parser.close()
     if titles.keys() != parser.states.keys():
         msg = "Jira description task IDs do not match the rendered checkboxes."
-        raise ValueError(msg)
+        raise UnreadableTaskMarkupError(msg)
     return [{"id": key, "title": title, "checked": parser.states[key]} for key, title in titles.items()]
