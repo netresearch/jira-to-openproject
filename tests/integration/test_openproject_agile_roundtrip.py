@@ -1208,3 +1208,35 @@ def test_list_field_options_follow_the_written_values(rails):
       CustomOption.where(id: ids).order(:position).pluck(:value)
     """)
     assert stored == ["Red", "Green"]
+
+
+def test_written_custom_fields_become_available_for_the_work_package(rails):
+    """A value for a field the type does not show yet is written, not refused (ADR-018)."""
+    client, query = rails
+    wp_id, shared, own, project_id = query("""
+      wp = WorkPackage.first!
+      shared = WorkPackageCustomField.create!(name: 'J2O Unlinked Shared', field_format: 'text', is_for_all: true)
+      own = WorkPackageCustomField.create!(name: 'J2O Unlinked Own', field_format: 'text', is_for_all: false)
+      [wp.id, shared.id, own.id, wp.project_id]
+    """)
+    available = (
+        f"wp = WorkPackage.find({wp_id}); RequestStore.store.delete(WorkPackage.send(:available_custom_field_key, wp)); "
+        "wp.available_custom_fields.map(&:id)"
+    )
+    assert {shared, own}.isdisjoint(query(available))
+
+    written = OpenProjectWorkPackageService(client).batch_update_work_packages(
+        [{"id": wp_id, f"customField{shared}": "for all projects", f"customField{own}": "this project only"}]
+    )
+
+    assert written["updated"] == 1, written
+    assert {shared, own} <= set(query(available))
+    stored = query(f"""
+      CustomValue.where(customized: WorkPackage.find({wp_id}), custom_field_id: [{shared}, {own}])
+                 .order(:custom_field_id).pluck(:value)
+    """)
+    assert stored == ["for all projects", "this project only"]
+    # Only the field that is not for all projects is linked to the project.
+    assert query(
+        f"CustomFieldsProject.where(custom_field_id: [{shared}, {own}]).pluck(:custom_field_id, :project_id)"
+    ) == [[own, project_id]]
