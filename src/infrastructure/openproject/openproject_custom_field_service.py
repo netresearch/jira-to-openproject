@@ -388,8 +388,9 @@ class OpenProjectCustomFieldService:
 
         Handles the broadest set of options: per-type creation
         (WorkPackage / Project / User / TimeEntry), searchable flag,
-        WorkPackage type-id population, UserCustomField activation. Returns
-        the resulting CF record dict.
+        UserCustomField activation. A WorkPackage field is linked to every type,
+        types created after the field included: a work package silently drops
+        a value whose field its type lacks. Returns the resulting CF record dict.
         """
         from src.infrastructure.openproject.openproject_client import escape_ruby_single_quoted
 
@@ -423,9 +424,11 @@ class OpenProjectCustomFieldService:
           end
           if cf.is_a?(WorkPackageCustomField)
             if cf.respond_to?(:type_variant_ids)
-              cf.type_variant_ids = TypeVariant.default_variant.ids if cf.type_variant_ids.empty?
-            elsif cf.type_ids.empty?
-              cf.type_ids = Type.ids
+              missing = TypeVariant.default_variant.ids - cf.type_variant_ids
+              cf.type_variant_ids += missing if missing.any?
+            else
+              missing = Type.ids - cf.type_ids
+              cf.type_ids += missing if missing.any?
             end
           end
           cf && cf.as_json(only: [:id, :name, :field_format, :type])
