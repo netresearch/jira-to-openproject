@@ -187,6 +187,7 @@ J2O_UPDATES
           begin
             wp = WorkPackage.find(update.fetch('id'))
             status = 'updated'
+            linked = []
             guard = attr = before = digest = nil
             wp.with_lock(requires_new: true) do
               attributes = update.except('id', '_rails_operations')
@@ -239,7 +240,7 @@ J2O_UPDATES
                 end
                 # A long-lived console keeps the available fields of each project and type in RequestStore.
                 WorkPackage.preload_available_custom_fields([wp])
-                enabled.add(pair)
+                linked << pair
               end
               expected = {{}}
               values = fields.to_h do |key, raw|
@@ -295,6 +296,8 @@ J2O_UPDATES
                 digest = j2o_digest.call(status == 'updated' ? j2o_stored.call(wp, attr) : before)
               end
             end
+            # A refused row rolls its links back, so only a committed row counts as linked.
+            enabled.merge(linked)
             row = {{ id: wp.id, status: status }}
             if guard
               row[:attr] = attr
