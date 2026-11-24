@@ -1208,3 +1208,92 @@ def test_list_field_options_follow_the_written_values(rails):
       CustomOption.where(id: ids).order(:position).pluck(:value)
     """)
     assert stored == ["Red", "Green"]
+
+
+def test_written_custom_fields_become_available_for_the_work_package(rails):
+    """A value for a field the type does not show yet is written, not refused (ADR-018)."""
+    client, query = rails
+    wp_id, shared, own, project_id = query("""
+      wp = WorkPackage.first!
+      shared = WorkPackageCustomField.create!(name: 'J2O Unlinked Shared', field_format: 'text', is_for_all: true)
+      own = WorkPackageCustomField.create!(name: 'J2O Unlinked Own', field_format: 'text', is_for_all: false)
+      [wp.id, shared.id, own.id, wp.project_id]
+    """)
+    available = (
+        f"wp = WorkPackage.find({wp_id}); RequestStore.store.delete(WorkPackage.send(:available_custom_field_key, wp)); "
+        "wp.available_custom_fields.map(&:id)"
+    )
+    assert {shared, own}.isdisjoint(query(available))
+
+    written = OpenProjectWorkPackageService(client).batch_update_work_packages(
+        [{"id": wp_id, f"customField{shared}": "for all projects", f"customField{own}": "this project only"}]
+    )
+
+    assert written["updated"] == 1, written
+    assert {shared, own} <= set(query(available))
+    stored = query(f"""
+      CustomValue.where(customized: WorkPackage.find({wp_id}), custom_field_id: [{shared}, {own}])
+                 .order(:custom_field_id).pluck(:value)
+    """)
+    assert stored == ["for all projects", "this project only"]
+    # Only the field that is not for all projects is linked to the project.
+    assert query(
+        f"CustomFieldsProject.where(custom_field_id: [{shared}, {own}]).pluck(:custom_field_id, :project_id)"
+    ) == [[own, project_id]]
+
+
+def test_written_custom_field_follows_the_type_the_row_assigns(rails):
+    """A row that also changes the type links the field to the new type, not the old one (ADR-018)."""
+    client, query = rails
+    wp_id, field, old_type, new_type = query("""
+      wp = WorkPackage.first!
+      other = ProjectType.where(project_id: wp.project_id).where.not(type_id: wp.type_id).first!
+      field = WorkPackageCustomField.create!(name: 'J2O Unlinked Typed', field_format: 'text', is_for_all: true)
+      [wp.id, field.id, wp.type_id, other.type_id]
+    """)
+    owner = (
+        "wp = WorkPackage.find({wp}); wp.type_id = {type}; "
+        "o = wp.respond_to?(:type_variant) ? wp.type_variant.effective_source_for(TypeVariant::FORM_CONFIGURATION) : wp.type; "
+        "o.custom_fields.exists?({field})"
+    )
+
+    written = OpenProjectWorkPackageService(client).batch_update_work_packages(
+        [{"id": wp_id, "type_id": new_type, f"customField{field}": "typed"}]
+    )
+
+    assert written["updated"] == 1, written
+    assert query(f"WorkPackage.find({wp_id}).type_id") == new_type
+    assert query(owner.format(wp=wp_id, type=new_type, field=field)) is True
+    assert query(owner.format(wp=wp_id, type=old_type, field=field)) is False
+
+
+def test_failed_row_does_not_hide_the_field_from_the_next_row(rails):
+    """A refused row rolls its link back; the next row of the same type must link again (ADR-018)."""
+    client, query = rails
+    first, second, text, choice = query("""
+      pair = WorkPackage.group(:project_id, :type_id).having('COUNT(*) > 1').pluck(:project_id, :type_id).first
+      ids = WorkPackage.where(project_id: pair[0], type_id: pair[1]).order(:id).limit(2).pluck(:id)
+      text = WorkPackageCustomField.create!(name: 'J2O Unlinked Retry', field_format: 'text', is_for_all: true)
+      choice = WorkPackageCustomField.new(name: 'J2O Unlinked Choice', field_format: 'list', is_for_all: true)
+      choice.custom_options.build(value: 'Known')
+      choice.save!
+      [*ids, text.id, choice.id]
+    """)
+
+    written = OpenProjectWorkPackageService(client).batch_update_work_packages(
+        [
+            {"id": first, f"customField{text}": "refused", f"customField{choice}": "Unknown"},
+            {"id": second, f"customField{text}": "kept"},
+        ]
+    )
+
+    assert (written["updated"], written["failed"]) == (1, 1), written
+    assert query(
+        f"CustomValue.where(customized: WorkPackage.find({second}), custom_field_id: {text}).pluck(:value)"
+    ) == ["kept"]
+    # The stored value must also be visible: the link survives in the database, not only in the memo.
+    assert query(f"""
+      wp = WorkPackage.find({second})
+      owner = wp.respond_to?(:type_variant) ? wp.type_variant.effective_source_for(TypeVariant::FORM_CONFIGURATION) : wp.type
+      owner.custom_fields.exists?({text})
+    """)
