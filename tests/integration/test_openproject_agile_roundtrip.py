@@ -1240,3 +1240,28 @@ def test_written_custom_fields_become_available_for_the_work_package(rails):
     assert query(
         f"CustomFieldsProject.where(custom_field_id: [{shared}, {own}]).pluck(:custom_field_id, :project_id)"
     ) == [[own, project_id]]
+
+
+def test_written_custom_field_follows_the_type_the_row_assigns(rails):
+    """A row that also changes the type links the field to the new type, not the old one (ADR-018)."""
+    client, query = rails
+    wp_id, field, old_type, new_type = query("""
+      wp = WorkPackage.first!
+      other = ProjectType.where(project_id: wp.project_id).where.not(type_id: wp.type_id).first!
+      field = WorkPackageCustomField.create!(name: 'J2O Unlinked Typed', field_format: 'text', is_for_all: true)
+      [wp.id, field.id, wp.type_id, other.type_id]
+    """)
+    owner = (
+        "wp = WorkPackage.find({wp}); wp.type_id = {type}; "
+        "o = wp.respond_to?(:type_variant) ? wp.type_variant.effective_source_for(TypeVariant::FORM_CONFIGURATION) : wp.type; "
+        "o.custom_fields.exists?({field})"
+    )
+
+    written = OpenProjectWorkPackageService(client).batch_update_work_packages(
+        [{"id": wp_id, "type_id": new_type, f"customField{field}": "typed"}]
+    )
+
+    assert written["updated"] == 1, written
+    assert query(f"WorkPackage.find({wp_id}).type_id") == new_type
+    assert query(owner.format(wp=wp_id, type=new_type, field=field)) is True
+    assert query(owner.format(wp=wp_id, type=old_type, field=field)) is False

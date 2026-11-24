@@ -186,27 +186,6 @@ J2O_UPDATES
         updates.each do |update|
           begin
             wp = WorkPackage.find(update.fetch('id'))
-            # A field J2O writes must be available for the work package (ADR-018): link it to the
-            # form configuration in force for the type and, unless it is for all projects, to the
-            # project, as the per-field writer in openproject_work_package_custom_field_service does.
-            update.keys.grep(/\\AcustomField[0-9]+\\z/).each do |key|
-              cf = WorkPackageCustomField.find_by(id: key.delete_prefix('customField').to_i)
-              next unless cf
-              pair = [cf.id, wp.project_id, wp.type_id]
-              next if enabled.include?(pair)
-              cf.with_lock do
-                owner = if wp.respond_to?(:type_variant)
-                          wp.type_variant.effective_source_for(TypeVariant::FORM_CONFIGURATION)
-                        else
-                          wp.type
-                        end
-                owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
-                CustomFieldsProject.find_or_create_by!(custom_field: cf, project_id: wp.project_id) unless cf.is_for_all?
-              end
-              # A long-lived console keeps the available fields of each project and type in RequestStore.
-              WorkPackage.preload_available_custom_fields([wp])
-              enabled.add(pair)
-            end
             status = 'updated'
             guard = attr = before = digest = nil
             wp.with_lock(requires_new: true) do
@@ -240,6 +219,28 @@ J2O_UPDATES
                 end
               end
               wp.assign_attributes(attributes)
+              # A field J2O writes must be available for the work package (ADR-018): link it to the
+              # form configuration in force for the type and, unless it is for all projects, to the
+              # project, as the per-field writer in openproject_work_package_custom_field_service does.
+              # The row's own type and project are assigned first, so the link follows them.
+              fields.keys.each do |key|
+                cf = WorkPackageCustomField.find_by(id: key.delete_prefix('customField').to_i)
+                next unless cf
+                pair = [cf.id, wp.project_id, wp.type_id]
+                next if enabled.include?(pair)
+                cf.with_lock do
+                  owner = if wp.respond_to?(:type_variant)
+                            wp.type_variant.effective_source_for(TypeVariant::FORM_CONFIGURATION)
+                          else
+                            wp.type
+                          end
+                  owner.custom_fields << cf unless owner.custom_fields.exists?(cf.id)
+                  CustomFieldsProject.find_or_create_by!(custom_field: cf, project_id: wp.project_id) unless cf.is_for_all?
+                end
+                # A long-lived console keeps the available fields of each project and type in RequestStore.
+                WorkPackage.preload_available_custom_fields([wp])
+                enabled.add(pair)
+              end
               expected = {{}}
               values = fields.to_h do |key, raw|
                 cf = wp.available_custom_fields.find {{ |f| f.id == key.delete_prefix('customField').to_i }}
