@@ -18,7 +18,7 @@ from src.application.components.base_migration import BaseMigration, register_en
 from src.application.components.issue_security import permits_unrestricted_result, unrestricted_project_jql
 from src.application.components.project_named_records import project_id
 from src.application.components.security_level_projects_migration import LevelProjectError
-from src.infrastructure.jira.description_tasks import description_tasks
+from src.infrastructure.jira.description_tasks import UnreadableTaskMarkupError, description_tasks
 from src.infrastructure.jira.issue_pagination import iter_issue_pages
 from src.infrastructure.jira.jira_issue_service import fetch_issue_page_with_retry
 from src.infrastructure.jira.sidebar_tasks import issue_task_records
@@ -186,7 +186,12 @@ class SimpleTasksMigration(BaseMigration):
             raise ValueError(msg)
         if level_id is not None and level_issues.issue_level_id(raw) != level_id:
             raise _LevelChangedError(issue.key)
-        tasks, held = self._confirmed_tasks(raw)
+        try:
+            tasks, held = self._confirmed_tasks(raw)
+        except UnreadableTaskMarkupError as exc:
+            # One issue's markup must not stop the others; its checklist is not written and it is named.
+            self.__dict__.setdefault("_unreadable", []).append(f"{issue.key}: {exc}")
+            return None, 0
         return {
             **ref,
             "tasks": tasks,
@@ -312,8 +317,12 @@ class SimpleTasksMigration(BaseMigration):
                     counts[key] += actual[key]
                 # The checklist rewrites the text J2O wrote last; its digest follows (ADR-013).
                 store.record((int(wp), "description", str(d)) for wp, d in (actual.get("digests") or {}).items())
-        details = {**mapped.details, **counts}
+        unreadable = sorted(self.__dict__.get("_unreadable", []))
+        details = {**mapped.details, **counts, "unreadable_task_markup": unreadable}
         warnings = []
+        if unreadable:
+            warnings.append(f"Wrote no checklist for {len(unreadable)} issue(s) with unreadable task markup.")
+            self.logger.warning("Wrote no checklist for issues with unreadable task markup: %s", "; ".join(unreadable))
         if n := details["unverified_task_audience"]:
             warnings.append(f"Withheld {n} task(s) with an unverified source audience.")
         if n := details["unconfirmed_issues"]:
@@ -332,6 +341,7 @@ class SimpleTasksMigration(BaseMigration):
         write (ADR-009) and their refusals are counted into the result.
         """
         self._level: level_issues.LevelWorkPackages | None = None
+        self._unreadable: list[str] = []
         if level_issues.enabled():
             try:
                 self._level = level_issues.level_work_packages(
