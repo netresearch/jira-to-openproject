@@ -41,7 +41,9 @@ from src.utils.rate_limiter import create_jira_rate_limiter
 
 HTTP_OK = 200
 HTTP_BAD_REQUEST_MIN = 400
+HTTP_UNAUTHORIZED = 401
 HTTP_NOT_FOUND = 404
+UNAUTHORIZED_RETRY_SECONDS = 2.0
 
 
 class JiraError(Exception):
@@ -595,7 +597,24 @@ class JiraClient:
             raise JiraConnectionError(msg)
 
         # Store original _session.request method
-        original_request = self.jira._session.request
+        session = self.jira._session
+        original_request = session.request
+
+        def request_with_one_retry(method: str, url: str, **kwargs: object) -> Response:
+            """Repeat a read that Jira refuses with 401, once and without the session cookies.
+
+            In full runs Jira refused single reads with 401 and an invalid-cookie notice, although
+            the token was valid and the next read succeeded.
+            """
+            try:
+                return original_request(method, url, **kwargs)
+            except Exception as exc:
+                if method.upper() != "GET" or getattr(exc, "status_code", None) != HTTP_UNAUTHORIZED:
+                    raise
+                logger.warning("Jira refused a read with HTTP 401; retrying once without cookies")
+            session.cookies.clear()
+            time.sleep(UNAUTHORIZED_RETRY_SECONDS)
+            return original_request(method, url, **kwargs)
 
         # Create patched method that checks for CAPTCHA
         def patched_request(method: str, url: str, **kwargs: object) -> Response:
@@ -603,7 +622,7 @@ class JiraClient:
                 self.request_count += 1
                 # dump requestcount
                 logger.debug("Jira client request count: %s", self.request_count)
-                response = original_request(method, url, **kwargs)
+                response = request_with_one_retry(method, url, **kwargs)
 
                 # Check for CAPTCHA or other errors
                 self._handle_response(response)

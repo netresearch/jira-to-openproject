@@ -19,7 +19,7 @@ def page_reader(monkeypatch, replies):
     app = legacy.WorkPackageMigration.__new__(legacy.WorkPackageMigration)
     client = JiraClient.__new__(JiraClient)
     client.request_count = 0
-    session = SimpleNamespace(request=Mock(side_effect=replies))
+    session = SimpleNamespace(request=Mock(side_effect=replies), cookies=requests.cookies.RequestsCookieJar())
     client.jira = SimpleNamespace(_session=session)
     client._patch_jira_client()
 
@@ -60,7 +60,17 @@ def test_mixed_transport_and_sdk_rate_limits_spend_one_retry_budget(monkeypatch)
     assert sleep.call_args_list == [call(delay) for delay in (1, 2, 4, 8, 16)]
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 500])
+def test_persistent_401_spends_the_one_read_retry_and_no_page_retry(monkeypatch):
+    errors = [JIRAError(text="HTTP Error 429 in upstream detail", status_code=401) for _ in range(2)]
+    app, sleep = page_reader(monkeypatch, errors)
+    with pytest.raises(JiraApiError) as caught:
+        fetch_page(app)
+    assert caught.value.__cause__ is errors[1]
+    assert app.jira_client.request_count == 1
+    sleep.assert_called_once_with(2.0)
+
+
+@pytest.mark.parametrize("status", [403, 404, 500])
 def test_other_sdk_statuses_propagate_without_retry(monkeypatch, status):
     error = JIRAError(text="HTTP Error 429 in upstream detail", status_code=status)
     app, sleep = page_reader(monkeypatch, [error])
